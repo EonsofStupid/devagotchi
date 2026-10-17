@@ -2,7 +2,7 @@
 
 **Your AI, at home in your workspace.**
 
-Devagotchi is a universal workspace bridge, beginning with locally installed MCP clients and a native app for seeing commands, output, and workspace activity. The product direction represents every admitted task as a graph and grows into a trusted internal mesh, with public API/MCP surfaces for adoption. Windows, macOS, and Linux are required targets. Its intended repository is [eonsofstupid/devagotchi](https://github.com/eonsofstupid/devagotchi). The rebuilt [Devagotchi Site](https://devagotchi.justsayit.chatgpt.site) is published with a read-only HTTP/MCP reference service and Linux source download; [devagotchi.net](https://devagotchi.net) has been added and is pending DNS validation.
+Devagotchi is a universal workspace bridge, beginning with locally installed MCP clients and a native app for seeing commands, output, and workspace activity. The product direction represents every admitted task as a graph and grows into a trusted internal mesh, with public API/MCP surfaces for adoption. Windows, macOS, and Linux are required targets. Source is published at [EonsofStupid/devagotchi](https://github.com/EonsofStupid/devagotchi). The rebuilt [Devagotchi Site](https://devagotchi.justsayit.chatgpt.site) is published with a read-only HTTP/MCP reference service and Linux source download; [devagotchi.net](https://devagotchi.net) has been added and is pending DNS validation.
 
 This working copy starts the replacement for DesktopCommanderMCP with a separate process broker, a thin official-SDK MCP adapter, and a Tauri desktop inspector. **The current execution provider is implemented and tested on Linux. Windows and macOS providers are still required before a cross-platform release.**
 
@@ -41,6 +41,7 @@ This desktop implementation does not yet provide file/search/edit tools, PTY inp
 | Local IPC | `src/ipc.rs` | Private directory/socket, peer UID, instance lock, bounded framed requests |
 | MCP adapter | `src/bin/bridge-mcp.rs` | Official `rmcp` 3.5.1 stdio transport and four typed tools |
 | Desktop app | `apps/desktop` | Tauri 2 native host and React/TypeScript inspector |
+| Website and public reference service | [`apps/website`](apps/website/README.md) | Product documentation, source download, and read-only HTTP/MCP reference routes |
 | Contract authority | `src/contracts.rs` | Rust DTOs, strict decoding, generated JSON Schema and TypeScript |
 | Verification | `tests`, module tests, `verification` | Real process and protocol checks plus recorded evidence |
 
@@ -152,6 +153,6 @@ The current engine uses pipes, not a PTY. It clears inherited environment variab
 
 DesktopCommanderMCP was inspected as the reference at commit `f508e524469c26f6366e17dbfd3ee5a69d112127`. The implementation here is a new foundation; it is not a claim of feature parity or benchmarked superiority over that project. The separate audit explains concrete behaviors being improved and preserves the reference's MIT license with its source snapshot.
 
-The GitHub connection returned `404` for the intended Devagotchi repository. This copy has not been reconciled with repository contents, pushed, or merged; the response does not establish why access failed. Restore access before that integration step. It does not block authorized publication through the existing Site.
+The broker, desktop inspector, planning documents, audit evidence, and website source are published in this repository. The initial complete source import is commit [`72ea5db`](https://github.com/EonsofStupid/devagotchi/commit/72ea5db73e898efa0ebfc8800a531a2df29fe6f7), whose Git tree matches the verified 211-file source snapshot. Website code lives in [`apps/website`](apps/website/README.md) and retains its existing Sites deployment identity. The earlier `404` is preserved in historical audit artifacts; repository access is now verified.
 
 The website is published at https://devagotchi.justsayit.chatgpt.site as version 3, source commit `91bb93c49eb35fa37315973666ce71dbb437a659`. The [publication receipt](verification/website-publication.json) records 12 passing reference-handler checks, successful type checking/build, 13 successful public GET checks, and the deployed MCP OAuth challenge. The MCP plugin is provisioned and installed; its tools did not surface in this chat, so an authenticated named-client call is not claimed. Browser visual QA remained unavailable. `devagotchi.net` is pending DNS validation. Public reference availability does not imply graph/mesh/runtime HTTP implementation, a native installer, or measured superiority.
