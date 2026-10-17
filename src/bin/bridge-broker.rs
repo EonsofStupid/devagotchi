@@ -1,0 +1,107 @@
+//! The broker runs independently from the MCP client process.
+
+#[cfg(target_os = "linux")]
+#[tokio::main]
+async fn main() {
+    if let Err(error) = run().await {
+        eprintln!("bridge-broker: {error}");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("bridge-broker: unsupported_platform: the current native execution provider is Linux; Windows and macOS providers are pending");
+    std::process::exit(1);
+}
+
+#[cfg(target_os = "linux")]
+async fn run() -> Result<(), Box<dyn std::error::Error>> {
+    use desktop_bridge::{contracts::*, execution::{Broker, BrokerConfig}, ipc::{self, StateGuard}};
+    use std::{io::Read, path::PathBuf, sync::Arc};
+
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args == ["--help"] {
+        println!("Usage: bridge-broker --state-dir ABS_PATH --config ABS_JSON\n\nStarts a private per-user local broker. The state parent directory must exist.\nExecutable grants authorize process execution as your OS user, not a sandbox.\nThe current native execution provider is Linux; Windows and macOS providers are pending.");
+        return Ok(());
+    }
+    let mut state = None;
+    let mut config = None;
+    if args.len() != 4 { return Err("Expected --state-dir ABS_PATH --config ABS_JSON; use --help".into()); }
+    for pair in args.chunks_exact(2) {
+        let value = PathBuf::from(&pair[1]);
+        if !value.is_absolute() { return Err("All CLI paths must be absolute".into()); }
+        match pair[0].as_str() {
+            "--state-dir" if state.is_none() => state = Some(value),
+            "--config" if config.is_none() => config = Some(value),
+            _ => return Err("Unknown or repeated CLI option".into()),
+        }
+    }
+    let state = state.ok_or("Missing --state-dir")?;
+    let config_path = config.ok_or("Missing --config")?;
+    let metadata = std::fs::metadata(&config_path)?;
+    if !metadata.is_file() || metadata.len() > MAX_FRAME_BYTES as u64 { return Err("Config must be a regular file no larger than 64 KiB".into()); }
+    // Read with a cap even if the file grows after metadata inspection.
+    let mut file = std::fs::File::open(config_path)?;
+    let mut bytes = Vec::new();
+    std::io::Read::take(&mut file, (MAX_FRAME_BYTES + 1) as u64).read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_FRAME_BYTES { return Err("Config exceeds 64 KiB".into()); }
+    let config: BrokerConfig = serde_json::from_slice(&bytes)?;
+    let mut guard = StateGuard::acquire(&state)?;
+    // Bind before opening the journal, so a foreign endpoint prevents reconciliation.
+    let listener = guard.bind().await?;
+    let broker = Broker::open(config, &state)?;
+    eprintln!("bridge-broker ready: {}", guard.socket().display());
+
+    let permits = Arc::new(tokio::sync::Semaphore::new(32));
+    let mut connections = tokio::task::JoinSet::new();
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    loop {
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => break,
+            _ = terminate.recv() => break,
+            joined = connections.join_next(), if !connections.is_empty() => {
+                if let Some(Err(error)) = joined { eprintln!("IPC connection task failed: {error}"); }
+            }
+            accepted = listener.accept() => {
+                let (mut stream, _) = accepted?;
+                let permit = match Arc::clone(&permits).try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => { drop(stream); continue; }
+                };
+                let broker = Arc::clone(&broker);
+                connections.spawn(async move {
+                    let _permit = permit;
+                    let result: BridgeResult<ResponseBody> = async {
+                        let uid = stream.peer_cred().map_err(ipc::io_error)?.uid();
+                        if uid != unsafe { libc::geteuid() } {
+                            return Err(BridgeError::new("peer_identity", "Caller UID does not match the broker operator"));
+                        }
+                        let bytes = ipc::read_frame(&mut stream, MAX_FRAME_BYTES).await?;
+                        let request: WireRequest = serde_json::from_slice(&bytes)
+                            .map_err(|e| BridgeError::new("invalid_request", e.to_string()))?;
+                        if request.api_version != API_VERSION {
+                            return Err(BridgeError::new("api_version", "Supported local broker API version is 1"));
+                        }
+                        broker.handle(request.request).await
+                    }.await;
+                    let response = match result { Ok(value) => WireResponse::Ok(value), Err(error) => WireResponse::Error(error) };
+                    match serde_json::to_vec(&response) {
+                        Ok(bytes) => {
+                            if let Err(error) = ipc::write_frame(&mut stream, &bytes, ipc::MAX_RESPONSE_BYTES).await {
+                                eprintln!("IPC response could not be delivered: {error}");
+                            }
+                        }
+                        Err(error) => eprintln!("IPC response serialization failed: {error}"),
+                    }
+                });
+            }
+        }
+    }
+    drop(listener);
+    broker.shutdown().await;
+    connections.abort_all();
+    while connections.join_next().await.is_some() {}
+    eprintln!("bridge-broker stopped");
+    Ok(())
+}

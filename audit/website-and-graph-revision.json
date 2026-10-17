@@ -1,0 +1,87 @@
+{
+  "revision": "public-website-task-graphs-and-mesh-2026-10-17",
+  "prepared_at_utc": "2026-10-17T03:14:18.590722+00:00",
+  "baseline_archive_sha256": "075a259e66f50168c84989d8cedb81c1debadd08e950bf2f3abb468c4e2b7987",
+  "protected_original_files_verified": 132,
+  "product_source_unchanged": true,
+  "historical_raw_evidence_unchanged": true,
+  "reference_snapshot_unchanged": true,
+  "changed_original_files": {
+    "devagotchi-foundation/README.md": {
+      "before_sha256": "837678cfd25bf0b80820c2aee90054cba0803ee722248ef857baf0df068b27f0",
+      "after_sha256": "0cfc8ae18cf93b8a1e364e5cbf712523e5477a8392b8cb5927dc2216f2816910",
+      "bytes": 4668
+    },
+    "devagotchi-foundation/desktop-bridge-audit-and-foundation.md": {
+      "before_sha256": "c1e7a55faeff6b09f31cfce47fc29ee2c3736b2bf81f030d6d3c73e4e7cfb57d",
+      "after_sha256": "b1ac65e6711523b38eda15b2a8b06576264d037f45c232aa5a9c03634e05ce84",
+      "bytes": 68070
+    },
+    "devagotchi-foundation/devagotchi/README.md": {
+      "before_sha256": "ec4c11e5d406546e7bf5639546bd296ee07afb41aee8425b5d93485e8f44b153",
+      "after_sha256": "c9563e4d6e264d4081a2eccd60003dae76bf13ea7a97bbd5bab9dc358dcebaf2",
+      "bytes": 13793
+    },
+    "devagotchi-foundation/devagotchi/docs/product-and-platform-plan.md": {
+      "before_sha256": "776cb4a2defd540daa248e267525abd0adedd8ab05761e46743c4aed77c0473b",
+      "after_sha256": "ade2bdc6b6a5e9808839b295e45aaa110a94a72fec5fd0cf551fd0d9b0cb6d9e",
+      "bytes": 51809
+    },
+    "devagotchi-foundation/devagotchi/verification/README.md": {
+      "before_sha256": "a08486633bffc4c92c3562dc9401b6f4a86acfc4718b3c587c5c1802b2260b65",
+      "after_sha256": "2bea00abf59e7321b7be7bd62cb9394b649d76e59551644c47450ec9c795493b",
+      "bytes": 13384
+    },
+    "devagotchi-foundation/devagotchi/verification/source-manifest.json": {
+      "before_sha256": "fccd0f3de42e49d6b45bf292dd68f00770214e1a6a39cd02e4eafe6e8edfb0e7",
+      "after_sha256": "7bd1e5f60c9eb1d34ebf69865ca19283ca7e27f2b19bdcf683a0221b09743019",
+      "bytes": 13198
+    }
+  },
+  "new_files_excluding_this_record": {
+    "devagotchi-foundation/audit/devagotchi-source-manifest-before-growth-plan.json": {
+      "bytes": 11983,
+      "sha256": "fccd0f3de42e49d6b45bf292dd68f00770214e1a6a39cd02e4eafe6e8edfb0e7"
+    },
+    "devagotchi-foundation/audit/planning-revision.json": {
+      "bytes": 3703,
+      "sha256": "b36209fe55b7f7398303ad20cca4ebcac1727fde8863343ecf07ddeee5733bb8"
+    },
+    "devagotchi-foundation/devagotchi/docs/desktop-commander-user-evidence.md": {
+      "bytes": 28258,
+      "sha256": "a577046eb85195788c1a0bd87656d1198c8a2f03a330cf05709712f74e842cc6"
+    },
+    "devagotchi-foundation/devagotchi/docs/implementation-guide.md": {
+      "bytes": 26805,
+      "sha256": "01364a1c3db265133d6ef13907b0db3ae5e188cc90ca7fcb5fe364507fdd1cba"
+    },
+    "devagotchi-foundation/devagotchi/docs/performance-and-experience-spec.md": {
+      "bytes": 29388,
+      "sha256": "c2a6da89a152ec64c884495829b5eddd75cf1cd8ab072b88fbf36eb33ac6bf39"
+    },
+    "devagotchi-foundation/devagotchi/docs/task-graph-and-mesh-contract.md": {
+      "bytes": 22400,
+      "sha256": "7cdb2876fcb2ad9ba16f5c361318b9d408930234735d3ceeb467ba00266a1a3e"
+    },
+    "devagotchi-foundation/devagotchi/verification/website-publication.json": {
+      "bytes": 10528,
+      "sha256": "43cd1191abafc548a706aed0137ed669a51fd48e2886099b87baefbd7e8a8b08"
+    }
+  },
+  "page": {
+    "page_id": "page_66e8885df79c819193681dd54e8b71bd",
+    "sequence": 5,
+    "audit_blocks_preserved_with_identical_hashes": 61,
+    "all_other_unedited_blocks_preserved": true
+  },
+  "site": {
+    "url": "https://devagotchi.justsayit.chatgpt.site",
+    "version": 3,
+    "source_commit": "91bb93c49eb35fa37315973666ce71dbb437a659",
+    "receipt": "../devagotchi/verification/website-publication.json",
+    "website_source_location": "Existing Site source repository; not duplicated in this archive."
+  },
+  "validation_scope": "Preserved source/report hashes, documentation links and Page readback; separate new website build/typecheck/reference-handler/public HTTP checks. No new native product run or benchmark.",
+  "self_integrity": "This record is covered by the ZIP hash and excludes its own hash.",
+  "documentation_link_scope": "Authored project/planning/audit Markdown only. The preserved partial upstream snapshot has three pre-existing links to omitted README files; no upstream file was changed."
+}

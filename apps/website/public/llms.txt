@@ -1,0 +1,28 @@
+# Devagotchi
+
+> A local desktop bridge between AI and the workspace. Current workstation execution is a Linux source preview. Task graphs, native Windows/macOS providers, and an internal mesh are in design or planned.
+
+## Public reference
+
+- [Connections](https://devagotchi.justsayit.chatgpt.site/connect): HTTP API, reference MCP, and local setup.
+- [Capabilities](https://devagotchi.justsayit.chatgpt.site/api/v1/capabilities): current machine-readable readiness.
+- [Topics](https://devagotchi.justsayit.chatgpt.site/api/v1/reference): reference topic index.
+- [OpenAPI](https://devagotchi.justsayit.chatgpt.site/openapi.json): read-only HTTP API.
+- [Local schemas](https://devagotchi.justsayit.chatgpt.site/reference/broker-contracts.schema.json): generated snapshot; these are not hosted execution routes.
+- [Architecture](https://devagotchi.justsayit.chatgpt.site/architecture): existing owners, proposed graph model, mesh semantics, build gates.
+- [Research](https://devagotchi.justsayit.chatgpt.site/research): recurring Desktop Commander user reports and resolution evidence.
+
+## MCP
+
+Reference endpoint: https://devagotchi.justsayit.chatgpt.site/mcp
+Transport: Streamable HTTP, protocol 2026-07-28 only, POST with per-request metadata and mirrored headers. Hosted MCP authorization policy applies.
+Tools: devagotchi_get_capabilities; devagotchi_get_reference(topic).
+These tools read public product reference only. They do not execute commands, access files, connect to a broker, enroll machines, or start a graph.
+
+## Local workstation execution
+
+An installed local MCP host launches bridge-mcp --socket ABS_PATH. The independently launched broker owns execution. Four tools: operation_start, operation_get, operation_read, operation_cancel. See the quickstart topic for exact arguments and limits.
+
+The source archive is a Linux developer preview, not an installer. No project license has been selected. No named-host or cross-platform release certification, comparative performance win, or distributed exactly-once guarantee is claimed.
+
+Domain target: devagotchi.net. Use the verified hosted origin above until custom-domain activation is confirmed.

@@ -1,0 +1,95 @@
+{
+  "started_at_utc": "2026-10-16T23:44:15.375175+00:00",
+  "broker_binary": "/workspace/scratch/b9d4b5c776c5/desktop-bridge/target/debug/bridge-broker",
+  "broker_sha256": "4064d6f2d20b665f6b5dc421416a899df1ebe66b523cf88a95f915d185e20b14",
+  "scope": "Linux IPC, explicit process grants, state integrity, and owned inherited-group cancellation; not an OS sandbox",
+  "capabilities": {
+    "unix_socket": true,
+    "different_uid": true,
+    "different_uid_reason": ""
+  },
+  "finished_at_utc": "2026-10-16T23:44:25.651760+00:00",
+  "status": "passed",
+  "tests_run": 15,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "binary_changed_during_run": false,
+  "results": [
+    {
+      "test": "__main__.SecurityBoundaryTests.test_active_socket_is_preserved_even_without_a_broker_lock",
+      "status": "passed",
+      "duration_seconds": 0.0029
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_foreign_owned_state_and_socket_are_preserved",
+      "status": "passed",
+      "duration_seconds": 0.0044
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_grant_and_schema_denials_have_no_process_side_effect",
+      "status": "passed",
+      "duration_seconds": 0.1336
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_hardlinked_journal_cannot_modify_an_unrelated_file",
+      "status": "passed",
+      "duration_seconds": 0.0032
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_incomplete_peers_are_timed_out_and_connection_capacity_recovers",
+      "status": "passed",
+      "duration_seconds": 5.0346
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_inherited_child_remains_cancellable_after_root_exits",
+      "status": "passed",
+      "duration_seconds": 1.4752
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_insecure_existing_state_is_rejected",
+      "status": "passed",
+      "duration_seconds": 0.0035
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_malformed_frames_and_request_fields_are_rejected",
+      "status": "passed",
+      "duration_seconds": 0.0362
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_only_one_request_is_processed_per_connection",
+      "status": "passed",
+      "duration_seconds": 0.1301
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_owned_stale_socket_can_be_replaced",
+      "status": "passed",
+      "duration_seconds": 0.0299
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_owner_only_state_and_socket_permissions",
+      "status": "passed",
+      "duration_seconds": 3.0276
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_peer_uid_is_checked_independently_of_socket_file_mode",
+      "status": "passed",
+      "duration_seconds": 0.0515
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_second_broker_cannot_reconcile_the_active_brokers_job",
+      "status": "passed",
+      "duration_seconds": 0.2568
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_socket_and_lock_files_are_not_overwritten",
+      "status": "passed",
+      "duration_seconds": 0.0083
+    },
+    {
+      "test": "__main__.SecurityBoundaryTests.test_symlink_state_and_ancestor_are_rejected",
+      "status": "passed",
+      "duration_seconds": 0.007
+    }
+  ]
+}

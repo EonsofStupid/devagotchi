@@ -1,0 +1,32 @@
+/**
+ * Do not edit directly, this file was auto-generated.
+ */
+
+:root {
+  --color-brand-ink: #171526;
+  --color-brand-mint: #baf8c9;
+  --color-brand-pink: #ff8fb5;
+  --color-brand-violet: #7a65e8;
+  --color-surface-paper: #f7f4ed;
+  --color-surface-cream: #fffdf7;
+  --color-border-subtle: rgba(23, 21, 38, 0.14);
+  --color-accent-butter: #fff2a4;
+  --radius-overlay: 18px;
+  --radius-control: 12px;
+  --shadow-popup: 8px 8px 0 #171526;
+  --duration-fast: 180ms;
+  --easing-pop: cubic-bezier(0.16, 1, 0.3, 1);
+  --bridge-color-forest: #12251e;
+  --bridge-color-deep: #0b1914;
+  --bridge-color-panel: #1b3027;
+  --bridge-color-paper: #f5f6f0;
+  --bridge-color-white: #ffffff;
+  --bridge-color-ink: #172b22;
+  --bridge-color-muted: #5c6c61;
+  --bridge-color-subtle: #bdcdc1;
+  --bridge-color-lime: #c1f17b;
+  --bridge-color-line: #d9e0d6;
+  --bridge-color-violet: #cabbf6;
+  --bridge-radius-card: 18px;
+  --bridge-radius-control: 8px;
+}

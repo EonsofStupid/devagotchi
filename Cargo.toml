@@ -1,0 +1,34 @@
+[package]
+name = "desktop-bridge"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+description = "A local MCP adapter and independently supervised desktop broker proof"
+
+[dependencies]
+rmcp = { version = "=3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "io-std", "net", "sync", "signal", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+base64 = "0.22.1"
+hex = "0.4.3"
+rusqlite = { version = "0.37", features = ["bundled"] }
+sha2 = "0.10.9"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[[bin]]
+name = "bridge-broker"
+path = "src/bin/bridge-broker.rs"
+
+[[bin]]
+name = "bridge-mcp"
+path = "src/bin/bridge-mcp.rs"

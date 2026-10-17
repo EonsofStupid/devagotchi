@@ -1,0 +1,130 @@
+{
+  "color": {
+    "brand": {
+      "ink": {
+        "value": "#171526",
+        "type": "color"
+      },
+      "mint": {
+        "value": "#BAF8C9",
+        "type": "color"
+      },
+      "pink": {
+        "value": "#FF8FB5",
+        "type": "color"
+      },
+      "violet": {
+        "value": "#7A65E8",
+        "type": "color"
+      }
+    },
+    "surface": {
+      "paper": {
+        "value": "#F7F4ED",
+        "type": "color"
+      },
+      "cream": {
+        "value": "#FFFDF7",
+        "type": "color"
+      }
+    },
+    "border": {
+      "subtle": {
+        "value": "rgba(23, 21, 38, 0.14)",
+        "type": "color"
+      }
+    },
+    "accent": {
+      "butter": {
+        "value": "#FFF2A4",
+        "type": "color"
+      }
+    }
+  },
+  "radius": {
+    "overlay": {
+      "value": "18px",
+      "type": "dimension"
+    },
+    "control": {
+      "value": "12px",
+      "type": "dimension"
+    }
+  },
+  "shadow": {
+    "popup": {
+      "value": "8px 8px 0 #171526",
+      "type": "shadow"
+    }
+  },
+  "duration": {
+    "fast": {
+      "value": "180ms",
+      "type": "duration"
+    }
+  },
+  "easing": {
+    "pop": {
+      "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+      "type": "cubicBezier"
+    }
+  },
+  "bridge": {
+    "color": {
+      "forest": {
+        "value": "#12251E",
+        "type": "color"
+      },
+      "deep": {
+        "value": "#0B1914",
+        "type": "color"
+      },
+      "panel": {
+        "value": "#1B3027",
+        "type": "color"
+      },
+      "paper": {
+        "value": "#F5F6F0",
+        "type": "color"
+      },
+      "white": {
+        "value": "#FFFFFF",
+        "type": "color"
+      },
+      "ink": {
+        "value": "#172B22",
+        "type": "color"
+      },
+      "muted": {
+        "value": "#5C6C61",
+        "type": "color"
+      },
+      "subtle": {
+        "value": "#BDCDC1",
+        "type": "color"
+      },
+      "lime": {
+        "value": "#C1F17B",
+        "type": "color"
+      },
+      "line": {
+        "value": "#D9E0D6",
+        "type": "color"
+      },
+      "violet": {
+        "value": "#CABBF6",
+        "type": "color"
+      }
+    },
+    "radius": {
+      "card": {
+        "value": "18px",
+        "type": "dimension"
+      },
+      "control": {
+        "value": "8px",
+        "type": "dimension"
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "harness": "Pinned validatePath source with stubbed config/telemetry/timeout wrapper; real filesystem",
+  "platform": "linux",
+  "distinctDirectoryInodes": true,
+  "results": [
+    {
+      "label": "inside allowed root",
+      "expected": true,
+      "accepted": true,
+      "correct": true
+    },
+    {
+      "label": "unrelated sibling",
+      "expected": false,
+      "accepted": false,
+      "correct": true
+    },
+    {
+      "label": "symlink to unrelated sibling",
+      "expected": false,
+      "accepted": false,
+      "correct": true
+    },
+    {
+      "label": "different-case sibling",
+      "expected": false,
+      "accepted": true,
+      "correct": false
+    }
+  ]
+}

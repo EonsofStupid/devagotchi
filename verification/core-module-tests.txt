@@ -1,0 +1,16 @@
+   Compiling desktop-bridge v0.1.0 (/workspace/scratch/b9d4b5c776c5/desktop-bridge)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.80s
+     Running unittests src/lib.rs (target/debug/deps/desktop_bridge-0475f77b853a59cf)
+
+running 7 tests
+test journal::tests::journal_rejects_hardlinks_and_sidecar_collisions_without_mutation ... ok
+test execution::tests::utf8_invalid_and_truncated_sequences_are_explicit ... ok
+test execution::tests::unknown_config_fields_and_unsafe_limits_fail_closed ... ok
+test execution::tests::utf8_is_identical_across_every_split_boundary ... ok
+test journal::tests::journal_reopens_exact_bytes_and_idempotency_evidence ... ok
+test execution::tests::recovery_never_replays_unsettled_admissions ... ok
+test execution::tests::critical_journal_failure_is_visible_and_blocks_new_execution ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+

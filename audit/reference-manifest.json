@@ -1,0 +1,266 @@
+{
+  "repository": "wonderwhy-er/DesktopCommanderMCP",
+  "commit": "f508e524469c26f6366e17dbfd3ee5a69d112127",
+  "commit_date": "2026-10-14T14:29:39Z",
+  "inspected_date": "2026-10-16",
+  "snapshot_kind": "partial inspected source and tests; not complete repository",
+  "recursive_tree_entries": 578,
+  "recursive_tree_truncated": false,
+  "verified_reference_files": 49,
+  "files": {
+    ".github/workflows/release.yml": {
+      "git_blob_sha": "d0b1edb9a238925359b24bd218f341fc7e203dee",
+      "sha256": "7820d07d2e46c4ba6f565292347094e6ef447998d0ca8d1ea713ba7f180d1398",
+      "bytes": 25897
+    },
+    "LICENSE": {
+      "git_blob_sha": "cc6ce4fa68f26cd5db3dc1ff83c8163094f28451",
+      "sha256": "e77cff545e0506903bf6a4bf29169fa40911eb76d70d239267df10c5c59370dd",
+      "bytes": 1108
+    },
+    "config.json": {
+      "git_blob_sha": "793a281bc88939fe2c1eacd0c0939ef250f532d9",
+      "sha256": "baafc61d7ce104796125f91909aeda4d11c9d87da0b53ec147a35668e7cc5d94",
+      "bytes": 202
+    },
+    "src/index.ts": {
+      "git_blob_sha": "1cd207c4a248e8b7d0cb4d6e3e4489827e06d533",
+      "sha256": "8d0e506fc497254b7606135539f00bd96bdda480b67510f1f97fa8ec09119806",
+      "bytes": 6921
+    },
+    "src/server.ts": {
+      "git_blob_sha": "800ab9f55b294e24708d0ad3e8fc43b042f332ad",
+      "sha256": "f311938198dce6b751960487e0983b7589c84dd88ea17b8846a084aa46d3b2e6",
+      "bytes": 76062
+    },
+    "src/tools/schemas.ts": {
+      "git_blob_sha": "bbdb466a2af295e1c20c2f88e09736fb207ead01",
+      "sha256": "63ac9e7d37b5c8421fff0daab4555ea4419cacdc7bce48565e4ab494f2b08f0d",
+      "bytes": 10562
+    },
+    "src/types.ts": {
+      "git_blob_sha": "fe0ffb0425ce6664322b69c9bc4105a491c9287f",
+      "sha256": "b03fc651e78abb33ea0d22db4d72064115ed390f80410497edbb8076301e13b6",
+      "bytes": 2841
+    },
+    "test/run-all-tests.js": {
+      "git_blob_sha": "5790778ec36685cbd0d1c5613578c6537ae7da5d",
+      "sha256": "5b52aaf80fd4423836a39b054b3350b3fcd6dfda3ea471e192ab5134c2bf44e1",
+      "bytes": 10377
+    },
+    "src/command-manager.ts": {
+      "git_blob_sha": "88c655a1cdd3ddeb9d6a40409f77363440a60c37",
+      "sha256": "7bcf3911f87b090ae489a53fc043357ea1b7eda94f2576dec1ace8f161fe65ea",
+      "bytes": 11056
+    },
+    "src/terminal-manager.ts": {
+      "git_blob_sha": "02192b46d2082790ab61e10fcbb9a97831ab196c",
+      "sha256": "8a50bb5fff7053a504d743e672f097e07185517e2db2f15dbc76576332f930bb",
+      "bytes": 37638
+    },
+    "src/tools/improved-process-tools.ts": {
+      "git_blob_sha": "381e64f3491d0853370cf0229d330f0ba097073c",
+      "sha256": "21db76eb24f801d14933fb6a7ebbd22c69f0ba1b64701fa598c3b855780da30f",
+      "bytes": 29737
+    },
+    "src/utils/process-detection.ts": {
+      "git_blob_sha": "23d19ddb8cccbdfac56c4b0068466e6f3a9bddc9",
+      "sha256": "3a645a81c4cbcc8b3934863a52f971508dc599bf1ce9901d96122f8fd2812033",
+      "bytes": 12187
+    },
+    "src/utils/process-tree.ts": {
+      "git_blob_sha": "b6438b07cf3e91d65f8adfae7a54a1786c6941e8",
+      "sha256": "6a81a7998d93ed1ee258dd578ed311acd21318cdd4b3a98baab1d32c9b40427d",
+      "bytes": 8834
+    },
+    "src/utils/shell.ts": {
+      "git_blob_sha": "3d9c46e4a440afd8062cebf70864452bc1156d39",
+      "sha256": "88aab05b98097960b0326d5e1a53326ec308319c52990823c221b5dea778cf50",
+      "bytes": 6979
+    },
+    "test/integration/terminal-output-buffer-leak.js": {
+      "git_blob_sha": "a5f46b7578899e9c06abf801a2d7cf2ba19e97b0",
+      "sha256": "a7854c2ef2de85cb5b7295e1660f63a20e7204719c35bffdd2fe1d3ff340d935",
+      "bytes": 6441
+    },
+    "test/test-process-facts.js": {
+      "git_blob_sha": "e029849ea9229849654a8f9b5e47594870969454",
+      "sha256": "38f335bce3723deb675f270a4a88dde42dbae2db22f95db2f35124fe739318bf",
+      "bytes": 3372
+    },
+    "test/test-process-memory.js": {
+      "git_blob_sha": "5f6cb6b9312a47e0d1619bc867e0820334afb808",
+      "sha256": "70ec927193448ff0bc76197659b0105f737742f6b0f501e3d471b0590ffad789",
+      "bytes": 2356
+    },
+    "test/test-process-pagination.js": {
+      "git_blob_sha": "24c6e8f15d9126a34550064ad969724365e2bec5",
+      "sha256": "91155f8be22740996783efc7911462ef2a12ef60f5d2b610d354b9592d9a989c",
+      "bytes": 13685
+    },
+    "test/test-process-state-detection.js": {
+      "git_blob_sha": "348b5225e6f617cb712f3e42be2646ffe63cc26c",
+      "sha256": "6b8642fa5d6f64557511a2d4eaa318fc4842d5122ac69096b7cf4efe59b67d92",
+      "bytes": 10327
+    },
+    "test/test-process-wait-config.js": {
+      "git_blob_sha": "cfcfe5947b3ff6d1aa28da71c8b49b84cea8334d",
+      "sha256": "bd70a4c9a56ecbccaf6809564f5d145d07cb6321eafb77596fc028d44dd5a7fb",
+      "bytes": 9658
+    },
+    "test/test-terminate-process-tree.js": {
+      "git_blob_sha": "721c18e100865747e088d7f5ee0d8c0c3d132a4a",
+      "sha256": "915b3d147158d3033872faed3f97af94209421410606c4ac2d0cd7028f3db9e0",
+      "bytes": 22420
+    },
+    "PRIVACY.md": {
+      "git_blob_sha": "4953d232af27ddd1a8dd8133f4ec1eff158444c4",
+      "sha256": "7f2f0437a3edc78db0de60a24d14c7b751cc6d472d7d96139c86d832e8d4670a",
+      "bytes": 9636
+    },
+    "SECURITY.md": {
+      "git_blob_sha": "8646b7e2951a426706ae3a17359afdaab6868cd0",
+      "sha256": "171efa2c43111d7e7d4faf3063a04302fbe3621f5da949e25b188b80bfae38ee",
+      "bytes": 4190
+    },
+    "src/config-field-definitions.ts": {
+      "git_blob_sha": "77efa9bf329d1a2bf80ba76651fd2330fc99d3e1",
+      "sha256": "d705dd5bd35fa2bee7129918dc4c44714db4f1cfd3b989e8bf9d3d68b7f2c843",
+      "bytes": 2302
+    },
+    "src/config-manager.ts": {
+      "git_blob_sha": "4cb89f2d5fdc3fd0b81b1cd192fbdbcdcd5251fd",
+      "sha256": "92ebeccee29d9c675011f8a481df936b00a0f824e988e2ab6caba81d33d0fc8f",
+      "bytes": 26601
+    },
+    "src/handlers/history-handlers.ts": {
+      "git_blob_sha": "1c65a6c2eded665afbea2c54b60a98ef4ead43d4",
+      "sha256": "e6971ee1bc5246658f5a013dca4cf9ad18c502125c9a2aadf971e73edd29df31",
+      "bytes": 2227
+    },
+    "src/tools/config.ts": {
+      "git_blob_sha": "eba9debe1f1dddf8789986d9cc688a75fffe4c17",
+      "sha256": "dea428ac3e4e1d863596ea755a728d1486869060085e2063514a1553d2c5e683",
+      "bytes": 8305
+    },
+    "src/tools/edit.ts": {
+      "git_blob_sha": "61810f58f3a4791903eab60fabf260cbb923141c",
+      "sha256": "2adf00579def9d7337aeb684cecf7ccdc3db70ada57b6dd55957af67ef7de466",
+      "bytes": 24066
+    },
+    "src/tools/filesystem.ts": {
+      "git_blob_sha": "ac9f516d77e2e066f9e5362b63a55c3d31b5d8d0",
+      "sha256": "f5ee14a1368ae2e2b1cd5079d21777b4eca9d3960e01bb010c86d4559a73bd49",
+      "bytes": 49874
+    },
+    "src/utils/atomic-write.ts": {
+      "git_blob_sha": "01238b09939c6c4b26dac97ab183ac2a8f581c02",
+      "sha256": "8e4f07bed1a4aea3830803ec1b134a6fe57ca091eb061008558c537d8ed23daa",
+      "bytes": 3637
+    },
+    "src/utils/capture.ts": {
+      "git_blob_sha": "26f576a382ed32655cf549255da51b62de5ea5be",
+      "sha256": "02ffffaa5c6eb93e74db719740610aee758352f41c53ffffaa86ac315cf88692",
+      "bytes": 26466
+    },
+    "src/utils/files/text.ts": {
+      "git_blob_sha": "b51d6ea73691919a39c6f1ff0d5a749207ec46ff",
+      "sha256": "5909cc953f6eb2f41b46971e41d43bfd71db4de082b3a7470e89f5a0e68c99e0",
+      "bytes": 18452
+    },
+    "src/utils/fuzzySearchLogger.ts": {
+      "git_blob_sha": "5dc7379d7674734b98bf25bf559e9a1e50dc49a0",
+      "sha256": "93b6f04d684a681ff7dd3e9cfee055a1f5542d8645fa9413efb635e96fcf5d89",
+      "bytes": 5168
+    },
+    "src/utils/toolHistory.ts": {
+      "git_blob_sha": "6c9d548812316eb4c32ef7f010c66100af902a34",
+      "sha256": "471d0915e5beda353bf01ffe3281004f0c0fd7343b113f7875895df78bc19cc1",
+      "bytes": 11255
+    },
+    "test/test-allowed-directories-symlink.js": {
+      "git_blob_sha": "d866450de24803ad92fe40e28ebe261eb3b91d9d",
+      "sha256": "8fca43cfd186bd18591e936892251f5587fe87a1abd2d5429d6cee817afe0530",
+      "bytes": 4535
+    },
+    "test/test-atomic-write.js": {
+      "git_blob_sha": "6889371b1024f3819e92ba620da683342322d019",
+      "sha256": "3082b45dacca6a255ebb237ac22ba38f0ed1ba3bb444c05f8034d251d5ae897c",
+      "bytes": 3013
+    },
+    "test/test-symlink-security.js": {
+      "git_blob_sha": "8197a6d85c969c96a304595b66d00f86df838b81",
+      "sha256": "0b9eef51bd5f9ccb99519f08327769a94fb9c5fd71c806a6b1f25ee6f91b73fe",
+      "bytes": 11346
+    },
+    "package.json": {
+      "git_blob_sha": "2e2e39be1b27abdbc978ad061ce6994c7251b740",
+      "sha256": "8ba64a033e75730c16f90b09f2749fa5e61c28240104ead151cabe93239ba14a",
+      "bytes": 6036
+    },
+    "src/custom-stdio.ts": {
+      "git_blob_sha": "e1c3bb4c29dfbf53e1c7120e17ca59a682f450e0",
+      "sha256": "c3b5944ca2e090a5339b02812a934cecd94667768df50c94e174fc2306d47139",
+      "bytes": 12701
+    },
+    "src/remote-device/README.md": {
+      "git_blob_sha": "5f5fc0a8979fe0fa55b7f0431990541be8ff134b",
+      "sha256": "be0ef1e0c137d9ebac76e00ce1f3d3889f675dc3dc6f20f0022955ad5e24c037",
+      "bytes": 7993
+    },
+    "src/remote-device/desktop-commander-integration.ts": {
+      "git_blob_sha": "37337024ba1c4c1d055304c76b99c4a422602816",
+      "sha256": "8bc968054dfa4a91a7e4e98fce35a020ef984033b1f2d74d4d98d00bfdcc5c19",
+      "bytes": 18430
+    },
+    "src/remote-device/device-authenticator.ts": {
+      "git_blob_sha": "fba2b83efa51d32b34f6384d8321ba875012692f",
+      "sha256": "2eb94d3b848d028a1ebfeae2d1ecf5e3b18453541fbed664ce12961ac6afb92c",
+      "bytes": 9330
+    },
+    "src/remote-device/device.ts": {
+      "git_blob_sha": "0e212afbdd44d987d887376324b393b47707f113",
+      "sha256": "0d90f1e2629369a9535534faecd2ad306d78e71b492fa5f35f1ad79298b20248",
+      "bytes": 37772
+    },
+    "src/remote-device/remote-channel.ts": {
+      "git_blob_sha": "01684786d87e42b76ba982da531b05648b765ad0",
+      "sha256": "0f3875a5345a4c1da2263835c891792806cfb1a8a9084e8a019792b6ce0e1f35",
+      "bytes": 93114
+    },
+    "test/integration/remote-device-restart.js": {
+      "git_blob_sha": "1ae3f97e6ddfd0da76067c357447c2b81a548905",
+      "sha256": "f635c00b6faf331590cd1c22c49784f7291a06253d3d36d2d502921eaca8b31d",
+      "bytes": 13661
+    },
+    "test/test-remote-channel-reconnect.js": {
+      "git_blob_sha": "8eecf0c15c7e7c32b77fc579706abc0c31dab91d",
+      "sha256": "cf62293bfda3ebcc4b16772be979d221ae65da006cefbf925cb40e5d31df2aa3",
+      "bytes": 49183
+    },
+    "test/test-remote-device-readiness.js": {
+      "git_blob_sha": "f36f8772282c5492ffe2bc405987ab0a91b034d4",
+      "sha256": "ab011f2c747d5bb146d86fd16994d5795de70a477d53a6eb54896ff98e7917d1",
+      "bytes": 17829
+    },
+    "test/test-remote-inflight-call-fast-fail.js": {
+      "git_blob_sha": "92455c85e36e0af67ba7e0b4caa3e24cbe51791c",
+      "sha256": "17c4ff607145c811474b98b65195798e92d146a8eb8f97bff960f932a77c4a93",
+      "bytes": 9296
+    },
+    "test/test-remote-pending-recovery.js": {
+      "git_blob_sha": "da7b3c4b3dfd047e539ae2efcc84a2b0f3ee6cb3",
+      "sha256": "37f4b3e5e5beade47f0ef437367839d3f472af2c22af4f190b64747878e4f6c3",
+      "bytes": 7532
+    }
+  },
+  "verification": {
+    "source_integrity": "All included reference bytes match pinned Git blob SHA.",
+    "process_probe": "Actual TerminalManager source with fake child process and stubbed config; UTF-8 corruption, shared cursor, ongoing timing events reproduced.",
+    "path_probe": "Actual validatePath source with stubbed config/telemetry/timeout; real Linux filesystem. Case-sensitive sibling incorrectly accepted, controls rejected correctly.",
+    "full_upstream_build_and_suite": "not run",
+    "windows_execution": "not run",
+    "hosted_relay": "not inspected",
+    "replacement_product": "not implemented"
+  }
+}

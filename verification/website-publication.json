@@ -1,0 +1,289 @@
+{
+  "recorded_at_utc": "2026-10-17T03:10:36Z",
+  "scope": "Website/reference-service publication only; separate from historical Linux broker/native evidence.",
+  "site": {
+    "project_id": "appgprj_6a8150d1b19481919fa3a4e84c13824c",
+    "version_number": 3,
+    "version_id": "appgprj_6a8150d1b19481919fa3a4e84c13824c~appgver_e490c7dd38388191a5f1b13625f7197b",
+    "deployment_id": "appgdep_6ad2e6d1c64081918ecd1d6a20b83ac8",
+    "status": "succeeded",
+    "url": "https://devagotchi.justsayit.chatgpt.site",
+    "source_commit": "91bb93c49eb35fa37315973666ce71dbb437a659",
+    "archive_sha256": "sha256:9412e511d35db707d4eed9c1ada03a93f33d94378355fbaae4aa5fb1a2f2ca2d",
+    "has_mcp": true
+  },
+  "mcp": {
+    "mcp_url": "https://devagotchi.justsayit.chatgpt.site/mcp",
+    "oauth_resource": "https://devagotchi.justsayit.chatgpt.site/mcp",
+    "plugin_id": "plugin_asdk_app_sites_b92651e232a481919984d42e16a08d4a",
+    "protocol_version": "2026-07-28",
+    "plugin_installation": "Already installed, as reported by plugin management",
+    "public_http_status": 401,
+    "authentication": "OAuth challenge with protected-resource metadata; no authenticated named-client tool call completed in this chat because installed tools did not surface."
+  },
+  "source_preview": {
+    "url": "https://devagotchi.justsayit.chatgpt.site/downloads/devagotchi-linux-source-preview.zip",
+    "sha256": "5fe3a0ff3fa763b1c1b360ff49fb8926a9df1ed30798e4675fd545739976d252",
+    "bytes": 352523,
+    "entries": 78,
+    "canonical_files_byte_identical": 73,
+    "scope": "Linux source, not an installer. No project license selected. Snapshot prepared before this publication receipt."
+  },
+  "validation": {
+    "reference_handler_tests": {
+      "passed": 12,
+      "failed": 0,
+      "skipped": 0,
+      "command": "node tests/reference-mcp.test.mjs"
+    },
+    "typescript": "Passed after generating current Worker runtime types and narrowing an existing upload-error response",
+    "production_build": "Passed through the Sites build and source workflow",
+    "public_http": {
+      "origin": "https://devagotchi.justsayit.chatgpt.site",
+      "checks": [
+        {
+          "path": "/",
+          "status": 200,
+          "content_type": "text/html; charset=utf-8",
+          "bytes": 53034,
+          "contains_brand": true,
+          "contains_main": true,
+          "starter_marker_absent": true
+        },
+        {
+          "path": "/connect",
+          "status": 200,
+          "content_type": "text/html; charset=utf-8",
+          "bytes": 72271,
+          "contains_brand": true,
+          "contains_main": true,
+          "starter_marker_absent": true
+        },
+        {
+          "path": "/architecture",
+          "status": 200,
+          "content_type": "text/html; charset=utf-8",
+          "bytes": 49198,
+          "contains_brand": true,
+          "contains_main": true,
+          "starter_marker_absent": true
+        },
+        {
+          "path": "/research",
+          "status": 200,
+          "content_type": "text/html; charset=utf-8",
+          "bytes": 56651,
+          "contains_brand": true,
+          "contains_main": true,
+          "starter_marker_absent": true
+        },
+        {
+          "path": "/api/v1/capabilities",
+          "status": 200,
+          "content_type": "application/json",
+          "bytes": 1725,
+          "json_keys": [
+            "platforms",
+            "product",
+            "reference",
+            "reference_version",
+            "schema_version",
+            "source",
+            "stage",
+            "workspace"
+          ],
+          "capabilities": {
+            "schema_version": "1.0",
+            "reference_version": "2026.10.17-preview.1",
+            "product": "Devagotchi",
+            "stage": "developer-preview",
+            "reference": {
+              "purpose": "Public product documentation and capability discovery. No workstation execution.",
+              "api": "https://devagotchi.justsayit.chatgpt.site/api/v1/capabilities",
+              "documentation": "https://devagotchi.justsayit.chatgpt.site/api/v1/reference",
+              "openapi": "https://devagotchi.justsayit.chatgpt.site/openapi.json",
+              "mcp": {
+                "url": "https://devagotchi.justsayit.chatgpt.site/mcp",
+                "protocol_versions": [
+                  "2026-07-28"
+                ],
+                "transport": "streamable-http",
+                "access": "read-only reference; hosted MCP access policy applies"
+              }
+            },
+            "workspace": {
+              "available_as": "linux-source-preview",
+              "transport": "stdio",
+              "protocol_versions_verified_in_raw_tests": [
+                "2025-11-25",
+                "2026-07-28"
+              ],
+              "named_client_certification": [],
+              "tools": [
+                "operation_start",
+                "operation_get",
+                "operation_read",
+                "operation_cancel"
+              ],
+              "remote_execution_available": false,
+              "graph_execution_available": false,
+              "mesh_available": false
+            },
+            "platforms": [
+              {
+                "name": "Linux",
+                "status": "Source preview",
+                "detail": "Broker, stdio MCP adapter, and native inspector. Tested on a Linux development host.",
+                "available": true
+              },
+              {
+                "name": "macOS",
+                "status": "Planned",
+                "detail": "Native process supervision, permissions, packaging, and validation remain to be built.",
+                "available": false
+              },
+              {
+                "name": "Windows",
+                "status": "Planned",
+                "detail": "Job Objects, named pipes, ConPTY, native permissions, and installers remain to be built.",
+                "available": false
+              }
+            ],
+            "source": {
+              "repository": "https://github.com/eonsofstupid/devagotchi",
+              "repository_access_verified": false,
+              "preview": "https://devagotchi.justsayit.chatgpt.site/downloads/devagotchi-linux-source-preview.zip",
+              "license": "No project license has been selected for the preview."
+            }
+          }
+        },
+        {
+          "path": "/api/v1/reference?topic=local-tools",
+          "status": 200,
+          "content_type": "application/json",
+          "bytes": 2826,
+          "json_keys": [
+            "reference",
+            "reference_version",
+            "topic"
+          ]
+        },
+        {
+          "path": "/api/v1/reference?topic=task-graphs",
+          "status": 200,
+          "content_type": "application/json",
+          "bytes": 3694,
+          "json_keys": [
+            "reference",
+            "reference_version",
+            "topic"
+          ]
+        },
+        {
+          "path": "/openapi.json",
+          "status": 200,
+          "content_type": "application/json",
+          "bytes": 1182,
+          "json_keys": [
+            "externalDocs",
+            "info",
+            "openapi",
+            "paths",
+            "servers"
+          ],
+          "openapi": "3.1.0"
+        },
+        {
+          "path": "/llms.txt",
+          "status": 200,
+          "content_type": "text/plain",
+          "bytes": 2164,
+          "sha256": "050de2a39f5e38fab55c478c1f1612114f37993ef08f8c58b5bf6e94fb30ca89",
+          "matches_published_input": true
+        },
+        {
+          "path": "/downloads/devagotchi-linux-source-preview.zip",
+          "status": 200,
+          "content_type": "application/zip",
+          "bytes": 352523,
+          "sha256": "5fe3a0ff3fa763b1c1b360ff49fb8926a9df1ed30798e4675fd545739976d252",
+          "matches_published_input": true
+        },
+        {
+          "path": "/downloads/devagotchi-linux-source-preview.sha256",
+          "status": 200,
+          "content_type": "application/octet-stream",
+          "bytes": 102,
+          "sha256": "ef8ce9cc33952ef1f6ff6bf3fd9dabc417f852b45ed9e4718f1736bb57011385",
+          "matches_published_input": true
+        },
+        {
+          "path": "/reference/broker-contracts.schema.json",
+          "status": 200,
+          "content_type": "application/json",
+          "bytes": 9490,
+          "json_keys": [
+            "$defs",
+            "$schema",
+            "additionalProperties",
+            "description",
+            "properties",
+            "required",
+            "title",
+            "type"
+          ],
+          "sha256": "d5963fe58abfc676ef1acad5c302c572a666d0a40cdef7b859589ac18da0c169",
+          "matches_published_input": true
+        },
+        {
+          "path": "/images/devagotchi-linux-preview.png",
+          "status": 200,
+          "content_type": "image/png",
+          "bytes": 100398,
+          "sha256": "a14778cd4dd2e83c1e676c7db9fc34decc4f584998762291c566411e9fcb879b",
+          "matches_published_input": true
+        },
+        {
+          "path": "/mcp",
+          "status": 401,
+          "content_type": "text/plain; charset=utf-8",
+          "bytes": 12,
+          "authentication_challenge": "Bearer resource_metadata=\"https://devagotchi.justsayit.chatgpt.site/.well-known/oauth-protected-resource/mcp\", scope=\"openid resource.invoke email\""
+        }
+      ]
+    },
+    "browser_qa": "Unverified: supervised preview never became healthy; browser reported connection refused. No substitute browser automation was used.",
+    "native_product_tests": "Not rerun for this website/documentation revision."
+  },
+  "domain": {
+    "hostname": "devagotchi.net",
+    "status": "pending",
+    "ssl_status": "pending_validation",
+    "apex_proxy_ipv4_targets": [
+      "162.159.143.30",
+      "172.66.3.26"
+    ],
+    "validation_records": [
+      {
+        "type": "TXT",
+        "name": "_openai-site-verification.devagotchi.net",
+        "value": "openai-site-verification=kKSK9bwSL11j8L-6NfakmHQyD1427JPdkZpe844OFkg"
+      },
+      {
+        "type": "TXT",
+        "name": "_cf-custom-hostname.devagotchi.net",
+        "value": "c7d276bf-a4c0-425d-967a-c53a30527202"
+      }
+    ],
+    "dns_management_access": "No connected DNS management capability was available."
+  },
+  "product_status": {
+    "linux_source_preview": true,
+    "windows_provider": false,
+    "macos_provider": false,
+    "graph_execution": false,
+    "mesh_execution": false,
+    "runtime_http": false,
+    "comparative_performance_results": false
+  }
+}

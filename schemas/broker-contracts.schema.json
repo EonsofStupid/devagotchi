@@ -1,0 +1,399 @@
+{
+  "$defs": {
+    "BridgeError": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "GetInput": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id"
+      ],
+      "type": "object"
+    },
+    "ListInput": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "default": 32,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "OperationState": {
+      "enum": [
+        "accepted",
+        "running",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "timed_out",
+        "interrupted",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "OperationSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "display_command": {
+          "description": "Bounded display preview only. Execute only the exact argv from the canonical request.",
+          "type": "string"
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        },
+        "updated_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "state",
+        "created_at_ms",
+        "updated_at_ms",
+        "display_command"
+      ],
+      "type": "object"
+    },
+    "OperationView": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cancellation_requested": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "deadline_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "executable": {
+          "type": "string"
+        },
+        "exit_code": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "output_complete": {
+          "type": "boolean"
+        },
+        "ownership_scope": {
+          "description": "Root process and its inherited process group only; this is not OS containment.",
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/OperationState"
+        },
+        "updated_at_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "executable",
+        "args",
+        "cwd",
+        "deadline_ms",
+        "state",
+        "created_at_ms",
+        "updated_at_ms",
+        "ownership_scope",
+        "cancellation_requested",
+        "output_complete"
+      ],
+      "type": "object"
+    },
+    "OperationsPage": {
+      "additionalProperties": false,
+      "properties": {
+        "next_offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "operations": {
+          "items": {
+            "$ref": "#/$defs/OperationSummary"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "operations"
+      ],
+      "type": "object"
+    },
+    "OutputFrame": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes_base64": {
+          "description": "Raw process bytes, losslessly encoded. Text below is a UTF-8 convenience view.",
+          "type": "string"
+        },
+        "sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stream": {
+          "type": "string"
+        },
+        "text": {
+          "description": "Incrementally decoded per stream; split UTF-8 sequences are retained between chunks.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sequence",
+        "stream",
+        "bytes_base64",
+        "text"
+      ],
+      "type": "object"
+    },
+    "OutputPage": {
+      "additionalProperties": false,
+      "properties": {
+        "earliest_retained_sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "frames": {
+          "items": {
+            "$ref": "#/$defs/OutputFrame"
+          },
+          "type": "array"
+        },
+        "gap": {
+          "description": "True when requested output was evicted from this operation's bounded retention.",
+          "type": "boolean"
+        },
+        "has_more": {
+          "type": "boolean"
+        },
+        "latest_sequence": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "next_cursor": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operation": {
+          "$ref": "#/$defs/OperationView"
+        },
+        "operation_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "frames",
+        "next_cursor",
+        "gap",
+        "earliest_retained_sequence",
+        "latest_sequence",
+        "has_more",
+        "operation"
+      ],
+      "type": "object"
+    },
+    "ReadInput": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "default": 0,
+          "description": "Last sequence consumed, starting at zero. Reading never advances another reader.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_bytes": {
+          "default": 16384,
+          "description": "Maximum raw bytes to return, 1024..=16384. Frames are at most 1024 bytes.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "operation_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id"
+      ],
+      "type": "object"
+    },
+    "StartInput": {
+      "additionalProperties": false,
+      "properties": {
+        "args": {
+          "default": [],
+          "description": "Exact argument vector. No shell parsing, interpolation, or added command text.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cwd": {
+          "description": "Absolute working directory within the configured workspace; defaults to its root.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "deadline_ms": {
+          "description": "Execution deadline, not a client wait timeout. 1..=300000 milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "executable": {
+          "description": "Absolute path of an executable granted by the broker operator.",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "description": "A caller-created retry key. The same key and inputs return the same operation.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "idempotency_key",
+        "executable",
+        "deadline_ms"
+      ],
+      "type": "object"
+    },
+    "StartOutput": {
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "$ref": "#/$defs/OperationView"
+        },
+        "replayed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "operation",
+        "replayed"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Export-only schema root. These fields reference canonical Rust DTOs and are\nnot a broker request or a second set of independently authored contracts.",
+  "properties": {
+    "bridge_error": {
+      "$ref": "#/$defs/BridgeError"
+    },
+    "get_input": {
+      "$ref": "#/$defs/GetInput"
+    },
+    "list_input": {
+      "$ref": "#/$defs/ListInput"
+    },
+    "operation_view": {
+      "$ref": "#/$defs/OperationView"
+    },
+    "operations_page": {
+      "$ref": "#/$defs/OperationsPage"
+    },
+    "output_page": {
+      "$ref": "#/$defs/OutputPage"
+    },
+    "read_input": {
+      "$ref": "#/$defs/ReadInput"
+    },
+    "start_input": {
+      "$ref": "#/$defs/StartInput"
+    },
+    "start_output": {
+      "$ref": "#/$defs/StartOutput"
+    }
+  },
+  "required": [
+    "start_input",
+    "get_input",
+    "read_input",
+    "list_input",
+    "start_output",
+    "operation_view",
+    "output_page",
+    "operations_page",
+    "bridge_error"
+  ],
+  "title": "BrokerContracts",
+  "type": "object"
+}

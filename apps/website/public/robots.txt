@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /sanctuary
+Disallow: /api/pets
+Disallow: /api/preferences

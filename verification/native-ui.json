@@ -1,0 +1,91 @@
+{
+  "status": "passed",
+  "platform": "linux",
+  "python_version": "3.12.14",
+  "native_binary": "/workspace/scratch/b9d4b5c776c5/desktop-bridge/apps/desktop/src-tauri/target/debug/devagotchi",
+  "native_binary_sha256": "29187b414926bc3c385fe1433c4107e72f59b100db54d4539ce18bf5cff9d201",
+  "broker_binary_sha256": "4064d6f2d20b665f6b5dc421416a899df1ebe66b523cf88a95f915d185e20b14",
+  "adapter_binary_sha256": "bbf03617f283acb2a5ac0c2c968e262c713075c899c3aa8fc0ce311b3b77838f",
+  "tauri_driver_sha256": "4f0ee47e7fae0b9356a495ed678b17e656fba3e4bce9984dee7d11e7d0d7310d",
+  "expected_script_assets": [
+    "index-Dwb3xSMd.js"
+  ],
+  "webkit_sandbox_disabled_for_container": false,
+  "checks": [
+    {
+      "name": "real_mcp_commands_admitted_before_native_launch",
+      "status": "passed"
+    },
+    {
+      "name": "compiled_assets_in_real_native_webkit",
+      "status": "passed",
+      "title": "Devagotchi",
+      "scripts": [
+        "tauri://localhost/assets/index-Dwb3xSMd.js"
+      ],
+      "url": "tauri://localhost",
+      "stylesheets": [
+        "tauri://localhost/assets/index-Cobh3DGI.css"
+      ]
+    },
+    {
+      "name": "native_command_list_and_exact_request_match_broker",
+      "status": "passed",
+      "operation_id": "be367be1-9003-436f-a73b-e9fe7d04a684"
+    },
+    {
+      "name": "real_streamed_unicode_and_stderr_render_as_plain_text",
+      "status": "passed"
+    },
+    {
+      "name": "rapid_selection_cancels_only_selected_operation",
+      "status": "passed",
+      "selected_operation_id": "c3b22b66-75e2-44ee-8736-ef4fa51e6b6f",
+      "selected_state": "cancelled",
+      "other_operation_id": "be367be1-9003-436f-a73b-e9fe7d04a684",
+      "other_state": "running",
+      "other_heartbeat_advanced": true,
+      "rapid_pointer_clicks": 5,
+      "immediate_click_requested_cancellation": true
+    },
+    {
+      "name": "native_cancel_reaches_broker_and_stops_fixture",
+      "status": "passed",
+      "state": "cancelled",
+      "cancellation_requested": true,
+      "output_complete": true,
+      "heartbeat_bytes": 43
+    },
+    {
+      "name": "broker_loss_is_explicit_and_last_history_is_retained",
+      "status": "passed",
+      "error": "ipc ioNo such file or directory (os error 2)"
+    }
+  ],
+  "system_test_packages": [
+    "libwebkit2gtk-4.1-0=2.52.3-0ubuntu0.24.04.1",
+    "webkit2gtk-driver=2.52.3-0ubuntu0.24.04.1",
+    "xauth=1:1.1.2-1build1",
+    "xvfb=2:21.1.12-1ubuntu1.6"
+  ],
+  "fixture_operation_id": "be367be1-9003-436f-a73b-e9fe7d04a684",
+  "historic_operation_id": "eea42b83-c986-4e5e-9ab3-3341b5be5adf",
+  "webdriver_capabilities": {
+    "browserName": "wry",
+    "browserVersion": "0.57",
+    "platformName": "linux",
+    "acceptInsecureCerts": false,
+    "strictFileInteractability": false,
+    "setWindowRect": true,
+    "unhandledPromptBehavior": "dismiss and notify",
+    "pageLoadStrategy": "normal",
+    "proxy": {},
+    "timeouts": {
+      "script": 30000,
+      "pageLoad": 300000,
+      "implicit": 0
+    }
+  },
+  "selection_fixture_operation_id": "c3b22b66-75e2-44ee-8736-ef4fa51e6b6f",
+  "elapsed_seconds": 11.311
+}

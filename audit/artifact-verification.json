@@ -1,0 +1,31 @@
+{
+  "report_page": "https://chatgpt.com/space/page_66e8885df79c819193681dd54e8b71bd",
+  "report_title": "Devagotchi audit and build foundation",
+  "report_sequence": 2,
+  "reference_files": 49,
+  "original_audit_blocks_preserved": 61,
+  "reference_sha256_and_git_blob_verified": true,
+  "report_text_verified": {
+    "title": true,
+    "native_seven_checks": true,
+    "locked_product": true,
+    "local_client": true,
+    "repository_access_limit": true,
+    "no_stale_gate": true
+  },
+  "page_preview": "No native Page rendering preview was available. Text, title, table and preserved original audit blocks were read back and checked.",
+  "replacement_bridge": "Implemented and verified development foundation on Linux; not a signed release or full Desktop Commander parity.",
+  "product": "Devagotchi",
+  "repo": "https://github.com/eonsofstupid/devagotchi",
+  "planned_site": "https://devagotchi.net",
+  "product_targets": [
+    "Windows",
+    "macOS",
+    "Linux"
+  ],
+  "runtime_verified": [
+    "Linux"
+  ],
+  "source_files_before_manifest": 77,
+  "excluded": "Build outputs, dependencies, QA screenshots/HTML, temporary fixtures and caches."
+}

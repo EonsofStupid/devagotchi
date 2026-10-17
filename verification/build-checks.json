@@ -1,0 +1,77 @@
+{
+  "status": "passed",
+  "platform": "linux",
+  "environment": {
+    "os": "Ubuntu 24.04.3",
+    "rustc": "1.99.1",
+    "node": "24.19.0",
+    "npm": "11.9.0",
+    "python": "3.12.14"
+  },
+  "source_context": "Isolated Devagotchi foundation; not reconciled with a GitHub commit.",
+  "checks": [
+    {
+      "name": "core_library_tests",
+      "command": "cargo +stable test --locked --offline --lib",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "duration_seconds": 0.23
+    },
+    {
+      "name": "generated_contract_drift",
+      "command": "node scripts/generate-contracts.cjs --check",
+      "result": "Canonical Rust schema and generated desktop contracts are current."
+    },
+    {
+      "name": "frontend_production_build",
+      "command": "npm run build",
+      "result": "TypeScript strict check and Vite production build passed; current embedded assets also verified by native-ui.json."
+    },
+    {
+      "name": "native_linux_build",
+      "command": "cargo +stable build --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --features custom-protocol -j 2",
+      "result": "Native executable linked successfully with current frontend assets.",
+      "duration_seconds": 107
+    },
+    {
+      "name": "native_host_library_tests",
+      "command": "cargo +stable test --locked --offline --manifest-path apps/desktop/src-tauri/Cargo.toml --features custom-protocol --lib -j 2",
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "tests": [
+        "cli_configuration_is_explicit",
+        "navigation_cannot_leave_the_app",
+        "list_request_preserves_paging_and_rejects_wrong_response_kind"
+      ]
+    },
+    {
+      "name": "native_visual_review",
+      "result": "Actual WebKit running, cancelled and disconnected app states inspected internally; screenshots are not included in the deliverable."
+    },
+    {
+      "name": "final_core_binary_build",
+      "command": "cargo +stable build --locked --offline --bins",
+      "result": "Passed; broker platform-startup guards compiled. Smoke/boundary/native checks then passed against this final binary."
+    },
+    {
+      "name": "final_native_ui_selection_guard",
+      "result": "Strict frontend production build passed; native binary rebuilt with index-Dwb3xSMd.js; seven actual native WebKit checks passed including selected-command cancellation isolation.",
+      "native_build_seconds": 1.56,
+      "ui_check_seconds": 11.311,
+      "evidence": "native-ui.json"
+    }
+  ],
+  "limits": [
+    "Results are observed development checks, not a signed release or installer qualification.",
+    "The UI smoke exercises allowed Tauri commands; the negative capability boundary was reviewed in source, not exhaustively probed at runtime.",
+    "The optional Playwright fixture suite was not run to completion: its browser download returned invalid archive content. Actual native WebKit UI checks passed separately.",
+    "Windows, macOS, a named desktop MCP host, physical power-loss durability, file tools and PTY/ConPTY are not certified by these results."
+  ],
+  "final_binary_hashes": {
+    "bridge-broker": "4064d6f2d20b665f6b5dc421416a899df1ebe66b523cf88a95f915d185e20b14",
+    "bridge-mcp": "bbf03617f283acb2a5ac0c2c968e262c713075c899c3aa8fc0ce311b3b77838f",
+    "devagotchi": "29187b414926bc3c385fe1433c4107e72f59b100db54d4539ce18bf5cff9d201"
+  }
+}

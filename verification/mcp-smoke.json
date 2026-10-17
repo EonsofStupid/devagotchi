@@ -1,0 +1,49 @@
+{
+  "status": "passed",
+  "product": "Devagotchi",
+  "environment": "linux",
+  "scope": "Real Linux broker plus scripted MCP stdio client; not a named desktop-client certification",
+  "elapsed_seconds": 3.004,
+  "checks": [
+    {
+      "name": "stdio_initialize_and_typed_tool_catalog",
+      "status": "passed",
+      "protocol": "2025-11-25",
+      "tools": 4
+    },
+    {
+      "name": "split_utf8_lossless_bytes_and_independent_readers",
+      "status": "passed",
+      "sha256": "27c1168bd19d3e9e2e8389c0c127f2b701c78a49fe3c804419d04f66ede01686",
+      "frames": 17
+    },
+    {
+      "name": "idempotent_retry_and_conflicting_request_rejection",
+      "status": "passed"
+    },
+    {
+      "name": "job_survives_stdio_client_disconnect",
+      "status": "passed",
+      "same_operation_id": true
+    },
+    {
+      "name": "explicit_cancellation_stops_root_and_inherited_child",
+      "status": "passed",
+      "observed_processes": 2
+    },
+    {
+      "name": "execution_deadline_is_enforced",
+      "status": "passed"
+    },
+    {
+      "name": "bounded_retention_reports_output_gap_without_blocking",
+      "status": "passed",
+      "retained_raw_bytes": 8192,
+      "limit_bytes": 8192
+    },
+    {
+      "name": "broker_crash_reports_unknown_without_reexecution",
+      "status": "passed"
+    }
+  ]
+}

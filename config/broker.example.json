@@ -1,0 +1,7 @@
+{
+  "workspace": "/absolute/path/to/your/workspace",
+  "allowed_executables": ["/absolute/path/to/an/executable/you/authorize"],
+  "output_limit_bytes": 262144,
+  "max_operations": 64,
+  "max_concurrent": 4
+}

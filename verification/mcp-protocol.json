@@ -1,0 +1,95 @@
+{
+  "probe": "desktop-bridge-mcp-protocol",
+  "timestamp_utc": "2026-10-16T23:26:52.749581+00:00",
+  "platform": "Linux",
+  "adapter": "/workspace/scratch/b9d4b5c776c5/desktop-bridge/target/debug/bridge-mcp",
+  "scope": "Raw stdio protocol and catalog only; no broker execution or named-client certification.",
+  "checks": [
+    {
+      "name": "discover_2026_07_28.discovery",
+      "passed": true,
+      "supported_versions": [
+        "2024-11-05",
+        "2025-03-26",
+        "2025-06-18",
+        "2025-11-25",
+        "2026-07-28"
+      ]
+    },
+    {
+      "name": "discover_2026_07_28.catalog",
+      "passed": true,
+      "tools": [
+        "operation_cancel",
+        "operation_get",
+        "operation_read",
+        "operation_start"
+      ],
+      "object_output_schemas": 4,
+      "input_schemas_reject_unknown_fields": true
+    },
+    {
+      "name": "discover_2026_07_28.unknown_version_rejected",
+      "passed": true,
+      "error_code": -32022
+    },
+    {
+      "name": "discover_2026_07_28.missing_request_metadata_rejected",
+      "passed": true,
+      "error_code": -32602
+    },
+    {
+      "name": "discover_2026_07_28.valid_request_after_rejection",
+      "passed": true,
+      "tools": [
+        "operation_cancel",
+        "operation_get",
+        "operation_read",
+        "operation_start"
+      ],
+      "object_output_schemas": 4,
+      "input_schemas_reject_unknown_fields": true
+    },
+    {
+      "name": "discover_2026_07_28.unknown_tool_rejected",
+      "passed": true,
+      "error_code": -32602
+    },
+    {
+      "name": "discover_2026_07_28.clean_shutdown",
+      "passed": true,
+      "exit_code": 0,
+      "forced_termination": false
+    },
+    {
+      "name": "initialize_2025_11_25.initialize",
+      "passed": true,
+      "negotiated_version": "2025-11-25"
+    },
+    {
+      "name": "initialize_2025_11_25.catalog",
+      "passed": true,
+      "tools": [
+        "operation_cancel",
+        "operation_get",
+        "operation_read",
+        "operation_start"
+      ],
+      "object_output_schemas": 4,
+      "input_schemas_reject_unknown_fields": true
+    },
+    {
+      "name": "initialize_2025_11_25.unknown_tool_rejected",
+      "passed": true,
+      "error_code": -32602
+    },
+    {
+      "name": "initialize_2025_11_25.clean_shutdown",
+      "passed": true,
+      "exit_code": 0,
+      "forced_termination": false
+    }
+  ],
+  "adapter_sha256": "bbf03617f283acb2a5ac0c2c968e262c713075c899c3aa8fc0ce311b3b77838f",
+  "passed": true
+}

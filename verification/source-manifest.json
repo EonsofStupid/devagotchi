@@ -1,0 +1,337 @@
+{
+  "scope": "Current supplied Devagotchi core source, planning documents, historical Linux evidence, and a separate website publication receipt. This manifest excludes itself; no new core test run or core Git revision is claimed.",
+  "planning_revision_utc": "2026-10-17",
+  "baseline_archive_sha256": "075a259e66f50168c84989d8cedb81c1debadd08e950bf2f3abb468c4e2b7987",
+  "historical_baseline_manifest": "../../audit/devagotchi-source-manifest-before-growth-plan.json",
+  "files": {
+    ".gitignore": {
+      "bytes": 40,
+      "sha256": "1afb7ad82fa0a92e65bf9b9645b0919f23bc427bcb6fe2e05f91d2c4a3d3da3a"
+    },
+    "Cargo.lock": {
+      "bytes": 26218,
+      "sha256": "716a161791dec75f1cc80868a3dbcd4c557f2c3c41a990eea11868a0222cb9b9"
+    },
+    "Cargo.toml": {
+      "bytes": 920,
+      "sha256": "867ea7a5646861b78bea81c06191d7401b369453cfcc8efc1e3fa00e4a858db3"
+    },
+    "README.md": {
+      "bytes": 13793,
+      "sha256": "c9563e4d6e264d4081a2eccd60003dae76bf13ea7a97bbd5bab9dc358dcebaf2"
+    },
+    "apps/desktop/README.md": {
+      "bytes": 10232,
+      "sha256": "8a45c6c1ebca0ace0087dcf63f390fcf5b230003ee0cc0a42a009b19520cd2d9"
+    },
+    "apps/desktop/index.html": {
+      "bytes": 395,
+      "sha256": "7b1a1d0500f069c67273f79e89afcae6eba827261c5069f8a81fd85ff0556e6c"
+    },
+    "apps/desktop/package-lock.json": {
+      "bytes": 52865,
+      "sha256": "9ab190732ccc23f3a4bf48edad6da89b45fea816bd272ebf73aa6c86c9291acb"
+    },
+    "apps/desktop/package.json": {
+      "bytes": 702,
+      "sha256": "ecb8a108753ca367a4b8caa97fd38de5234a7b74a9b485f11a3d182b25136bdb"
+    },
+    "apps/desktop/public/devagotchi.svg": {
+      "bytes": 547,
+      "sha256": "5684c4ac470a6720f636ed7bd1399fd80a647bfa83c03235e1307451a2b9b883"
+    },
+    "apps/desktop/src/App.tsx": {
+      "bytes": 26698,
+      "sha256": "6ec051f3b08be64edd7d9f6a92afb81f79690b486b528c4a587c240e9542eb36"
+    },
+    "apps/desktop/src/bridge.ts": {
+      "bytes": 2015,
+      "sha256": "274b185807189e4638f01954fbdcee733e5592f03e465f93cb8a9b129b30f4de"
+    },
+    "apps/desktop/src/generated/contracts.ts": {
+      "bytes": 3550,
+      "sha256": "29568ced607d6e7841fa626fdb6b0f00c75f22c4bc7b77792afd5256c61860a3"
+    },
+    "apps/desktop/src/main.tsx": {
+      "bytes": 299,
+      "sha256": "d1407794ba56074ef5adf70830675bf03813ab8e100b3faf6548c072e8053ecc"
+    },
+    "apps/desktop/src/styles.css": {
+      "bytes": 28281,
+      "sha256": "075fcbdcbcbbce50bb35aeefbdb93f32060de80ceeddbba72d2af4042bd4b394"
+    },
+    "apps/desktop/src/typography.css": {
+      "bytes": 83,
+      "sha256": "aee81bb4bf3d4c52506cdfdfc0d4016599036f15da8297fb698eb9a6e48607e5"
+    },
+    "apps/desktop/src/useInspector.ts": {
+      "bytes": 8184,
+      "sha256": "c196c434e594835b6db545ea7e3478f2fe2cdeff4076cd124cfffa98fec6b593"
+    },
+    "apps/desktop/src-tauri/Cargo.lock": {
+      "bytes": 110120,
+      "sha256": "a2c8610e7dc7678145e588f0084f981ad81514fe3e9dd3ff9df68855a3629715"
+    },
+    "apps/desktop/src-tauri/Cargo.toml": {
+      "bytes": 688,
+      "sha256": "5a107fdc4a1e5b69bfeaf9b72dd9cd75e922d7585b5e166fc746657f0f3be493"
+    },
+    "apps/desktop/src-tauri/build.rs": {
+      "bytes": 568,
+      "sha256": "2c3391576360e38f0cc39f9c32ab7002e5eca5512218031697311350e5f13125"
+    },
+    "apps/desktop/src-tauri/capabilities/inspector.json": {
+      "bytes": 395,
+      "sha256": "a90f4075a2ce0c31bf09a7fe5f858a7f8bac61140026e730e3285302e6951d2b"
+    },
+    "apps/desktop/src-tauri/icons/128x128.png": {
+      "bytes": 3537,
+      "sha256": "1be777856f864891e7cd00c270367f5fec68534793ee9b4d8cfe214e52eb31ab"
+    },
+    "apps/desktop/src-tauri/icons/128x128@2x.png": {
+      "bytes": 6530,
+      "sha256": "35be072e0a3124e8249a8f2cad828f6652bde065bc74bcd5064283993776067d"
+    },
+    "apps/desktop/src-tauri/icons/32x32.png": {
+      "bytes": 987,
+      "sha256": "d98edfe31c34dc1082e725dee4bdf9c669c2953a1e7fc0f421f8d700b59366c6"
+    },
+    "apps/desktop/src-tauri/icons/64x64.png": {
+      "bytes": 1787,
+      "sha256": "965f45d83d07acc767bea672456ca7e40b4f05066f78d29f85421a89a6d64d16"
+    },
+    "apps/desktop/src-tauri/icons/Square107x107Logo.png": {
+      "bytes": 2870,
+      "sha256": "ea92c0fe68ed31c24e7b4eb6129e1e3a4afc349ec750e6f92aa578ac57862c3c"
+    },
+    "apps/desktop/src-tauri/icons/Square142x142Logo.png": {
+      "bytes": 3723,
+      "sha256": "6ca2447f60df883643faadbe39f6bdb496913cd55131df26bbcaf5c18347b206"
+    },
+    "apps/desktop/src-tauri/icons/Square150x150Logo.png": {
+      "bytes": 4078,
+      "sha256": "309b7cdf3cf43c31a81a1655d29db48a06da30e9d60163a2fbbc4bcd3245be7e"
+    },
+    "apps/desktop/src-tauri/icons/Square284x284Logo.png": {
+      "bytes": 7706,
+      "sha256": "dc7476020a5dc145bf9476777f86a2391aab1d05311057d0835c3cb34f412e11"
+    },
+    "apps/desktop/src-tauri/icons/Square30x30Logo.png": {
+      "bytes": 918,
+      "sha256": "08d76811c1f3d79151c7aa5dacb4cc9d9b7566f2a487aa5461a0468bb20a1d14"
+    },
+    "apps/desktop/src-tauri/icons/Square310x310Logo.png": {
+      "bytes": 8301,
+      "sha256": "54baaec9ffbf58de3910bca18fb586cf81a9876ef3d2bc2259d80b8edaafd731"
+    },
+    "apps/desktop/src-tauri/icons/Square44x44Logo.png": {
+      "bytes": 1326,
+      "sha256": "58077e785b51d252d424ed06de0c4a6ce126a1894ae3ab5afc4d1318ddeec11c"
+    },
+    "apps/desktop/src-tauri/icons/Square71x71Logo.png": {
+      "bytes": 1957,
+      "sha256": "6205756ebe47a2015c49e75961b75430640b0358b360d813b0f2c46dce60f5bc"
+    },
+    "apps/desktop/src-tauri/icons/Square89x89Logo.png": {
+      "bytes": 2473,
+      "sha256": "7db976791db49fc5c57d357a867429c7bf4db2ab296d23448aa30913ea4c8f55"
+    },
+    "apps/desktop/src-tauri/icons/StoreLogo.png": {
+      "bytes": 1480,
+      "sha256": "f7c4901de5e7c0bd0cf2058290b74a8c9d0a17e0cd37c1d238b459952b97a47d"
+    },
+    "apps/desktop/src-tauri/icons/icon.icns": {
+      "bytes": 77998,
+      "sha256": "734d6a3d88d6fb24efb648b49b369f6f17fc4ddbcab65a9189a2267df8e3fa9a"
+    },
+    "apps/desktop/src-tauri/icons/icon.ico": {
+      "bytes": 13882,
+      "sha256": "ab245b34c24ffdfa2523fabe494bbbf4595646ac80d6d68ea2644a2adcf19afe"
+    },
+    "apps/desktop/src-tauri/icons/icon.png": {
+      "bytes": 13364,
+      "sha256": "e43cf0dd64370d61f6aaf551c5605b993e2dc49ffcc95d5d51b198137b44c7e8"
+    },
+    "apps/desktop/src-tauri/permissions/autogenerated/cancel_operation.toml": {
+      "bytes": 396,
+      "sha256": "fd7d0605998ee12413030f037453fb6fe65f211b2c09c44e599ca689d89d0414"
+    },
+    "apps/desktop/src-tauri/permissions/autogenerated/connection_info.toml": {
+      "bytes": 390,
+      "sha256": "32569c40bc2adab69b3731c087ce28e2d2977383029be3e76db1cc3a320a5817"
+    },
+    "apps/desktop/src-tauri/permissions/autogenerated/get_operation.toml": {
+      "bytes": 378,
+      "sha256": "ffc1cf8a59364aa3d231ba9f369dd292bd9d3165738943570c6d26d3861b1f07"
+    },
+    "apps/desktop/src-tauri/permissions/autogenerated/list_operations.toml": {
+      "bytes": 390,
+      "sha256": "1e34c6b95a615482fe80fa3ce38373baf9ad1b466ab080a68cef0306ce860b92"
+    },
+    "apps/desktop/src-tauri/permissions/autogenerated/read_output.toml": {
+      "bytes": 366,
+      "sha256": "73d4ff5d704f07d23c85f9872207b75f0d28c6fae49ffcf2fc60433ff3196dde"
+    },
+    "apps/desktop/src-tauri/src/lib.rs": {
+      "bytes": 9599,
+      "sha256": "ee07b2c2780c8f4a37e134a6ffc0ced90d4a31dc5baa4446f8516b69706090a1"
+    },
+    "apps/desktop/src-tauri/src/main.rs": {
+      "bytes": 796,
+      "sha256": "042df0ae243955fa8200961985cc3bc2ae58ef65645f22c26d2fdd042cba5e05"
+    },
+    "apps/desktop/src-tauri/tauri.conf.json": {
+      "bytes": 1131,
+      "sha256": "4b45a48c466f8765eb3884459f9ced1d83b7bd90f1663e3b5acc64af770731a5"
+    },
+    "apps/desktop/tests/ui/fixture-client.ts": {
+      "bytes": 5934,
+      "sha256": "c40277e290293177d8714ed2a6cafce1e79009cc105b5c3a062e418a993a0966"
+    },
+    "apps/desktop/tests/ui/fixture.css": {
+      "bytes": 356,
+      "sha256": "d166b8716e98100968943a86bf2ae083157dadbce837a6ae6499a607a21dafc1"
+    },
+    "apps/desktop/tests/ui/fixture.html": {
+      "bytes": 296,
+      "sha256": "88635dc17ee2e1706bad3efe3da539240061f4b0f4d38d0166d9dbfe232cfc82"
+    },
+    "apps/desktop/tests/ui/fixture.tsx": {
+      "bytes": 592,
+      "sha256": "f44c431fb9b463aeb9f997b64497fa930e745996efb0d44cde7d614d1062493c"
+    },
+    "apps/desktop/tests/ui/smoke.mjs": {
+      "bytes": 8128,
+      "sha256": "f902294daa57e7a4030ac4e53d46e6351a3912d13b701d651c7c8746913cb86e"
+    },
+    "apps/desktop/tsconfig.json": {
+      "bytes": 481,
+      "sha256": "742abad461fe84868510df7bfb632873629ffbca55c51e2ae3ed3c15221ea20b"
+    },
+    "apps/desktop/vite.config.ts": {
+      "bytes": 206,
+      "sha256": "739224c382b2d1c478ee4aedc5451affe82bea5b1bd9fd48efcd6d12a0d1a6b5"
+    },
+    "apps/desktop/vite.qa.config.ts": {
+      "bytes": 328,
+      "sha256": "079715065f3952eaa5e45eb59a518a555077352baa00ce1107fdcf8f9bd3d9fa"
+    },
+    "config/broker.example.json": {
+      "bytes": 209,
+      "sha256": "b895eae60553a72b9532e3f9b235293c2c428af277b1fd6adc402b6561c26569"
+    },
+    "docs/desktop-commander-user-evidence.md": {
+      "bytes": 28258,
+      "sha256": "a577046eb85195788c1a0bd87656d1198c8a2f03a330cf05709712f74e842cc6"
+    },
+    "docs/implementation-guide.md": {
+      "bytes": 26805,
+      "sha256": "01364a1c3db265133d6ef13907b0db3ae5e188cc90ca7fcb5fe364507fdd1cba"
+    },
+    "docs/performance-and-experience-spec.md": {
+      "bytes": 29388,
+      "sha256": "c2a6da89a152ec64c884495829b5eddd75cf1cd8ab072b88fbf36eb33ac6bf39"
+    },
+    "docs/product-and-platform-plan.md": {
+      "bytes": 51809,
+      "sha256": "ade2bdc6b6a5e9808839b295e45aaa110a94a72fec5fd0cf551fd0d9b0cb6d9e"
+    },
+    "docs/task-graph-and-mesh-contract.md": {
+      "bytes": 22400,
+      "sha256": "7cdb2876fcb2ad9ba16f5c361318b9d408930234735d3ceeb467ba00266a1a3e"
+    },
+    "rust-toolchain.toml": {
+      "bytes": 51,
+      "sha256": "ca67e66659a82661386e5a08471c913cb8b3f7c7ce37592207d3f513589a41c2"
+    },
+    "schemas/broker-contracts.schema.json": {
+      "bytes": 9490,
+      "sha256": "d5963fe58abfc676ef1acad5c302c572a666d0a40cdef7b859589ac18da0c169"
+    },
+    "scripts/generate-contracts.cjs": {
+      "bytes": 5249,
+      "sha256": "20f6002ff0b2ea301f1c36fea7525e3eda069196f4b0512b8010c3cc5b9e683f"
+    },
+    "src/bin/bridge-broker.rs": {
+      "bytes": 5499,
+      "sha256": "e44b586e723c7967717c1f87e081b47f664d930b07365eb3593cdaf367abd13c"
+    },
+    "src/bin/bridge-mcp.rs": {
+      "bytes": 8069,
+      "sha256": "6d0372456024354ab2eb60e43deba58549a75f03a6fb4de8cbbb4537880f25e3"
+    },
+    "src/bin/export-contracts.rs": {
+      "bytes": 3507,
+      "sha256": "94850c5d13b0180ea99dc6b0ce3af23a9706f3c5bae549548a4e1fcc8df78fd8"
+    },
+    "src/contracts.rs": {
+      "bytes": 5985,
+      "sha256": "0da43519f4c3d7e155ea0489a41370a14637c8ae16d29135a59a8d5790f21eee"
+    },
+    "src/execution.rs": {
+      "bytes": 50283,
+      "sha256": "15ee042c6ba154ca3e1e061686207f065617ea16460a16ad12f449eaa38d3195"
+    },
+    "src/ipc.rs": {
+      "bytes": 10168,
+      "sha256": "1e5a12e600806ae70bdd2a1d6074c252fc6186589571258185e535e07d2cf09d"
+    },
+    "src/journal.rs": {
+      "bytes": 13485,
+      "sha256": "d757b6c994eb446ba1e22a271ed078c561df3f8f9a00da5b93313c087585eb8f"
+    },
+    "src/lib.rs": {
+      "bytes": 124,
+      "sha256": "4ff628ec94ff577ab67e2d189109e2a930bb279fd74aa8362e8f38b8bc0d9e80"
+    },
+    "tests/mcp_protocol.py": {
+      "bytes": 12863,
+      "sha256": "bede5a52930952563a7fc0b3797ea68f184e42528be914f93959fe9a47382b4d"
+    },
+    "tests/mcp_smoke.py": {
+      "bytes": 13619,
+      "sha256": "d4225edfcf64416a0493837c1b04d10693c689d6e6170c003807505354338230"
+    },
+    "tests/native_ui_smoke.py": {
+      "bytes": 25678,
+      "sha256": "8f6278beba2376e2997733bc59e980d8145d3292018456d8b607aa303f26cfb9"
+    },
+    "tests/security_boundary.py": {
+      "bytes": 29546,
+      "sha256": "d5b593ffe8f88ec760ef56929e2676174f4ff37c133d62af4f72fd7510124e00"
+    },
+    "verification/README.md": {
+      "bytes": 13384,
+      "sha256": "2bea00abf59e7321b7be7bd62cb9394b649d76e59551644c47450ec9c795493b"
+    },
+    "verification/build-checks.json": {
+      "bytes": 3373,
+      "sha256": "f5f8dd9b4795030955123ba194c148d21bece04a86a048c76a647400d6b0624d"
+    },
+    "verification/core-module-tests.txt": {
+      "bytes": 935,
+      "sha256": "29382e8e4c1a9e541e355239611af2321a2237edbfbf79f36654c57ddf88a285"
+    },
+    "verification/mcp-protocol.json": {
+      "bytes": 2489,
+      "sha256": "f81bbf8b827b2102af060c0186a44c5e6e86f4cc92d90dceb08820268559b063"
+    },
+    "verification/mcp-smoke.json": {
+      "bytes": 1313,
+      "sha256": "74bb2e90fc3962e9c0bb41006ae2d20cf65f04202991d996a07d881672fec400"
+    },
+    "verification/native-ui.json": {
+      "bytes": 3088,
+      "sha256": "a9dd75c556b81c8d91810216610fdc3c05c4c40685d972e8d11ff1b6408d5df3"
+    },
+    "verification/security-boundary.json": {
+      "bytes": 3267,
+      "sha256": "a43851c33d891d0b578e3c7cf765b15acb7a68e6b4cf08d7372ee0e250901159"
+    },
+    "verification/website-publication.json": {
+      "bytes": 10528,
+      "sha256": "43cd1191abafc548a706aed0137ed669a51fd48e2886099b87baefbd7e8a8b08"
+    }
+  },
+  "website_publication_receipt": "website-publication.json"
+}

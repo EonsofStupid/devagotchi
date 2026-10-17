@@ -1,0 +1,72 @@
+{
+  "revision": "architecture-and-growth-plan-2026-10-17",
+  "prepared_at_utc": "2026-10-17T02:16:32.861665+00:00",
+  "baseline_archive_sha256": "075a259e66f50168c84989d8cedb81c1debadd08e950bf2f3abb468c4e2b7987",
+  "baseline_manifest_sha256": "fccd0f3de42e49d6b45bf292dd68f00770214e1a6a39cd02e4eafe6e8edfb0e7",
+  "baseline_manifest_entries": 77,
+  "current_manifest_entries": 79,
+  "product_source_unchanged": true,
+  "historical_raw_evidence_unchanged": true,
+  "reference_snapshot_unchanged": true,
+  "protected_original_files_verified": 132,
+  "unchanged_original_manifest_entries": 74,
+  "changed_original_manifest_entries": [
+    "README.md",
+    "docs/product-and-platform-plan.md",
+    "verification/README.md"
+  ],
+  "changed_files": {
+    "devagotchi-foundation/README.md": {
+      "before_sha256": "837678cfd25bf0b80820c2aee90054cba0803ee722248ef857baf0df068b27f0",
+      "after_sha256": "e1ba2efe4581a4b6d3f4823b012eca96b68f35815db4824bbc134f835ff8c909",
+      "bytes": 3826
+    },
+    "devagotchi-foundation/desktop-bridge-audit-and-foundation.md": {
+      "before_sha256": "c1e7a55faeff6b09f31cfce47fc29ee2c3736b2bf81f030d6d3c73e4e7cfb57d",
+      "after_sha256": "72de4166f2d882057249f527b491e8b021d05d7708b34408e9a63a220051adb4",
+      "bytes": 59507
+    },
+    "devagotchi-foundation/devagotchi/README.md": {
+      "before_sha256": "ec4c11e5d406546e7bf5639546bd296ee07afb41aee8425b5d93485e8f44b153",
+      "after_sha256": "2943faf562888a0466b61cd8d8a960df201d423162733c761a41ea072738e299",
+      "bytes": 10005
+    },
+    "devagotchi-foundation/devagotchi/docs/product-and-platform-plan.md": {
+      "before_sha256": "776cb4a2defd540daa248e267525abd0adedd8ab05761e46743c4aed77c0473b",
+      "after_sha256": "019f950255a366fc79e78be87307bbc5eb879c12af6d060639c6cc891d3e2291",
+      "bytes": 39465
+    },
+    "devagotchi-foundation/devagotchi/verification/README.md": {
+      "before_sha256": "a08486633bffc4c92c3562dc9401b6f4a86acfc4718b3c587c5c1802b2260b65",
+      "after_sha256": "9546c1dd8e409072414870a979df06c9ed540305ec56359d1f9f5b9226688035",
+      "bytes": 12916
+    },
+    "devagotchi-foundation/devagotchi/verification/source-manifest.json": {
+      "before_sha256": "fccd0f3de42e49d6b45bf292dd68f00770214e1a6a39cd02e4eafe6e8edfb0e7",
+      "after_sha256": "d74cb8ea6564747a93025f773a229cf9d6e986a3a9bbb3c4845dc05ec7de9b2b",
+      "bytes": 12617
+    }
+  },
+  "new_files_excluding_this_manifest": {
+    "devagotchi-foundation/audit/devagotchi-source-manifest-before-growth-plan.json": {
+      "sha256": "fccd0f3de42e49d6b45bf292dd68f00770214e1a6a39cd02e4eafe6e8edfb0e7",
+      "bytes": 11983
+    },
+    "devagotchi-foundation/devagotchi/docs/implementation-guide.md": {
+      "sha256": "7b202a539fbe963cbd3a703f432e3d8cbfe13ea3c47649e14835a619b836e9f8",
+      "bytes": 17193
+    },
+    "devagotchi-foundation/devagotchi/docs/performance-and-experience-spec.md": {
+      "sha256": "c2a6da89a152ec64c884495829b5eddd75cf1cd8ab072b88fbf36eb33ac6bf39",
+      "bytes": 29388
+    }
+  },
+  "page": {
+    "page_id": "page_66e8885df79c819193681dd54e8b71bd",
+    "sequence": 4,
+    "audit_blocks_preserved_with_identical_hashes": 61
+  },
+  "validation_scope": "Documentation/link integrity, baseline hash comparison, and Page readback only. No product build, test, benchmark, native certification, GitHub push, or site deployment.",
+  "plan_review": "Independent execution and architecture reviews completed; accepted corrections cover all-attempt benchmark accounting, scoped optimization gates, queued authority/deadlines, retry compatibility fencing, and interior output gaps.",
+  "self_integrity": "This manifest is covered by the containing ZIP hash; it does not embed its own hash."
+}

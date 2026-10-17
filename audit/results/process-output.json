@@ -1,0 +1,24 @@
+{
+  "source": "f508e524469c26f6366e17dbfd3ee5a69d112127/src/terminal-manager.ts",
+  "methodology": "Real source body, Node 24 TS erasure, fake child process and config dependencies; not full project tests",
+  "splitUtf8": {
+    "expected": "€",
+    "received": "���",
+    "corrupted": true
+  },
+  "sharedReadCursor": {
+    "firstReaderLines": [
+      "initial",
+      "���"
+    ],
+    "secondReaderLines": []
+  },
+  "timingAfterWaitReturned": {
+    "eventsAtReturn": 1,
+    "eventsAfterTwoLaterChunks": 3
+  },
+  "writeReturnedFalse": {
+    "reportedSent": true,
+    "note": "write(false) signals backpressure, not a send failure; source does not await drain"
+  }
+}
