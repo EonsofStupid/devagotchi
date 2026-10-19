@@ -5,8 +5,8 @@
 //! no breakaway and terminates its members when the broker's job handle
 //! closes. Observation and termination use that job handle, never a PID.
 
-use super::GROUP_SETTLE;
 use crate::contracts::{BridgeError, BridgeResult, OperationState};
+use crate::execution::GROUP_SETTLE;
 use std::ffi::OsStr;
 use std::fs::Metadata;
 use std::io;
@@ -33,21 +33,21 @@ use windows_sys::Win32::System::Threading::{
     WaitForSingleObject,
 };
 
-pub(super) const SCOPE: &str = "Windows root process and every process in the broker-owned Job Object it was assigned to before it ran. Breakaway is not permitted, and closing the broker's job handle terminates remaining members. Work a member hands to a service or another process outside the job is not owned. This is not OS containment.";
-pub(super) const RUNNING_DETAIL: &str = "Root created suspended with exact argv (Microsoft C runtime quoting), an environment cleared except SystemRoot, null stdin, and no console window, then assigned to a broker-owned Job Object before it ran. Executable behavior is not sandboxed.";
-pub(super) const TERMINATION_VERIFIED_DETAIL: &str = " TerminateJobObject was issued through the broker's job handle; no active processes remained in the job.";
-pub(super) const OBSERVATION_FAILED_DETAIL: &str =
+pub(crate) const SCOPE: &str = "Windows root process and every process in the broker-owned Job Object it was assigned to before it ran. Breakaway is not permitted, and closing the broker's job handle terminates remaining members. Work a member hands to a service or another process outside the job is not owned. This is not OS containment.";
+pub(crate) const RUNNING_DETAIL: &str = "Root created suspended with exact argv (Microsoft C runtime quoting), an environment cleared except SystemRoot, null stdin, and no console window, then assigned to a broker-owned Job Object before it ran. Executable behavior is not sandboxed.";
+pub(crate) const TERMINATION_VERIFIED_DETAIL: &str = " TerminateJobObject was issued through the broker's job handle; no active processes remained in the job.";
+pub(crate) const OBSERVATION_FAILED_DETAIL: &str =
     "Job Object observation failed and requested cancellation. ";
-pub(super) const TERMINATION_UNVERIFIED_DETAIL: &str = " Job Object termination was not verified";
-pub(super) const PIPE_TIMEOUT_DETAIL: &str = " Output pipes did not close within one second of root settlement; a process holding them may have received them outside the job. Reading was stopped, output is incomplete, and processes outside the owned Job Object are not tracked or terminated.";
-pub(super) const EXECUTABLE_RULE: &str = " (Windows grants must be .exe or .com images; batch files run through cmd.exe parsing, so grant cmd.exe explicitly)";
+pub(crate) const TERMINATION_UNVERIFIED_DETAIL: &str = " Job Object termination was not verified";
+pub(crate) const PIPE_TIMEOUT_DETAIL: &str = " Output pipes did not close within one second of root settlement; a process holding them may have received them outside the job. Reading was stopped, output is incomplete, and processes outside the owned Job Object are not tracked or terminated.";
+pub(crate) const EXECUTABLE_RULE: &str = " (Windows grants must be .exe or .com images; batch files run through cmd.exe parsing, so grant cmd.exe explicitly)";
 
 /// Exit code given to members the broker terminates.
 const TERMINATED_EXIT_CODE: u32 = 1;
 
 /// A Windows grant or request target must be a regular file that
 /// `CreateProcessW` runs directly as an image.
-pub(super) fn is_directly_executable(path: &Path, metadata: &Metadata) -> bool {
+pub(crate) fn is_directly_executable(path: &Path, metadata: &Metadata) -> bool {
     metadata.is_file()
         && path
             .extension()
@@ -61,7 +61,7 @@ pub(super) fn is_directly_executable(path: &Path, metadata: &Metadata) -> bool {
 /// of its own the root and its descendants never receive the broker console's
 /// Ctrl+C. Windows system libraries need `SystemRoot`, so it alone survives the
 /// cleared environment.
-pub(super) fn configure(command: &mut Command) {
+pub(crate) fn configure(command: &mut Command) {
     command.creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW);
     if let Some(system_root) = std::env::var_os("SystemRoot") {
         command.env("SystemRoot", system_root);
@@ -69,20 +69,20 @@ pub(super) fn configure(command: &mut Command) {
 }
 
 /// Why a spawned root could not be taken into ownership.
-pub(super) struct AdoptFailure {
-    pub(super) state: OperationState,
-    pub(super) output_complete: bool,
-    pub(super) detail: String,
+pub(crate) struct AdoptFailure {
+    pub(crate) state: OperationState,
+    pub(crate) output_complete: bool,
+    pub(crate) detail: String,
 }
 
 /// The broker's handle to the Job Object that owns one root and every
 /// process created inside it.
-pub(super) struct OwnedTree {
+pub(crate) struct OwnedTree {
     job: OwnedHandle,
 }
 
 impl OwnedTree {
-    pub(super) async fn adopt(child: &mut Child) -> Result<Self, AdoptFailure> {
+    pub(crate) async fn adopt(child: &mut Child) -> Result<Self, AdoptFailure> {
         let (Some(process), Some(pid)) = (child.raw_handle(), child.id()) else {
             return Err(AdoptFailure {
                 state: OperationState::Unknown,
@@ -96,7 +96,10 @@ impl OwnedTree {
             Err(error) => {
                 // The root is still suspended: it has executed no program code.
                 let _ = child.start_kill();
-                let terminated = matches!(timeout(super::ROOT_WAIT, child.wait()).await, Ok(Ok(_)));
+                let terminated = matches!(
+                    timeout(crate::execution::ROOT_WAIT, child.wait()).await,
+                    Ok(Ok(_))
+                );
                 return Err(if terminated {
                     AdoptFailure {
                         state: OperationState::Failed,
@@ -119,7 +122,7 @@ impl OwnedTree {
         let tree = Self { job };
         if let Err(error) = resume_threads(pid) {
             let termination = tree.terminate().await;
-            let _ = timeout(super::ROOT_WAIT, child.wait()).await;
+            let _ = timeout(crate::execution::ROOT_WAIT, child.wait()).await;
             return Err(match termination {
                 Ok(()) => AdoptFailure {
                     state: OperationState::Failed,
@@ -142,7 +145,7 @@ impl OwnedTree {
 
     /// Observes root exit through the owned process handle, which also keeps
     /// the root's identity from being reused.
-    pub(super) fn root_exited(&self, child: &Child) -> BridgeResult<bool> {
+    pub(crate) fn root_exited(&self, child: &Child) -> BridgeResult<bool> {
         let Some(process) = child.raw_handle() else {
             return Ok(true);
         };
@@ -159,7 +162,7 @@ impl OwnedTree {
         }
     }
 
-    pub(super) fn has_executing_members(&self) -> BridgeResult<bool> {
+    pub(crate) fn has_executing_members(&self) -> BridgeResult<bool> {
         let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
         if unsafe {
             QueryInformationJobObject(
@@ -182,7 +185,7 @@ impl OwnedTree {
     /// Terminates every member through the job handle, then verifies that no
     /// active process remains. Windows offers no general graceful request for
     /// arbitrary console or GUI processes, so there is no grace period.
-    pub(super) async fn terminate(&self) -> BridgeResult<()> {
+    pub(crate) async fn terminate(&self) -> BridgeResult<()> {
         if unsafe { TerminateJobObject(self.job.as_raw_handle(), TERMINATED_EXIT_CODE) } == FALSE {
             return Err(BridgeError::new(
                 "process_signal_error",

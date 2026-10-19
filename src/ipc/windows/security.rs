@@ -1,4 +1,4 @@
-//! Win32 identity and security-descriptor primitives.
+//! Win32 identity and security-descriptor checks for private broker state.
 //!
 //! The Windows trust boundary is the operator's user SID, as the Unix boundary
 //! is the operator's UID. Private broker state, the named-pipe endpoint, and

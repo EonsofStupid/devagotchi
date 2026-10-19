@@ -57,7 +57,7 @@ impl Termination {
 
 #[cfg(any(target_os = "linux", windows))]
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    use desktop_bridge::{contracts::*, execution::{Broker, BrokerConfig}, ipc::{self, StateGuard}};
+    use desktop_bridge::{broker::{Broker, BrokerConfig}, contracts::*, ipc::{self, StateGuard}};
     use std::{io::Read, path::PathBuf, sync::Arc};
 
     let args: Vec<String> = std::env::args().skip(1).collect();

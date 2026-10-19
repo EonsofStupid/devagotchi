@@ -3,8 +3,8 @@
 //! The root stays unreaped while it is observed and signalled, so its PID and
 //! group identity cannot be reused by an unrelated process.
 
-use super::GROUP_SETTLE;
 use crate::contracts::{BridgeError, BridgeResult, OperationState};
+use crate::execution::GROUP_SETTLE;
 use std::fs::Metadata;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
@@ -16,40 +16,40 @@ use tokio::time::{Instant, sleep};
 /// Bounded wait between SIGTERM and SIGKILL.
 const TERM_GRACE: Duration = Duration::from_millis(200);
 
-pub(super) const SCOPE: &str = "Linux root process and inherited process group; excludes processes that leave the group. This is not OS containment.";
-pub(super) const RUNNING_DETAIL: &str = "Root spawned with exact argv, cleared environment, null stdin, and a new Linux process group. Executable behavior is not sandboxed.";
-pub(super) const TERMINATION_VERIFIED_DETAIL: &str = " SIGTERM then SIGKILL were issued while the root PID was still owned; no executing members remained in its inherited process group.";
-pub(super) const OBSERVATION_FAILED_DETAIL: &str =
+pub(crate) const SCOPE: &str = "Linux root process and inherited process group; excludes processes that leave the group. This is not OS containment.";
+pub(crate) const RUNNING_DETAIL: &str = "Root spawned with exact argv, cleared environment, null stdin, and a new Linux process group. Executable behavior is not sandboxed.";
+pub(crate) const TERMINATION_VERIFIED_DETAIL: &str = " SIGTERM then SIGKILL were issued while the root PID was still owned; no executing members remained in its inherited process group.";
+pub(crate) const OBSERVATION_FAILED_DETAIL: &str =
     "Process-group observation failed and requested cancellation. ";
-pub(super) const TERMINATION_UNVERIFIED_DETAIL: &str = " Group termination was not verified";
-pub(super) const PIPE_TIMEOUT_DETAIL: &str = " Output pipes did not close within one second of root settlement; a descendant may still hold them open. Reading was stopped, output is incomplete, and processes outside the owned group are not tracked or terminated.";
-pub(super) const EXECUTABLE_RULE: &str = "";
+pub(crate) const TERMINATION_UNVERIFIED_DETAIL: &str = " Group termination was not verified";
+pub(crate) const PIPE_TIMEOUT_DETAIL: &str = " Output pipes did not close within one second of root settlement; a descendant may still hold them open. Reading was stopped, output is incomplete, and processes outside the owned group are not tracked or terminated.";
+pub(crate) const EXECUTABLE_RULE: &str = "";
 
 /// A Linux grant or request target must be a regular file with an execute bit.
-pub(super) fn is_directly_executable(_path: &Path, metadata: &Metadata) -> bool {
+pub(crate) fn is_directly_executable(_path: &Path, metadata: &Metadata) -> bool {
     metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
 }
 
 /// Starts the root in its own process group, detached from the broker's
 /// terminal signals.
-pub(super) fn configure(command: &mut Command) {
+pub(crate) fn configure(command: &mut Command) {
     command.as_std_mut().process_group(0);
 }
 
 /// Why a spawned root could not be taken into ownership.
-pub(super) struct AdoptFailure {
-    pub(super) state: OperationState,
-    pub(super) output_complete: bool,
-    pub(super) detail: String,
+pub(crate) struct AdoptFailure {
+    pub(crate) state: OperationState,
+    pub(crate) output_complete: bool,
+    pub(crate) detail: String,
 }
 
 /// The root's PID and inherited process group, held while the root is unreaped.
-pub(super) struct OwnedTree {
+pub(crate) struct OwnedTree {
     pid: u32,
 }
 
 impl OwnedTree {
-    pub(super) async fn adopt(child: &mut Child) -> Result<Self, AdoptFailure> {
+    pub(crate) async fn adopt(child: &mut Child) -> Result<Self, AdoptFailure> {
         match child.id() {
             Some(pid) => Ok(Self { pid }),
             None => Err(AdoptFailure {
@@ -62,16 +62,16 @@ impl OwnedTree {
     }
 
     /// Observes root exit without reaping it.
-    pub(super) fn root_exited(&self, _child: &Child) -> BridgeResult<bool> {
+    pub(crate) fn root_exited(&self, _child: &Child) -> BridgeResult<bool> {
         root_exited_without_reaping(self.pid)
     }
 
-    pub(super) fn has_executing_members(&self) -> BridgeResult<bool> {
+    pub(crate) fn has_executing_members(&self) -> BridgeResult<bool> {
         group_has_executing_members(self.pid)
     }
 
     /// SIGTERM, a bounded grace, SIGKILL, then verified settlement of the group.
-    pub(super) async fn terminate(&self) -> BridgeResult<()> {
+    pub(crate) async fn terminate(&self) -> BridgeResult<()> {
         end_owned_group(self.pid).await
     }
 }

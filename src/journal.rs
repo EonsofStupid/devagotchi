@@ -77,14 +77,14 @@ fn create_private_file(path: &Path) -> std::io::Result<()> {
 /// itself, never followed.
 #[cfg(windows)]
 fn validate_private_file(path: &Path) -> BridgeResult<()> {
-    use crate::win32::{self, Entry, Operator};
-    let entry = match win32::open_entry(path) {
+    use crate::ipc::security::{self, Entry, Operator};
+    let entry = match security::open_entry(path) {
         Ok(entry) => entry,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(persistence(error)),
     };
     let operator = Operator::current().map_err(persistence)?;
-    if win32::private_entry_defect(&entry, Entry::File, &operator)
+    if security::private_entry_defect(&entry, Entry::File, &operator)
         .map_err(persistence)?
         .is_some()
     {
@@ -95,8 +95,8 @@ fn validate_private_file(path: &Path) -> BridgeResult<()> {
 
 #[cfg(windows)]
 fn create_private_file(path: &Path) -> std::io::Result<()> {
-    let operator = crate::win32::Operator::current()?;
-    crate::win32::create_private_file(path, &operator.user)
+    let operator = crate::ipc::security::Operator::current()?;
+    crate::ipc::security::create_private_file(path, &operator.user)
 }
 
 impl Journal {

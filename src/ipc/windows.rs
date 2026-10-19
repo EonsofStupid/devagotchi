@@ -6,7 +6,7 @@
 
 use super::{IO_TIMEOUT, exchange, io_error};
 use crate::contracts::*;
-use crate::win32::{self, Entry, Operator, SecurityDescriptor};
+use security::{Entry, Operator, SecurityDescriptor};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
@@ -24,6 +24,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OPEN_REPARSE_POINT,
 };
 use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
+
+pub(crate) mod security;
 
 const PIPE_PREFIX: &str = r"\\.\pipe\";
 
@@ -76,7 +78,7 @@ pub fn verify_peer(connection: &Connection) -> BridgeResult<()> {
             ),
         ));
     }
-    let caller = win32::process_user(pid).map_err(|error| {
+    let caller = security::process_user(pid).map_err(|error| {
         BridgeError::new(
             "peer_identity",
             format!("Cannot read the caller's user: {error}"),
@@ -148,7 +150,7 @@ pub async fn request(endpoint: &Path, body: RequestBody) -> BridgeResult<Respons
     // A pipe created first by another account, or by the operator without the
     // broker's DACL, is not the broker's endpoint.
     let security =
-        win32::object_security(client.as_raw_handle(), SE_KERNEL_OBJECT).map_err(io_error)?;
+        security::object_security(client.as_raw_handle(), SE_KERNEL_OBJECT).map_err(io_error)?;
     if !security.owner.equals(&operator.user) || !security.grants_only(&operator.user) {
         return Err(BridgeError::new(
             "socket_permissions",
@@ -165,7 +167,7 @@ pub async fn request(endpoint: &Path, body: RequestBody) -> BridgeResult<Respons
             ),
         ));
     }
-    let server = win32::process_user(pid).map_err(|error| {
+    let server = security::process_user(pid).map_err(|error| {
         BridgeError::new(
             "peer_identity",
             format!("Cannot read the broker's user: {error}"),
@@ -205,9 +207,9 @@ fn validate_ancestors(path: &Path) -> BridgeResult<()> {
 }
 
 fn validate_private_directory(path: &Path, operator: &Operator) -> BridgeResult<()> {
-    let entry = win32::open_entry(path).map_err(io_error)?;
+    let entry = security::open_entry(path).map_err(io_error)?;
     if let Some(defect) =
-        win32::private_entry_defect(&entry, Entry::Directory, operator).map_err(io_error)?
+        security::private_entry_defect(&entry, Entry::Directory, operator).map_err(io_error)?
     {
         return Err(BridgeError::new(
             "state_permissions",
@@ -258,7 +260,7 @@ impl StateGuard {
                 .ok_or_else(|| BridgeError::new("state_path", "Missing state parent"))?;
             // Validate all existing ancestors before creating anything. The leaf is checked below.
             validate_ancestors(parent)?;
-            win32::create_private_directory(directory, &operator.user).map_err(io_error)?;
+            security::create_private_directory(directory, &operator.user).map_err(io_error)?;
         }
         validate_private_directory(directory, &operator)?;
         // Share mode zero makes the open handle the instance lock; reparse
@@ -280,7 +282,7 @@ impl StateGuard {
             }
             Err(error) => return Err(io_error(error)),
         };
-        if win32::private_entry_defect(&lock, Entry::File, &operator)
+        if security::private_entry_defect(&lock, Entry::File, &operator)
             .map_err(io_error)?
             .is_some()
         {

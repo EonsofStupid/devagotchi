@@ -38,9 +38,9 @@ This desktop implementation does not yet provide file/search/edit tools, PTY inp
 
 | Component | Source | Responsibility |
 |---|---|---|
-| Broker | `src/execution.rs`, `src/journal.rs`, `src/bin/bridge-broker.rs` | Admission, execution, output retention, cancellation, recovery |
-| Native execution providers | `src/execution/linux.rs`, `src/execution/windows.rs` | Spawning, observing, and terminating one root's owned process group or Job Object |
-| Local IPC | `src/ipc.rs`, `src/ipc/unix.rs`, `src/ipc/windows.rs`, `src/win32.rs` | Private state directory, Unix socket or named pipe, peer UID or SID, instance lock, bounded framed requests |
+| Broker | `src/broker.rs`, `src/journal.rs`, `src/bin/bridge-broker.rs` | Admission, operation lifecycle, output retention, cancellation, recovery |
+| Execution | `src/execution.rs`, `src/execution/platform/linux.rs`, `src/execution/platform/windows.rs` | Process orchestration; spawning, observing, and terminating one root's owned process group or Job Object |
+| Local IPC | `src/ipc.rs`, `src/ipc/unix.rs`, `src/ipc/windows.rs`, `src/ipc/windows/security.rs` | Private state directory, Unix socket or named pipe, peer UID or SID, instance lock, bounded framed requests |
 | MCP adapter | `src/bin/bridge-mcp.rs` | Official `rmcp` 3.5.1 stdio transport and four typed tools |
 | Desktop app | `apps/desktop` | Tauri 2 native host and React/TypeScript inspector |
 | Website and public reference service | [`apps/website`](apps/website/README.md) | Product documentation, source download, and read-only HTTP/MCP reference routes |

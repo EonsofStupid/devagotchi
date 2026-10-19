@@ -14,6 +14,9 @@ pub use unix::*;
 mod windows;
 #[cfg(windows)]
 pub use windows::*;
+/// Win32 identity and private-state checks shared by IPC and the journal.
+#[cfg(windows)]
+pub(crate) use windows::security;
 
 pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -72,8 +75,8 @@ pub(crate) fn private_test_state(parent: &std::path::Path) -> std::path::PathBuf
     #[cfg(windows)]
     {
         let state = parent.join("state");
-        let operator = crate::win32::Operator::current().unwrap();
-        crate::win32::create_private_directory(&state, &operator.user).unwrap();
+        let operator = security::Operator::current().unwrap();
+        security::create_private_directory(&state, &operator.user).unwrap();
         state
     }
 }
