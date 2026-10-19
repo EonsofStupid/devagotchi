@@ -1,8 +1,8 @@
 //! Export canonical Rust DTO schemas without opening a broker or journal.
 
 use desktop_bridge::contracts::{
-    BridgeError, GetInput, ListInput, OperationView, OperationsPage, OutputPage, ReadInput,
-    StartInput, StartOutput,
+    BridgeError, FileListInput, FileListPage, FileReadInput, FileReadPage, GetInput, ListInput,
+    OperationView, OperationsPage, OutputPage, ReadInput, StartInput, StartOutput,
 };
 use rmcp::schemars::{self, JsonSchema, generate::SchemaSettings};
 use serde_json::Value;
@@ -23,6 +23,10 @@ struct BrokerContracts {
     operation_view: OperationView,
     output_page: OutputPage,
     operations_page: OperationsPage,
+    file_list_input: FileListInput,
+    file_list_page: FileListPage,
+    file_read_input: FileReadInput,
+    file_read_page: FileReadPage,
     bridge_error: BridgeError,
 }
 

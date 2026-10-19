@@ -16,6 +16,215 @@
       ],
       "type": "object"
     },
+    "FileEntry": {
+      "additionalProperties": false,
+      "description": "One directory entry, describing the entry itself and never a link target.",
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/FileKind"
+        },
+        "modified_ms": {
+          "description": "Last modification time in Unix milliseconds, when the filesystem reports one.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The entry's name. When `name_exact` is false the native name is not valid Unicode; invalid\nsequences are shown as U+FFFD and this version cannot address the entry by path.",
+          "type": "string"
+        },
+        "name_exact": {
+          "type": "boolean"
+        },
+        "size_bytes": {
+          "description": "Present for regular files.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "name_exact",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "FileKind": {
+      "description": "The kind of a directory entry itself. `symlink` covers symbolic links, junctions, and other\nname-surrogate reparse points; they are never followed.",
+      "enum": [
+        "file",
+        "directory",
+        "symlink",
+        "other"
+      ],
+      "type": "string"
+    },
+    "FileListInput": {
+      "additionalProperties": false,
+      "properties": {
+        "cursor": {
+          "default": null,
+          "description": "The previous page's `next_cursor`; omit it for the first page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "default": 128,
+          "description": "Maximum entries to return, 1..=512.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Absolute path of a directory within the configured workspace.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FileListPage": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "description": "Entries in ascending native-name order after the request cursor.",
+          "items": {
+            "$ref": "#/$defs/FileEntry"
+          },
+          "type": "array"
+        },
+        "next_cursor": {
+          "description": "Pass as `cursor` to read the next page; absent on the last page.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Canonical absolute path of the listed directory.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "entries"
+      ],
+      "type": "object"
+    },
+    "FileReadInput": {
+      "additionalProperties": false,
+      "properties": {
+        "max_bytes": {
+          "default": 65536,
+          "description": "Maximum bytes to return, 1024..=65536.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "description": "Byte offset of the first byte to return.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Absolute path of a regular file within the configured workspace.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FileReadPage": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes_base64": {
+          "description": "The exact bytes read.",
+          "type": "string"
+        },
+        "eof": {
+          "description": "True when the read reached the end of the file.",
+          "type": "boolean"
+        },
+        "next_offset": {
+          "description": "Offset to request next.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Canonical absolute path of the file that was read.",
+          "type": "string"
+        },
+        "revision": {
+          "$ref": "#/$defs/FileRevision"
+        },
+        "text": {
+          "description": "The same bytes as text when they are valid UTF-8. A character split by the page end is\nleft for the next page; any other invalid sequence leaves this absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "revision",
+        "offset",
+        "bytes_base64",
+        "next_offset",
+        "eof"
+      ],
+      "type": "object"
+    },
+    "FileRevision": {
+      "additionalProperties": false,
+      "description": "The version of a file a read observed.",
+      "properties": {
+        "identity": {
+          "description": "Identity of the file object: device and inode on Unix, volume serial and file ID on\nWindows. It survives a rename and changes when the file is replaced by another object.",
+          "type": "string"
+        },
+        "modified_ms": {
+          "description": "Last modification time in Unix milliseconds, when the filesystem reports one.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "identity",
+        "size_bytes"
+      ],
+      "type": "object"
+    },
     "GetInput": {
       "additionalProperties": false,
       "properties": {
@@ -358,6 +567,18 @@
     "bridge_error": {
       "$ref": "#/$defs/BridgeError"
     },
+    "file_list_input": {
+      "$ref": "#/$defs/FileListInput"
+    },
+    "file_list_page": {
+      "$ref": "#/$defs/FileListPage"
+    },
+    "file_read_input": {
+      "$ref": "#/$defs/FileReadInput"
+    },
+    "file_read_page": {
+      "$ref": "#/$defs/FileReadPage"
+    },
     "get_input": {
       "$ref": "#/$defs/GetInput"
     },
@@ -392,6 +613,10 @@
     "operation_view",
     "output_page",
     "operations_page",
+    "file_list_input",
+    "file_list_page",
+    "file_read_input",
+    "file_read_page",
     "bridge_error"
   ],
   "title": "BrokerContracts",
