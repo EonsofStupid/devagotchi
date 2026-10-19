@@ -625,8 +625,11 @@ name = "devagotchi-ipc"
 version = "0.1.0"
 dependencies = [
  "devagotchi-contracts",
+ "dunce",
+ "hex",
  "libc",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "windows-sys 0.61.2",

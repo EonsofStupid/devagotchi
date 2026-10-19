@@ -24,6 +24,10 @@ tokio = { workspace = true }
 libc = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
+# The named pipe is addressed by a SHA-256 of the canonical state path and the owner SID.
+dunce = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
 windows-sys = { workspace = true }
 
 [dev-dependencies]
