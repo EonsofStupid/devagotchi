@@ -4,7 +4,7 @@ use std::{env, ffi::OsString, path::PathBuf, process::ExitCode};
 
 use desktop_bridge::contracts::{BridgeError, BridgeResult};
 
-const USAGE: &str = "Usage:\n  bridge-mcp --socket ABS_PATH\n  bridge-mcp --help\n\nConnects MCP tools to an already running local broker.\nThis proof uses Unix domain socket IPC; Windows is unsupported.";
+const USAGE: &str = "Usage:\n  bridge-mcp --socket ABS_PATH\n  bridge-mcp --help\n\nConnects MCP tools to an already running local broker.\nABS_PATH is the endpoint on the broker's ready line: a Unix socket path, or a\n\\\\.\\pipe\\ named-pipe path on Windows.";
 
 enum Command {
     Help,
@@ -56,15 +56,6 @@ async fn main() -> ExitCode {
     }
 }
 
-#[cfg(not(unix))]
-async fn serve(_socket: PathBuf) -> BridgeResult<()> {
-    Err(BridgeError::new(
-        "unsupported_platform",
-        "this proof requires Unix domain socket IPC; Windows is unsupported",
-    ))
-}
-
-#[cfg(unix)]
 async fn serve(socket: PathBuf) -> BridgeResult<()> {
     use rmcp::{ServiceExt, transport::stdio};
 
@@ -79,7 +70,6 @@ async fn serve(socket: PathBuf) -> BridgeResult<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 mod adapter {
     use std::path::PathBuf;
 

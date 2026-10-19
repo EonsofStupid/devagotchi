@@ -4,7 +4,9 @@
 use crate::contracts::{BridgeError, BridgeResult, OperationView};
 use rusqlite::{Connection, params};
 use std::collections::VecDeque;
+#[cfg(unix)]
 use std::fs::OpenOptions;
+#[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::time::Duration;
@@ -35,6 +37,14 @@ fn persistence(error: impl std::fmt::Display) -> BridgeError {
     BridgeError::new("persistence_error", format!("SQLite journal: {error}"))
 }
 
+fn collision(path: &Path) -> BridgeError {
+    persistence(format!(
+        "Refusing journal collision at {}: expected an operator-owned private regular file with one link",
+        path.display()
+    ))
+}
+
+#[cfg(unix)]
 fn validate_private_file(path: &Path) -> BridgeResult<()> {
     let metadata = match std::fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
@@ -47,12 +57,46 @@ fn validate_private_file(path: &Path) -> BridgeResult<()> {
         || metadata.permissions().mode() & 0o077 != 0
         || metadata.nlink() != 1
     {
-        return Err(persistence(format!(
-            "Refusing journal collision at {}: expected an operator-owned private regular file with one link",
-            path.display()
-        )));
+        return Err(collision(path));
     }
     Ok(())
+}
+
+#[cfg(unix)]
+fn create_private_file(path: &Path) -> std::io::Result<()> {
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map(drop)
+}
+
+/// The entry is inspected through its own handle; a reparse point is opened as
+/// itself, never followed.
+#[cfg(windows)]
+fn validate_private_file(path: &Path) -> BridgeResult<()> {
+    use crate::win32::{self, Entry, Operator};
+    let entry = match win32::open_entry(path) {
+        Ok(entry) => entry,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(persistence(error)),
+    };
+    let operator = Operator::current().map_err(persistence)?;
+    if win32::private_entry_defect(&entry, Entry::File, &operator)
+        .map_err(persistence)?
+        .is_some()
+    {
+        return Err(collision(path));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn create_private_file(path: &Path) -> std::io::Result<()> {
+    let operator = crate::win32::Operator::current()?;
+    crate::win32::create_private_file(path, &operator.user)
 }
 
 impl Journal {
@@ -66,14 +110,8 @@ impl Journal {
         ] {
             validate_private_file(&state_dir.join(name))?;
         }
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
-            .open(&path)
-        {
-            Ok(file) => drop(file),
+        match create_private_file(&path) {
+            Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(persistence(error)),
         }
@@ -273,9 +311,10 @@ mod tests {
     #[test]
     fn journal_reopens_exact_bytes_and_idempotency_evidence() {
         let directory = tempfile::tempdir().unwrap();
+        let state = crate::ipc::private_test_state(directory.path());
         let id = uuid::Uuid::new_v4().to_string();
         {
-            let mut journal = Journal::open(directory.path()).unwrap();
+            let mut journal = Journal::open(&state).unwrap();
             journal
                 .insert(&JournalOperation {
                     key: "retry-key".into(),
@@ -313,7 +352,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let journal = Journal::open(directory.path()).unwrap();
+        let journal = Journal::open(&state).unwrap();
         let loaded = journal.load().unwrap();
         assert_eq!(loaded[0].key, "retry-key");
         assert_eq!(loaded[0].config_identity, "configuration-digest");
@@ -322,6 +361,7 @@ mod tests {
         assert!(matches!(loaded[0].view.state, OperationState::Accepted));
     }
 
+    #[cfg(unix)]
     #[test]
     fn journal_rejects_hardlinks_and_sidecar_collisions_without_mutation() {
         let directory = tempfile::tempdir().unwrap();
@@ -335,6 +375,23 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), b"keep this exact content");
         std::fs::remove_file(state.join("operations.sqlite3")).unwrap();
         std::os::unix::fs::symlink(&target, state.join("operations.sqlite3-wal")).unwrap();
+        assert!(Journal::open(&state).is_err());
+        assert!(!state.join("operations.sqlite3").exists());
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep this exact content");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn journal_rejects_hardlinks_and_sidecar_collisions_without_mutation() {
+        let directory = tempfile::tempdir().unwrap();
+        let target = directory.path().join("unrelated");
+        std::fs::write(&target, b"keep this exact content").unwrap();
+        let state = crate::ipc::private_test_state(directory.path());
+        std::fs::hard_link(&target, state.join("operations.sqlite3")).unwrap();
+        assert!(Journal::open(&state).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"keep this exact content");
+        std::fs::remove_file(state.join("operations.sqlite3")).unwrap();
+        std::fs::hard_link(&target, state.join("operations.sqlite3-wal")).unwrap();
         assert!(Journal::open(&state).is_err());
         assert!(!state.join("operations.sqlite3").exists());
         assert_eq!(std::fs::read(&target).unwrap(), b"keep this exact content");

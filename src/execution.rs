@@ -1,5 +1,7 @@
-//! Linux execution proof: durable admissions, independent output cursors, and
-//! owned process-group cancellation. Executable grants are not a sandbox.
+//! Durable admissions, independent output cursors, and owned process-tree
+//! cancellation. The native provider (`linux`, `windows`) owns spawning,
+//! observation, and termination of one root's process tree; this module owns
+//! the lifecycle. Executable grants are not a sandbox.
 
 use crate::contracts::*;
 use crate::journal::{Journal, JournalFrame, JournalOperation};
@@ -7,8 +9,6 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -21,11 +21,21 @@ use tokio::time::{Instant, sleep, sleep_until, timeout};
 const FRAME_BYTES: usize = 1024;
 const MAX_FRAMES: usize = 1024;
 const MAX_PAGE_FRAMES: usize = 64;
-const TERM_GRACE: Duration = Duration::from_millis(200);
 const GROUP_SETTLE: Duration = Duration::from_millis(1000);
 const ROOT_WAIT: Duration = Duration::from_millis(2000);
 const PIPE_DRAIN: Duration = Duration::from_millis(1000);
-const SCOPE: &str = "Linux root process and inherited process group; excludes processes that leave the group. This is not OS containment.";
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(windows)]
+mod windows;
+
+#[cfg(target_os = "linux")]
+use linux as native;
+#[cfg(windows)]
+use windows as native;
+
+use native::SCOPE;
 
 fn default_output_limit() -> usize {
     262_144
@@ -117,7 +127,9 @@ fn canonical_existing(value: &str, kind: &str, code: &str) -> BridgeResult<PathB
             format!("{kind} must be an absolute path without NUL bytes"),
         ));
     }
-    path.canonicalize()
+    // Windows canonical paths drop the verbatim prefix when that is lossless, so
+    // child working directories and displayed paths stay ordinary drive paths.
+    dunce::canonicalize(path)
         .map_err(|error| BridgeError::new(code, format!("Cannot canonicalize {kind}: {error}")))
 }
 
@@ -129,12 +141,6 @@ fn path_string(path: &Path) -> BridgeResult<String> {
 
 impl Broker {
     pub fn open(config: BrokerConfig, state_dir: &Path) -> BridgeResult<Arc<Self>> {
-        if !cfg!(target_os = "linux") {
-            return Err(BridgeError::new(
-                "unsupported_platform",
-                "This proof supports Linux only",
-            ));
-        }
         if !(1024..=16 * 1024 * 1024).contains(&config.output_limit_bytes)
             || !(1..=4096).contains(&config.max_operations)
             || !(1..=64).contains(&config.max_concurrent)
@@ -159,10 +165,13 @@ impl Broker {
             let metadata = executable
                 .metadata()
                 .map_err(|error| BridgeError::new("invalid_config", error.to_string()))?;
-            if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
+            if !native::is_directly_executable(&executable, &metadata) {
                 return Err(BridgeError::new(
                     "invalid_config",
-                    "Each executable grant must resolve to an executable regular file",
+                    format!(
+                        "Each executable grant must resolve to an executable regular file{}",
+                        native::EXECUTABLE_RULE
+                    ),
                 ));
             }
             executables.insert(executable);
@@ -276,8 +285,11 @@ impl Broker {
         let metadata = executable
             .metadata()
             .map_err(|error| invalid(error.to_string()))?;
-        if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
-            return Err(invalid("Executable is not an executable regular file"));
+        if !native::is_directly_executable(&executable, &metadata) {
+            return Err(invalid(format!(
+                "Executable is not an executable regular file{}",
+                native::EXECUTABLE_RULE
+            )));
         }
         let cwd = match &input.cwd {
             Some(cwd) => canonical_existing(cwd, "cwd", "invalid_request")?,
@@ -666,7 +678,7 @@ impl Shared {
         }
         operation.record.view.state = OperationState::Running;
         operation.record.view.updated_at_ms = now_ms();
-        operation.record.view.detail = Some("Root spawned with exact argv, cleared environment, null stdin, and a new Linux process group. Executable behavior is not sandboxed.".into());
+        operation.record.view.detail = Some(native::RUNNING_DETAIL.into());
         let view = operation.record.view.clone();
         if let Err(error) = state.journal.update(&view) {
             state.fault(error);
@@ -857,120 +869,6 @@ async fn drain_pipe<R: AsyncRead + Unpin>(
     }
 }
 
-// WNOWAIT observes the root without releasing its PID. The same owned child is
-// not reaped until all process-group signals have been sent, preventing PID reuse
-// from retargeting a later group signal at an unrelated process.
-fn root_exited_without_reaping(pid: u32) -> BridgeResult<bool> {
-    let mut information: libc::siginfo_t = unsafe { std::mem::zeroed() };
-    let result = unsafe {
-        libc::waitid(
-            libc::P_PID,
-            pid,
-            &mut information,
-            libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-        )
-    };
-    if result == -1 {
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::Interrupted {
-            return Ok(false);
-        }
-        return Err(BridgeError::new(
-            "process_observation_error",
-            format!("Cannot observe the owned unreaped root: {error}"),
-        ));
-    }
-    Ok(unsafe { information.si_pid() } != 0)
-}
-
-fn signal_group(pid: u32, signal: i32) -> BridgeResult<()> {
-    if pid == 0 || pid > i32::MAX as u32 {
-        return Err(BridgeError::new(
-            "process_signal_error",
-            "Invalid owned process group",
-        ));
-    }
-    let result = unsafe { libc::kill(-(pid as i32), signal) };
-    if result == -1 {
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() != Some(libc::ESRCH) {
-            return Err(BridgeError::new(
-                "process_signal_error",
-                format!("Cannot signal the owned process group: {error}"),
-            ));
-        }
-    }
-    Ok(())
-}
-
-/// A Linux /proc observation while the root remains unreaped. Zombies have
-/// ended execution and cannot run or create more processes.
-fn group_has_executing_members(group: u32) -> BridgeResult<bool> {
-    let entries = std::fs::read_dir("/proc")
-        .map_err(|error| BridgeError::new("process_observation_error", error.to_string()))?;
-    for entry in entries {
-        let entry = entry
-            .map_err(|error| BridgeError::new("process_observation_error", error.to_string()))?;
-        if entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<u32>().ok())
-            .is_none()
-        {
-            continue;
-        }
-        let stat = match std::fs::read_to_string(entry.path().join("stat")) {
-            Ok(stat) => stat,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(BridgeError::new(
-                    "process_observation_error",
-                    format!("Cannot inspect /proc process groups: {error}"),
-                ));
-            }
-        };
-        let Some(end) = stat.rfind(')') else {
-            return Err(BridgeError::new(
-                "process_observation_error",
-                "Malformed /proc process stat",
-            ));
-        };
-        let fields: Vec<_> = stat[end + 1..].split_whitespace().take(3).collect();
-        if fields.len() != 3 {
-            return Err(BridgeError::new(
-                "process_observation_error",
-                "Incomplete /proc process stat",
-            ));
-        }
-        if fields[2].parse::<u32>().ok() == Some(group) && fields[0] != "Z" && fields[0] != "X" {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-async fn end_owned_group(pid: u32) -> BridgeResult<()> {
-    let term_error = signal_group(pid, libc::SIGTERM).err();
-    sleep(TERM_GRACE).await;
-    let kill_error = signal_group(pid, libc::SIGKILL).err();
-    if let Some(error) = term_error.or(kill_error) {
-        return Err(error);
-    }
-    let deadline = Instant::now() + GROUP_SETTLE;
-    loop {
-        if !group_has_executing_members(pid)? {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            return Err(BridgeError::new(
-                "termination_unverified",
-                "Executing members remained in the owned process group after SIGKILL",
-            ));
-        }
-        sleep(Duration::from_millis(20)).await;
-    }
-}
-
 async fn run_job(
     shared: Arc<Shared>,
     id: String,
@@ -1004,10 +902,10 @@ async fn run_job(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // All destructive signalling is explicit while the owned root is unreaped.
-    // Unexpected task/runtime failure remains Unknown; a drop handler must not
-    // turn a lost-ownership condition into an unverified PID-based kill.
-    command.as_std_mut().process_group(0);
+    // All destructive signalling is explicit while the owned root identity is
+    // held. Unexpected task/runtime failure remains Unknown; a drop handler must
+    // not turn a lost-ownership condition into an unverified PID-based kill.
+    native::configure(&mut command);
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
@@ -1021,19 +919,22 @@ async fn run_job(
             return;
         }
     };
-    let Some(pid) = child.id() else {
-        shared.finish(
-            &id,
-            OperationState::Unknown,
-            None,
-            false,
-            "Spawn returned no process identity; resource status cannot be certified.".into(),
-        );
-        return;
+    let tree = match native::OwnedTree::adopt(&mut child).await {
+        Ok(tree) => tree,
+        Err(failure) => {
+            shared.finish(
+                &id,
+                failure.state,
+                None,
+                failure.output_complete,
+                failure.detail,
+            );
+            return;
+        }
     };
     shared.running(&id);
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
-        let termination = end_owned_group(pid).await;
+        let termination = tree.terminate().await;
         let _ = timeout(ROOT_WAIT, child.wait()).await;
         shared.finish(&id, OperationState::Unknown, None, false, format!("Piped output handles were missing; attempted owned-group termination: {termination:?}"));
         return;
@@ -1051,8 +952,8 @@ async fn run_job(
             reason = Some(StopReason::Deadline);
             break;
         }
-        match root_exited_without_reaping(pid) {
-            Ok(true) => match group_has_executing_members(pid) {
+        match tree.root_exited(&child) {
+            Ok(true) => match tree.has_executing_members() {
                 // Keep the root unreaped while its ordinary inherited children
                 // still execute. They remain owned, cancellable, and subject to
                 // the same deadline even after the root program has exited.
@@ -1078,14 +979,11 @@ async fn run_job(
     }
     let termination_error = if reason.is_some() {
         shared.mark_stop(&id);
-        end_owned_group(pid)
-            .await
-            .err()
-            .map(|error| error.to_string())
+        tree.terminate().await.err().map(|error| error.to_string())
     } else {
         None
     };
-    // There are no group signals after this point; wait may now release the root PID.
+    // There is no tree termination after this point; wait may now release the root.
     let waited = timeout(ROOT_WAIT, child.wait()).await;
     let status: Option<ExitStatus> = match waited {
         Ok(Ok(status)) => Some(status),
@@ -1120,7 +1018,7 @@ async fn run_job(
         Err(_) => {
             stdout_task.abort();
             stderr_task.abort();
-            pipe_detail = " Output pipes did not close within one second of root settlement; a descendant may still hold them open. Reading was stopped, output is incomplete, and processes outside the owned group are not tracked or terminated.".into();
+            pipe_detail = native::PIPE_TIMEOUT_DETAIL.into();
             false
         }
     };
@@ -1147,22 +1045,23 @@ async fn run_job(
         Some(StopReason::PersistenceFailure) => {
             "Critical persistence failure requested cancellation. ".to_owned()
         }
-        Some(StopReason::ObservationFailure) => {
-            "Process-group observation failed and requested cancellation. ".to_owned()
-        }
+        Some(StopReason::ObservationFailure) => native::OBSERVATION_FAILED_DETAIL.to_owned(),
         None => String::new(),
     };
     if let Some(status) = status {
         detail.push_str(&format!("Root exit observed: {status}."));
     }
     if reason.is_some() && termination_error.is_none() {
-        detail.push_str(" SIGTERM then SIGKILL were issued while the root PID was still owned; no executing members remained in its inherited process group.");
+        detail.push_str(native::TERMINATION_VERIFIED_DETAIL);
     }
     if let Some(error) = observation_error {
         detail.push_str(&format!(" {error}."));
     }
     if let Some(error) = termination_error {
-        detail.push_str(&format!(" Group termination was not verified: {error}."));
+        detail.push_str(&format!(
+            "{}: {error}.",
+            native::TERMINATION_UNVERIFIED_DETAIL
+        ));
     }
     detail.push_str(&pipe_detail);
     shared.finish(&id, state, exit_code, output_complete, detail);
@@ -1171,6 +1070,199 @@ async fn run_job(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An executable that exits successfully without arguments or input.
+    fn test_executable() -> PathBuf {
+        #[cfg(unix)]
+        let executable = dunce::canonicalize("/usr/bin/true").unwrap();
+        #[cfg(windows)]
+        let executable = system32("hostname.exe");
+        executable
+    }
+
+    #[cfg(windows)]
+    fn system32(name: &str) -> PathBuf {
+        let root = std::env::var_os("SystemRoot").expect("SystemRoot is set on Windows");
+        dunce::canonicalize(Path::new(&root).join("System32").join(name)).unwrap()
+    }
+
+    /// The platform shell and the argv that makes it run `script`.
+    fn shell(script: &[&str]) -> (PathBuf, Vec<String>) {
+        #[cfg(unix)]
+        let (shell, mut args) = (
+            dunce::canonicalize("/bin/sh").unwrap(),
+            vec!["-c".to_owned()],
+        );
+        #[cfg(windows)]
+        let (shell, mut args) = (system32("cmd.exe"), vec!["/d".to_owned(), "/c".to_owned()]);
+        #[cfg(unix)]
+        args.push(script.join(" "));
+        #[cfg(windows)]
+        args.extend(script.iter().map(|part| (*part).to_owned()));
+        (shell, args)
+    }
+
+    fn open_broker(directory: &tempfile::TempDir, grants: &[&Path]) -> Arc<Broker> {
+        let config = BrokerConfig {
+            workspace: directory.path().display().to_string(),
+            allowed_executables: grants
+                .iter()
+                .map(|grant| grant.display().to_string())
+                .collect(),
+            output_limit_bytes: 65_536,
+            max_operations: 8,
+            max_concurrent: 4,
+        };
+        Broker::open(config, &crate::ipc::private_test_state(directory.path())).unwrap()
+    }
+
+    fn start(
+        broker: &Broker,
+        key: &str,
+        executable: &Path,
+        args: Vec<String>,
+        deadline_ms: u64,
+    ) -> String {
+        broker
+            .start(StartInput {
+                idempotency_key: key.into(),
+                executable: executable.display().to_string(),
+                args,
+                cwd: None,
+                deadline_ms,
+            })
+            .unwrap()
+            .operation
+            .operation_id
+    }
+
+    async fn settle(broker: &Broker, id: &str) -> OperationView {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let view = broker.get(id).unwrap();
+            if view.state.terminal() {
+                return view;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "operation did not settle: {view:?}"
+            );
+            sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    fn output_text(broker: &Broker, id: &str) -> String {
+        let page = broker
+            .read(ReadInput {
+                operation_id: id.into(),
+                cursor: 0,
+                max_bytes: MAX_OUTPUT_PAGE_BYTES,
+            })
+            .unwrap();
+        page.frames
+            .iter()
+            .map(|frame| frame.text.as_str())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn exit_status_and_output_are_recorded() {
+        let directory = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let (shell, args) = shell(&["echo devagotchi;", "exit 3"]);
+        #[cfg(windows)]
+        let (shell, args) = shell(&["echo", "devagotchi&", "exit", "3"]);
+        let broker = open_broker(&directory, &[&shell]);
+        let id = start(&broker, "exit-status", &shell, args, 20_000);
+        let view = settle(&broker, &id).await;
+        assert!(matches!(view.state, OperationState::Failed), "{view:?}");
+        assert_eq!(view.exit_code, Some(3));
+        assert!(view.output_complete);
+        assert_eq!(view.ownership_scope, SCOPE);
+        assert!(output_text(&broker, &id).contains("devagotchi"));
+        broker.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn owned_descendants_keep_the_operation_running_until_cancelled() {
+        let directory = tempfile::tempdir().unwrap();
+        // The root exits at once and leaves one descendant running.
+        #[cfg(unix)]
+        let (shell, args) = shell(&["/bin/sleep 30 &", "exit 0"]);
+        #[cfg(windows)]
+        let ping = system32("PING.EXE");
+        #[cfg(windows)]
+        let (shell, args) = shell(&[
+            "start",
+            "/b",
+            "",
+            ping.to_str().unwrap(),
+            "-n",
+            "30",
+            "127.0.0.1",
+        ]);
+        let broker = open_broker(&directory, &[&shell]);
+        let id = start(&broker, "descendant", &shell, args, 60_000);
+        sleep(Duration::from_millis(1500)).await;
+        let view = broker.get(&id).unwrap();
+        assert!(
+            matches!(view.state, OperationState::Running),
+            "a descendant outlived its root: {view:?}"
+        );
+        broker.cancel(&id).unwrap();
+        let view = settle(&broker, &id).await;
+        assert!(matches!(view.state, OperationState::Cancelled), "{view:?}");
+        assert!(view.cancellation_requested);
+        assert!(view.output_complete, "{view:?}");
+        assert!(
+            view.detail
+                .unwrap()
+                .contains(native::TERMINATION_VERIFIED_DETAIL)
+        );
+        broker.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_deadline_ends_the_owned_tree() {
+        let directory = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let (shell, args) = shell(&["/bin/sleep 30"]);
+        #[cfg(windows)]
+        let (shell, args) = (
+            system32("PING.EXE"),
+            vec!["-n".to_owned(), "30".to_owned(), "127.0.0.1".to_owned()],
+        );
+        let broker = open_broker(&directory, &[&shell]);
+        let id = start(&broker, "deadline", &shell, args, 500);
+        let view = settle(&broker, &id).await;
+        assert!(matches!(view.state, OperationState::TimedOut), "{view:?}");
+        assert!(
+            view.detail
+                .unwrap()
+                .contains(native::TERMINATION_VERIFIED_DETAIL)
+        );
+        broker.shutdown().await;
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn batch_files_are_not_executable_grants() {
+        let directory = tempfile::tempdir().unwrap();
+        let script = directory.path().join("grant.cmd");
+        std::fs::write(&script, b"@echo off\r\n").unwrap();
+        let config = BrokerConfig {
+            workspace: directory.path().display().to_string(),
+            allowed_executables: vec![script.display().to_string()],
+            output_limit_bytes: 8192,
+            max_operations: 1,
+            max_concurrent: 1,
+        };
+        let error = Broker::open(config, &crate::ipc::private_test_state(directory.path()))
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "invalid_config");
+        assert!(error.message.contains("cmd.exe"));
+    }
 
     #[test]
     fn utf8_is_identical_across_every_split_boundary() {
@@ -1219,7 +1311,7 @@ mod tests {
     #[tokio::test]
     async fn critical_journal_failure_is_visible_and_blocks_new_execution() {
         let directory = tempfile::tempdir().unwrap();
-        let executable = Path::new("/usr/bin/true").canonicalize().unwrap();
+        let executable = test_executable();
         let config = BrokerConfig {
             workspace: directory.path().display().to_string(),
             allowed_executables: vec![executable.display().to_string()],
@@ -1227,9 +1319,9 @@ mod tests {
             max_operations: 4,
             max_concurrent: 2,
         };
-        let broker = Broker::open(config, directory.path()).unwrap();
-        let injection =
-            rusqlite::Connection::open(directory.path().join("operations.sqlite3")).unwrap();
+        let state = crate::ipc::private_test_state(directory.path());
+        let broker = Broker::open(config, &state).unwrap();
+        let injection = rusqlite::Connection::open(state.join("operations.sqlite3")).unwrap();
         injection.execute_batch("CREATE TRIGGER injected_failure BEFORE UPDATE ON operations BEGIN SELECT RAISE(FAIL, 'test persistence failure'); END;").unwrap();
         let input = StartInput {
             idempotency_key: "before-fault".into(),
@@ -1264,7 +1356,7 @@ mod tests {
     #[tokio::test]
     async fn recovery_never_replays_unsettled_admissions() {
         let directory = tempfile::tempdir().unwrap();
-        let executable = Path::new("/usr/bin/true").canonicalize().unwrap();
+        let executable = test_executable();
         let config = BrokerConfig {
             workspace: directory.path().display().to_string(),
             allowed_executables: vec![executable.display().to_string()],
@@ -1280,8 +1372,9 @@ mod tests {
             deadline_ms: 1000,
         };
         let id = uuid::Uuid::new_v4().to_string();
+        let state = crate::ipc::private_test_state(directory.path());
         {
-            let broker = Broker::open(config.clone(), directory.path()).unwrap();
+            let broker = Broker::open(config.clone(), &state).unwrap();
             let (spec, digest) = broker.normalize(&input).unwrap();
             let record = JournalOperation {
                 key: input.idempotency_key.clone(),
@@ -1307,7 +1400,7 @@ mod tests {
             };
             broker.shared.lock().journal.insert(&record).unwrap();
         }
-        let broker = Broker::open(config, directory.path()).unwrap();
+        let broker = Broker::open(config, &state).unwrap();
         let replay = broker.start(input).unwrap();
         assert!(replay.replayed);
         assert_eq!(replay.operation.operation_id, id);

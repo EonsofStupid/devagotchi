@@ -4,13 +4,13 @@
 
 Devagotchi is a universal workspace bridge, beginning with locally installed MCP clients and a native app for seeing commands, output, and workspace activity. The product direction represents every admitted task as a graph and grows into a trusted internal mesh, with public API/MCP surfaces for adoption. Windows, macOS, and Linux are required targets. Source is published at [EonsofStupid/devagotchi](https://github.com/EonsofStupid/devagotchi). The rebuilt [Devagotchi Site](https://devagotchi.justsayit.chatgpt.site) is published with a read-only HTTP/MCP reference service and Linux source download; [devagotchi.net](https://devagotchi.net) has been added and is pending DNS validation.
 
-This working copy starts the replacement for DesktopCommanderMCP with a separate process broker, a thin official-SDK MCP adapter, and a Tauri desktop inspector. **The current execution provider is implemented and tested on Linux. Windows and macOS providers are still required before a cross-platform release.**
+This working copy starts the replacement for DesktopCommanderMCP with a separate process broker, a thin official-SDK MCP adapter, and a Tauri desktop inspector. **Execution providers are implemented for Linux and Windows. The macOS provider is still required before a cross-platform release.**
 
 ## Project status and source preview
 
 | Surface | Current status | What its evidence establishes |
 |---|---|---|
-| Desktop broker, local stdio MCP, and inspector | Linux foundation source and historical verification are included here | The recorded process/protocol/native UI scenarios; no Windows/macOS or named-host certification. |
+| Desktop broker, local stdio MCP, and inspector | Linux and Windows broker source; historical Linux verification; lifecycle, journal, and IPC tests on Linux and Windows in [CI](.github/workflows/ci.yml) | The recorded process/protocol/native UI scenarios and the CI test results; no macOS, Windows installer, or named-host certification. |
 | Public website and reference HTTP API/MCP | Published as Site version 3; HTTP reference/download verified, MCP enabled with OAuth and installed plugin | Read-only docs, local schemas, capability information, and a labelled graph example; no workstation execution. |
 | Custom domain | devagotchi.net added, DNS pending | No verified custom-domain activation is claimed here. |
 | Task graphs | Candidate contract and scoped implementation plan | No graph execution engine is implemented in this foundation. |
@@ -27,18 +27,20 @@ This directory is the desktop foundation and planning source preview, not a sign
 - Matching retries return the recorded job. Reusing a key with changed inputs is a conflict.
 - Each output reader supplies its own cursor. UTF-8 decoding is incremental; raw bytes remain available losslessly. Retention limits produce explicit gaps.
 - Cancellation and deadlines supervise the root and its inherited Linux process group. A parent exiting does not abandon children that remain in that group.
+- On Windows, the root is created suspended and assigned to a broker-owned Job Object before it runs. Cancellation and deadlines terminate the job and verify that no active process remains in it.
 - Restarted brokers preserve unfinished work as `unknown`. They do not replay it or signal a remembered PID.
 - The desktop inspector reads the same operations, displays exact command details and live retained output, and can request cancellation.
 - The native host validates broker responses against Rust types. Desktop types are generated from the same canonical Rust contracts.
 
-This desktop implementation does not yet provide file/search/edit tools, PTY input, workspace onboarding, a tray/service installer, Windows Job Objects/ConPTY, macOS process supervision, signed updates, task-graph execution, trusted mesh, or runtime HTTP. Those capabilities follow the scoped sequence in the [master plan](docs/product-and-platform-plan.md). The website/reference publication is a separate immediate workstream and does not wait for full native release.
+This desktop implementation does not yet provide file/search/edit tools, PTY input, workspace onboarding, a tray/service installer, Windows ConPTY, macOS process supervision, signed updates, task-graph execution, trusted mesh, or runtime HTTP. Those capabilities follow the scoped sequence in the [master plan](docs/product-and-platform-plan.md). The website/reference publication is a separate immediate workstream and does not wait for full native release.
 
 ## Components
 
 | Component | Source | Responsibility |
 |---|---|---|
 | Broker | `src/execution.rs`, `src/journal.rs`, `src/bin/bridge-broker.rs` | Admission, execution, output retention, cancellation, recovery |
-| Local IPC | `src/ipc.rs` | Private directory/socket, peer UID, instance lock, bounded framed requests |
+| Native execution providers | `src/execution/linux.rs`, `src/execution/windows.rs` | Spawning, observing, and terminating one root's owned process group or Job Object |
+| Local IPC | `src/ipc.rs`, `src/ipc/unix.rs`, `src/ipc/windows.rs`, `src/win32.rs` | Private state directory, Unix socket or named pipe, peer UID or SID, instance lock, bounded framed requests |
 | MCP adapter | `src/bin/bridge-mcp.rs` | Official `rmcp` 3.5.1 stdio transport and four typed tools |
 | Desktop app | `apps/desktop` | Tauri 2 native host and React/TypeScript inspector |
 | Website and public reference service | [`apps/website`](apps/website/README.md) | Product documentation, source download, and read-only HTTP/MCP reference routes |
@@ -70,6 +72,25 @@ The endpoint is `/absolute/private/state/devagotchi/broker.sock`. Run the broker
 
 The example config's paths are placeholders, deliberately not broad default grants. The broker loads one workspace and one operator configuration at startup. Configuration errors prevent admission. MCP tools cannot modify grants.
 
+## Build and run on Windows
+
+Install the toolchain from `rust-toolchain.toml` for the MSVC host and the Visual Studio C++ build tools, which compile the bundled SQLite. From the repository root in PowerShell:
+
+```powershell
+cargo build --locked --bins
+cargo test --locked --lib
+```
+
+Use `config/broker.windows.example.json` as the template. Grants must name `.exe` or `.com` images. Batch files are interpreted by `cmd.exe`, so grant `cmd.exe` itself when you intend to run scripts. The state directory's parent must exist. The broker creates the state directory owned by your user, with a protected DACL that grants only your user, and refuses an existing directory that inherits other permissions.
+
+```powershell
+.\target\debug\bridge-broker.exe --state-dir X:\absolute\private\state\devagotchi --config X:\absolute\path\broker.json
+```
+
+The ready line names the endpoint: a local named pipe, `\\.\pipe\devagotchi-broker-<digest>`, derived from your user SID and the state directory. Pass it to `bridge-mcp --socket` and to the desktop app. The pipe's DACL grants only your user and it rejects remote clients. The broker refuses to start if a pipe with its name already exists, and each end checks that the other runs as your user. Ctrl+C, Ctrl+Break, closing the console, or system shutdown request bounded shutdown and cancellation of active owned jobs.
+
+Each root is created suspended, assigned to a new Job Object, and only then resumed, so neither it nor anything it starts runs outside that job. The job permits no breakaway and terminates its members when the broker's job handle closes, including when the broker exits. Cancellation and deadlines call `TerminateJobObject` and verify that no active process remains. Windows has no general graceful-stop request for arbitrary programs, so there is no grace period. Arguments are encoded with the Microsoft C runtime quoting rules most programs parse; a program with its own command-line parser may read them differently.
+
 ## Connect a local MCP client
 
 For clients using an `mcpServers` configuration object, the entry has this shape:
@@ -84,6 +105,8 @@ For clients using an `mcpServers` configuration object, the entry has this shape
   }
 }
 ```
+
+On Windows, `command` is the path to `bridge-mcp.exe` and the `--socket` value is the broker's `\\.\pipe\` endpoint, escaped as `"\\\\.\\pipe\\devagotchi-broker-<digest>"` in JSON.
 
 The exact configuration location and format depend on the selected host. A named desktop client's integration has not yet been certified. The adapter's raw stdio tests cover both `initialize` with protocol `2025-11-25` and discovery/per-request metadata with `2026-07-28`.
 
@@ -124,7 +147,7 @@ The Rust exporter produces one JSON Schema bundle. `json-schema-to-typescript` g
 
 ## Run the acceptance checks
 
-These tests create disposable workspaces and launch only their own fixture processes. Linux local Unix sockets must be available; the boundary suite performs a preflight so an environment that blocks sockets cannot produce misleading passing startup-denial tests.
+These tests create disposable workspaces and launch only their own fixture processes. The Python suites are Linux harnesses; on Windows, `cargo test --locked --lib` runs the shared lifecycle tests plus the Windows IPC and journal tests. Linux local Unix sockets must be available; the boundary suite performs a preflight so an environment that blocks sockets cannot produce misleading passing startup-denial tests.
 
 ```bash
 python3 -B tests/mcp_smoke.py --output test-results/mcp-smoke.json
@@ -139,7 +162,7 @@ The smoke test covers real process execution, split Unicode, independent readers
 
 ## Authority and limits
 
-The local trust boundary is the OS user. A same-user process can use the same private endpoint; this version does not authenticate individual MCP applications separately. The socket does not expose a remote listener.
+The local trust boundary is the OS user. A same-user process can use the same private endpoint; this version does not authenticate individual MCP applications separately. Neither the Unix socket nor the named pipe accepts remote clients.
 
 Future authenticated runtime HTTP and trusted peer routing must reuse broker authorization and recorded operation identity. A website login, graph edge, route advertisement, or client-supplied device label cannot widen a workstation grant. An unreachable target or uncertain attempt is not permission to execute the work on another machine.
 
@@ -147,7 +170,7 @@ Executable grants authorize the behavior of that executable as your OS user. Gra
 
 Output and command arguments can contain sensitive or hostile text. The broker and inspector do not send telemetry, and the journal is stored locally. Connected MCP clients receive tool results and may forward them to their configured model or services. The UI renders output as text. The journal contains exact arguments and retained output, so choose a private local state directory and appropriate retention. Logical output/frame and operation counts are bounded; a strict physical disk quota and a complete denial/audit event chain are later release requirements.
 
-The current engine uses pipes, not a PTY. It clears inherited environment variables and closes stdin. Programs that need environment configuration, interactive input, or a real terminal are outside this initial execution contract and must receive explicit future support.
+The current engine uses pipes, not a PTY. It clears inherited environment variables and closes stdin. On Windows it keeps only `SystemRoot`, which Windows system libraries require. Programs that need environment configuration, interactive input, or a real terminal are outside this initial execution contract and must receive explicit future support.
 
 ## Source and release status
 
