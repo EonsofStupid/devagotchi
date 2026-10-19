@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub const API_VERSION: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 64 * 1024;
 pub const MAX_OUTPUT_PAGE_BYTES: usize = 16 * 1024;
+pub const MAX_FILE_PAGE_BYTES: usize = 64 * 1024;
+pub const MAX_FILE_LIST_ENTRIES: u32 = 512;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -162,6 +164,101 @@ impl std::error::Error for BridgeError {}
 
 pub type BridgeResult<T> = Result<T, BridgeError>;
 
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileListInput {
+    /// Absolute path of a directory within the configured workspace.
+    pub path: String,
+    /// The previous page's `next_cursor`; omit it for the first page.
+    #[serde(default)]
+    pub cursor: Option<String>,
+    /// Maximum entries to return, 1..=512.
+    #[serde(default = "default_file_list_limit")]
+    pub limit: u32,
+}
+fn default_file_list_limit() -> u32 { 128 }
+
+/// The kind of a directory entry itself. `symlink` covers symbolic links, junctions, and other
+/// name-surrogate reparse points; they are never followed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FileKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+/// One directory entry, describing the entry itself and never a link target.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileEntry {
+    /// The entry's name. When `name_exact` is false the native name is not valid Unicode; invalid
+    /// sequences are shown as U+FFFD and this version cannot address the entry by path.
+    pub name: String,
+    pub name_exact: bool,
+    pub kind: FileKind,
+    /// Present for regular files.
+    pub size_bytes: Option<u64>,
+    /// Last modification time in Unix milliseconds, when the filesystem reports one.
+    pub modified_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileListPage {
+    /// Canonical absolute path of the listed directory.
+    pub path: String,
+    /// Entries in ascending native-name order after the request cursor.
+    pub entries: Vec<FileEntry>,
+    /// Pass as `cursor` to read the next page; absent on the last page.
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileReadInput {
+    /// Absolute path of a regular file within the configured workspace.
+    pub path: String,
+    /// Byte offset of the first byte to return.
+    #[serde(default)]
+    pub offset: u64,
+    /// Maximum bytes to return, 1024..=65536.
+    #[serde(default = "default_file_page_bytes")]
+    pub max_bytes: usize,
+}
+fn default_file_page_bytes() -> usize { MAX_FILE_PAGE_BYTES }
+
+/// The version of a file a read observed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileRevision {
+    /// Identity of the file object: device and inode on Unix, volume serial and file ID on
+    /// Windows. It survives a rename and changes when the file is replaced by another object.
+    pub identity: String,
+    pub size_bytes: u64,
+    /// Last modification time in Unix milliseconds, when the filesystem reports one.
+    pub modified_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileReadPage {
+    /// Canonical absolute path of the file that was read.
+    pub path: String,
+    pub revision: FileRevision,
+    pub offset: u64,
+    /// The exact bytes read.
+    pub bytes_base64: String,
+    /// The same bytes as text when they are valid UTF-8. A character split by the page end is
+    /// left for the next page; any other invalid sequence leaves this absent.
+    pub text: Option<String>,
+    /// Offset to request next.
+    pub next_offset: u64,
+    /// True when the read reached the end of the file.
+    pub eof: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RequestBody {
@@ -170,6 +267,8 @@ pub enum RequestBody {
     OperationRead(ReadInput),
     OperationCancel(GetInput),
     OperationList(ListInput),
+    FileList(FileListInput),
+    FileRead(FileReadInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +285,22 @@ pub enum ResponseBody {
     Operation(OperationView),
     Output(OutputPage),
     Operations(OperationsPage),
+    Files(FileListPage),
+    FileContent(FileReadPage),
+}
+
+impl ResponseBody {
+    /// The wire `kind` tag, for diagnostics about an unexpected response.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Start(_) => "start",
+            Self::Operation(_) => "operation",
+            Self::Output(_) => "output",
+            Self::Operations(_) => "operations",
+            Self::Files(_) => "files",
+            Self::FileContent(_) => "file_content",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

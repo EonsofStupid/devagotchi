@@ -11,7 +11,8 @@ const root = path.resolve(__dirname, "..");
 const schemaFile = path.join(root, "schemas", "broker-contracts.schema.json");
 const typesFile = path.join(root, "apps", "desktop", "src", "generated", "contracts.ts");
 const expectedTypes = [
-  "BridgeError", "GetInput", "ListInput", "OperationState", "OperationSummary",
+  "BridgeError", "FileEntry", "FileKind", "FileListInput", "FileListPage", "FileReadInput",
+  "FileReadPage", "FileRevision", "GetInput", "ListInput", "OperationState", "OperationSummary",
   "OperationsPage", "OperationView", "OutputFrame", "OutputPage", "ReadInput",
   "StartInput", "StartOutput",
 ];

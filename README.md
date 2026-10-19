@@ -30,9 +30,10 @@ This directory is the desktop foundation and planning source preview, not a sign
 - On Windows, the root is created suspended and assigned to a broker-owned Job Object before it runs. Cancellation and deadlines terminate the job and verify that no active process remains in it.
 - Restarted brokers preserve unfinished work as `unknown`. They do not replay it or signal a remembered PID.
 - The desktop inspector reads the same operations, displays exact command details and live retained output, and can request cancellation.
+- When the operator grants `file_access: "read"`, clients can list a workspace directory and read a bounded byte range of a workspace file. Paths resolve inside the workspace, links are reported rather than followed, each read is checked against the opened handle's own path, and the handle is closed before the response, so a completed read never blocks a later replace.
 - The native host validates broker responses against Rust types. Desktop types are generated from the same canonical Rust contracts.
 
-This desktop implementation does not yet provide file/search/edit tools, PTY input, workspace onboarding, a tray/service installer, Windows ConPTY, macOS process supervision, signed updates, task-graph execution, trusted mesh, or runtime HTTP. Those capabilities follow the scoped sequence in the [master plan](docs/product-and-platform-plan.md). The website/reference publication is a separate immediate workstream and does not wait for full native release.
+This desktop implementation does not yet provide file search or edit tools, PTY input, workspace onboarding, a tray/service installer, Windows ConPTY, macOS process supervision, signed updates, task-graph execution, trusted mesh, or runtime HTTP. Those capabilities follow the scoped sequence in the [master plan](docs/product-and-platform-plan.md). The website/reference publication is a separate immediate workstream and does not wait for full native release.
 
 ## Components
 
@@ -40,6 +41,7 @@ This desktop implementation does not yet provide file/search/edit tools, PTY inp
 |---|---|---|
 | Broker | `src/broker.rs`, `src/journal.rs`, `src/bin/bridge-broker.rs` | Admission, operation lifecycle, output retention, cancellation, recovery |
 | Execution | `src/execution.rs`, `src/execution/platform/linux.rs`, `src/execution/platform/windows.rs` | Process orchestration; spawning, observing, and terminating one root's owned process group or Job Object |
+| Files | `src/files.rs`, `src/files/platform/linux.rs`, `src/files/platform/windows.rs` | Bounded, read-only workspace list and read queries with native handle identity |
 | Local IPC | `src/ipc.rs`, `src/ipc/unix.rs`, `src/ipc/windows.rs`, `src/ipc/windows/security.rs` | Private state directory, Unix socket or named pipe, peer UID or SID, instance lock, bounded framed requests |
 | MCP adapter | `src/bin/bridge-mcp.rs` | Official `rmcp` 3.5.1 stdio transport and four typed tools |
 | Desktop app | `apps/desktop` | Tauri 2 native host and React/TypeScript inspector |
@@ -70,7 +72,7 @@ Create a broker configuration using `config/broker.example.json` as a template. 
 
 The endpoint is `/absolute/private/state/devagotchi/broker.sock`. Run the broker independently of the MCP client. `SIGTERM` or Ctrl-C requests bounded shutdown and cancellation of active owned jobs.
 
-The example config's paths are placeholders, deliberately not broad default grants. The broker loads one workspace and one operator configuration at startup. Configuration errors prevent admission. MCP tools cannot modify grants.
+The example config's paths are placeholders, deliberately not broad default grants. `file_access` is `none` unless the operator sets it to `read`, which permits workspace list and read queries. The broker loads one workspace and one operator configuration at startup. Configuration errors prevent admission. MCP tools cannot modify grants.
 
 ## Build and run on Windows
 
@@ -118,6 +120,8 @@ Those are historical local-adapter results. The separate Site reference MCP targ
 | `operation_get` | Read the job's observed state and exact request |
 | `operation_read` | Read retained output after a caller-owned cursor |
 | `operation_cancel` | Explicitly request cancellation of an admitted job |
+| `file_list` | List one workspace directory, a bounded page at a time in stable name order (requires `file_access: "read"`) |
+| `file_read` | Read a bounded byte range of a workspace file with its revision identity (requires `file_access: "read"`) |
 
 Stopping an MCP request only stops waiting for that response. Once admission is committed, reuse the same retry key and request to reconcile a lost reply. A different retry key can start new work.
 

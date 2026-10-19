@@ -109,7 +109,7 @@ def main():
         config = root / 'config.json'
         executable = str(Path(sys.executable).resolve())
         config.write_text(json.dumps({'workspace': str(workspace), 'allowed_executables': [executable],
-            'output_limit_bytes': 8192, 'max_operations': 32, 'max_concurrent': 4}))
+            'output_limit_bytes': 8192, 'max_operations': 32, 'max_concurrent': 4, 'file_access': 'read'}))
 
         def launch_broker():
             nonlocal broker, broker_log
@@ -167,9 +167,21 @@ def main():
             launch_broker()
             c = client()
             catalog = c.rpc('tools/list', {})['tools']
-            assert {t['name'] for t in catalog} == {'operation_start', 'operation_get', 'operation_read', 'operation_cancel'}
+            assert {t['name'] for t in catalog} == {'operation_start', 'operation_get', 'operation_read', 'operation_cancel', 'file_list', 'file_read'}
             assert all(t.get('outputSchema') for t in catalog), catalog
-            passed('stdio_initialize_and_typed_tool_catalog', protocol='2025-11-25', tools=4)
+            passed('stdio_initialize_and_typed_tool_catalog', protocol='2025-11-25', tools=len(catalog))
+
+            notes = 'first line\nsecond € line\n'.encode()
+            (workspace / 'notes.txt').write_bytes(notes)
+            listing = c.tool('file_list', {'path': str(workspace), 'limit': 512})
+            entry = next(e for e in listing['entries'] if e['name'] == 'notes.txt')
+            assert entry['kind'] == 'file' and entry['name_exact'] and entry['size_bytes'] == len(notes), entry
+            page = c.tool('file_read', {'path': str(workspace / 'notes.txt'), 'offset': 0, 'max_bytes': 1024})
+            assert base64.b64decode(page['bytes_base64']) == notes and page['text'] == notes.decode(), page
+            assert page['eof'] and page['next_offset'] == len(notes) and page['revision']['size_bytes'] == len(notes), page
+            outside = c.tool('file_read', {'path': str(config), 'offset': 0, 'max_bytes': 1024}, error=True)
+            assert outside['code'] == 'path_outside_workspace', outside
+            passed('workspace_file_list_and_read', identity=page['revision']['identity'], bytes=len(notes))
 
             expected = 'Start: € 🍀\n'.encode()
             code = 'import os,time\n' + f'data={expected!r}\n' + 'for b in data:\n os.write(1,bytes([b]));time.sleep(0.01)\nos.write(2,b"stderr-ok\\n")'

@@ -105,13 +105,7 @@ impl Connection {
 }
 
 fn unexpected(expected: &str, actual: &ResponseBody) -> BridgeError {
-    let actual = match actual {
-        ResponseBody::Start(_) => "start",
-        ResponseBody::Operation(_) => "operation",
-        ResponseBody::Output(_) => "output",
-        ResponseBody::Operations(_) => "operations",
-    };
-    BridgeError::new("unexpected_broker_response", format!("Expected {expected}, received {actual}"))
+    BridgeError::new("unexpected_broker_response", format!("Expected {expected}, received {}", actual.kind()))
 }
 
 #[tauri::command]

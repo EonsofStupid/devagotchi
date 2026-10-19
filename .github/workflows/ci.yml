@@ -28,3 +28,27 @@ jobs:
       - run: rustup toolchain install
       - run: cargo build --locked --bins
       - run: cargo test --locked --lib
+
+  acceptance:
+    name: acceptance (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: cargo build --locked --bins
+      # Generated schema and desktop types must match the Rust contracts.
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: apps/desktop
+      - run: node scripts/generate-contracts.cjs --check
+      # Real broker and MCP adapter processes over stdio and the local socket.
+      - run: mkdir -p test-results
+      - run: python3 -B tests/mcp_smoke.py --output test-results/mcp-smoke.json
+      - run: >-
+          python3 -B tests/mcp_protocol.py
+          --adapter "$PWD/target/debug/bridge-mcp"
+          --socket /tmp/devagotchi-protocol-unused.sock
+          --output test-results/mcp-protocol.json

@@ -6,6 +6,7 @@
 use crate::contracts::*;
 use crate::execution::platform::{self, SCOPE};
 use crate::execution::{ExecutionSpec, StopReason, run_job};
+use crate::files::{self, FileAccess};
 use crate::journal::{Journal, JournalFrame, JournalOperation};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
@@ -41,6 +42,9 @@ pub struct BrokerConfig {
     pub max_operations: usize,
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: usize,
+    /// Workspace file queries clients may make. Absent means none.
+    #[serde(default)]
+    pub file_access: FileAccess,
 }
 
 struct Operation {
@@ -223,7 +227,36 @@ impl Broker {
                 .cancel(&input.operation_id)
                 .map(ResponseBody::Operation),
             RequestBody::OperationList(input) => self.list(input).map(ResponseBody::Operations),
+            RequestBody::FileList(input) => self
+                .file_query(move |workspace| files::list(workspace, input))
+                .await
+                .map(ResponseBody::Files),
+            RequestBody::FileRead(input) => self
+                .file_query(move |workspace| files::read(workspace, input))
+                .await
+                .map(ResponseBody::FileContent),
         }
+    }
+
+    /// Runs one bounded file query on the blocking pool, outside the registry
+    /// lock, after checking the operator's file grant. File queries are direct
+    /// reads; they create no operation and no journal record.
+    async fn file_query<T: Send + 'static>(
+        &self,
+        query: impl FnOnce(&Path) -> BridgeResult<T> + Send + 'static,
+    ) -> BridgeResult<T> {
+        if self.shared.config.file_access != FileAccess::Read {
+            return Err(BridgeError::new(
+                "file_access_denied",
+                "The broker operator has not granted workspace file reads; set \"file_access\": \"read\" in the broker configuration",
+            ));
+        }
+        let workspace = self.shared.workspace.clone();
+        tokio::task::spawn_blocking(move || query(&workspace))
+            .await
+            .map_err(|error| {
+                BridgeError::new("file_io", format!("File query did not complete: {error}"))
+            })?
     }
 
     fn normalize(&self, input: &StartInput) -> BridgeResult<(ExecutionSpec, String)> {
@@ -796,6 +829,7 @@ mod tests {
             output_limit_bytes: 65_536,
             max_operations: 8,
             max_concurrent: 4,
+            file_access: FileAccess::None,
         };
         Broker::open(config, &crate::ipc::private_test_state(directory.path())).unwrap()
     }
@@ -928,6 +962,42 @@ mod tests {
         broker.shutdown().await;
     }
 
+    #[tokio::test]
+    async fn file_queries_require_the_operator_file_grant() {
+        let open = |directory: &tempfile::TempDir, file_access| {
+            let config = BrokerConfig {
+                workspace: directory.path().display().to_string(),
+                allowed_executables: vec![],
+                output_limit_bytes: 8192,
+                max_operations: 1,
+                max_concurrent: 1,
+                file_access,
+            };
+            Broker::open(config, &crate::ipc::private_test_state(directory.path())).unwrap()
+        };
+        let read = |directory: &tempfile::TempDir| {
+            RequestBody::FileRead(FileReadInput {
+                path: directory.path().join("readme.txt").display().to_string(),
+                offset: 0,
+                max_bytes: 1024,
+            })
+        };
+        let ungranted = tempfile::tempdir().unwrap();
+        std::fs::write(ungranted.path().join("readme.txt"), "hello").unwrap();
+        let broker = open(&ungranted, FileAccess::None);
+        let error = broker.handle(read(&ungranted)).await.unwrap_err();
+        assert_eq!(error.code, "file_access_denied");
+        broker.shutdown().await;
+        let granted = tempfile::tempdir().unwrap();
+        std::fs::write(granted.path().join("readme.txt"), "hello").unwrap();
+        let broker = open(&granted, FileAccess::Read);
+        match broker.handle(read(&granted)).await.unwrap() {
+            ResponseBody::FileContent(page) => assert_eq!(page.text.as_deref(), Some("hello")),
+            other => panic!("unexpected response {}", other.kind()),
+        }
+        broker.shutdown().await;
+    }
+
     #[cfg(windows)]
     #[test]
     fn batch_files_are_not_executable_grants() {
@@ -940,6 +1010,7 @@ mod tests {
             output_limit_bytes: 8192,
             max_operations: 1,
             max_concurrent: 1,
+            file_access: FileAccess::None,
         };
         let error = Broker::open(config, &crate::ipc::private_test_state(directory.path()))
             .err()
@@ -963,6 +1034,7 @@ mod tests {
             output_limit_bytes: 8192,
             max_operations: 1,
             max_concurrent: 2,
+            file_access: FileAccess::None,
         };
         assert!(Broker::open(config, directory.path()).is_err());
     }
@@ -977,6 +1049,7 @@ mod tests {
             output_limit_bytes: 8192,
             max_operations: 4,
             max_concurrent: 2,
+            file_access: FileAccess::None,
         };
         let state = crate::ipc::private_test_state(directory.path());
         let broker = Broker::open(config, &state).unwrap();
@@ -1022,6 +1095,7 @@ mod tests {
             output_limit_bytes: 8192,
             max_operations: 4,
             max_concurrent: 2,
+            file_access: FileAccess::None,
         };
         let input = StartInput {
             idempotency_key: "survives-restart".into(),
