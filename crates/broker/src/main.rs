@@ -16,10 +16,10 @@ fn main() {
 }
 
 /// Operating-system requests to stop, besides Ctrl+C.
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 struct Termination(tokio::signal::unix::Signal);
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 impl Termination {
     fn new() -> std::io::Result<Self> {
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map(Self)
@@ -57,7 +57,9 @@ impl Termination {
 
 #[cfg(any(target_os = "linux", windows))]
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    use desktop_bridge::{broker::{Broker, BrokerConfig}, contracts::*, ipc::{self, StateGuard}};
+    use devagotchi_contracts::*;
+    use devagotchi_core::broker::{Broker, BrokerConfig};
+    use devagotchi_ipc::{self as ipc, StateGuard};
     use std::{io::Read, path::PathBuf, sync::Arc};
 
     let args: Vec<String> = std::env::args().skip(1).collect();

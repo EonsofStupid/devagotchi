@@ -2,7 +2,7 @@
 
 use std::{env, ffi::OsString, path::PathBuf, process::ExitCode};
 
-use desktop_bridge::contracts::{BridgeError, BridgeResult};
+use devagotchi_contracts::{BridgeError, BridgeResult};
 
 const USAGE: &str = "Usage:\n  bridge-mcp --socket ABS_PATH\n  bridge-mcp --help\n\nConnects MCP tools to an already running local broker.\nABS_PATH is the endpoint on the broker's ready line: a Unix socket path, or a\n\\\\.\\pipe\\ named-pipe path on Windows.";
 
@@ -73,7 +73,7 @@ async fn serve(socket: PathBuf) -> BridgeResult<()> {
 mod adapter {
     use std::path::PathBuf;
 
-    use desktop_bridge::contracts::{
+    use devagotchi_contracts::{
         BridgeError, GetInput, OperationView, OutputPage, ReadInput, RequestBody, ResponseBody,
         StartInput, StartOutput,
     };
@@ -107,7 +107,7 @@ mod adapter {
                     "request_cancelled",
                     "stopped waiting for the broker response; admitted operations are not cancelled",
                 ))),
-                response = desktop_bridge::ipc::request(&self.socket, body) => {
+                response = devagotchi_ipc::request(&self.socket, body) => {
                     response.map_err(Json)
                 }
             }

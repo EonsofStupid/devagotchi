@@ -1,6 +1,6 @@
 //! Canonical wire types. Serde rejects unknown fields; broker validation enforces bounds.
 
-use rmcp::schemars::{self, JsonSchema};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub const API_VERSION: u32 = 1;

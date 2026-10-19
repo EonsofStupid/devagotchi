@@ -2,8 +2,10 @@
 //!
 //! The root stays unreaped while it is observed and signalled, so its PID and
 //! group identity cannot be reused by an unrelated process.
+// Native OS calls live here and nowhere else in this crate's dependents.
+#![allow(unsafe_code)]
 
-use crate::contracts::{BridgeError, BridgeResult, OperationState};
+use devagotchi_contracts::{BridgeError, BridgeResult, OperationState};
 use crate::execution::GROUP_SETTLE;
 use std::fs::Metadata;
 use std::os::unix::fs::PermissionsExt;

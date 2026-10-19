@@ -5,6 +5,8 @@
 //! journal files are created with an explicit owner and a DACL that grants only
 //! that SID; existing entries are inspected through their own handles, never
 //! through a reparse-point target.
+// Native OS calls live here and nowhere else in this crate's dependents.
+#![allow(unsafe_code)]
 
 use std::ffi::{OsStr, c_void};
 use std::fs::{File, OpenOptions};

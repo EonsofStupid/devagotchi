@@ -2,7 +2,7 @@
 //! Framing and the request exchange are shared; endpoint creation, privacy, and
 //! peer identity are native (`unix`, `windows`).
 
-use crate::contracts::*;
+use devagotchi_contracts::*;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
@@ -16,7 +16,7 @@ mod windows;
 pub use windows::*;
 /// Win32 identity and private-state checks shared by IPC and the journal.
 #[cfg(windows)]
-pub(crate) use windows::security;
+pub use windows::security;
 
 pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -65,8 +65,9 @@ async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S, body: Reque
 }
 
 /// A private state directory for tests, created as the broker creates one.
-#[cfg(test)]
-pub(crate) fn private_test_state(parent: &std::path::Path) -> std::path::PathBuf {
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn private_test_state(parent: &std::path::Path) -> std::path::PathBuf {
     #[cfg(unix)]
     {
         // tempfile creates its directories with mode 0700.

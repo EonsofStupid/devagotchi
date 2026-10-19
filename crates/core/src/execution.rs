@@ -4,7 +4,7 @@
 //! `platform`; admission and the operation lifecycle live in `crate::broker`.
 
 use crate::broker::Shared;
-use crate::contracts::*;
+use devagotchi_contracts::*;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
