@@ -1,6 +1,6 @@
 //! The broker runs independently from the MCP client process.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows))]
 #[tokio::main]
 async fn main() {
     if let Err(error) = run().await {
@@ -9,20 +9,60 @@ async fn main() {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", windows)))]
 fn main() {
-    eprintln!("bridge-broker: unsupported_platform: the current native execution provider is Linux; Windows and macOS providers are pending");
+    eprintln!("bridge-broker: unsupported_platform: native execution providers exist for Linux and Windows; the macOS provider is pending");
     std::process::exit(1);
 }
 
-#[cfg(target_os = "linux")]
+/// Operating-system requests to stop, besides Ctrl+C.
+#[cfg(unix)]
+struct Termination(tokio::signal::unix::Signal);
+
+#[cfg(unix)]
+impl Termination {
+    fn new() -> std::io::Result<Self> {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).map(Self)
+    }
+
+    async fn recv(&mut self) {
+        self.0.recv().await;
+    }
+}
+
+/// Operating-system requests to stop, besides Ctrl+C: Ctrl+Break, console
+/// close, and system shutdown.
+#[cfg(windows)]
+struct Termination {
+    ctrl_break: tokio::signal::windows::CtrlBreak,
+    close: tokio::signal::windows::CtrlClose,
+    shutdown: tokio::signal::windows::CtrlShutdown,
+}
+
+#[cfg(windows)]
+impl Termination {
+    fn new() -> std::io::Result<Self> {
+        use tokio::signal::windows::{ctrl_break, ctrl_close, ctrl_shutdown};
+        Ok(Self { ctrl_break: ctrl_break()?, close: ctrl_close()?, shutdown: ctrl_shutdown()? })
+    }
+
+    async fn recv(&mut self) {
+        tokio::select! {
+            _ = self.ctrl_break.recv() => {}
+            _ = self.close.recv() => {}
+            _ = self.shutdown.recv() => {}
+        }
+    }
+}
+
+#[cfg(any(target_os = "linux", windows))]
 async fn run() -> Result<(), Box<dyn std::error::Error>> {
-    use desktop_bridge::{contracts::*, execution::{Broker, BrokerConfig}, ipc::{self, StateGuard}};
+    use desktop_bridge::{broker::{Broker, BrokerConfig}, contracts::*, ipc::{self, StateGuard}};
     use std::{io::Read, path::PathBuf, sync::Arc};
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args == ["--help"] {
-        println!("Usage: bridge-broker --state-dir ABS_PATH --config ABS_JSON\n\nStarts a private per-user local broker. The state parent directory must exist.\nExecutable grants authorize process execution as your OS user, not a sandbox.\nThe current native execution provider is Linux; Windows and macOS providers are pending.");
+        println!("Usage: bridge-broker --state-dir ABS_PATH --config ABS_JSON\n\nStarts a private per-user local broker. The state parent directory must exist.\nExecutable grants authorize process execution as your OS user, not a sandbox.\nThe ready line names the endpoint clients pass as --socket: a Unix socket path on Linux,\nor a \\\\.\\pipe\\ named-pipe path on Windows. The macOS provider is pending.");
         return Ok(());
     }
     let mut state = None;
@@ -49,13 +89,13 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
     let config: BrokerConfig = serde_json::from_slice(&bytes)?;
     let mut guard = StateGuard::acquire(&state)?;
     // Bind before opening the journal, so a foreign endpoint prevents reconciliation.
-    let listener = guard.bind().await?;
+    let mut listener = guard.bind().await?;
     let broker = Broker::open(config, &state)?;
-    eprintln!("bridge-broker ready: {}", guard.socket().display());
+    eprintln!("bridge-broker ready: {}", guard.endpoint().display());
 
     let permits = Arc::new(tokio::sync::Semaphore::new(32));
     let mut connections = tokio::task::JoinSet::new();
-    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let mut terminate = Termination::new()?;
     loop {
         tokio::select! {
             _ = tokio::signal::ctrl_c() => break,
@@ -64,7 +104,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(Err(error)) = joined { eprintln!("IPC connection task failed: {error}"); }
             }
             accepted = listener.accept() => {
-                let (mut stream, _) = accepted?;
+                let mut stream = accepted?;
                 let permit = match Arc::clone(&permits).try_acquire_owned() {
                     Ok(permit) => permit,
                     Err(_) => { drop(stream); continue; }
@@ -73,10 +113,7 @@ async fn run() -> Result<(), Box<dyn std::error::Error>> {
                 connections.spawn(async move {
                     let _permit = permit;
                     let result: BridgeResult<ResponseBody> = async {
-                        let uid = stream.peer_cred().map_err(ipc::io_error)?.uid();
-                        if uid != unsafe { libc::geteuid() } {
-                            return Err(BridgeError::new("peer_identity", "Caller UID does not match the broker operator"));
-                        }
+                        ipc::verify_peer(&stream)?;
                         let bytes = ipc::read_frame(&mut stream, MAX_FRAME_BYTES).await?;
                         let request: WireRequest = serde_json::from_slice(&bytes)
                             .map_err(|e| BridgeError::new("invalid_request", e.to_string()))?;
