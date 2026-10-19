@@ -1,0 +1,32 @@
+# Incus profile for a Devagotchi devspace tenant.
+#   incus profile create devspace
+#   incus profile edit devspace < deploy/devspace/incus-profile.yaml
+#   incus storage volume create default devspace-hades size=60GiB
+#   incus launch images:ubuntu/24.04 devspace-hades -p default -p devspace
+#   incus config device add devspace-hades devspace disk pool=default source=devspace-hades path=/devspace
+#   incus file push deploy/devspace/*.sh deploy/devspace/*.service deploy/devspace/*.json devspace-hades/root/
+#   incus exec devspace-hades -- env DEVSPACE_USER=hades bash /root/provision.sh
+#
+# A separate volume at /devspace is what makes the tenant portable: snapshot it,
+# rebuild the container from the image, re-attach, re-run provision.sh.
+name: devspace
+description: Devagotchi devspace tenant (systemd + cgroup v2 inside, one persistent volume)
+config:
+  # systemd --user and cgroup delegation inside the container.
+  security.nesting: "true"
+  limits.cpu: "4"
+  limits.memory: 8GiB
+  limits.memory.swap: "false"
+  boot.autostart: "true"
+  snapshots.schedule: "@daily"
+  snapshots.expiry: 14d
+devices:
+  root:
+    type: disk
+    pool: default
+    path: /
+    size: 20GiB
+  eth0:
+    type: nic
+    network: incusbr0
+    name: eth0

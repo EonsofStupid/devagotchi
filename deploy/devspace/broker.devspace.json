@@ -1,0 +1,14 @@
+{
+  "workspace": "/devspace/repos",
+  "allowed_executables": [
+    "/devspace/toolchains/cargo/bin/cargo",
+    "/devspace/toolchains/cargo/bin/rustup",
+    "/devspace/toolchains/go/bin/go",
+    "/devspace/toolchains/uv/uv",
+    "/usr/bin/git",
+    "/usr/bin/rg"
+  ],
+  "output_limit_bytes": 262144,
+  "max_operations": 64,
+  "max_concurrent": 4
+}
