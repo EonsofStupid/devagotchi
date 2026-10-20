@@ -78,24 +78,32 @@ export RUSTUP_HOME=$DEVSPACE_ROOT/toolchains/rustup
 export CARGO_HOME=$DEVSPACE_ROOT/toolchains/cargo
 export GOROOT=$DEVSPACE_ROOT/toolchains/go
 export GOPATH=$DEVSPACE_ROOT/toolchains/gopath
+export GOCACHE=$DEVSPACE_ROOT/toolchains/go-cache
 export GOTOOLCHAIN=local
 export UV_INSTALL_DIR=$DEVSPACE_ROOT/toolchains/uv
 export UV_PYTHON_INSTALL_DIR=$DEVSPACE_ROOT/toolchains/python
+export UV_PYTHON_BIN_DIR=$DEVSPACE_ROOT/toolchains/python-bin
+export UV_TOOL_DIR=$DEVSPACE_ROOT/toolchains/uv-tools
+export UV_TOOL_BIN_DIR=$DEVSPACE_ROOT/toolchains/python-bin
 export UV_CACHE_DIR=$DEVSPACE_ROOT/toolchains/uv-cache
 export FNM_DIR=$DEVSPACE_ROOT/toolchains/fnm
 export NPM_CONFIG_PREFIX=$DEVSPACE_ROOT/toolchains/npm
-export PATH=$DEVSPACE_ROOT/bin:\$CARGO_HOME/bin:\$GOROOT/bin:\$GOPATH/bin:\$UV_INSTALL_DIR:\$FNM_DIR/aliases/default/bin:\$NPM_CONFIG_PREFIX/bin:\$PATH
+export NPM_CONFIG_CACHE=$DEVSPACE_ROOT/toolchains/npm-cache
+# uv and Node ship their own root stores; point both at the system store too, so a tenant
+# behind TLS inspection (corporate CA under /usr/local/share/ca-certificates) behaves like curl and apt.
+export UV_SYSTEM_CERTS=1
+export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/ca-certificates.crt
+export PATH=$DEVSPACE_ROOT/bin:\$CARGO_HOME/bin:\$GOROOT/bin:\$GOPATH/bin:\$UV_INSTALL_DIR:\$UV_PYTHON_BIN_DIR:\$FNM_DIR/bin:\$FNM_DIR/aliases/default/bin:\$NPM_CONFIG_PREFIX/bin:\$PATH
 EOF
 chown "$DEVSPACE_USER:$DEVSPACE_USER" "$DEVSPACE_ROOT/env.sh"
 ln -sf "$DEVSPACE_ROOT/env.sh" /etc/profile.d/devspace.sh
 
 # systemd --user services do not read profile.d; environment.d does the same job for them.
+# Evaluate env.sh in an empty environment so every value is written out fully resolved.
 USER_HOME=$(getent passwd "$DEVSPACE_USER" | cut -d: -f6)
 install -d -o "$DEVSPACE_USER" -g "$DEVSPACE_USER" "$USER_HOME/.config/environment.d" "$USER_HOME/.config/systemd/user"
-grep -E '^export ' "$DEVSPACE_ROOT/env.sh" | sed -e 's/^export //' -e "s|\\\$CARGO_HOME|$DEVSPACE_ROOT/toolchains/cargo|g" \
-  -e "s|\\\$GOROOT|$DEVSPACE_ROOT/toolchains/go|g" -e "s|\\\$GOPATH|$DEVSPACE_ROOT/toolchains/gopath|g" \
-  -e "s|\\\$UV_INSTALL_DIR|$DEVSPACE_ROOT/toolchains/uv|g" -e "s|\\\$FNM_DIR|$DEVSPACE_ROOT/toolchains/fnm|g" \
-  -e "s|\\\$NPM_CONFIG_PREFIX|$DEVSPACE_ROOT/toolchains/npm|g" -e 's|:\$PATH$|:/usr/local/bin:/usr/bin:/bin|' \
+env -i HOME="$USER_HOME" PATH=/usr/local/bin:/usr/bin:/bin bash --noprofile --norc -c \
+  ". '$DEVSPACE_ROOT/env.sh'; for v in \$(grep -oE '^export [A-Z_]+' '$DEVSPACE_ROOT/env.sh' | cut -d' ' -f2); do printf '%s=%s\n' \"\$v\" \"\${!v}\"; done" \
   > "$USER_HOME/.config/environment.d/10-devspace.conf"
 chown "$DEVSPACE_USER:$DEVSPACE_USER" "$USER_HOME/.config/environment.d/10-devspace.conf"
 
@@ -123,16 +131,19 @@ fi
 
 log "Python via uv (${PYTHON_VERSIONS})"
 if ! as_user "command -v uv >/dev/null"; then
-  as_user "curl -LsSf https://astral.sh/uv/install.sh | sh"
+  as_user "curl -LsSf https://astral.sh/uv/install.sh | UV_NO_MODIFY_PATH=1 sh"
 fi
-as_user "uv python install $PYTHON_VERSIONS"
+as_user "uv python install $PYTHON_VERSIONS && uv python list --only-installed"
 
 log "Node ${NODE_MAJOR} via fnm (Desktop Commander remote agent, website tooling, contract generator)"
 if ! as_user "command -v fnm >/dev/null"; then
-  as_user "curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir $DEVSPACE_ROOT/toolchains/fnm --skip-shell"
+  as_user "curl -fsSL https://fnm.vercel.app/install | bash -s -- --install-dir $DEVSPACE_ROOT/toolchains/fnm/bin --skip-shell"
 fi
 as_user "fnm install $NODE_MAJOR && fnm default $NODE_MAJOR && node --version"
-as_user "npm install -g @wonderwhy-er/desktop-commander@latest >/dev/null && echo 'desktop-commander installed'"
+# --ignore-scripts: a global npm install lays down the macOS-only fsevents and then tries to
+# node-gyp it on Linux (npm quirk); Desktop Commander's own postinstall is only telemetry and a
+# ripgrep check, and its ripgrep comes as a platform package (@vscode/ripgrep-linux-x64).
+as_user "npm install -g --ignore-scripts --no-audit --no-fund @wonderwhy-er/desktop-commander@latest >/dev/null && echo 'desktop-commander installed'"
 
 if [ "$INSTALL_CLAUDE_CODE" = "1" ]; then
   log "Claude Code (signed apt repository, stable channel)"
@@ -162,4 +173,8 @@ else
   echo "    (no running systemd: unit installed to ~/.config/systemd/user, enable it on the real tenant)"
 fi
 
-log "Done. Next: deploy/devspace/README.md → 'Build and start the broker' and 'Connect remotely'."
+if [ -f "$HERE/check.sh" ]; then
+  install -o "$DEVSPACE_USER" -g "$DEVSPACE_USER" -m 0755 "$HERE/check.sh" "$DEVSPACE_ROOT/bin/devspace-check"
+fi
+
+log "Done. As $DEVSPACE_USER: devspace-check. Then deploy/devspace/README.md → 'Build and start the broker' and 'Connect remotely'."

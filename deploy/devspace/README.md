@@ -21,9 +21,9 @@ plan describes: the same broker that runs on a laptop runs here headless, as a
 │   └── devagotchi/
 ├── state/          XDG_STATE_HOME: devagotchi/ journal and logs
 ├── config/         XDG_CONFIG_HOME: devagotchi/broker.json
-├── toolchains/     rustup cargo go gopath uv python uv-cache fnm npm
+├── toolchains/     rustup cargo go gopath uv python python-bin uv-cache fnm npm
 ├── receipts/       verification and benchmark run directories (committed back under verification/ when they matter)
-├── bin/            bridge-broker, bridge-mcp symlinks to the current build
+├── bin/            devspace-check; bridge-broker and bridge-mcp symlinks to the current build
 └── env.sh          exports for shells (/etc/profile.d) and systemd user services (environment.d)
 ```
 
@@ -36,13 +36,17 @@ incus profile edit devspace < deploy/devspace/incus-profile.yaml
 incus storage volume create default devspace-hades size=60GiB
 incus launch images:ubuntu/24.04 devspace-hades -p default -p devspace
 incus config device add devspace-hades devspace disk pool=default source=devspace-hades path=/devspace
-incus file push deploy/devspace/provision.sh deploy/devspace/devagotchi-broker.service deploy/devspace/broker.devspace.json devspace-hades/root/
+incus file push deploy/devspace/provision.sh deploy/devspace/check.sh deploy/devspace/devagotchi-broker.service deploy/devspace/broker.devspace.json devspace-hades/root/
 incus exec devspace-hades -- env DEVSPACE_USER=hades bash /root/provision.sh
+incus exec devspace-hades -- su - hades -c devspace-check     # every line ok; paste it into the PR or receipt
 ```
 
 `provision.sh` is idempotent; re-run it to move a toolchain version. Set `INSTALL_CARGO_TOOLS=1`
 to also build `cargo-nextest` and `cargo-deny` (tooling PR of Increment 1). Any Ubuntu 24.04
-machine works the same way without Incus: copy the three files and run the script as root.
+machine works the same way without Incus: copy the four files and run the script as root.
+It assumes direct egress, or a transparent proxy whose CA is in the system store (uv is told to
+use that store, `UV_SYSTEM_CERTS=1`, because it otherwise trusts only its bundled roots); an
+explicit `https_proxy` has to be set system-wide (`/etc/environment`) since `sudo` strips it.
 
 ## Build and start the broker
 
@@ -53,7 +57,8 @@ cargo build --locked --release --bins
 ln -sf /devspace/repos/devagotchi/target/release/bridge-broker /devspace/bin/bridge-broker
 ln -sf /devspace/repos/devagotchi/target/release/bridge-mcp    /devspace/bin/bridge-mcp
 systemctl --user start devagotchi-broker && systemctl --user status devagotchi-broker
-journalctl --user -u devagotchi-broker -n 20     # "bridge-broker ready: /devspace/state/devagotchi/<socket>"
+journalctl --user -u devagotchi-broker -n 20     # "bridge-broker ready: /devspace/state/devagotchi/broker.sock"
+python3 tests/devspace_broker_probe.py /devspace/state/devagotchi/broker.sock   # runs git --version under the broker, exit 0
 ```
 
 Point any local MCP host at the adapter the usual way: `/devspace/bin/bridge-mcp --socket <path from the ready line>`.

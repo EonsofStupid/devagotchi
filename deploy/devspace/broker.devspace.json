@@ -5,6 +5,8 @@
     "/devspace/toolchains/cargo/bin/rustup",
     "/devspace/toolchains/go/bin/go",
     "/devspace/toolchains/uv/uv",
+    "/devspace/toolchains/python-bin/python3.13",
+    "/devspace/toolchains/fnm/aliases/default/bin/node",
     "/usr/bin/git",
     "/usr/bin/rg"
   ],

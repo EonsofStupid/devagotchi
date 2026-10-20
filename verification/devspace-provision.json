@@ -1,0 +1,86 @@
+{
+  "status": "passed",
+  "product": "Devagotchi devspace",
+  "scope": "deploy/devspace/provision.sh run end to end as root in an Ubuntu 24.04 sandbox without PID 1 systemd; devspace-check as the tenant user; the debug broker started with the generated config and probed through bridge-mcp",
+  "recorded_at": "2026-10-20T00:08:57+00:00",
+  "environment": {
+    "base": "Ubuntu 24.04.5 LTS",
+    "kernel": "6.18.44-fc-v139",
+    "systemd_pid1": false,
+    "egress": "transparent TLS-inspecting proxy; its CA in the system store"
+  },
+  "inputs_sha256": {
+    "deploy/devspace/provision.sh": "ea1d0be0debb588fa61f748a94e6e331b4722332322b6f53ef941707197a6a56",
+    "deploy/devspace/check.sh": "8f5922162eb7723b424ce3b961ceaca0373ac4acb45970ebc238028cd308afa2",
+    "deploy/devspace/broker.devspace.json": "61e9bffa4edbf4f1a065a049b16cf75fb74c75d00dd2aafee8de06371f188869",
+    "deploy/devspace/devagotchi-broker.service": "4f49806ae50a1fb967075037d49637dc90e50b6e4a99e9619b6c518639275673",
+    "bridge-broker (target/debug, stand-in for the tenant's release build)": "73375d5b61f9930ca4ed1e377d67629f65e30b943dd17ed2c674c9c6e33bb3fd",
+    "bridge-mcp (target/debug)": "7d3068efd5b3f14352f37063da7351870121413ac324d0a44fd332d1ec62db2d"
+  },
+  "runs": [
+    {
+      "run": 1,
+      "result": "failed at Python: uv rejected the inspection CA (invalid peer certificate: UnknownIssuer); fixed with UV_SYSTEM_CERTS=1, and UV_PYTHON_BIN_DIR so python links stay under /devspace"
+    },
+    {
+      "run": 2,
+      "result": "failed at Node: fnm binary installed outside PATH; fixed (toolchains/fnm/bin on PATH)"
+    },
+    {
+      "run": 3,
+      "result": "failed at Node: npm SELF_SIGNED_CERT_IN_CHAIN; fixed with NODE_EXTRA_CA_CERTS pointing at the system store, caches confined to /devspace"
+    },
+    {
+      "run": 4,
+      "result": "failed at Node: the global npm install node-gyp'd the macOS-only fsevents; fixed with --ignore-scripts (Desktop Commander's ripgrep ships as a platform package)"
+    },
+    {
+      "run": 5,
+      "result": "passed end to end, EXIT=0"
+    }
+  ],
+  "devspace_check": [
+    "devspace /devspace as hades on Ubuntu 24.04.5 LTS 6.18.44-fc-v139",
+    "toolchains:",
+    "  ok    rustup             rustup 1.29.1 (d95a37b6a 2026-08-13)",
+    "  ok    go                 go version go1.27.2 linux/amd64",
+    "  ok    uv                 uv 0.13.2 (x86_64-unknown-linux-gnu)",
+    "  ok    python3.12         Python 3.12.15",
+    "  ok    python3.13         Python 3.13.16",
+    "  ok    node               v22.23.3",
+    "  ok    npm                10.9.9",
+    "  ok    desktop-commander  /devspace/toolchains/npm/bin/desktop-commander",
+    "  ok    claude             2.1.304 (Claude Code)",
+    "  ok    git                git version 2.43.0",
+    "  ok    rg                 ripgrep 14.1.0",
+    "  ok    tmux               tmux 3.4",
+    "layout:",
+    "  ok    repos",
+    "  ok    state",
+    "  ok    config",
+    "  ok    toolchains",
+    "  ok    receipts",
+    "  ok    bin",
+    "  ok    config/devagotchi/broker.json",
+    "  ok    devagotchi-broker.service installed",
+    "home (everything a toolchain writes should land under /devspace):",
+    "  ok    nothing stray in $HOME",
+    "services:",
+    "  note  no running systemd here; linger and the broker unit are checked on the real tenant"
+  ],
+  "broker_probe": {
+    "ready_line": "bridge-broker ready: /devspace/state/devagotchi/broker.sock",
+    "server": "desktop-bridge 0.1.0 protocol 2025-06-18",
+    "tools": "operation_cancel, operation_get, operation_read, operation_start",
+    "operation_state": "succeeded exit: 0",
+    "git_output": "git version 2.43.0",
+    "ungranted_executable_refused": "True {\"code\":\"executable_not_allowed\",\"message\":\"The canonical executable path has no operator grant\"}",
+    "probe_exit": "0"
+  },
+  "not_verified_here": [
+    "loginctl enable-linger and systemctl --user enable/start of devagotchi-broker.service (no PID 1 systemd in the sandbox)",
+    "Incus profile launch and the /devspace volume attach",
+    "Desktop Commander remote-agent pairing and claude remote-control (need the real tenant and the user's accounts)",
+    "release build of the broker on the tenant (the probe used the debug binaries built for PR #3)"
+  ]
+}

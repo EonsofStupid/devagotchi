@@ -6,6 +6,7 @@
 #   incus config device add devspace-hades devspace disk pool=default source=devspace-hades path=/devspace
 #   incus file push deploy/devspace/*.sh deploy/devspace/*.service deploy/devspace/*.json devspace-hades/root/
 #   incus exec devspace-hades -- env DEVSPACE_USER=hades bash /root/provision.sh
+#   incus exec devspace-hades -- su - hades -c devspace-check
 #
 # A separate volume at /devspace is what makes the tenant portable: snapshot it,
 # rebuild the container from the image, re-attach, re-run provision.sh.
