@@ -19,3 +19,6 @@ serde_json = { workspace = true }
 [[bin]]
 name = "export-contracts"
 path = "src/bin/export-contracts.rs"
+
+[package.metadata.dist]
+dist = false

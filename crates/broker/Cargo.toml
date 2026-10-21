@@ -22,3 +22,6 @@ devagotchi-core = { workspace = true }
 devagotchi-ipc = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+
+[package.metadata.dist]
+dist = true
