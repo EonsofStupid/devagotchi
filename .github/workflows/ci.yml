@@ -27,11 +27,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       # Installs the toolchain pinned in rust-toolchain.toml.
       - run: rustup toolchain install
-      # Default members: contracts, ipc, core, broker, mcp. The Tauri inspector
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      # Default members: contracts, ipc, core, broker, mcp, hub. The Tauri inspector
       # is a workspace member but needs native webview toolchains; it gets its
       # own job when it enters CI.
       - run: cargo build --locked --bins
-      - run: cargo test --locked --lib
+      # nextest runs every test binary (library, binary and integration tests),
+      # one process per test, with the profile in .config/nextest.toml.
+      - run: cargo nextest run --locked --profile ci
