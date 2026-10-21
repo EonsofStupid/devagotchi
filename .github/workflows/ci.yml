@@ -42,3 +42,24 @@ jobs:
       # nextest runs every test binary (library, binary and integration tests),
       # one process per test, with the profile in .config/nextest.toml.
       - run: cargo nextest run --locked --profile ci
+
+  e2e:
+    # The built binaries, end to end: broker, stdio adapter, hub over HTTP MCP.
+    # Unix socket on Linux, named pipe on Windows; same probes (tests/e2e.py).
+    name: e2e (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: cargo build --locked --bins
+      - run: python tests/e2e.py --bin-dir target/debug
