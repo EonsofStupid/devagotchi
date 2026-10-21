@@ -13,22 +13,27 @@ this file is how to work here. Read first:
 Cargo workspace: `crates/contracts` (wire types, schema exporter), `crates/ipc` (framing, typed
 client, Unix-socket and named-pipe endpoints), `crates/core` (broker, journal, execution),
 `crates/broker` and `crates/mcp` (the two binaries, still named `bridge-broker` and `bridge-mcp`),
-`apps/desktop` (Tauri 2 + React inspector, not a default member), `apps/website`, `tests/`
+`crates/hub` (`devagotchi-hub`, the bastion: authenticated HTTP MCP routed to brokers by name),
+`deploy/` (`devspace/`, `shippin/`, `windows/` installers), `apps/desktop` (Tauri 2 + React inspector, not a default member), `apps/website`, `tests/`
 (Python harnesses), `verification/` (recorded receipts), `schemas/` (generated).
 
 ## Before every push
 
 ```bash
 cargo build --locked --bins
-cargo test --locked --lib
+cargo nextest run --locked                         # every test binary, hub included
+python3 tests/e2e.py --bin-dir target/debug        # broker, stdio adapter and hub end to end
+cargo deny --all-features check                    # advisories, licenses, sources, no-network bans
 python3 tests/security_boundary.py --broker "$PWD/target/debug/bridge-broker"
 python3 tests/mcp_protocol.py --adapter "$PWD/target/debug/bridge-mcp" --socket /tmp/unused.sock
 python3 tests/mcp_smoke.py --broker "$PWD/target/debug/bridge-broker" --adapter "$PWD/target/debug/bridge-mcp"
 node scripts/generate-contracts.cjs --check      # after `npm ci` in apps/desktop
 ```
 
-CI runs the build and unit tests on ubuntu-24.04, windows-2025, windows-2022 and macos-latest;
-a PR merges only when all four are green.
+CI runs the build and nextest on ubuntu-24.04, windows-2025, windows-2022 and macos-latest, the
+end-to-end run (and the Windows installer under PowerShell 7 and 5.1) on Linux and both Windows
+runners, `cargo deny` on every PR and weekly, and the release build for Linux and Windows. A PR
+merges only when all of it is green. `docs/security-baseline.md` is the checklist every PR clears.
 
 ## Rules
 

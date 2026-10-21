@@ -34,7 +34,7 @@ actually present (git, rg, node, npm, python3, cargo, rustup, go, uv), and enabl
 the broker unsupervised and says so. Re-running moves the version; the config is kept.
 
 Check: `systemctl --user status devagotchi-broker` shows `bridge-broker ready: ~/.local/state/devagotchi/broker.sock`;
-`python3 tests/devspace_broker_probe.py ~/.local/state/devagotchi/broker.sock --adapter ~/.local/bin/bridge-mcp --cwd ~`
+`python3 tests/adapter_probe.py ~/.local/state/devagotchi/broker.sock --adapter ~/.local/bin/bridge-mcp --cwd ~`
 runs `git --version` under the broker and confirms an ungranted executable is refused.
 
 ## Baking it into the workspace image
