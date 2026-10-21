@@ -286,35 +286,43 @@ async fn healthz(State(state): State<AppState>) -> Response {
     (status, axum::Json(body)).into_response()
 }
 
-#[cfg(unix)]
+/// A broker is reachable when it answers a real request over its own IPC: the same
+/// owner checks, framing and endpoint a routed call uses, on every platform.
 async fn reachable(socket: &str) -> bool {
-    tokio::time::timeout(
-        Duration::from_secs(2),
-        tokio::net::UnixStream::connect(socket),
+    let body = devagotchi_contracts::RequestBody::OperationList(devagotchi_contracts::ListInput {
+        offset: 0,
+        limit: 1,
+    });
+    matches!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            devagotchi_ipc::request(std::path::Path::new(socket), body)
+        )
+        .await,
+        Ok(Ok(_))
     )
-    .await
-    .map(|result| result.is_ok())
-    .unwrap_or(false)
-}
-
-#[cfg(not(unix))]
-async fn reachable(_socket: &str) -> bool {
-    false
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    const STATE: &str = "/s";
+    #[cfg(windows)]
+    const STATE: &str = r"C:\s";
+    #[cfg(unix)]
+    const CONFIG: &str = "/c.json";
+    #[cfg(windows)]
+    const CONFIG: &str = r"C:\c.json";
+
     #[test]
     fn cli_requires_both_absolute_paths() {
         let ok =
-            parse_args(["--state-dir", "/s", "--config", "/c.json"].map(OsString::from)).unwrap();
-        assert_eq!(ok, Some((PathBuf::from("/s"), PathBuf::from("/c.json"))));
-        assert!(parse_args(["--config", "/c.json"].map(OsString::from)).is_err());
-        assert!(
-            parse_args(["--state-dir", "s", "--config", "/c.json"].map(OsString::from)).is_err()
-        );
+            parse_args(["--state-dir", STATE, "--config", CONFIG].map(OsString::from)).unwrap();
+        assert_eq!(ok, Some((PathBuf::from(STATE), PathBuf::from(CONFIG))));
+        assert!(parse_args(["--config", CONFIG].map(OsString::from)).is_err());
+        assert!(parse_args(["--state-dir", "s", "--config", CONFIG].map(OsString::from)).is_err());
         assert_eq!(parse_args(["--help"].map(OsString::from)).unwrap(), None);
     }
 }
