@@ -63,3 +63,14 @@ jobs:
           python-version: "3.13"
       - run: cargo build --locked --bins
       - run: python tests/e2e.py --bin-dir target/debug
+      # The Windows installer, as a user would run it: install from the build, start the
+      # broker, register with a Claude Desktop config that already has Desktop Commander,
+      # then use exactly the registered command. PowerShell 7 on 2025, 5.1 on 2022.
+      - name: Windows installer (PowerShell 7)
+        if: matrix.os == 'windows-2025'
+        shell: pwsh
+        run: ./deploy/windows/ci-install-check.ps1
+      - name: Windows installer (Windows PowerShell 5.1)
+        if: matrix.os == 'windows-2022'
+        shell: powershell
+        run: ./deploy/windows/ci-install-check.ps1
