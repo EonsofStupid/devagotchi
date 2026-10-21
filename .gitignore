@@ -1,3 +1,4 @@
 /target/
 /.bridge-state/
 /test-results/
+node_modules/

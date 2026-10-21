@@ -1,12 +1,15 @@
 [package]
 name = "devagotchi-desktop"
-version = "0.1.0"
-edition = "2024"
-rust-version = "1.90"
-publish = false
 description = "Devagotchi local desktop inspector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
 
-[workspace]
+[lints]
+workspace = true
 
 [lib]
 name = "devagotchi_desktop"
@@ -20,14 +23,16 @@ path = "src/main.rs"
 tauri-build = { version = "=2.7.3", features = [] }
 
 [dependencies]
-desktop-bridge = { path = "../../.." }
-serde = { version = "1", features = ["derive"] }
+# The inspector links only the contracts and the typed client, never the broker.
+devagotchi-contracts = { workspace = true }
+devagotchi-ipc = { workspace = true }
+serde = { workspace = true }
 tauri = { version = "=2.12.4", features = [] }
 
 [dev-dependencies]
-serde_json = "1"
-tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+tokio = { workspace = true }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]

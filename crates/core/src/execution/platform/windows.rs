@@ -4,8 +4,10 @@
 //! resumed, so it cannot run or create a child outside the job. The job permits
 //! no breakaway and terminates its members when the broker's job handle
 //! closes. Observation and termination use that job handle, never a PID.
+// Native OS calls live here and nowhere else in this crate's dependents.
+#![allow(unsafe_code)]
 
-use crate::contracts::{BridgeError, BridgeResult, OperationState};
+use devagotchi_contracts::{BridgeError, BridgeResult, OperationState};
 use crate::execution::GROUP_SETTLE;
 use std::ffi::OsStr;
 use std::fs::Metadata;

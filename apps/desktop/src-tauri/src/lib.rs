@@ -1,7 +1,7 @@
 //! A small native inspector. The independently running broker owns every job.
 
 use std::{ffi::OsString, path::{Path, PathBuf}};
-use desktop_bridge::contracts::{
+use devagotchi_contracts::{
     BridgeError, BridgeResult, GetInput, ListInput, OperationsPage, OperationView,
     OutputPage, ReadInput, RequestBody, ResponseBody,
 };
@@ -72,7 +72,7 @@ impl Connection {
     async fn request(&self, body: RequestBody) -> BridgeResult<ResponseBody> {
         // No shell/plugin execution, automatic broker startup, implicit cancel,
         // retries of effects, or grant changes occur in the desktop host.
-        desktop_bridge::ipc::request(self.socket()?, body).await
+        devagotchi_ipc::request(self.socket()?, body).await
     }
 
     async fn list(&self, input: ListInput) -> BridgeResult<OperationsPage> {
@@ -197,7 +197,8 @@ mod tests {
     #[tokio::test]
     async fn list_request_preserves_paging_and_rejects_wrong_response_kind() {
         use std::os::unix::fs::PermissionsExt;
-        use desktop_bridge::{contracts::{WireRequest, WireResponse, MAX_FRAME_BYTES}, ipc};
+        use devagotchi_contracts::{WireRequest, WireResponse, MAX_FRAME_BYTES};
+        use devagotchi_ipc as ipc;
         let directory = tempfile::tempdir().unwrap();
         std::fs::set_permissions(directory.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
         let socket = directory.path().join("test.sock");

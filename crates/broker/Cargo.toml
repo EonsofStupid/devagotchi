@@ -1,0 +1,24 @@
+[package]
+name = "devagotchi-broker"
+description = "The independently running per-user Devagotchi broker process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# The binary keeps its historical name until the rename decision lands.
+[[bin]]
+name = "bridge-broker"
+path = "src/main.rs"
+
+[dependencies]
+devagotchi-contracts = { workspace = true }
+devagotchi-core = { workspace = true }
+devagotchi-ipc = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }

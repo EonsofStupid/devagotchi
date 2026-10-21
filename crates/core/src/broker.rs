@@ -3,7 +3,7 @@
 //! bounded shutdown, and restart recovery. Each admitted operation's process
 //! is run by `crate::execution`. Executable grants are not a sandbox.
 
-use crate::contracts::*;
+use devagotchi_contracts::*;
 use crate::execution::platform::{self, SCOPE};
 use crate::execution::{ExecutionSpec, StopReason, run_job};
 use crate::journal::{Journal, JournalFrame, JournalOperation};
@@ -797,7 +797,7 @@ mod tests {
             max_operations: 8,
             max_concurrent: 4,
         };
-        Broker::open(config, &crate::ipc::private_test_state(directory.path())).unwrap()
+        Broker::open(config, &devagotchi_ipc::private_test_state(directory.path())).unwrap()
     }
 
     fn start(
@@ -941,7 +941,7 @@ mod tests {
             max_operations: 1,
             max_concurrent: 1,
         };
-        let error = Broker::open(config, &crate::ipc::private_test_state(directory.path()))
+        let error = Broker::open(config, &devagotchi_ipc::private_test_state(directory.path()))
             .err()
             .unwrap();
         assert_eq!(error.code, "invalid_config");
@@ -978,7 +978,7 @@ mod tests {
             max_operations: 4,
             max_concurrent: 2,
         };
-        let state = crate::ipc::private_test_state(directory.path());
+        let state = devagotchi_ipc::private_test_state(directory.path());
         let broker = Broker::open(config, &state).unwrap();
         let injection = rusqlite::Connection::open(state.join("operations.sqlite3")).unwrap();
         injection.execute_batch("CREATE TRIGGER injected_failure BEFORE UPDATE ON operations BEGIN SELECT RAISE(FAIL, 'test persistence failure'); END;").unwrap();
@@ -1031,7 +1031,7 @@ mod tests {
             deadline_ms: 1000,
         };
         let id = uuid::Uuid::new_v4().to_string();
-        let state = crate::ipc::private_test_state(directory.path());
+        let state = devagotchi_ipc::private_test_state(directory.path());
         {
             let broker = Broker::open(config.clone(), &state).unwrap();
             let (spec, digest) = broker.normalize(&input).unwrap();

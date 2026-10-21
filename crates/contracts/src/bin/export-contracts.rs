@@ -1,10 +1,10 @@
 //! Export canonical Rust DTO schemas without opening a broker or journal.
 
-use desktop_bridge::contracts::{
+use devagotchi_contracts::{
     BridgeError, GetInput, ListInput, OperationView, OperationsPage, OutputPage, ReadInput,
     StartInput, StartOutput,
 };
-use rmcp::schemars::{self, JsonSchema, generate::SchemaSettings};
+use schemars::{JsonSchema, generate::SchemaSettings};
 use serde_json::Value;
 use std::io::Write;
 use std::path::PathBuf;

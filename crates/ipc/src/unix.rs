@@ -1,8 +1,10 @@
 //! Unix local IPC: a private 0700 state directory, an exclusive `flock`
 //! instance lock, and an owner-only socket. Peers are checked by UID.
+// Native OS calls live here and nowhere else in this crate's dependents.
+#![allow(unsafe_code)]
 
 use super::{IO_TIMEOUT, exchange, io_error};
-use crate::contracts::*;
+use devagotchi_contracts::*;
 use std::{path::{Path, PathBuf}, time::Duration};
 
 /// Accepts connections on the broker's bound socket.
@@ -164,4 +166,10 @@ impl Drop for StateGuard {
             }
         }
     }
+}
+
+/// The effective UID of this process: the Unix trust boundary for private state.
+pub fn current_uid() -> u32 {
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    unsafe { libc::geteuid() }
 }

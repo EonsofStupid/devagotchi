@@ -5,6 +5,8 @@
 //! journal files are created with an explicit owner and a DACL that grants only
 //! that SID; existing entries are inspected through their own handles, never
 //! through a reparse-point target.
+// Native OS calls live here and nowhere else in this crate's dependents.
+#![allow(unsafe_code)]
 
 use std::ffi::{OsStr, c_void};
 use std::fs::{File, OpenOptions};
@@ -46,7 +48,7 @@ fn wide(value: &OsStr) -> Vec<u16> {
 /// A copied security identifier, stored with the alignment its
 /// sub-authorities require.
 #[derive(Clone)]
-pub(crate) struct Sid {
+pub struct Sid {
     words: Vec<u32>,
 }
 
@@ -73,12 +75,12 @@ impl Sid {
         self.words.as_ptr().cast_mut().cast()
     }
 
-    pub(crate) fn equals(&self, other: &Sid) -> bool {
+    pub fn equals(&self, other: &Sid) -> bool {
         unsafe { EqualSid(self.as_psid(), other.as_psid()) != FALSE }
     }
 
     /// The SDDL string form, for example `S-1-5-21-…`.
-    pub(crate) fn to_sddl(&self) -> io::Result<String> {
+    pub fn to_sddl(&self) -> io::Result<String> {
         let mut text: *mut u16 = null_mut();
         if unsafe { ConvertSidToStringSidW(self.as_psid(), &mut text) } == FALSE {
             return Err(io::Error::last_os_error());
@@ -106,13 +108,13 @@ impl Drop for LocalAllocation {
 /// The operator: the OS user this process runs as, and the owner Windows
 /// assigns to objects it creates without an explicit owner. An elevated
 /// administrator's default owner may be the Administrators group.
-pub(crate) struct Operator {
-    pub(crate) user: Sid,
-    pub(crate) default_owner: Sid,
+pub struct Operator {
+    pub user: Sid,
+    pub default_owner: Sid,
 }
 
 impl Operator {
-    pub(crate) fn current() -> io::Result<Self> {
+    pub fn current() -> io::Result<Self> {
         let token = process_token(unsafe { GetCurrentProcess() })?;
         Ok(Self {
             user: token_user(&token)?,
@@ -165,7 +167,7 @@ fn token_owner(token: &OwnedHandle) -> io::Result<Sid> {
 }
 
 /// The user SID of the process `pid` runs as.
-pub(crate) fn process_user(pid: u32) -> io::Result<Sid> {
+pub fn process_user(pid: u32) -> io::Result<Sid> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
     if process.is_null() {
         return Err(io::Error::last_os_error());
@@ -175,7 +177,7 @@ pub(crate) fn process_user(pid: u32) -> io::Result<Sid> {
 }
 
 /// A security descriptor parsed from SDDL, freed with `LocalFree`.
-pub(crate) struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
+pub struct SecurityDescriptor(PSECURITY_DESCRIPTOR);
 
 // The descriptor is an owned, immutable heap allocation; it is only read.
 unsafe impl Send for SecurityDescriptor {}
@@ -201,14 +203,14 @@ impl SecurityDescriptor {
 
     /// Owner `user` and a protected DACL granting every right to `user` only.
     /// `inheritable` passes the grant to files and directories created inside.
-    pub(crate) fn private_to(user: &Sid, inheritable: bool) -> io::Result<Self> {
+    pub fn private_to(user: &Sid, inheritable: bool) -> io::Result<Self> {
         let sid = user.to_sddl()?;
         let inheritance = if inheritable { "OICI" } else { "" };
         Self::from_sddl(&format!("O:{sid}D:P(A;{inheritance};FA;;;{sid})"))
     }
 
     /// Non-inheritable handle attributes that apply this descriptor.
-    pub(crate) fn attributes(&self) -> SECURITY_ATTRIBUTES {
+    pub fn attributes(&self) -> SECURITY_ATTRIBUTES {
         SECURITY_ATTRIBUTES {
             nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
             lpSecurityDescriptor: self.0,
@@ -223,23 +225,23 @@ impl Drop for SecurityDescriptor {
     }
 }
 
-pub(crate) enum Ace {
+pub enum Ace {
     Allow(Sid),
     /// Any entry other than an access-allowed entry.
     Other,
 }
 
 /// The owner and DACL of one object, read through its handle.
-pub(crate) struct ObjectSecurity {
-    pub(crate) owner: Sid,
-    pub(crate) dacl_protected: bool,
+pub struct ObjectSecurity {
+    pub owner: Sid,
+    pub dacl_protected: bool,
     /// `None` is a null DACL, which grants everyone full access.
-    pub(crate) dacl: Option<Vec<Ace>>,
+    pub dacl: Option<Vec<Ace>>,
 }
 
 impl ObjectSecurity {
     /// True when a DACL exists and every entry is an allow entry for `user`.
-    pub(crate) fn grants_only(&self, user: &Sid) -> bool {
+    pub fn grants_only(&self, user: &Sid) -> bool {
         self.dacl.as_ref().is_some_and(|entries| {
             entries
                 .iter()
@@ -248,7 +250,7 @@ impl ObjectSecurity {
     }
 }
 
-pub(crate) fn object_security(
+pub fn object_security(
     handle: RawHandle,
     object: SE_OBJECT_TYPE,
 ) -> io::Result<ObjectSecurity> {
@@ -319,7 +321,7 @@ pub(crate) fn object_security(
 
 /// Creates a directory owned by `user` whose protected, inheritable DACL
 /// grants only `user`. Fails if anything already exists at `path`.
-pub(crate) fn create_private_directory(path: &Path, user: &Sid) -> io::Result<()> {
+pub fn create_private_directory(path: &Path, user: &Sid) -> io::Result<()> {
     let descriptor = SecurityDescriptor::private_to(user, true)?;
     let attributes = descriptor.attributes();
     let path = wide(path.as_os_str());
@@ -331,7 +333,7 @@ pub(crate) fn create_private_directory(path: &Path, user: &Sid) -> io::Result<()
 
 /// Creates an empty file owned by `user` whose protected DACL grants only
 /// `user`. Fails if anything, including a reparse point, exists at `path`.
-pub(crate) fn create_private_file(path: &Path, user: &Sid) -> io::Result<()> {
+pub fn create_private_file(path: &Path, user: &Sid) -> io::Result<()> {
     let descriptor = SecurityDescriptor::private_to(user, false)?;
     let attributes = descriptor.attributes();
     let path = wide(path.as_os_str());
@@ -355,7 +357,7 @@ pub(crate) fn create_private_file(path: &Path, user: &Sid) -> io::Result<()> {
 
 /// Opens the entry at `path` itself, never a reparse-point target, for
 /// attribute and security queries. Other openers are not blocked.
-pub(crate) fn open_entry(path: &Path) -> io::Result<File> {
+pub fn open_entry(path: &Path) -> io::Result<File> {
     OpenOptions::new()
         .access_mode(READ_CONTROL | FILE_READ_ATTRIBUTES)
         .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
@@ -363,7 +365,7 @@ pub(crate) fn open_entry(path: &Path) -> io::Result<File> {
         .open(path)
 }
 
-pub(crate) enum Entry {
+pub enum Entry {
     Directory,
     File,
 }
@@ -374,7 +376,7 @@ pub(crate) enum Entry {
 /// with a protected DACL that grants only that user. A private file is a
 /// regular file with one link, owned by the operator, whose DACL grants only
 /// the operator's user. Neither may be a reparse point.
-pub(crate) fn private_entry_defect(
+pub fn private_entry_defect(
     entry: &File,
     kind: Entry,
     operator: &Operator,

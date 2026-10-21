@@ -1,31 +1,51 @@
-[package]
-name = "desktop-bridge"
+[workspace]
+resolver = "3"
+members = [
+    "crates/contracts",
+    "crates/ipc",
+    "crates/core",
+    "crates/broker",
+    "crates/mcp",
+    "apps/desktop/src-tauri",
+]
+# `cargo build` / `cargo test` at the root build the broker, adapter and their
+# libraries. The Tauri inspector needs native webview toolchains, so it is a
+# member (one lockfile, one toolchain) but built explicitly with `-p`.
+default-members = [
+    "crates/contracts",
+    "crates/ipc",
+    "crates/core",
+    "crates/broker",
+    "crates/mcp",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+# rmcp 3.5.1 sets the floor; the pinned toolchain in rust-toolchain.toml is what builds.
 rust-version = "1.88"
 publish = false
-description = "A local MCP adapter and independently supervised desktop broker proof"
+license = "Apache-2.0"
+repository = "https://github.com/EonsofStupid/devagotchi"
 
-[dependencies]
+[workspace.dependencies]
+devagotchi-contracts = { path = "crates/contracts" }
+devagotchi-ipc = { path = "crates/ipc" }
+devagotchi-core = { path = "crates/core" }
+
 rmcp = { version = "=3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
+schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "io-std", "net", "sync", "signal", "time"] }
-
-[target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-# The broker, journal, and execution lifecycle build where a native execution
-# provider exists.
-[target.'cfg(any(target_os = "linux", windows))'.dependencies]
 base64 = "0.22.1"
 dunce = "1.0.5"
 hex = "0.4.3"
 rusqlite = { version = "0.37", features = ["bundled"] }
 sha2 = "0.10.9"
 uuid = { version = "1", features = ["v4"] }
-
-[target.'cfg(windows)'.dependencies]
+tempfile = "3"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Security",
@@ -38,13 +58,8 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Threading",
 ] }
 
-[dev-dependencies]
-tempfile = "3"
+[workspace.lints.rust]
+unsafe_code = "deny"
 
-[[bin]]
-name = "bridge-broker"
-path = "src/bin/bridge-broker.rs"
-
-[[bin]]
-name = "bridge-mcp"
-path = "src/bin/bridge-mcp.rs"
+[workspace.lints.clippy]
+all = "warn"

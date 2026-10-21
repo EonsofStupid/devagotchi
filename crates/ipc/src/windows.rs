@@ -3,9 +3,11 @@
 //! explicit DACL grants only that SID. Default named-pipe security is not
 //! treated as owner-only protection. Each end also checks that the other runs
 //! as the operator's user.
+// Native OS calls live here and nowhere else in this crate's dependents.
+#![allow(unsafe_code)]
 
 use super::{IO_TIMEOUT, exchange, io_error};
-use crate::contracts::*;
+use devagotchi_contracts::*;
 use security::{Entry, Operator, SecurityDescriptor};
 use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
@@ -25,7 +27,7 @@ use windows_sys::Win32::Storage::FileSystem::{
 };
 use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 
-pub(crate) mod security;
+pub mod security;
 
 const PIPE_PREFIX: &str = r"\\.\pipe\";
 

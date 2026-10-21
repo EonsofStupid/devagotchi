@@ -1,7 +1,7 @@
 //! Durable broker records. Every mutation commits with SQLite synchronous=FULL.
 //! OS process identifiers are deliberately never persisted or recovered.
 
-use crate::contracts::{BridgeError, BridgeResult, OperationView};
+use devagotchi_contracts::{BridgeError, BridgeResult, OperationView};
 use rusqlite::{Connection, params};
 use std::collections::VecDeque;
 #[cfg(unix)]
@@ -53,7 +53,7 @@ fn validate_private_file(path: &Path) -> BridgeResult<()> {
     };
     if !metadata.is_file()
         || metadata.file_type().is_symlink()
-        || metadata.uid() != unsafe { libc::geteuid() }
+        || metadata.uid() != devagotchi_ipc::current_uid()
         || metadata.permissions().mode() & 0o077 != 0
         || metadata.nlink() != 1
     {
@@ -77,7 +77,7 @@ fn create_private_file(path: &Path) -> std::io::Result<()> {
 /// itself, never followed.
 #[cfg(windows)]
 fn validate_private_file(path: &Path) -> BridgeResult<()> {
-    use crate::ipc::security::{self, Entry, Operator};
+    use devagotchi_ipc::security::{self, Entry, Operator};
     let entry = match security::open_entry(path) {
         Ok(entry) => entry,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -95,8 +95,8 @@ fn validate_private_file(path: &Path) -> BridgeResult<()> {
 
 #[cfg(windows)]
 fn create_private_file(path: &Path) -> std::io::Result<()> {
-    let operator = crate::ipc::security::Operator::current()?;
-    crate::ipc::security::create_private_file(path, &operator.user)
+    let operator = devagotchi_ipc::security::Operator::current()?;
+    devagotchi_ipc::security::create_private_file(path, &operator.user)
 }
 
 impl Journal {
@@ -306,12 +306,12 @@ impl Journal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::contracts::OperationState;
+    use devagotchi_contracts::OperationState;
 
     #[test]
     fn journal_reopens_exact_bytes_and_idempotency_evidence() {
         let directory = tempfile::tempdir().unwrap();
-        let state = crate::ipc::private_test_state(directory.path());
+        let state = devagotchi_ipc::private_test_state(directory.path());
         let id = uuid::Uuid::new_v4().to_string();
         {
             let mut journal = Journal::open(&state).unwrap();
@@ -386,7 +386,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let target = directory.path().join("unrelated");
         std::fs::write(&target, b"keep this exact content").unwrap();
-        let state = crate::ipc::private_test_state(directory.path());
+        let state = devagotchi_ipc::private_test_state(directory.path());
         std::fs::hard_link(&target, state.join("operations.sqlite3")).unwrap();
         assert!(Journal::open(&state).is_err());
         assert_eq!(std::fs::read(&target).unwrap(), b"keep this exact content");
