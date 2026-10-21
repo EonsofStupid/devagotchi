@@ -1,0 +1,73 @@
+# cargo-deny: the supply-chain half of docs/security-baseline.md.
+#   cargo deny check            # advisories, licenses, bans, sources
+# CI runs it on every pull request and weekly (.github/workflows/security.yml).
+
+[graph]
+# Every workspace member, every target the release pipeline builds.
+all-features = false
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-pc-windows-msvc",
+  "aarch64-apple-darwin",
+]
+
+[advisories]
+# A known vulnerability or an unsound crate fails the check; unmaintained ones warn.
+version = 2
+db-path = "~/.cargo/advisory-db"
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = [
+  # proc-macro-error 1.x is unmaintained; it reaches us only through the GTK bindings
+  # under the Tauri inspector (glib-macros 0.18). Not linked by the broker, adapter or hub.
+  { id = "RUSTSEC-2024-0370", reason = "transitive via gtk/glib-macros for the desktop inspector only; tracked until the gtk-rs 0.19+ move" },
+]
+
+[licenses]
+# Permissive licenses only in the dependency tree. The product's own license is
+# decided separately (plan N7/N17); this list governs what we link, not what we grant.
+version = 2
+confidence-threshold = 0.9
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "MPL-2.0",
+  "Unlicense",
+  "0BSD",
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace path dependencies carry no version; that is the one wildcard we allow.
+allow-wildcard-paths = true
+highlight = "all"
+# The no-network rule (plan S10, CLAUDE.md): nothing in core or mcp may link an HTTP
+# client. The hub is the one crate allowed to, because it talks to the identity
+# provider; `wrappers` lists every crate permitted to depend on each banned crate.
+deny = [
+  { crate = "reqwest", wrappers = ["devagotchi-hub"] },
+  { crate = "ureq", wrappers = [] },
+  { crate = "curl", wrappers = [] },
+  { crate = "isahc", wrappers = [] },
+  { crate = "hyper-util", wrappers = ["reqwest", "axum", "hyper-rustls"] },
+  # openssl-sys drags a system TLS stack into every build; rustls only.
+  { crate = "openssl-sys", wrappers = [] },
+  { crate = "native-tls", wrappers = [] },
+]
+skip = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
