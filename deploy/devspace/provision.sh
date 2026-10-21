@@ -101,7 +101,10 @@ ln -sf "$DEVSPACE_ROOT/env.sh" /etc/profile.d/devspace.sh
 # systemd --user services do not read profile.d; environment.d does the same job for them.
 # Evaluate env.sh in an empty environment so every value is written out fully resolved.
 USER_HOME=$(getent passwd "$DEVSPACE_USER" | cut -d: -f6)
-install -d -o "$DEVSPACE_USER" -g "$DEVSPACE_USER" "$USER_HOME/.config/environment.d" "$USER_HOME/.config/systemd/user"
+# install -d only chowns the leaf; make the intermediate directories the user's too, or the
+# user cannot create ~/.config/<app> later (found by the Shippin workspace installer).
+install -d -o "$DEVSPACE_USER" -g "$DEVSPACE_USER" "$USER_HOME/.config" "$USER_HOME/.config/environment.d" \
+  "$USER_HOME/.config/systemd" "$USER_HOME/.config/systemd/user" "$USER_HOME/.local" "$USER_HOME/.local/bin"
 env -i HOME="$USER_HOME" PATH=/usr/local/bin:/usr/bin:/bin bash --noprofile --norc -c \
   ". '$DEVSPACE_ROOT/env.sh'; for v in \$(grep -oE '^export [A-Z_]+' '$DEVSPACE_ROOT/env.sh' | cut -d' ' -f2); do printf '%s=%s\n' \"\$v\" \"\${!v}\"; done" \
   > "$USER_HOME/.config/environment.d/10-devspace.conf"
