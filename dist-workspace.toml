@@ -22,3 +22,6 @@ github-attestations = true
 
 # Build each released package on its own (the Tauri desktop crate needs GTK and is not released here)
 precise-builds = true
+
+# Build and upload the artifacts on pull requests too, so the Windows release build is proven before merge
+pr-run-mode = "upload"
