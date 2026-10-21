@@ -1,0 +1,39 @@
+[package]
+name = "devagotchi-hub"
+description = "The bastion: authenticates every AI through the identity provider and routes typed operations to the broker that owns the target machine; it never admits a job itself"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "devagotchi-hub"
+path = "src/main.rs"
+
+[dependencies]
+devagotchi-contracts = { workspace = true }
+devagotchi-ipc = { workspace = true }
+rmcp = { workspace = true, features = ["transport-streamable-http-server"] }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+rusqlite = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+jsonwebtoken = "10"
+http = "1"
+tower-service = "0.3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[package.metadata.dist]
+dist = true

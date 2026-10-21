@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "product": "Devagotchi hub (H1)",
+  "scope": "devagotchi-hub in dev-token mode against a live bridge-broker (release 0.1.0 binaries installed by deploy/shippin/install-workspace.sh), probed over Streamable HTTP MCP by tests/hub_probe.py; OIDC mode brought up against the real Nomen issuer for discovery, JWKS and token rejection only (no token could be minted here)",
+  "recorded_at": "2026-10-21T15:19:27+00:00",
+  "environment": {
+    "base": "Ubuntu 24.04.5 LTS sandbox",
+    "user": "hades (hub and broker as the same OS user, as the IPC requires)"
+  },
+  "inputs_sha256": {
+    "target/debug/devagotchi-hub": "f9ec010ddd493c44cc5a15322d1120abf78e5673bd34fa0cd9b8d7f55bfab992",
+    "tests/hub_probe.py": "05ee8a1e2a574b46c97824ea6987f3ee2f029b9d745db2fa5510ae3ee03656ba",
+    "crates/hub/src/main.rs": "a89e8669ec0ae62f73e927b4d65969e26be5ebca657425a3206caeef8ce8a7ae",
+    "crates/hub/src/auth.rs": "f19b7bb2d4a4e7059d176c39141ab3455597f073e7cb9b3a608d9982da4fb27a",
+    "crates/hub/src/hub.rs": "4b8d3a2553093c6b8dc37cdfaba98a09341547739d5f9f75b9946bfa9770e365"
+  },
+  "unit_tests": "cargo test -p devagotchi-hub: 8 passed (config fail-closed cases, dev tokens incl. file mode, audit chain tamper detection, CLI)",
+  "dev_mode_probe": [
+    "devagotchi-hub ready: http://127.0.0.1:8787/mcp (1 brokers, auth dev tokens)",
+    "ok   unauthenticated refused HTTP 401 Bearer resource_metadata=\"http://127.0.0.1:8787/.well-known/oauth-protected-resource\"",
+    "ok   healthz {\"audit\": {\"entries\": 7, \"head\": \"02f63de4897b65ff28bfce702381e807a89e46ecc4d6ded7bd629b3e6e5b8141\", \"ok\": true}, \"brokers\": [{\"name\": \"gold-ws\", \"reachable\": true}], \"ok\": true}",
+    "ok   initialize {'name': 'devagotchi-hub', 'version': '0.1.0'} protocol 2025-06-18",
+    "ok   tools operation_cancel, operation_get, operation_read, operation_start, whoami",
+    "ok   whoami {\"brokers\": [\"gold-ws\"], \"subject\": \"jesse\", \"via\": \"dev\"}",
+    "ok   operation_start routed {\"operation\": {\"args\": [\"--version\"], \"cancellation_requested\": false, \"created_at_ms\": 1792595937016, \"cwd\": \"/home/hades\", \"deadline_ms\": 30000, \"detail\": \"Admission committed; the independent broke",
+    "ok   git --version under the broker state=succeeded output='git version 2.43.0'",
+    "ok   ungranted broker refused {\"code\": \"unknown_broker\", \"message\": \"no broker named \\\"nobody-has-this\\\" is enrolled\"}",
+    "ok   audit chain verified {\"entries\": 11, \"head\": \"cb6849f77e545770cda81f2daf1784cf505a645428031135dbea216408a122c8\", \"ok\": true}",
+    "PROBE_EXIT=0",
+    "--- denied subject:",
+    "FAIL operation_start routed {\"code\": \"not_granted\", \"message\": \"codex-agent holds no grant for broker \\\"gold-ws\\\"\"}"
+  ],
+  "oidc_mode": {
+    "issuer": "https://id.shippin.cloud",
+    "result": "discovery and JWKS fetched, issuer matched; /.well-known/oauth-protected-resource lists the issuer; unauthenticated POST /mcp \u2192 401 with resource_metadata; a JWT with an unknown kid \u2192 401 error=invalid_token after one throttled JWKS refresh"
+  },
+  "not_verified_here": [
+    "a real Nomen-issued JWT accepted end to end (needs an app in Nomen with JWT access tokens and the hub's audience)",
+    "Windows and macOS builds of the hub (the PR run of release.yml and ci.yml are the check)",
+    "remote brokers (M1), introspection for opaque tokens, UI, agent-hub, harnesses, bundle (H2\u2013H5)"
+  ]
+}
