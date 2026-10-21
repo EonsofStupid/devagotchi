@@ -8,6 +8,10 @@ This directory records completed Linux core checks for the Devagotchi foundation
 
 The separate [website publication receipt](website-publication.json) records the October 17 public Site, HTTP reference/download checks, MCP OAuth challenge and plugin provisioning, source identity, and DNS status. Its 12 reference-handler checks concern website code, not this Rust broker. Browser visual QA and an authenticated named-client MCP call remain unverified. The Linux results below are unchanged historical evidence.
 
+## Devspace provisioning
+
+[devspace-provision.json](devspace-provision.json) records the October 20, 2026 UTC end-to-end run of `deploy/devspace/provision.sh` in an Ubuntu 24.04 sandbox: the four failures it surfaced and their fixes, the `devspace-check` output (every toolchain under `/devspace`, nothing stray in `$HOME`), and a broker started with the generated config and probed through `bridge-mcp` (`tests/devspace_broker_probe.py`: `git --version` succeeded under the broker, an ungranted executable was refused). The sandbox has no PID 1 systemd, so `enable-linger` and the user unit are listed as not verified; they are checked on the real tenant.
+
 ## Recorded results
 
 | Check | Recorded result | Evidence and scope |
