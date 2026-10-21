@@ -63,16 +63,24 @@ log "Broker config (grants = the toolchains present in this workspace)"
 install -d -m 0700 "$CONFIG_HOME/devagotchi" "$STATE_HOME/devagotchi"
 CONF="$CONFIG_HOME/devagotchi/broker.json"
 if [ ! -f "$CONF" ]; then
-  grants=""
-  for exe in git rg node npm python3 cargo rustup go uv; do
+  # Grants are canonical paths (the broker canonicalizes too); cargo and rustup share one
+  # proxy binary, so duplicates are dropped. npm is a script and stays out: with the job
+  # environment cleared (S10) its shebang could not find node anyway.
+  declare -A seen; grants=()
+  for exe in git rg node python3 cargo rustup go uv; do
     p=$(command -v "$exe" 2>/dev/null || true); [ -n "$p" ] || continue
-    p=$(readlink -f "$p"); [ -f "$p" ] || continue
-    grants="$grants    \"$p\",\n"
+    p=$(readlink -f "$p"); [ -f "$p" ] && [ -x "$p" ] || continue
+    [ -n "${seen[$p]:-}" ] && continue; seen[$p]=1; grants+=("$p")
   done
-  printf '{\n  "workspace": "%s",\n  "allowed_executables": [\n%s  ],\n  "output_limit_bytes": 262144,\n  "max_operations": 64,\n  "max_concurrent": 4\n}\n' \
-    "$WORKSPACE" "$(printf '%b' "$grants" | sed '$ s/,$//')" > "$CONF"
+  {
+    printf '{\n  "workspace": "%s",\n  "allowed_executables": [\n' "$WORKSPACE"
+    for i in "${!grants[@]}"; do
+      if [ "$i" -lt $(( ${#grants[@]} - 1 )) ]; then printf '    "%s",\n' "${grants[$i]}"; else printf '    "%s"\n' "${grants[$i]}"; fi
+    done
+    printf '  ],\n  "output_limit_bytes": 262144,\n  "max_operations": 64,\n  "max_concurrent": 4\n}\n'
+  } > "$CONF"
   chmod 0600 "$CONF"
-  echo "    wrote $CONF"
+  echo "    wrote $CONF with ${#grants[@]} grants"
 else
   echo "    kept existing $CONF"
 fi
