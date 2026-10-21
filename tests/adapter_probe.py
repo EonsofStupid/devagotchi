@@ -81,10 +81,11 @@ started = call("operation_start", {
 operation = started["operation"]["operation_id"] if "operation" in started else started["operation_id"]
 print("operation:", operation)
 state = None
-for _ in range(100):
+for _ in range(300):  # up to 30 s
     got = call("operation_get", {"operation_id": operation})
     state = got.get("operation", got)
-    if state["state"] not in ("admitted", "running", "pending"):
+    # Non-terminal states per OperationState::terminal (contracts): accepted, running.
+    if state["state"] not in ("accepted", "running"):
         break
     time.sleep(0.1)
 print("state:", state["state"], "exit:", state.get("exit_code", state.get("exit")))

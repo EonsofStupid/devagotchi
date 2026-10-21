@@ -112,10 +112,11 @@ check("operation_start routed", not is_error, json.dumps(started)[:200])
 operation = started.get("operation", {}).get("operation_id") if not is_error else None
 state = None
 if operation:
-    for _ in range(100):
+    for _ in range(300):  # up to 30 s
         _, view = call("operation_get", {"broker": args.broker, "input": {"operation_id": operation}})
         state = view.get("state")
-        if state not in ("admitted", "running", "pending"):
+        # Non-terminal states per OperationState::terminal (contracts): accepted, running.
+        if state not in ("accepted", "running"):
             break
         time.sleep(0.1)
     _, page = call("operation_read", {"broker": args.broker, "input": {"operation_id": operation, "cursor": 0, "max_bytes": 4096}})
