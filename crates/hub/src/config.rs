@@ -174,17 +174,33 @@ fn valid_name(name: &str) -> bool {
 mod tests {
     use super::*;
 
-    const GOOD: &str = r#"{
-      "listen": "127.0.0.1:8787",
-      "public_url": "https://hub.example",
-      "auth": { "mode": "dev", "tokens_file": "/tmp/tokens.json" },
-      "brokers": [ { "name": "gold-ws", "socket": "/run/broker.sock" } ],
-      "grants": [ { "subject": "jesse", "brokers": ["gold-ws"] } ]
-    }"#;
+    /// Absolute paths in the platform's own form: `/…` is not absolute on Windows.
+    #[cfg(unix)]
+    const TOKENS: &str = "/tmp/tokens.json";
+    #[cfg(windows)]
+    const TOKENS: &str = r"C:\tmp\tokens.json";
+    #[cfg(unix)]
+    const SOCKET: &str = "/run/broker.sock";
+    #[cfg(windows)]
+    const SOCKET: &str = r"\\.\pipe\devagotchi-broker-test";
+
+    fn good() -> serde_json::Value {
+        serde_json::json!({
+            "listen": "127.0.0.1:8787",
+            "public_url": "https://hub.example",
+            "auth": { "mode": "dev", "tokens_file": TOKENS },
+            "brokers": [ { "name": "gold-ws", "socket": SOCKET } ],
+            "grants": [ { "subject": "jesse", "brokers": ["gold-ws"] } ]
+        })
+    }
+
+    fn parse(value: &serde_json::Value) -> BridgeResult<HubConfig> {
+        HubConfig::parse(&value.to_string())
+    }
 
     #[test]
     fn accepts_a_minimal_dev_config_and_resolves_grants() {
-        let config = HubConfig::parse(GOOD).unwrap();
+        let config = parse(&good()).unwrap();
         assert_eq!(config.brokers_for("jesse").len(), 1);
         assert!(config.brokers_for("someone-else").is_empty());
         assert!(config.broker("gold-ws").is_some());
@@ -192,41 +208,40 @@ mod tests {
 
     #[test]
     fn unknown_fields_unknown_brokers_and_bad_names_fail_closed() {
-        let unknown = GOOD.replace("\"grants\"", "\"grant\"");
-        assert_eq!(
-            HubConfig::parse(&unknown).unwrap_err().code,
-            "invalid_config"
-        );
-        let dangling = GOOD.replace("\"brokers\": [\"gold-ws\"]", "\"brokers\": [\"other\"]");
-        assert_eq!(
-            HubConfig::parse(&dangling).unwrap_err().code,
-            "invalid_config"
-        );
-        let bad_name = GOOD.replace("\"name\": \"gold-ws\"", "\"name\": \"Gold WS\"");
-        assert_eq!(
-            HubConfig::parse(&bad_name).unwrap_err().code,
-            "invalid_config"
-        );
-        let relative = GOOD.replace("/run/broker.sock", "broker.sock");
-        assert_eq!(
-            HubConfig::parse(&relative).unwrap_err().code,
-            "invalid_config"
-        );
+        let mut unknown = good();
+        let grants = unknown.as_object_mut().unwrap().remove("grants").unwrap();
+        unknown["grant"] = grants;
+        assert_eq!(parse(&unknown).unwrap_err().code, "invalid_config");
+
+        let mut dangling = good();
+        dangling["grants"][0]["brokers"] = serde_json::json!(["other"]);
+        assert_eq!(parse(&dangling).unwrap_err().code, "invalid_config");
+
+        let mut bad_name = good();
+        bad_name["brokers"][0]["name"] = serde_json::json!("Gold WS");
+        assert_eq!(parse(&bad_name).unwrap_err().code, "invalid_config");
+
+        let mut relative = good();
+        relative["brokers"][0]["socket"] = serde_json::json!("broker.sock");
+        assert_eq!(parse(&relative).unwrap_err().code, "invalid_config");
+
+        let mut relative_tokens = good();
+        relative_tokens["auth"]["tokens_file"] = serde_json::json!("tokens.json");
+        assert_eq!(parse(&relative_tokens).unwrap_err().code, "invalid_config");
     }
 
     #[test]
     fn oidc_requires_https_issuer_and_an_audience() {
-        let oidc = GOOD.replace(
-            r#"{ "mode": "dev", "tokens_file": "/tmp/tokens.json" }"#,
-            r#"{ "mode": "oidc", "issuer": "https://id.example", "audiences": ["hub"] }"#,
-        );
-        assert!(HubConfig::parse(&oidc).is_ok());
-        let no_aud = oidc.replace(r#"["hub"]"#, "[]");
-        assert_eq!(
-            HubConfig::parse(&no_aud).unwrap_err().code,
-            "invalid_config"
-        );
-        let plain = oidc.replace("https://id.example", "http://id.example");
-        assert_eq!(HubConfig::parse(&plain).unwrap_err().code, "invalid_config");
+        let mut oidc = good();
+        oidc["auth"] = serde_json::json!({ "mode": "oidc", "issuer": "https://id.example", "audiences": ["hub"] });
+        assert!(parse(&oidc).is_ok());
+
+        let mut no_aud = oidc.clone();
+        no_aud["auth"]["audiences"] = serde_json::json!([]);
+        assert_eq!(parse(&no_aud).unwrap_err().code, "invalid_config");
+
+        let mut plain = oidc.clone();
+        plain["auth"]["issuer"] = serde_json::json!("http://id.example");
+        assert_eq!(parse(&plain).unwrap_err().code, "invalid_config");
     }
 }
