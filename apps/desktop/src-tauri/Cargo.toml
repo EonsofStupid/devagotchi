@@ -36,3 +36,6 @@ tokio = { workspace = true }
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+[package.metadata.dist]
+dist = false

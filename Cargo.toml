@@ -63,3 +63,8 @@ unsafe_code = "deny"
 
 [workspace.lints.clippy]
 all = "warn"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
