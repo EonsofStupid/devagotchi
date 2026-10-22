@@ -139,7 +139,14 @@ $exes = 'bridge-broker.exe', 'bridge-mcp.exe', 'devagotchi-hub.exe', 'devagotchi
 
 if ($BinDir) {
     Step "Binaries from build directory $BinDir"
-    if (-not $Version) { $Version = 'local-' + (Get-Date -Format 'yyyyMMddHHmmss') }
+    if (-not $Version) {
+        # A new folder every time: a reinstall within the same second must never copy over
+        # the binaries the running broker and link were started from (Windows locks them).
+        $stamp = 'local-' + (Get-Date -Format 'yyyyMMddHHmmssfff')
+        $Version = $stamp
+        $n = 1
+        while (Test-Path (Join-Path $Root "versions\$Version")) { $Version = "$stamp-$n"; $n++ }
+    }
     $dest = Join-Path $Root "versions\$Version"
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
     foreach ($exe in $exes) {
