@@ -21,6 +21,9 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 /// The hub drops a link after 60 s of silence.
 const HEARTBEAT: Duration = Duration::from_secs(20);
+/// Calls handled at once. Beyond this the link answers `link_busy` instead of queueing,
+/// so a hub cannot make this machine open unbounded broker connections.
+const MAX_IN_FLIGHT: usize = 16;
 
 /// Why a connection ended.
 #[derive(Debug)]
@@ -28,6 +31,7 @@ pub enum Ended {
     /// Network trouble or the hub went away: reconnect after a pause.
     Retry(String),
     /// The hub refused this device (revoked, not enrolled, wrong key): stop and say why.
+    /// A hub that is only temporarily unable to check (`unavailable`) is a Retry instead.
     Refused(BridgeError),
     /// `enroll` finished: the key is bound and the connection closed on purpose.
     Enrolled,
@@ -98,9 +102,7 @@ pub async fn connect(config: &LinkConfig, key: &SigningKey, mode: Mode<'_>) -> E
     }
     match next_frame(&mut stream).await {
         Ok(HubFrame::Welcome { .. }) => {}
-        Ok(HubFrame::Refused { code, message }) => {
-            return Ended::Refused(BridgeError::new(&code, message));
-        }
+        Ok(HubFrame::Refused { code, message }) => return refusal(code, message),
         Ok(_) => return Ended::Retry("hub answered the hello with an unexpected frame".into()),
         Err(why) => return Ended::Retry(why),
     }
@@ -118,21 +120,29 @@ pub async fn connect(config: &LinkConfig, key: &SigningKey, mode: Mode<'_>) -> E
     let mut heartbeat = tokio::time::interval(HEARTBEAT);
     heartbeat.tick().await;
     let broker = std::path::PathBuf::from(&config.broker);
+    let slots = Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT));
     loop {
         tokio::select! {
             incoming = stream.next() => match incoming {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str::<HubFrame>(&text) {
                     Ok(HubFrame::Call { id, request }) => {
                         let answers = answers_tx.clone();
+                        let Ok(slot) = slots.clone().try_acquire_owned() else {
+                            let busy = WireResponse::Error(BridgeError::new(
+                                "link_busy",
+                                format!("this machine is already handling {MAX_IN_FLIGHT} calls"),
+                            ));
+                            let _ = answers.try_send(LinkFrame::Result { id, response: busy });
+                            continue;
+                        };
                         let broker = broker.clone();
                         tokio::spawn(async move {
                             let response = handle(&broker, request).await;
                             let _ = answers.send(LinkFrame::Result { id, response }).await;
+                            drop(slot);
                         });
                     }
-                    Ok(HubFrame::Refused { code, message }) => {
-                        return Ended::Refused(BridgeError::new(&code, message));
-                    }
+                    Ok(HubFrame::Refused { code, message }) => return refusal(code, message),
                     Ok(_) | Err(_) => return Ended::Retry("hub sent a frame this link does not understand".into()),
                 },
                 Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_))) => {}
@@ -151,6 +161,15 @@ pub async fn connect(config: &LinkConfig, key: &SigningKey, mode: Mode<'_>) -> E
                 }
             }
         }
+    }
+}
+
+/// A refusal from the hub: permanent unless the hub says it only could not check now.
+fn refusal(code: String, message: String) -> Ended {
+    if code == "unavailable" {
+        Ended::Retry(format!("hub temporarily unavailable: {message}"))
+    } else {
+        Ended::Refused(BridgeError::new(&code, message))
     }
 }
 

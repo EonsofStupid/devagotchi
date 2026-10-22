@@ -36,6 +36,7 @@ impl Audit {
             .execute_batch(
                 "PRAGMA journal_mode = WAL;
                  PRAGMA synchronous = FULL;
+                 PRAGMA busy_timeout = 5000;
                  CREATE TABLE IF NOT EXISTS audit (
                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
                    at TEXT NOT NULL,
@@ -56,9 +57,14 @@ impl Audit {
     }
 
     pub fn record(&self, entry: &AuditEntry<'_>) -> BridgeResult<u64> {
-        let connection = self.connection.lock().expect("audit lock");
+        let mut connection = self.connection.lock().expect("audit lock");
+        // IMMEDIATE takes the write lock before reading the head, so the hub and an
+        // operator command writing at the same moment cannot fork the chain.
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(|error| BridgeError::new("audit_write", error.to_string()))?;
         let at = now_rfc3339();
-        let prev: String = connection
+        let prev: String = transaction
             .query_row(
                 "SELECT hash FROM audit ORDER BY seq DESC LIMIT 1",
                 [],
@@ -68,14 +74,18 @@ impl Audit {
             .map_err(|error| BridgeError::new("audit_write", error.to_string()))?
             .unwrap_or_else(|| "0".repeat(64));
         let hash = row_hash(&prev, &at, entry);
-        connection
+        transaction
             .execute(
                 "INSERT INTO audit (at, subject, via, tool, broker, operation_id, outcome, prev_hash, hash)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![at, entry.subject, entry.via, entry.tool, entry.broker, entry.operation_id, entry.outcome, prev, hash],
             )
             .map_err(|error| BridgeError::new("audit_write", error.to_string()))?;
-        Ok(connection.last_insert_rowid() as u64)
+        let seq = transaction.last_insert_rowid() as u64;
+        transaction
+            .commit()
+            .map_err(|error| BridgeError::new("audit_write", error.to_string()))?;
+        Ok(seq)
     }
 
     /// Walk the whole chain. Small logs only; a paged walk arrives with the audit UI.

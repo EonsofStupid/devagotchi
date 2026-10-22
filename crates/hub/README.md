@@ -46,13 +46,14 @@ opens on the machine. The device proves its enrolled Ed25519 key over a fresh ch
 the hub then sends one call per routed request and waits up to 30 s for the answer.
 
 ```bash
-devagotchi-hub enroll  --state-dir DIR --device gus   # one-time code, 15 minutes, stdout only
-devagotchi-hub revoke  --state-dir DIR --device gus   # link closes within 2 s
+devagotchi-hub enroll  --state-dir DIR --device gus   # one-time code, 15 minutes, stdout only; supersedes older ones
+devagotchi-hub revoke  --state-dir DIR --device gus   # link closes within 2 s; pending codes cancelled
 devagotchi-hub devices --state-dir DIR                # enrolled machines, JSON
 ```
 
 A linked broker that is not connected answers `broker_offline`; one that never enrolled,
-`not_enrolled`; a revoked one, `device_revoked`. `/healthz` reports each linked broker as
+`not_enrolled`; a revoked one, `device_revoked`; one with 64 calls already waiting,
+`link_busy`. A refused device is told only `refused`; why is in the audit. `/healthz` reports each linked broker as
 `connected` without counting an asleep laptop against the hub's own health.
 
 ## Authentication

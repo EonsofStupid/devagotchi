@@ -14,19 +14,16 @@ use crate::{
     state::LinkConfig,
 };
 
-const USAGE: &str = "Usage:\n  devagotchi-link enroll --state-dir ABS_PATH --hub URL --device NAME --broker ENDPOINT --code CODE\n  devagotchi-link run --state-dir ABS_PATH\n  devagotchi-link --help\n\nenroll binds this machine's key to NAME on the hub with a one-time code from the hub\noperator (devagotchi-hub enroll), then exits. run holds the link open and reconnects on\nits own; start it at login. URL is the hub's https public URL. ENDPOINT is the local\nbroker's ready line (Unix socket path or named pipe).";
+const USAGE: &str = "Usage:\n  devagotchi-link enroll --state-dir ABS_PATH --hub URL --device NAME --broker ENDPOINT\n  devagotchi-link run --state-dir ABS_PATH\n  devagotchi-link --help\n\nenroll binds this machine's key to NAME on the hub with a one-time code from the hub\noperator (devagotchi-hub enroll), then exits. The code is read from the\nDEVAGOTCHI_ENROLL_CODE environment variable, or else from the first line of stdin, never\nfrom the command line where other users could see it. run holds the link open and\nreconnects on its own; start it at login. URL is the hub's https public URL. ENDPOINT is\nthe local broker's ready line (Unix socket path or named pipe).";
+
+/// Where `enroll` reads the one-time code from first.
+const CODE_ENV: &str = "DEVAGOTCHI_ENROLL_CODE";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
     Help,
-    Enroll {
-        state: PathBuf,
-        config: LinkConfig,
-        code: String,
-    },
-    Run {
-        state: PathBuf,
-    },
+    Enroll { state: PathBuf, config: LinkConfig },
+    Run { state: PathBuf },
 }
 
 fn parse_args(args: impl IntoIterator<Item = OsString>) -> BridgeResult<Command> {
@@ -65,13 +62,8 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> BridgeResult<Command>
                 device: take("--device").ok_or_else(invalid)?,
                 broker: take("--broker").ok_or_else(invalid)?,
             };
-            let code = take("--code").ok_or_else(invalid)?;
             config.validate()?;
-            Command::Enroll {
-                state,
-                config,
-                code,
-            }
+            Command::Enroll { state, config }
         }
         "run" => Command::Run { state },
         _ => return Err(invalid()),
@@ -96,11 +88,10 @@ async fn main() -> ExitCode {
         }
     };
     let result = match command {
-        Command::Enroll {
-            state,
-            config,
-            code,
-        } => enroll(state, config, code).await,
+        Command::Enroll { state, config } => match enrollment_code() {
+            Ok(code) => enroll(state, config, code).await,
+            Err(error) => Err(error),
+        },
         Command::Run { state } => run(state).await,
         Command::Help => unreachable!(),
     };
@@ -112,6 +103,28 @@ async fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// The one-time code: from the environment, else the first line of stdin.
+fn enrollment_code() -> BridgeResult<String> {
+    let code = match env::var(CODE_ENV) {
+        Ok(code) => code,
+        Err(_) => {
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .map_err(|e| BridgeError::new("invalid_cli", e.to_string()))?;
+            line
+        }
+    };
+    let code = code.trim().to_string();
+    if code.is_empty() || code.len() > 128 {
+        return Err(BridgeError::new(
+            "invalid_cli",
+            format!("no enrollment code: set {CODE_ENV} or pipe the code on stdin"),
+        ));
+    }
+    Ok(code)
 }
 
 async fn enroll(state_dir: PathBuf, config: LinkConfig, code: String) -> BridgeResult<()> {
@@ -202,7 +215,7 @@ mod tests {
 
     #[test]
     fn enroll_needs_every_flag_and_valid_values() {
-        let ok = parse_args(args(&[
+        let base = [
             "enroll",
             "--state-dir",
             STATE,
@@ -212,37 +225,17 @@ mod tests {
             "gus",
             "--broker",
             BROKER,
-            "--code",
-            "dvg-abc",
-        ]))
-        .unwrap();
-        assert!(matches!(ok, Command::Enroll { ref code, .. } if code == "dvg-abc"));
-        assert!(
-            parse_args(args(&[
-                "enroll",
-                "--state-dir",
-                STATE,
-                "--hub",
-                "https://hub.example"
-            ]))
-            .is_err()
-        );
-        assert!(
-            parse_args(args(&[
-                "enroll",
-                "--state-dir",
-                STATE,
-                "--hub",
-                "http://hub.example",
-                "--device",
-                "gus",
-                "--broker",
-                BROKER,
-                "--code",
-                "c",
-            ]))
-            .is_err()
-        );
+        ];
+        let ok = parse_args(args(&base)).unwrap();
+        assert!(matches!(ok, Command::Enroll { ref config, .. } if config.device == "gus"));
+        // The code is never a command-line argument, where other users could read it.
+        let mut with_code = base.to_vec();
+        with_code.extend(["--code", "dvg-abc"]);
+        assert!(parse_args(args(&with_code)).is_err());
+        assert!(parse_args(args(&base[..5])).is_err());
+        let mut plain_http = base.to_vec();
+        plain_http[4] = "http://hub.example";
+        assert!(parse_args(args(&plain_http)).is_err());
     }
 
     #[test]
