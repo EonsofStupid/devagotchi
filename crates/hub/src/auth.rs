@@ -15,17 +15,22 @@ use devagotchi_contracts::{BridgeError, BridgeResult};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
 use serde::Deserialize;
 
-use crate::config::AuthConfig;
+use crate::{config::AuthConfig, nomen::NomenVerifier};
 
 /// An authenticated caller. `id` is what grants are written against.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Subject {
     pub id: String,
-    /// `oidc` or `dev`; shows in the audit row so a dev token is never mistaken for a person.
+    /// `nomen`, `oidc` or `dev`; shows in the audit row so a dev token is never mistaken
+    /// for a person.
     pub via: &'static str,
+    /// The login name the identity provider reported, shown so a person can tell their
+    /// accounts apart. Never used for grants: two accounts can share a name.
+    pub name: Option<String>,
 }
 
 pub enum Verifier {
+    Nomen(NomenVerifier),
     Oidc(OidcVerifier),
     Dev(HashMap<String, String>),
 }
@@ -33,6 +38,13 @@ pub enum Verifier {
 impl Verifier {
     pub async fn from_config(config: &AuthConfig) -> BridgeResult<Self> {
         match config {
+            AuthConfig::Nomen {
+                issuer,
+                audiences,
+                key_file,
+            } => Ok(Verifier::Nomen(NomenVerifier::new(
+                issuer, audiences, key_file,
+            )?)),
             AuthConfig::Oidc { issuer, audiences } => Ok(Verifier::Oidc(
                 OidcVerifier::discover(issuer, audiences).await?,
             )),
@@ -50,14 +62,17 @@ impl Verifier {
                 .map(|subject| Subject {
                     id: subject.clone(),
                     via: "dev",
+                    name: None,
                 })
                 .ok_or(AuthError::Invalid("unknown token")),
+            Verifier::Nomen(nomen) => nomen.verify(bearer).await,
             Verifier::Oidc(oidc) => oidc.verify(bearer).await,
         }
     }
 
     pub fn issuer(&self) -> Option<&str> {
         match self {
+            Verifier::Nomen(nomen) => Some(nomen.issuer()),
             Verifier::Oidc(oidc) => Some(&oidc.issuer),
             Verifier::Dev(_) => None,
         }
@@ -81,22 +96,28 @@ impl std::fmt::Display for AuthError {
     }
 }
 
-fn read_dev_tokens(path: &str) -> BridgeResult<HashMap<String, String>> {
+/// Read a file that holds a credential, refusing it when others could read it too.
+/// Errors name the setting, never the contents.
+pub(crate) fn read_private(path: &str, setting: &str) -> BridgeResult<String> {
     let metadata = std::fs::metadata(path)
-        .map_err(|error| BridgeError::new("invalid_config", format!("tokens_file: {error}")))?;
+        .map_err(|error| BridgeError::new("invalid_config", format!("{setting}: {error}")))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         if metadata.permissions().mode() & 0o077 != 0 {
             return Err(BridgeError::new(
                 "invalid_config",
-                "tokens_file must be readable by its owner only (chmod 0600)",
+                format!("{setting} must be readable by its owner only (chmod 0600)"),
             ));
         }
     }
     let _ = metadata;
-    let text = std::fs::read_to_string(path)
-        .map_err(|error| BridgeError::new("invalid_config", format!("tokens_file: {error}")))?;
+    std::fs::read_to_string(path)
+        .map_err(|error| BridgeError::new("invalid_config", format!("{setting}: {error}")))
+}
+
+fn read_dev_tokens(path: &str) -> BridgeResult<HashMap<String, String>> {
+    let text = read_private(path, "tokens_file")?;
     let tokens: HashMap<String, String> = serde_json::from_str(&text)
         .map_err(|error| BridgeError::new("invalid_config", format!("tokens_file: {error}")))?;
     if tokens.is_empty()
@@ -216,6 +237,7 @@ impl OidcVerifier {
         Ok(Subject {
             id: data.claims.sub,
             via: "oidc",
+            name: None,
         })
     }
 
@@ -276,7 +298,8 @@ mod tests {
             subject,
             Subject {
                 id: "jesse".into(),
-                via: "dev"
+                via: "dev",
+                name: None,
             }
         );
         assert!(matches!(
@@ -285,6 +308,49 @@ mod tests {
         ));
         assert!(matches!(
             verifier.verify("").await,
+            Err(AuthError::Invalid(_))
+        ));
+    }
+
+    /// A real RS256 token through the OIDC path. Before jsonwebtoken had a signature
+    /// backend this panicked on the first token; a test that only read config could not see it.
+    #[tokio::test]
+    async fn oidc_verifies_a_real_signed_token() {
+        use jsonwebtoken::{EncodingKey, Header, encode};
+        let key = crate::test_keys::rsa();
+        let keys: JwkSet = serde_json::from_value(serde_json::json!({
+            "keys": [{"kty": "RSA", "kid": "k1", "alg": "RS256", "use": "sig", "n": key.n, "e": key.e}]
+        }))
+        .unwrap();
+        let verifier = OidcVerifier {
+            issuer: "https://id.example".into(),
+            audiences: vec!["hub".into()],
+            jwks_uri: "https://id.example/keys".into(),
+            http: reqwest::Client::new(),
+            keys: RwLock::new(Arc::new(keys)),
+            last_refresh: Mutex::new(Instant::now()),
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let sign = |aud: &str| {
+            let mut header = Header::new(Algorithm::RS256);
+            header.kid = Some("k1".into());
+            let claims = serde_json::json!({"iss": "https://id.example", "aud": aud,
+                "sub": "300000000000000001", "exp": now + 600});
+            encode(
+                &header,
+                &claims,
+                &EncodingKey::from_rsa_pem(key.pem.as_bytes()).unwrap(),
+            )
+            .unwrap()
+        };
+        let subject = verifier.verify(&sign("hub")).await.unwrap();
+        assert_eq!(subject.id, "300000000000000001");
+        assert_eq!(subject.via, "oidc");
+        assert!(matches!(
+            verifier.verify(&sign("someone-else")).await,
             Err(AuthError::Invalid(_))
         ));
     }

@@ -8,6 +8,9 @@ mod config;
 mod devices;
 mod hub;
 mod link;
+mod nomen;
+#[cfg(test)]
+mod test_keys;
 
 use std::{
     env, ffi::OsString, net::SocketAddr, path::PathBuf, process::ExitCode, sync::Arc,
@@ -299,10 +302,14 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         "devagotchi-hub ready: http://{listen}/mcp ({} brokers, auth {})",
         config.brokers.len(),
         match &config.auth {
+            config::AuthConfig::Nomen { issuer, .. } => format!("nomen {issuer}"),
             config::AuthConfig::Oidc { issuer, .. } => format!("oidc {issuer}"),
             config::AuthConfig::Dev { .. } => "dev tokens".to_string(),
         }
     );
+    if let Some(owner) = &config.owner {
+        eprintln!("devagotchi-hub owner: {owner} reaches every broker");
+    }
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),

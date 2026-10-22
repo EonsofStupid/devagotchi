@@ -55,9 +55,16 @@ pub struct ReadRouted {
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct WhoAmI {
-    /// The subject the identity provider proved, never a caller-supplied name.
+    /// The account ID (`sub`) the identity provider proved, never a caller-supplied name.
+    /// Grants are written against this.
     pub subject: String,
     pub via: String,
+    /// The login name the identity provider reported, to tell your accounts apart.
+    /// Grants never use it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Whether this is the hub's configured owner, who reaches every broker.
+    pub owner: bool,
     /// Brokers this subject holds a grant for, by name.
     pub brokers: Vec<String>,
 }
@@ -171,8 +178,10 @@ impl Hub {
                 .into_iter()
                 .map(|b| b.name.clone())
                 .collect(),
+            owner: self.config.is_owner(&subject.id),
             subject: subject.id,
             via: subject.via.to_string(),
+            name: subject.name,
         }))
     }
 

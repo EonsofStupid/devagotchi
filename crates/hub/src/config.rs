@@ -17,6 +17,12 @@ pub struct HubConfig {
     /// identifier (RFC 9728) and the `resource` hosted clients send.
     pub public_url: String,
     pub auth: AuthConfig,
+    /// The account ID (`sub`) of the person who owns this hub. The owner reaches every
+    /// broker without a grant, and nothing at runtime can take that away: only editing
+    /// this file changes it. Required with Nomen sign-in, so a hub can never be set up
+    /// without someone who can always get in.
+    #[serde(default)]
+    pub owner: Option<String>,
     /// Brokers this hub can route to: local ones by their IPC endpoint, and brokers on
     /// other machines reached through the link their `devagotchi-link` holds open.
     pub brokers: Vec<BrokerEntry>,
@@ -35,6 +41,21 @@ pub enum AuthConfig {
         /// Accepted `aud` values: the hub's own client/project ids at the provider,
         /// and the dynamic-registration project when hosted clients register there.
         audiences: Vec<String>,
+    },
+    /// Shippin sign-in. Nomen (Shippin's identity provider) issues opaque access
+    /// tokens, so the hub asks Nomen about each one (token introspection, RFC 7662),
+    /// signing in to Nomen as its own API application with a private-key JWT.
+    Nomen {
+        /// Nomen's issuer URL exactly as Nomen states it, e.g. `https://id.shippin.cloud`.
+        /// Tokens are checked at `<issuer>/oauth/v2/introspect`.
+        issuer: String,
+        /// Nomen project ids whose tokens this hub accepts. Nomen reports a token active
+        /// only when the hub's application is in its audience; the hub also requires one
+        /// of these ids in `aud`.
+        audiences: Vec<String>,
+        /// Absolute path to the hub's API application key, the JSON file Nomen downloads
+        /// (`type`, `keyId`, `key`, `clientId`). Owner-only (chmod 0600).
+        key_file: String,
     },
     /// Static tokens from a file the hub owner controls (mode 0600). For local
     /// tests and single-machine self-hosting without an identity provider.
@@ -98,11 +119,40 @@ impl HubConfig {
                     ));
                 }
             }
+            AuthConfig::Nomen {
+                issuer,
+                audiences,
+                key_file,
+            } => {
+                if !issuer.starts_with("https://") && !loopback_http(issuer) {
+                    return Err(invalid(
+                        "auth.issuer must be an https URL (plain http only on this machine's loopback, for tests)"
+                            .into(),
+                    ));
+                }
+                if audiences.is_empty() || audiences.iter().any(|a| a.trim().is_empty()) {
+                    return Err(invalid(
+                        "auth.audiences must name at least one Nomen project id".into(),
+                    ));
+                }
+                if !Path::new(key_file).is_absolute() {
+                    return Err(invalid("auth.key_file must be an absolute path".into()));
+                }
+                if self.owner.is_none() {
+                    return Err(invalid(
+                        "Nomen sign-in needs an owner: the account ID (sub) that can always reach every broker"
+                            .into(),
+                    ));
+                }
+            }
             AuthConfig::Dev { tokens_file } => {
                 if !Path::new(tokens_file).is_absolute() {
                     return Err(invalid("auth.tokens_file must be an absolute path".into()));
                 }
             }
+        }
+        if let Some(owner) = &self.owner {
+            valid_subject(owner).map_err(|why| invalid(format!("owner {why}")))?;
         }
         if self.brokers.is_empty() || self.brokers.len() > 256 {
             return Err(invalid(
@@ -145,9 +195,7 @@ impl HubConfig {
             return Err(invalid("at most 4096 grants".into()));
         }
         for grant in &self.grants {
-            if grant.subject.trim().is_empty() || grant.subject.len() > 256 {
-                return Err(invalid("grant subject must be 1..=256 characters".into()));
-            }
+            valid_subject(&grant.subject).map_err(|why| invalid(format!("grant subject {why}")))?;
             for name in &grant.brokers {
                 if !names.contains(name.as_str()) {
                     return Err(invalid(format!(
@@ -160,8 +208,17 @@ impl HubConfig {
         Ok(())
     }
 
+    /// Whether this subject is the hub's configured owner.
+    pub fn is_owner(&self, subject: &str) -> bool {
+        self.owner.as_deref() == Some(subject)
+    }
+
     /// Broker names the subject may route to, in config order, without duplicates.
+    /// The owner reaches every broker.
     pub fn brokers_for(&self, subject: &str) -> Vec<&BrokerEntry> {
+        if self.is_owner(subject) {
+            return self.brokers.iter().collect();
+        }
         let mut allowed = BTreeSet::new();
         for grant in self.grants.iter().filter(|g| g.subject == subject) {
             allowed.extend(grant.brokers.iter().map(String::as_str));
@@ -175,6 +232,39 @@ impl HubConfig {
     pub fn broker(&self, name: &str) -> Option<&BrokerEntry> {
         self.brokers.iter().find(|b| b.name == name)
     }
+}
+
+/// A subject is the account ID the identity provider issues, which never changes. An
+/// email or a display name can be shared by two accounts or change hands (Shippin once
+/// had two active accounts with the same name), so neither is accepted where an ID belongs.
+fn valid_subject(subject: &str) -> Result<(), String> {
+    if subject.is_empty() || subject.len() > 256 {
+        return Err(format!("{subject:?} must be 1..=256 characters"));
+    }
+    if subject.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return Err(format!(
+            "{subject:?} has spaces; use the account ID (sub), not a name"
+        ));
+    }
+    if subject.contains('@') {
+        return Err(format!(
+            "{subject:?} is an email; use the account ID (sub), which never changes. `whoami` shows it"
+        ));
+    }
+    Ok(())
+}
+
+/// `http://` to this machine's loopback only, where no network carries the traffic.
+fn loopback_http(url: &str) -> bool {
+    let Ok(uri) = url.parse::<http::Uri>() else {
+        return false;
+    };
+    uri.scheme_str() == Some("http")
+        && uri.authority().is_some_and(|a| !a.as_str().contains('@'))
+        && matches!(
+            uri.host(),
+            Some("127.0.0.1" | "localhost" | "[::1]" | "::1")
+        )
 }
 
 pub(crate) fn valid_name(name: &str) -> bool {
@@ -284,5 +374,91 @@ mod tests {
         let mut plain = oidc.clone();
         plain["auth"]["issuer"] = serde_json::json!("http://id.example");
         assert_eq!(parse(&plain).unwrap_err().code, "invalid_config");
+    }
+
+    fn nomen() -> serde_json::Value {
+        let mut config = good();
+        config["auth"] = serde_json::json!({
+            "mode": "nomen",
+            "issuer": "https://id.shippin.cloud",
+            "audiences": ["300000000000000500"],
+            "key_file": TOKENS,
+        });
+        config["owner"] = serde_json::json!("300000000000000001");
+        config["brokers"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({ "name": "gold-host", "link": true }));
+        config
+    }
+
+    #[test]
+    fn nomen_sign_in_needs_an_owner_who_reaches_every_broker() {
+        let config = parse(&nomen()).unwrap();
+        assert!(config.is_owner("300000000000000001"));
+        let owned: Vec<_> = config
+            .brokers_for("300000000000000001")
+            .iter()
+            .map(|b| b.name.as_str())
+            .collect();
+        assert_eq!(owned, ["gold-ws", "gold-host"]);
+        assert_eq!(config.brokers_for("jesse").len(), 1);
+        assert!(!config.is_owner("jesse"));
+
+        let mut ownerless = nomen();
+        ownerless.as_object_mut().unwrap().remove("owner");
+        assert_eq!(parse(&ownerless).unwrap_err().code, "invalid_config");
+
+        let mut no_key = nomen();
+        no_key["auth"]["key_file"] = serde_json::json!("hub-key.json");
+        assert_eq!(parse(&no_key).unwrap_err().code, "invalid_config");
+
+        let mut no_aud = nomen();
+        no_aud["auth"]["audiences"] = serde_json::json!([" "]);
+        assert_eq!(parse(&no_aud).unwrap_err().code, "invalid_config");
+    }
+
+    #[test]
+    fn an_email_or_a_name_is_never_an_identity() {
+        let mut email_owner = nomen();
+        email_owner["owner"] = serde_json::json!("jessay@gmail.com");
+        let error = parse(&email_owner).unwrap_err();
+        assert_eq!(error.code, "invalid_config");
+        assert!(error.message.contains("account ID"), "{}", error.message);
+
+        let mut email_grant = good();
+        email_grant["grants"][0]["subject"] = serde_json::json!("jessay@gmail.com");
+        assert_eq!(parse(&email_grant).unwrap_err().code, "invalid_config");
+
+        let mut name_grant = good();
+        name_grant["grants"][0]["subject"] = serde_json::json!("Pat Smith");
+        assert_eq!(parse(&name_grant).unwrap_err().code, "invalid_config");
+    }
+
+    #[test]
+    fn plain_http_issuers_only_on_loopback() {
+        for issuer in [
+            "http://127.0.0.1:9999",
+            "http://localhost:1",
+            "http://[::1]:2",
+        ] {
+            let mut local = nomen();
+            local["auth"]["issuer"] = serde_json::json!(issuer);
+            assert!(parse(&local).is_ok(), "{issuer}");
+        }
+        for issuer in [
+            "http://id.shippin.cloud",
+            "http://127.0.0.1.evil.example",
+            "http://user@127.0.0.1:1",
+            "ftp://127.0.0.1",
+        ] {
+            let mut remote = nomen();
+            remote["auth"]["issuer"] = serde_json::json!(issuer);
+            assert_eq!(
+                parse(&remote).unwrap_err().code,
+                "invalid_config",
+                "{issuer}"
+            );
+        }
     }
 }
