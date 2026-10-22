@@ -18,12 +18,20 @@ use crate::{
     audit::{Audit, AuditEntry},
     auth::Subject,
     config::HubConfig,
+    link::Links,
 };
 
 #[derive(Clone)]
 pub struct Hub {
     pub config: Arc<HubConfig>,
     pub audit: Arc<Audit>,
+    pub links: Arc<Links>,
+}
+
+/// Where a granted broker lives: on this host, or behind a machine's link.
+enum Route {
+    Local(PathBuf),
+    Link(String),
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -69,10 +77,13 @@ impl Hub {
             })
     }
 
-    fn route(&self, subject: &Subject, broker: &str) -> Result<PathBuf, Json<BridgeError>> {
+    fn route(&self, subject: &Subject, broker: &str) -> Result<Route, Json<BridgeError>> {
         let allowed = self.config.brokers_for(&subject.id);
         match allowed.iter().find(|b| b.name == broker) {
-            Some(entry) => Ok(PathBuf::from(&entry.socket)),
+            Some(entry) => Ok(match &entry.socket {
+                Some(socket) => Route::Local(PathBuf::from(socket)),
+                None => Route::Link(entry.name.clone()),
+            }),
             None if self.config.broker(broker).is_none() => Err(Json(BridgeError::new(
                 "unknown_broker",
                 format!("no broker named {broker:?} is enrolled"),
@@ -101,14 +112,20 @@ impl Hub {
             _ => String::new(),
         };
         let result = match self.route(&subject, broker) {
-            Ok(socket) => {
+            Ok(route) => {
+                let response = async {
+                    match route {
+                        Route::Local(socket) => devagotchi_ipc::request(&socket, body).await,
+                        Route::Link(device) => self.links.call(&device, body).await,
+                    }
+                };
                 tokio::select! {
                     biased;
                     _ = context.ct.cancelled() => Err(Json(BridgeError::new(
                         "request_cancelled",
                         "stopped waiting for the broker response; admitted operations are not cancelled",
                     ))),
-                    response = devagotchi_ipc::request(&socket, body) => response.map_err(Json),
+                    response = response => response.map_err(Json),
                 }
             }
             Err(error) => Err(error),

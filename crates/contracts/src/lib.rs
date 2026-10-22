@@ -194,3 +194,49 @@ pub enum WireResponse {
     Ok(ResponseBody),
     Error(BridgeError),
 }
+
+/// The machine link (plan N20): a broker on another machine is reached through one
+/// outbound WebSocket that its `devagotchi-link` holds open to the hub. These frames
+/// are the whole protocol. A `call` carries exactly one broker request, so the
+/// broker's own validation and executable grants still decide what runs.
+pub const LINK_PROTOCOL_VERSION: u32 = 1;
+/// Largest WebSocket message either side accepts.
+pub const MAX_LINK_MESSAGE_BYTES: usize = 1024 * 1024;
+
+/// Hub to device.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum HubFrame {
+    /// The first frame on every connection. The device answers with a signed `hello`.
+    Challenge { nonce: String, hub: String },
+    Welcome { device: String },
+    Refused { code: String, message: String },
+    Call { id: u64, request: WireRequest },
+}
+
+/// Device to hub.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum LinkFrame {
+    /// Proves the device key over the challenge. `enroll_code` is present only on the
+    /// first connection, when the hub binds this key to the device name.
+    Hello {
+        version: u32,
+        device: String,
+        /// Ed25519 public key, 32 bytes, hex.
+        public_key: String,
+        /// Ed25519 signature over `link_signing_message`, 64 bytes, hex.
+        signature: String,
+        #[serde(default)]
+        enroll_code: Option<String>,
+    },
+    Result { id: u64, response: WireResponse },
+    Heartbeat,
+}
+
+/// The exact bytes a device signs: protocol, the hub's public URL, the device name and
+/// the hub's nonce, so a signature cannot be replayed to another hub, as another
+/// device, or on another connection.
+pub fn link_signing_message(hub: &str, device: &str, nonce: &str) -> Vec<u8> {
+    format!("devagotchi-link/{LINK_PROTOCOL_VERSION}\n{hub}\n{device}\n{nonce}").into_bytes()
+}

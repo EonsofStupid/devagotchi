@@ -25,16 +25,35 @@ devagotchi-hub --state-dir ~/.local/state/devagotchi-hub --config ~/.config/deva
   "listen": "127.0.0.1:8787",
   "public_url": "https://hub.shippin.cloud",
   "auth": { "mode": "oidc", "issuer": "https://id.shippin.cloud", "audiences": ["<hub client or project id>"] },
-  "brokers": [ { "name": "gold-ws", "socket": "/home/dev/.local/state/devagotchi/broker.sock" } ],
-  "grants": [ { "subject": "<Nomen sub>", "brokers": ["gold-ws"] } ]
+  "brokers": [
+    { "name": "gold-ws", "socket": "/home/dev/.local/state/devagotchi/broker.sock" },
+    { "name": "gus", "link": true }
+  ],
+  "grants": [ { "subject": "<Nomen sub>", "brokers": ["gold-ws", "gus"] } ]
 }
 ```
 
 Unknown fields and unsafe values fail closed. The hub speaks plain HTTP; the edge (Caddy)
-terminates TLS at `public_url`, which is also the RFC 9728 resource identifier. The hub
-must run as the same OS user as each local broker it routes to: the IPC refuses sockets
-owned by anyone else, by design. Brokers on other machines arrive with the mesh (M1) behind
-the same names.
+terminates TLS at `public_url`, which is also the RFC 9728 resource identifier. A broker is
+either local (`socket`: the hub must run as the same OS user, since the IPC refuses
+endpoints owned by anyone else) or linked (`"link": true`: a machine that dials out to `/link`).
+
+## Machines on the link
+
+A broker on another machine (gus, dabo, a server) is reached through
+[`devagotchi-link`](../link/README.md), which holds one outbound WebSocket to `/link`. No port
+opens on the machine. The device proves its enrolled Ed25519 key over a fresh challenge;
+the hub then sends one call per routed request and waits up to 30 s for the answer.
+
+```bash
+devagotchi-hub enroll  --state-dir DIR --device gus   # one-time code, 15 minutes, stdout only
+devagotchi-hub revoke  --state-dir DIR --device gus   # link closes within 2 s
+devagotchi-hub devices --state-dir DIR                # enrolled machines, JSON
+```
+
+A linked broker that is not connected answers `broker_offline`; one that never enrolled,
+`not_enrolled`; a revoked one, `device_revoked`. `/healthz` reports each linked broker as
+`connected` without counting an asleep laptop against the hub's own health.
 
 ## Authentication
 
@@ -71,5 +90,6 @@ walks the surface end to end against a live broker and exits 0 only when every s
 
 ## Not in H1
 
-Remote brokers (M1 mesh), introspection for opaque tokens, a web UI, the agent-hub board
-(H3), harness profiles (H4), the bundle (H5).
+Trusting calls relayed by the Shippin front door (N19, D2), installer autostart for the
+link, introspection for opaque tokens, a web UI, the agent-hub board (H3), harness
+profiles (H4), the bundle (H5).

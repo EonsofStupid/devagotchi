@@ -5,7 +5,9 @@
 mod audit;
 mod auth;
 mod config;
+mod devices;
 mod hub;
+mod link;
 
 use std::{
     env, ffi::OsString, net::SocketAddr, path::PathBuf, process::ExitCode, sync::Arc,
@@ -14,7 +16,7 @@ use std::{
 
 use axum::{
     Router,
-    extract::{Request, State},
+    extract::{Request, State, ws::WebSocketUpgrade},
     http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -29,10 +31,21 @@ use crate::{
     audit::Audit,
     auth::{AuthError, Verifier},
     config::HubConfig,
+    devices::Devices,
     hub::Hub,
+    link::Links,
 };
 
-const USAGE: &str = "Usage: devagotchi-hub --state-dir ABS_PATH --config ABS_JSON\n\nStarts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\noperation_start/get/read/cancel to enrolled brokers by name, with whoami, /healthz and\nRFC 9728 protected-resource metadata. Put it behind the edge for TLS.";
+const USAGE: &str = "Usage:\n  devagotchi-hub --state-dir ABS_PATH --config ABS_JSON\n  devagotchi-hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi-hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi-hub devices --state-dir ABS_PATH\n\nStarts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\noperation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' devagotchi-link connects out.\nPut it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.";
+
+#[derive(Debug, PartialEq, Eq)]
+enum Command {
+    Help,
+    Serve { state: PathBuf, config: PathBuf },
+    Enroll { state: PathBuf, device: String },
+    Revoke { state: PathBuf, device: String },
+    Devices { state: PathBuf },
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -40,14 +53,20 @@ struct AppState {
     hub: Hub,
 }
 
-fn parse_args(
-    args: impl IntoIterator<Item = OsString>,
-) -> BridgeResult<Option<(PathBuf, PathBuf)>> {
-    let args: Vec<OsString> = args.into_iter().collect();
+fn parse_args(args: impl IntoIterator<Item = OsString>) -> BridgeResult<Command> {
+    let mut args: Vec<OsString> = args.into_iter().collect();
     if args.len() == 1 && args[0] == "--help" {
-        return Ok(None);
+        return Ok(Command::Help);
     }
-    let (mut state, mut config) = (None, None);
+    let verb = match args.first().and_then(|a| a.to_str()) {
+        Some(v @ ("enroll" | "revoke" | "devices")) => {
+            let v = v.to_string();
+            args.remove(0);
+            Some(v)
+        }
+        _ => None,
+    };
+    let (mut state, mut config, mut device) = (None, None, None);
     let mut iter = args.into_iter();
     while let Some(flag) = iter.next() {
         let value = iter
@@ -55,33 +74,102 @@ fn parse_args(
             .ok_or_else(|| BridgeError::new("invalid_cli", "flag without a value"))?;
         match flag.to_str() {
             Some("--state-dir") if state.is_none() => state = Some(PathBuf::from(value)),
-            Some("--config") if config.is_none() => config = Some(PathBuf::from(value)),
-            _ => {
+            Some("--config") if config.is_none() && verb.is_none() => {
+                config = Some(PathBuf::from(value))
+            }
+            Some("--device") if device.is_none() && verb.is_some() => {
+                device = Some(value.to_string_lossy().into_owned())
+            }
+            _ => return Err(BridgeError::new("invalid_cli", "unexpected flag")),
+        }
+    }
+    let state = state
+        .filter(|s| s.is_absolute())
+        .ok_or_else(|| BridgeError::new("invalid_cli", "--state-dir ABS_PATH is required"))?;
+    match (verb.as_deref(), config, device) {
+        (None, Some(config), None) if config.is_absolute() => Ok(Command::Serve { state, config }),
+        (Some("enroll"), None, Some(device)) => Ok(Command::Enroll { state, device }),
+        (Some("revoke"), None, Some(device)) => Ok(Command::Revoke { state, device }),
+        (Some("devices"), None, None) => Ok(Command::Devices { state }),
+        _ => Err(BridgeError::new(
+            "invalid_cli",
+            "see --help for the accepted forms",
+        )),
+    }
+}
+
+fn prepare_state_dir(state_dir: &std::path::Path) -> BridgeResult<()> {
+    std::fs::create_dir_all(state_dir)
+        .map_err(|error| BridgeError::new("state_dir", error.to_string()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(state_dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| BridgeError::new("state_dir", error.to_string()))?;
+    }
+    Ok(())
+}
+
+fn devices_at(state_dir: &std::path::Path) -> BridgeResult<Devices> {
+    prepare_state_dir(state_dir)?;
+    Devices::open(&state_dir.join("devices.sqlite3"))
+}
+
+fn manage(command: Command) -> BridgeResult<()> {
+    match command {
+        Command::Enroll { state, device } => {
+            if !config::valid_name(&device) {
                 return Err(BridgeError::new(
                     "invalid_cli",
-                    "expected --state-dir ABS_PATH --config ABS_JSON",
+                    "device must be [a-z0-9][a-z0-9-]{0,62}, the broker name in the hub config",
+                ));
+            }
+            let code = devices_at(&state)?.issue_code(&device, link::random::<16>())?;
+            // The code is the one secret this prints; it goes to stdout only, once.
+            println!("{code}");
+            eprintln!(
+                "One-time code for {device}, valid {} minutes. On that machine:\n  devagotchi-link enroll --code <code> ...",
+                devices::CODE_TTL_SECS / 60
+            );
+        }
+        Command::Revoke { state, device } => {
+            if devices_at(&state)?.revoke(&device)? {
+                eprintln!("{device} revoked; its link closes within seconds");
+            } else {
+                return Err(BridgeError::new(
+                    "not_enrolled",
+                    format!("no active device named {device}"),
                 ));
             }
         }
-    }
-    match (state, config) {
-        (Some(state), Some(config)) if state.is_absolute() && config.is_absolute() => {
-            Ok(Some((state, config)))
+        Command::Devices { state } => {
+            let list = devices_at(&state)?.list()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&list).unwrap_or_default()
+            );
         }
-        _ => Err(BridgeError::new(
-            "invalid_cli",
-            "both --state-dir and --config are required and must be absolute",
-        )),
+        Command::Help | Command::Serve { .. } => unreachable!(),
     }
+    Ok(())
 }
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let (state_dir, config_path) = match parse_args(env::args_os().skip(1)) {
-        Ok(Some(paths)) => paths,
-        Ok(None) => {
+        Ok(Command::Serve { state, config }) => (state, config),
+        Ok(Command::Help) => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
+        }
+        Ok(command) => {
+            return match manage(command) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => {
+                    eprintln!("devagotchi-hub: {error}");
+                    ExitCode::FAILURE
+                }
+            };
         }
         Err(error) => {
             eprintln!("devagotchi-hub: {error}\n\n{USAGE}");
@@ -105,15 +193,9 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         )
     })?;
     let config = Arc::new(HubConfig::parse(&text)?);
-    std::fs::create_dir_all(&state_dir)
-        .map_err(|error| BridgeError::new("state_dir", error.to_string()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700))
-            .map_err(|error| BridgeError::new("state_dir", error.to_string()))?;
-    }
+    let devices = Arc::new(devices_at(&state_dir)?);
     let audit = Arc::new(Audit::open(&state_dir.join("audit.sqlite3"))?);
+    let links = Arc::new(Links::new(config.clone(), devices, audit.clone()));
     let verifier = Arc::new(Verifier::from_config(&config.auth).await?);
     let listen: SocketAddr = config
         .listen
@@ -124,6 +206,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         hub: Hub {
             config: config.clone(),
             audit,
+            links,
         },
     };
 
@@ -154,6 +237,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
 
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route("/link", get(link_upgrade))
         .route(
             "/.well-known/oauth-protected-resource",
             get(protected_resource),
@@ -263,13 +347,32 @@ async fn protected_resource(State(state): State<AppState>) -> Response {
     axum::Json(body).into_response()
 }
 
+/// Machines dial in here; the device proves its key inside the socket, not with a bearer.
+async fn link_upgrade(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
+    let links = state.hub.links.clone();
+    upgrade
+        .max_message_size(devagotchi_contracts::MAX_LINK_MESSAGE_BYTES)
+        .max_frame_size(devagotchi_contracts::MAX_LINK_MESSAGE_BYTES)
+        .on_upgrade(move |socket| links.serve(socket))
+}
+
 async fn healthz(State(state): State<AppState>) -> Response {
     let mut brokers = Vec::new();
     let mut all_up = true;
     for broker in &state.hub.config.brokers {
-        let reachable = reachable(&broker.socket).await;
-        all_up &= reachable;
-        brokers.push(serde_json::json!({ "name": broker.name, "reachable": reachable }));
+        match &broker.socket {
+            Some(socket) => {
+                let reachable = reachable(socket).await;
+                all_up &= reachable;
+                brokers.push(serde_json::json!({ "name": broker.name, "reachable": reachable }));
+            }
+            // A laptop that is asleep does not make the hub unhealthy; it is reported.
+            None => brokers.push(serde_json::json!({
+                "name": broker.name,
+                "link": true,
+                "connected": state.hub.links.connected(&broker.name),
+            })),
+        }
     }
     let audit = state.hub.audit.verify();
     let chain_ok = audit.as_ref().map(|status| status.ok).unwrap_or(false);
@@ -320,9 +423,41 @@ mod tests {
     fn cli_requires_both_absolute_paths() {
         let ok =
             parse_args(["--state-dir", STATE, "--config", CONFIG].map(OsString::from)).unwrap();
-        assert_eq!(ok, Some((PathBuf::from(STATE), PathBuf::from(CONFIG))));
+        assert_eq!(
+            ok,
+            Command::Serve {
+                state: PathBuf::from(STATE),
+                config: PathBuf::from(CONFIG)
+            }
+        );
         assert!(parse_args(["--config", CONFIG].map(OsString::from)).is_err());
         assert!(parse_args(["--state-dir", "s", "--config", CONFIG].map(OsString::from)).is_err());
-        assert_eq!(parse_args(["--help"].map(OsString::from)).unwrap(), None);
+        assert_eq!(
+            parse_args(["--help"].map(OsString::from)).unwrap(),
+            Command::Help
+        );
+    }
+
+    #[test]
+    fn device_commands_take_a_state_dir_and_a_device() {
+        let enroll =
+            parse_args(["enroll", "--state-dir", STATE, "--device", "gus"].map(OsString::from))
+                .unwrap();
+        assert_eq!(
+            enroll,
+            Command::Enroll {
+                state: PathBuf::from(STATE),
+                device: "gus".into()
+            }
+        );
+        assert!(matches!(
+            parse_args(["devices", "--state-dir", STATE].map(OsString::from)).unwrap(),
+            Command::Devices { .. }
+        ));
+        assert!(parse_args(["enroll", "--state-dir", STATE].map(OsString::from)).is_err());
+        assert!(
+            parse_args(["revoke", "--state-dir", STATE, "--config", CONFIG].map(OsString::from))
+                .is_err()
+        );
     }
 }

@@ -1,0 +1,38 @@
+[package]
+name = "devagotchi-link"
+description = "The machine side of the link: holds one outbound WebSocket to a Devagotchi hub and hands each routed request to the broker on this machine over local IPC"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "devagotchi-link"
+path = "src/main.rs"
+
+[dependencies]
+devagotchi-contracts = { workspace = true }
+devagotchi-ipc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+hex = { workspace = true }
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+getrandom = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+# Outbound WebSocket over TLS on 443, verified by the operating system's own trust store
+# (Windows certificate store, macOS keychain, Linux system roots): corporate roots work.
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+rustls-platform-verifier = "0.7"
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[package.metadata.dist]
+dist = true

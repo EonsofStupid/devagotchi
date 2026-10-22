@@ -14,6 +14,7 @@ Cargo workspace: `crates/contracts` (wire types, schema exporter), `crates/ipc` 
 client, Unix-socket and named-pipe endpoints), `crates/core` (broker, journal, execution),
 `crates/broker` and `crates/mcp` (the two binaries, still named `bridge-broker` and `bridge-mcp`),
 `crates/hub` (`devagotchi-hub`, the bastion: authenticated HTTP MCP routed to brokers by name),
+`crates/link` (`devagotchi-link`, a machine's outbound link to the hub; no inbound port),
 `deploy/` (`devspace/`, `shippin/`, `windows/` installers), `apps/desktop` (Tauri 2 + React inspector, not a default member), `apps/website`, `tests/`
 (Python harnesses), `verification/` (recorded receipts), `schemas/` (generated).
 
@@ -22,7 +23,7 @@ client, Unix-socket and named-pipe endpoints), `crates/core` (broker, journal, e
 ```bash
 cargo build --locked --bins
 cargo nextest run --locked                         # every test binary, hub included
-python3 tests/e2e.py --bin-dir target/debug        # broker, stdio adapter and hub end to end
+python3 tests/e2e.py --bin-dir target/debug        # broker, stdio adapter, hub and link end to end
 cargo deny --all-features check                    # advisories, licenses, sources, no-network bans
 python3 tests/security_boundary.py --broker "$PWD/target/debug/bridge-broker"
 python3 tests/mcp_protocol.py --adapter "$PWD/target/debug/bridge-mcp" --socket /tmp/unused.sock
@@ -46,6 +47,7 @@ merges only when all of it is green. `docs/security-baseline.md` is the checklis
   never hand-edit `schemas/` or `apps/desktop/src/generated/`.
 - Decisions: a resolved register row becomes `docs/adr/NNNN-*.md` through Jesse's ADR component.
   An ADR not saved through it is not canon. Do not re-open LOCKED or COMMITTED rows.
-- No network calls from `core` or `mcp`, ever; `deny.toml` bans HTTP client crates.
+- No network calls from `core` or `mcp`, ever; `deny.toml` bans HTTP client crates. Only
+  `hub` (identity provider, `/link`) and `link` (its one outbound WebSocket) touch the network.
 - On Jesse's Windows machines write to `D:`, never `C:`.
 - Commits end with the `Co-Authored-By` and `Claude-Session` trailers the session provides.
