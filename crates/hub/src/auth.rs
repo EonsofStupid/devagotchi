@@ -41,9 +41,10 @@ impl Verifier {
             AuthConfig::Nomen {
                 issuer,
                 audiences,
+                clients,
                 key_file,
             } => Ok(Verifier::Nomen(NomenVerifier::new(
-                issuer, audiences, key_file,
+                issuer, audiences, clients, key_file,
             )?)),
             AuthConfig::Oidc { issuer, audiences } => Ok(Verifier::Oidc(
                 OidcVerifier::discover(issuer, audiences).await?,

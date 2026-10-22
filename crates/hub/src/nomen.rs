@@ -4,13 +4,19 @@
 //! only Nomen can read. The hub asks Nomen about each one (token introspection, RFC 7662),
 //! signing in as its own API application with a private-key JWT. Nomen answers `active`
 //! only when the token is live and the hub's application is in its audience; the hub
-//! then re-checks issuer, audience, expiry and subject itself, so a misconfigured Nomen
-//! cannot widen what the hub accepts.
+//! then re-checks issuer, audience, client, expiry and subject itself, so a misconfigured
+//! Nomen cannot widen what the hub accepts.
+//!
+//! Any application in Nomen can ask for the hub's audience, and a person signed in to
+//! Nomen can be handed a token by any of them without typing anything. So the audience
+//! says only that a token may be shown to the hub; the hub also requires that it was
+//! issued to one of its configured clients, and grants match the account ID exactly.
 //!
 //! Lessons from running Shippin, built in here:
 //! - Nomen's answer about a token ("inactive", "another project's token") is reused for
 //!   a minute; failing to reach Nomen never is, and it surfaces as `issuer_unavailable`,
 //!   never as a refusal, so an outage cannot look like lost access.
+//! - A flood of unknown tokens can delay new sign-ins, but never evicts a confirmed one.
 //! - The hub starts without contacting Nomen, so its local commands and machine links
 //!   keep working while Nomen is down.
 //! - Redirects are not followed: the token and the hub's credential go to the issuer only.
@@ -27,10 +33,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::Semaphore;
 
-use crate::auth::{AuthError, Subject, read_private};
+use crate::{
+    auth::{AuthError, Subject, read_private},
+    config::valid_subject,
+};
 
-/// How long Nomen's answer about one token is reused. Signing out of Nomen reaches
-/// the hub within this window.
+/// How long Nomen's answer about one token is reused, counted from when the hub asked.
+/// Signing out of Nomen reaches the hub within this window.
 const CACHE_TTL: Duration = Duration::from_secs(60);
 const CACHE_MAX: usize = 4096;
 /// Introspection calls in flight at once; later callers wait, then get `issuer_unavailable`.
@@ -38,6 +47,10 @@ const MAX_IN_FLIGHT: usize = 16;
 const QUEUE_WAIT: Duration = Duration::from_secs(5);
 const MAX_ANSWER_BYTES: usize = 64 * 1024;
 const ASSERTION_LIFETIME_SECS: u64 = 300;
+/// One signed assertion serves every introspection for this long.
+const ASSERTION_REUSE_SECS: u64 = 60;
+/// `iat` is backdated this much, so a hub clock slightly ahead of Nomen's still signs in.
+const ASSERTION_BACKDATE_SECS: u64 = 5;
 const LEEWAY_SECS: u64 = 30;
 const JWT_BEARER: &str = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer";
 
@@ -60,6 +73,8 @@ struct Introspection {
     iss: Option<String>,
     #[serde(default)]
     aud: Option<Audience>,
+    #[serde(default)]
+    client_id: Option<String>,
     #[serde(default)]
     exp: Option<u64>,
     #[serde(default)]
@@ -84,6 +99,13 @@ impl Audience {
     }
 }
 
+/// What the hub accepts, as configured.
+struct Accepts {
+    issuer: String,
+    audiences: Vec<String>,
+    clients: Vec<String>,
+}
+
 #[derive(Serialize)]
 struct AssertionClaims<'a> {
     iss: &'a str,
@@ -95,28 +117,41 @@ struct AssertionClaims<'a> {
 
 struct Remembered {
     outcome: Result<Subject, &'static str>,
+    /// When the hub asked Nomen; a later answer never yields to an earlier one.
+    asked: Instant,
     until: Instant,
 }
 
 pub struct NomenVerifier {
-    issuer: String,
-    audiences: Vec<String>,
+    accepts: Accepts,
     endpoint: String,
     client_id: String,
     key_id: String,
     key: EncodingKey,
     http: reqwest::Client,
+    assertion: Mutex<Option<(String, u64)>>,
     cache: Mutex<HashMap<[u8; 32], Remembered>>,
     in_flight: Semaphore,
 }
 
 impl NomenVerifier {
     /// Load the hub's API application key. Nomen is not contacted until the first sign-in.
-    pub fn new(issuer: &str, audiences: &[String], key_file: &str) -> BridgeResult<Self> {
-        Self::from_key(issuer, audiences, &read_private(key_file, "auth.key_file")?)
+    pub fn new(
+        issuer: &str,
+        audiences: &[String],
+        clients: &[String],
+        key_file: &str,
+    ) -> BridgeResult<Self> {
+        let key = read_private(key_file, "auth.key_file")?;
+        Self::from_key(issuer, audiences, clients, &key)
     }
 
-    fn from_key(issuer: &str, audiences: &[String], key_json: &str) -> BridgeResult<Self> {
+    fn from_key(
+        issuer: &str,
+        audiences: &[String],
+        clients: &[String],
+        key_json: &str,
+    ) -> BridgeResult<Self> {
         // Errors describe the file, never its contents: it holds a private key.
         let invalid =
             |message: &str| BridgeError::new("invalid_config", format!("auth.key_file: {message}"));
@@ -141,24 +176,28 @@ impl NomenVerifier {
         let issuer = issuer.trim_end_matches('/').to_string();
         let verifier = Self {
             endpoint: format!("{issuer}/oauth/v2/introspect"),
-            issuer,
-            audiences: audiences.to_vec(),
+            accepts: Accepts {
+                issuer,
+                audiences: audiences.to_vec(),
+                clients: clients.to_vec(),
+            },
             client_id: key.client_id,
             key_id: key.key_id,
             key: encoding,
             http,
+            assertion: Mutex::new(None),
             cache: Mutex::new(HashMap::new()),
             in_flight: Semaphore::new(MAX_IN_FLIGHT),
         };
         // Sign once now: a key that cannot sign stops the hub at start, not at sign-in.
         verifier
-            .assertion()
+            .sign_assertion(unix_now())
             .map_err(|_| invalid("the key cannot sign (RSA, 2048 bits or more)"))?;
         Ok(verifier)
     }
 
     pub fn issuer(&self) -> &str {
-        &self.issuer
+        &self.accepts.issuer
     }
 
     pub async fn verify(&self, token: &str) -> Result<Subject, AuthError> {
@@ -179,14 +218,15 @@ impl NomenVerifier {
         if let Some(outcome) = self.recall(&digest) {
             return outcome.map_err(AuthError::Invalid);
         }
+        let asked = Instant::now();
         let answer = self.introspect(token).await?;
         let now = unix_now();
-        let outcome = assess(&answer, &self.issuer, &self.audiences, now);
+        let outcome = assess(&answer, &self.accepts, now);
         let ttl = match (&outcome, answer.exp) {
             (Ok(_), Some(exp)) => CACHE_TTL.min(Duration::from_secs(exp.saturating_sub(now))),
             _ => CACHE_TTL,
         };
-        self.remember(digest, outcome.clone(), ttl);
+        self.remember(digest, outcome.clone(), asked, ttl);
         outcome.map_err(AuthError::Invalid)
     }
 
@@ -194,7 +234,7 @@ impl NomenVerifier {
         let assertion = self.assertion().map_err(|_| {
             AuthError::Unavailable("could not sign the hub's client assertion".into())
         })?;
-        let response = self
+        let mut response = self
             .http
             .post(&self.endpoint)
             .form(&[
@@ -216,30 +256,54 @@ impl NomenVerifier {
                 "Nomen introspection answered {status}"
             )));
         }
-        let body = response
-            .bytes()
+        let too_large =
+            || AuthError::Unavailable("Nomen's introspection answer is too large".into());
+        if response
+            .content_length()
+            .is_some_and(|length| length > MAX_ANSWER_BYTES as u64)
+        {
+            return Err(too_large());
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
             .await
-            .map_err(|error| AuthError::Unavailable(format!("Nomen introspection: {error}")))?;
-        if body.len() > MAX_ANSWER_BYTES {
-            return Err(AuthError::Unavailable(
-                "Nomen's introspection answer is too large".into(),
-            ));
+            .map_err(|error| AuthError::Unavailable(format!("Nomen introspection: {error}")))?
+        {
+            if body.len() + chunk.len() > MAX_ANSWER_BYTES {
+                return Err(too_large());
+            }
+            body.extend_from_slice(&chunk);
         }
         serde_json::from_slice(&body).map_err(|_| {
             AuthError::Unavailable("Nomen's introspection answer is not JSON the hub reads".into())
         })
     }
 
-    /// The private-key JWT that proves to Nomen this request comes from the hub.
+    /// The private-key JWT that proves to Nomen a request comes from the hub, reused for a
+    /// minute so a stream of unknown tokens does not cost an RSA signature each.
     fn assertion(&self) -> jsonwebtoken::errors::Result<String> {
         let now = unix_now();
+        let mut current = self.assertion.lock().expect("assertion lock");
+        if let Some((assertion, minted)) = current.as_ref()
+            && now.saturating_sub(*minted) < ASSERTION_REUSE_SECS
+            && *minted <= now
+        {
+            return Ok(assertion.clone());
+        }
+        let assertion = self.sign_assertion(now)?;
+        *current = Some((assertion.clone(), now));
+        Ok(assertion)
+    }
+
+    fn sign_assertion(&self, now: u64) -> jsonwebtoken::errors::Result<String> {
         let mut header = Header::new(Algorithm::RS256);
         header.kid = Some(self.key_id.clone());
         let claims = AssertionClaims {
             iss: &self.client_id,
             sub: &self.client_id,
-            aud: &self.issuer,
-            iat: now,
+            aud: &self.accepts.issuer,
+            iat: now.saturating_sub(ASSERTION_BACKDATE_SECS),
             exp: now + ASSERTION_LIFETIME_SECS,
         };
         jsonwebtoken::encode(&header, &claims, &self.key)
@@ -257,49 +321,67 @@ impl NomenVerifier {
         }
     }
 
-    fn remember(&self, digest: [u8; 32], outcome: Result<Subject, &'static str>, ttl: Duration) {
-        if ttl.is_zero() {
+    /// Keep Nomen's answer until `asked + ttl`. A full cache drops expired answers, then
+    /// refusals; a confirmed sign-in is never evicted to make room for anything.
+    fn remember(
+        &self,
+        digest: [u8; 32],
+        outcome: Result<Subject, &'static str>,
+        asked: Instant,
+        ttl: Duration,
+    ) {
+        let now = Instant::now();
+        let until = asked + ttl;
+        if until <= now {
             return;
         }
-        let now = Instant::now();
         let mut cache = self.cache.lock().expect("nomen cache lock");
-        if cache.len() >= CACHE_MAX {
+        if cache.get(&digest).is_some_and(|newer| newer.asked > asked) {
+            return;
+        }
+        if !cache.contains_key(&digest) && cache.len() >= CACHE_MAX {
             cache.retain(|_, entry| entry.until > now);
             if cache.len() >= CACHE_MAX {
-                cache.clear();
+                cache.retain(|_, entry| entry.outcome.is_ok());
+            }
+            if cache.len() >= CACHE_MAX {
+                return;
             }
         }
         cache.insert(
             digest,
             Remembered {
                 outcome,
-                until: now + ttl,
+                asked,
+                until,
             },
         );
     }
 }
 
 /// Decide from Nomen's answer alone; every refusal names its reason for the operator log.
-fn assess(
-    answer: &Introspection,
-    issuer: &str,
-    audiences: &[String],
-    now: u64,
-) -> Result<Subject, &'static str> {
+fn assess(answer: &Introspection, accepts: &Accepts, now: u64) -> Result<Subject, &'static str> {
     if !answer.active {
         return Err(
             "Nomen reports the token inactive: expired, signed out, or for another application",
         );
     }
-    if answer.iss.as_deref().map(|iss| iss.trim_end_matches('/')) != Some(issuer) {
+    if answer.iss.as_deref().map(|iss| iss.trim_end_matches('/')) != Some(&accepts.issuer) {
         return Err("the token's issuer is not this hub's Nomen");
     }
     if !answer
         .aud
         .as_ref()
-        .is_some_and(|aud| aud.names_any(audiences))
+        .is_some_and(|aud| aud.names_any(&accepts.audiences))
     {
         return Err("the token was issued for a Nomen project this hub does not accept");
+    }
+    if !answer
+        .client_id
+        .as_ref()
+        .is_some_and(|client| accepts.clients.contains(client))
+    {
+        return Err("the token was issued to an application this hub does not accept");
     }
     if !answer
         .exp
@@ -307,11 +389,12 @@ fn assess(
     {
         return Err("the token has expired");
     }
+    // Exactly as Nomen states it: grants match the account ID byte for byte, so a padded
+    // or otherwise odd ID is refused here rather than normalised into someone else's.
     let sub = answer
         .sub
         .as_deref()
-        .map(str::trim)
-        .filter(|sub| !sub.is_empty() && sub.len() <= 256 && !sub.contains('@'))
+        .filter(|sub| valid_subject(sub).is_ok())
         .ok_or("Nomen named no usable account ID (sub) for the token")?;
     let name = answer
         .username

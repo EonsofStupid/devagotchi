@@ -53,6 +53,11 @@ pub enum AuthConfig {
         /// only when the hub's application is in its audience; the hub also requires one
         /// of these ids in `aud`.
         audiences: Vec<String>,
+        /// Nomen client ids (applications) whose sign-ins the hub accepts, such as
+        /// mcp.shippin.cloud's and shippin-bridge's. Any application in Nomen can ask for the
+        /// hub's audience, and a person already signed in to Nomen can be handed a token by
+        /// any of them, so the hub also requires the token's `client_id` to be one of these.
+        clients: Vec<String>,
         /// Absolute path to the hub's API application key, the JSON file Nomen downloads
         /// (`type`, `keyId`, `key`, `clientId`). Owner-only (chmod 0600).
         key_file: String,
@@ -122,6 +127,7 @@ impl HubConfig {
             AuthConfig::Nomen {
                 issuer,
                 audiences,
+                clients,
                 key_file,
             } => {
                 if !issuer.starts_with("https://") && !loopback_http(issuer) {
@@ -133,6 +139,12 @@ impl HubConfig {
                 if audiences.is_empty() || audiences.iter().any(|a| a.trim().is_empty()) {
                     return Err(invalid(
                         "auth.audiences must name at least one Nomen project id".into(),
+                    ));
+                }
+                if clients.is_empty() || clients.iter().any(|c| c.trim().is_empty()) {
+                    return Err(invalid(
+                        "auth.clients must name the Nomen applications whose sign-ins the hub accepts"
+                            .into(),
                     ));
                 }
                 if !Path::new(key_file).is_absolute() {
@@ -237,7 +249,7 @@ impl HubConfig {
 /// A subject is the account ID the identity provider issues, which never changes. An
 /// email or a display name can be shared by two accounts or change hands (Shippin once
 /// had two active accounts with the same name), so neither is accepted where an ID belongs.
-fn valid_subject(subject: &str) -> Result<(), String> {
+pub(crate) fn valid_subject(subject: &str) -> Result<(), String> {
     if subject.is_empty() || subject.len() > 256 {
         return Err(format!("{subject:?} must be 1..=256 characters"));
     }
@@ -382,6 +394,7 @@ mod tests {
             "mode": "nomen",
             "issuer": "https://id.shippin.cloud",
             "audiences": ["300000000000000500"],
+            "clients": ["300000000000000600"],
             "key_file": TOKENS,
         });
         config["owner"] = serde_json::json!("300000000000000001");
@@ -416,6 +429,10 @@ mod tests {
         let mut no_aud = nomen();
         no_aud["auth"]["audiences"] = serde_json::json!([" "]);
         assert_eq!(parse(&no_aud).unwrap_err().code, "invalid_config");
+
+        let mut any_client = nomen();
+        any_client["auth"]["clients"] = serde_json::json!([]);
+        assert_eq!(parse(&any_client).unwrap_err().code, "invalid_config");
     }
 
     #[test]

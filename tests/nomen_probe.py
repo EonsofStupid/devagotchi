@@ -8,7 +8,8 @@ Starts tests/fake_nomen.py (which checks the hub's private-key JWT), then the hu
 `nomen` mode with an owner and one member grant, and checks: an email as owner stops
 the hub at start; the owner reaches every broker without a grant and runs a real
 operation (tests/hub_probe.py); a member reaches only its grant; tokens for another
-project, from another issuer, inactive, or naming an email are refused with 401; a Nomen
+project, from another issuer, issued to an application the hub does not accept,
+inactive, naming an email or a padded account ID are refused with 401; a Nomen
 outage answers 503 (never a refusal) while a session Nomen already confirmed keeps
 working, and sign-in recovers when Nomen does. Exit 0 only when every step holds.
 """
@@ -133,7 +134,8 @@ base = f"http://127.0.0.1:{port}"
 config = {
     "listen": f"127.0.0.1:{port}",
     "public_url": base,
-    "auth": {"mode": "nomen", "issuer": nomen.issuer, "audiences": [HUB_PROJECT], "key_file": str(key_file)},
+    "auth": {"mode": "nomen", "issuer": nomen.issuer, "audiences": [HUB_PROJECT], "clients": ["shippin-mcp"],
+             "key_file": str(key_file)},
     "owner": OWNER,
     "brokers": [{"name": "local", "socket": args.endpoint}, {"name": "elsewhere", "link": True}],
     "grants": [{"subject": MEMBER, "brokers": ["local"]}],
@@ -163,6 +165,8 @@ try:
         "tok-other-issuer": nomen.active(OWNER, [HUB_PROJECT], iss="https://id.elsewhere.example"),
         "tok-email-sub": nomen.active("jessay@example.test", [HUB_PROJECT]),
         "tok-expired": nomen.active(OWNER, [HUB_PROJECT], exp=int(time.time()) - 600),
+        "tok-tenant-app": nomen.active(OWNER, [HUB_PROJECT], client_id="tenant-app"),
+        "tok-padded-sub": nomen.active(" " + OWNER, [HUB_PROJECT]),
     })
 
     with urllib.request.urlopen(base + "/.well-known/oauth-protected-resource", timeout=10) as resp:
@@ -182,7 +186,8 @@ try:
     is_error, answer = member.tool("operation_get", {"broker": "elsewhere", "input": {"operation_id": "x"}})
     check("member refused outside its grant", is_error and answer.get("code") == "not_granted", json.dumps(answer))
 
-    for token in ("tok-other-project", "tok-other-issuer", "tok-email-sub", "tok-expired", "tok-never-issued"):
+    for token in ("tok-other-project", "tok-other-issuer", "tok-email-sub", "tok-expired", "tok-never-issued",
+                  "tok-tenant-app", "tok-padded-sub"):
         status, www, _ = whoami(base, token)
         check(f"{token} refused", status == 401 and 'error="invalid_token"' in www, f"HTTP {status} {www}")
 
