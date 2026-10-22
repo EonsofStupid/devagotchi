@@ -94,10 +94,11 @@ def run_probe(argv, label):
     return result.returncode == 0
 
 
-def run_cmd(argv, label, expect=0):
+def run_cmd(argv, label, expect=0, env=None):
     """Run a one-shot command; stderr echoed, stdout returned. True when it exits `expect`."""
     print(f"--- {label}", flush=True)
-    result = subprocess.run([str(a) for a in argv], capture_output=True, text=True, timeout=60)
+    result = subprocess.run([str(a) for a in argv], capture_output=True, text=True, timeout=60,
+                            env={**os.environ, **(env or {})}, stdin=subprocess.DEVNULL)
     for line in result.stderr.splitlines():
         print(f"  [{label}] {line}", flush=True)
     ok = result.returncode == expect
@@ -143,9 +144,11 @@ try:
     steps.append(run_probe(probe + ["--broker", "remote", "--expect-error", "not_enrolled"], "linked broker before enrollment"))
     enrolled, code = run_cmd([hub_bin, "enroll", "--state-dir", hub_state, "--device", "remote"], "hub enroll")
     steps.append(enrolled and code.startswith("dvg-"))
-    enroll = [link_bin, "enroll", "--hub", hub_url, "--device", "remote", "--broker", endpoint, "--code", code]
-    steps.append(run_cmd(enroll + ["--state-dir", link_state], "link enroll")[0])
-    steps.append(run_cmd(enroll + ["--state-dir", work / "second-machine"], "link enroll with a spent code", expect=2)[0])
+    # The code travels in the environment, never on a command line other users can read.
+    enroll = [link_bin, "enroll", "--hub", hub_url, "--device", "remote", "--broker", endpoint]
+    code_env = {"DEVAGOTCHI_ENROLL_CODE": code}
+    steps.append(run_cmd(enroll + ["--state-dir", link_state], "link enroll", env=code_env)[0])
+    steps.append(run_cmd(enroll + ["--state-dir", work / "second-machine"], "link enroll with a spent code", expect=2, env=code_env)[0])
     link, _ = start([str(link_bin), "run", "--state-dir", str(link_state)], "ready:", "link")
     steps.append(run_probe(probe + ["--broker", "remote"], "hub probe through the link"))
     link.terminate()

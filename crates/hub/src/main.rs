@@ -16,7 +16,7 @@ use std::{
 
 use axum::{
     Router,
-    extract::{Request, State, ws::WebSocketUpgrade},
+    extract::{ConnectInfo, Request, State, ws::WebSocketUpgrade},
     http::{HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -115,6 +115,28 @@ fn devices_at(state_dir: &std::path::Path) -> BridgeResult<Devices> {
     Devices::open(&state_dir.join("devices.sqlite3"))
 }
 
+/// Record an operator command on the hub's audit chain: who ran it and what it did.
+fn operator_event(
+    state: &std::path::Path,
+    tool: &str,
+    device: &str,
+    outcome: &str,
+) -> BridgeResult<()> {
+    let user = env::var("USER")
+        .or_else(|_| env::var("USERNAME"))
+        .unwrap_or_else(|_| "unknown".into());
+    let subject = format!("operator:{user}");
+    Audit::open(&state.join("audit.sqlite3"))?.record(&audit::AuditEntry {
+        subject: &subject,
+        via: "cli",
+        tool,
+        broker: device,
+        operation_id: "",
+        outcome,
+    })?;
+    Ok(())
+}
+
 fn manage(command: Command) -> BridgeResult<()> {
     match command {
         Command::Enroll { state, device } => {
@@ -125,21 +147,34 @@ fn manage(command: Command) -> BridgeResult<()> {
                 ));
             }
             let code = devices_at(&state)?.issue_code(&device, link::random::<16>())?;
+            // The code itself is never audited or logged; only that one was issued.
+            operator_event(&state, "link.code_issued", &device, "ok")?;
             // The code is the one secret this prints; it goes to stdout only, once.
             println!("{code}");
             eprintln!(
-                "One-time code for {device}, valid {} minutes. On that machine:\n  devagotchi-link enroll --code <code> ...",
+                "One-time code for {device}, valid {} minutes; any earlier unused code for {device} no longer works.\nOn that machine, with the code in DEVAGOTCHI_ENROLL_CODE (or on stdin):\n  devagotchi-link enroll --state-dir ... --hub ... --device {device} --broker ...",
                 devices::CODE_TTL_SECS / 60
             );
         }
         Command::Revoke { state, device } => {
-            if devices_at(&state)?.revoke(&device)? {
-                eprintln!("{device} revoked; its link closes within seconds");
-            } else {
-                return Err(BridgeError::new(
-                    "not_enrolled",
-                    format!("no active device named {device}"),
-                ));
+            let (revoked, cancelled) = devices_at(&state)?.revoke(&device)?;
+            operator_event(
+                &state,
+                "link.revoke",
+                &device,
+                &format!("revoked={revoked} codes_cancelled={cancelled}"),
+            )?;
+            match (revoked, cancelled) {
+                (false, 0) => {
+                    return Err(BridgeError::new(
+                        "not_enrolled",
+                        format!("no active device or pending code named {device}"),
+                    ));
+                }
+                (true, _) => eprintln!(
+                    "{device} revoked; its link closes within seconds ({cancelled} pending codes cancelled)"
+                ),
+                (false, _) => eprintln!("{cancelled} pending codes for {device} cancelled"),
             }
         }
         Command::Devices { state } => {
@@ -268,12 +303,15 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             config::AuthConfig::Dev { .. } => "dev tokens".to_string(),
         }
     );
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
-        .await
-        .map_err(|error| BridgeError::new("serve", error.to_string()))?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(async {
+        let _ = tokio::signal::ctrl_c().await;
+    })
+    .await
+    .map_err(|error| BridgeError::new("serve", error.to_string()))?;
     eprintln!("devagotchi-hub stopped");
     Ok(())
 }
@@ -348,12 +386,20 @@ async fn protected_resource(State(state): State<AppState>) -> Response {
 }
 
 /// Machines dial in here; the device proves its key inside the socket, not with a bearer.
-async fn link_upgrade(State(state): State<AppState>, upgrade: WebSocketUpgrade) -> Response {
+async fn link_upgrade(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    upgrade: WebSocketUpgrade,
+) -> Response {
     let links = state.hub.links.clone();
+    // Refuse at the door when too many handshakes are already in flight.
+    let Some(permit) = links.handshake_permit() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "too many link handshakes").into_response();
+    };
     upgrade
         .max_message_size(devagotchi_contracts::MAX_LINK_MESSAGE_BYTES)
         .max_frame_size(devagotchi_contracts::MAX_LINK_MESSAGE_BYTES)
-        .on_upgrade(move |socket| links.serve(socket))
+        .on_upgrade(move |socket| links.serve(socket, peer, permit))
 }
 
 async fn healthz(State(state): State<AppState>) -> Response {

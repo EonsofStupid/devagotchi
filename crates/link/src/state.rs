@@ -50,31 +50,35 @@ impl LinkConfig {
 }
 
 /// The WebSocket endpoint for a hub public URL: `https` becomes `wss`, plain `http` is
-/// accepted only for a loopback hub (tests, a hub on the same machine).
+/// accepted only for a loopback hub (tests, a hub on the same machine). The URL is parsed,
+/// never pattern-matched: userinfo, queries and fragments are refused, so a URL such as
+/// `http://localhost@evil.example` cannot pass for a loopback hub.
 pub fn endpoint(hub: &str) -> BridgeResult<String> {
-    let base = hub.trim_end_matches('/');
-    if let Some(rest) = base.strip_prefix("https://") {
-        if !rest.is_empty() {
-            return Ok(format!("wss://{rest}/link"));
+    let invalid = || BridgeError::new("invalid_cli", "hub must be the hub's https:// public URL");
+    let uri: http::Uri = hub.parse().map_err(|_| invalid())?;
+    let authority = uri.authority().ok_or_else(invalid)?;
+    if authority.as_str().contains('@') || uri.query().is_some() || hub.contains('#') {
+        return Err(invalid());
+    }
+    let host = authority
+        .host()
+        .trim_start_matches('[')
+        .trim_end_matches(']');
+    if host.is_empty() {
+        return Err(invalid());
+    }
+    let path = uri.path().trim_end_matches('/');
+    match uri.scheme_str() {
+        Some("https") => Ok(format!("wss://{authority}{path}/link")),
+        Some("http") if matches!(host, "127.0.0.1" | "localhost" | "::1") => {
+            Ok(format!("ws://{authority}{path}/link"))
         }
-    } else if let Some(rest) = base.strip_prefix("http://") {
-        let host = rest.split('/').next().unwrap_or_default();
-        let host = match host.strip_prefix('[') {
-            Some(v6) => v6.split(']').next().unwrap_or_default(),
-            None => host.split(':').next().unwrap_or_default(),
-        };
-        if matches!(host, "127.0.0.1" | "localhost" | "::1") {
-            return Ok(format!("ws://{rest}/link"));
-        }
-        return Err(BridgeError::new(
+        Some("http") => Err(BridgeError::new(
             "insecure_hub",
             "a remote hub must be https; plain http is allowed only on loopback",
-        ));
+        )),
+        _ => Err(invalid()),
     }
-    Err(BridgeError::new(
-        "invalid_cli",
-        "hub must be the hub's https:// public URL",
-    ))
 }
 
 /// Create the state directory private to the operator, or check an existing one is.
@@ -87,7 +91,7 @@ pub fn prepare(dir: &Path) -> BridgeResult<()> {
     }
     #[cfg(unix)]
     {
-        use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+        use std::os::unix::fs::DirBuilderExt;
         if !dir.exists() {
             std::fs::DirBuilder::new()
                 .recursive(true)
@@ -95,16 +99,9 @@ pub fn prepare(dir: &Path) -> BridgeResult<()> {
                 .create(dir)
                 .map_err(|e| state_error("create state dir", e))?;
         }
-        let metadata = std::fs::symlink_metadata(dir).map_err(|e| state_error("state dir", e))?;
-        if !metadata.is_dir()
-            || metadata.uid() != devagotchi_ipc::current_uid()
-            || metadata.mode() & 0o077 != 0
-        {
-            return Err(BridgeError::new(
-                "state_permissions",
-                "state dir must be a directory owned by you with mode 0700",
-            ));
-        }
+        // The broker's own rule: every ancestor a real directory owned by you or root and
+        // not writable by others, the directory itself yours with mode 0700.
+        devagotchi_ipc::validate_private_directory(dir)?;
     }
     #[cfg(windows)]
     {
@@ -116,6 +113,18 @@ pub fn prepare(dir: &Path) -> BridgeResult<()> {
             }
             security::create_private_directory(dir, &operator.user)
                 .map_err(|e| state_error("create state dir", e))?;
+        }
+        // No ancestor may be a symlink or junction someone could re-point.
+        for ancestor in dir.ancestors().skip(1) {
+            if std::fs::symlink_metadata(ancestor).is_ok_and(|m| m.file_type().is_symlink()) {
+                return Err(BridgeError::new(
+                    "state_permissions",
+                    format!(
+                        "{} is a link; the state dir must sit under real directories",
+                        ancestor.display()
+                    ),
+                ));
+            }
         }
         let entry = security::open_entry(dir).map_err(|e| state_error("state dir", e))?;
         if let Some(defect) = security::private_entry_defect(&entry, Entry::Directory, &operator)
@@ -167,8 +176,7 @@ pub fn device_key(dir: &Path) -> BridgeResult<SigningKey> {
         getrandom::fill(&mut seed).map_err(|e| state_error("random", e))?;
         write_private(&path, hex::encode(seed).as_bytes())?;
     }
-    check_private_file(&path)?;
-    let text = std::fs::read_to_string(&path).map_err(|e| state_error("device.key", e))?;
+    let text = read_private(&path)?;
     let seed: [u8; 32] = hex::decode(text.trim())
         .ok()
         .and_then(|b| b.try_into().ok())
@@ -199,11 +207,19 @@ fn write_private(path: &Path, bytes: &[u8]) -> BridgeResult<()> {
     }
 }
 
-fn check_private_file(path: &Path) -> BridgeResult<()> {
+/// Open the key file once without following links, check that very handle is a private
+/// regular file, and read from it: nothing can swap the file between check and read.
+fn read_private(path: &Path) -> BridgeResult<String> {
+    use std::io::Read;
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        let metadata = std::fs::symlink_metadata(path).map_err(|e| state_error("device.key", e))?;
+    let mut file = {
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+            .map_err(|e| state_error("device.key", e))?;
+        let metadata = file.metadata().map_err(|e| state_error("device.key", e))?;
         if !metadata.is_file()
             || metadata.uid() != devagotchi_ipc::current_uid()
             || metadata.mode() & 0o077 != 0
@@ -214,13 +230,21 @@ fn check_private_file(path: &Path) -> BridgeResult<()> {
                 "device.key must be a regular file owned by you with mode 0600",
             ));
         }
-    }
+        file
+    };
     #[cfg(windows)]
-    {
+    let mut file = {
         use devagotchi_ipc::security::{self, Entry, Operator};
+        use std::os::windows::fs::OpenOptionsExt;
+        /// FILE_FLAG_OPEN_REPARSE_POINT: open the entry itself, never a link's target.
+        const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         let operator = Operator::current().map_err(|e| state_error("current user", e))?;
-        let entry = security::open_entry(path).map_err(|e| state_error("device.key", e))?;
-        if let Some(defect) = security::private_entry_defect(&entry, Entry::File, &operator)
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(OPEN_REPARSE_POINT)
+            .open(path)
+            .map_err(|e| state_error("device.key", e))?;
+        if let Some(defect) = security::private_entry_defect(&file, Entry::File, &operator)
             .map_err(|e| state_error("device.key", e))?
         {
             return Err(BridgeError::new(
@@ -228,8 +252,12 @@ fn check_private_file(path: &Path) -> BridgeResult<()> {
                 format!("device.key {defect}"),
             ));
         }
-    }
-    Ok(())
+        file
+    };
+    let mut text = String::new();
+    file.read_to_string(&mut text)
+        .map_err(|e| state_error("device.key", e))?;
+    Ok(text)
 }
 
 #[cfg(test)]
@@ -257,6 +285,12 @@ mod tests {
         );
         assert!(endpoint("ftp://x").is_err());
         assert!(endpoint("https://").is_err());
+        // Userinfo cannot dress a remote host up as loopback, or hide where https goes.
+        assert!(endpoint("http://localhost:1@evil.example").is_err());
+        assert!(endpoint("http://127.0.0.1@evil.example/").is_err());
+        assert!(endpoint("https://user@hub.example").is_err());
+        assert!(endpoint("https://hub.example/?x=1").is_err());
+        assert!(endpoint("https://hub.example/#frag").is_err());
     }
 
     #[test]
@@ -281,6 +315,10 @@ mod tests {
             )
             .unwrap();
             assert_eq!(device_key(&dir).unwrap_err().code, "state_permissions");
+            // A symlink in place of the key is refused, not followed.
+            std::fs::remove_file(dir.join("device.key")).unwrap();
+            std::os::unix::fs::symlink("/etc/hostname", dir.join("device.key")).unwrap();
+            assert!(device_key(&dir).is_err());
         }
     }
 

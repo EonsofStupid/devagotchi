@@ -26,33 +26,37 @@ The hub config lists the machine as a linked broker and grants it:
 "grants":  [ { "subject": "<Nomen sub>", "brokers": ["gus"] } ]
 ```
 
-On the machine, as the same user the broker runs as:
+On the machine, as the same user the broker runs as. The code goes in the environment (or
+on stdin), never on the command line where other users could read it in the process list:
 
 ```bash
-devagotchi-link enroll --state-dir ~/.local/state/devagotchi-link \
-  --hub https://mcp.shippin.cloud --device gus \
-  --broker "<the broker's ready-line endpoint>" --code dvg-3f0c…
+DEVAGOTCHI_ENROLL_CODE=dvg-3f0c… devagotchi-link enroll --state-dir ~/.local/state/devagotchi-link \
+  --hub https://mcp.shippin.cloud --device gus --broker "<the broker's ready-line endpoint>"
 devagotchi-link run --state-dir ~/.local/state/devagotchi-link
 # devagotchi-link ready: gus linked to https://mcp.shippin.cloud (broker …)
 ```
 
 `run` reconnects by itself with backoff (1 s doubling to 60 s, up to 25% jitter) and beats
-every 20 s; the hub drops a link silent for 60 s. Start it at login (installer support is
-the next increment). Exit code 2 means the hub refused this machine (revoked, not enrolled,
-wrong key, unknown name): a supervisor should not restart it blindly.
+every 20 s; the hub drops a link silent for 60 s. It handles at most 16 calls at once and
+answers `link_busy` beyond that. Start it at login (installer support is the next
+increment). Exit code 2 means the hub refused this machine: a supervisor should not restart
+it blindly. The hub tells a refused peer only `refused`; the reason (revoked, not enrolled,
+wrong key, unknown name) is in the hub's audit log. A hub that briefly cannot check
+(`unavailable`) is retried, not treated as a refusal.
 
 ## Security
 
 | Property | How |
 |---|---|
 | No inbound port | The link only dials out. Nothing on the machine listens for the hub |
-| The key never leaves | Ed25519 seed generated here into `device.key`; the state directory is 0700 and the key 0600 on Unix, a protected DACL for the user on Windows, checked on every start |
-| No replay | The device signs `devagotchi-link/1`, the hub's public URL, the device name and a fresh 32-byte nonce per connection |
-| Enrollment | A one-time code bound to one device name; the hub stores only its SHA-256, spends it once, expires it after 15 minutes |
-| Revocation | `devagotchi-hub revoke --device NAME` closes the link within 2 s; new calls answer `device_revoked`; the link exits 2 |
-| TLS | `https` hubs only, verified by the operating system's trust store; plain `ws` is accepted only for a loopback hub |
+| The key never leaves | Ed25519 seed generated here into `device.key`. The state directory follows the broker's rule (Unix: 0700, ancestors real directories not writable by others; Windows: a protected user-only DACL, no link in its ancestry). The key is opened once without following links, that handle is checked (0600 and one link on Unix, user-only DACL on Windows) and read |
+| No replay | The device signs `devagotchi-link/1`, the hub's public URL, the device name and a fresh 32-byte nonce per connection; the hub verifies strictly and refuses weak (small-order) keys |
+| Enrollment | A one-time code bound to one device name; the hub stores only its SHA-256, spends it once, expires it after 15 minutes. A newer code supersedes older unused ones; binding a key or revoking cancels every unused code for that name |
+| Revocation | `devagotchi-hub revoke --device NAME` closes the link within 2 s and is checked again before each queued call is forwarded; new calls answer `device_revoked`; the link exits 2 |
+| TLS | `https` hubs only, verified by the operating system's trust store; plain `ws` only for a loopback hub. Hub URLs are parsed: userinfo, queries and fragments are refused |
+| Bounded hub side | `/link` takes at most 32 handshakes at once, a hello of at most 4 KiB within 10 s, 64 queued calls per device; every write to a device times out after 10 s; refusals are audited at most once a second with a count of the rest |
 | The broker still decides | Each call carries one typed broker request; executable grants, workspace roots and deadlines are enforced by the broker as for a local caller |
-| Audit | The hub records enroll, connect, disconnect (with the reason) and every routed call on its hash chain |
+| Audit | The hub records code issued and revoke (with the operator), enroll, connect and disconnect (with the key fingerprint, peer address and reason), refusals, and every routed call on its hash chain. The code itself is never logged |
 
 ## Check
 

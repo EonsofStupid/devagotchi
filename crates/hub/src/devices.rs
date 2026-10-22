@@ -38,6 +38,20 @@ pub fn now_secs() -> u64 {
         .unwrap_or_default()
 }
 
+/// Mark every unused code for `device` as spent.
+fn cancel_codes(
+    transaction: &rusqlite::Transaction<'_>,
+    device: &str,
+    now: u64,
+) -> BridgeResult<usize> {
+    transaction
+        .execute(
+            "UPDATE enroll_codes SET used_at = ?1 WHERE device = ?2 AND used_at IS NULL",
+            params![now, device],
+        )
+        .map_err(store_error)
+}
+
 fn code_hash(code: &str) -> String {
     hex::encode(Sha256::digest(code.trim().as_bytes()))
 }
@@ -69,16 +83,21 @@ impl Devices {
         })
     }
 
-    /// Issue a one-time code that lets one machine bind its key to `device`.
+    /// Issue a one-time code that lets one machine bind its key to `device`. A new code
+    /// supersedes every unused one for the same device, so at most one is ever live.
     pub fn issue_code(&self, device: &str, random: [u8; 16]) -> BridgeResult<String> {
         let code = format!("dvg-{}", hex::encode(random));
-        let connection = self.connection.lock().expect("device lock");
-        connection
+        let now = now_secs();
+        let mut connection = self.connection.lock().expect("device lock");
+        let transaction = connection.transaction().map_err(store_error)?;
+        cancel_codes(&transaction, device, now)?;
+        transaction
             .execute(
                 "INSERT INTO enroll_codes (code_hash, device, expires_at) VALUES (?1, ?2, ?3)",
-                params![code_hash(&code), device, now_secs() + CODE_TTL_SECS],
+                params![code_hash(&code), device, now + CODE_TTL_SECS],
             )
             .map_err(store_error)?;
+        transaction.commit().map_err(store_error)?;
         Ok(code)
     }
 
@@ -87,7 +106,9 @@ impl Devices {
     pub fn enroll(&self, device: &str, code: &str, public_key: &str) -> BridgeResult<()> {
         let refused = |message: &str| BridgeError::new("enroll_refused", message);
         let mut connection = self.connection.lock().expect("device lock");
-        let transaction = connection.transaction().map_err(store_error)?;
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(store_error)?;
         let row: Option<(String, u64, Option<u64>)> = transaction
             .query_row(
                 "SELECT device, expires_at, used_at FROM enroll_codes WHERE code_hash = ?1",
@@ -108,12 +129,8 @@ impl Devices {
             }
             Some(_) => {}
         }
-        transaction
-            .execute(
-                "UPDATE enroll_codes SET used_at = ?1 WHERE code_hash = ?2",
-                params![now, code_hash(code)],
-            )
-            .map_err(store_error)?;
+        // Spend this code and any other unused one for the device: a binding ends them all.
+        cancel_codes(&transaction, device, now)?;
         transaction
             .execute(
                 "INSERT INTO devices (name, public_key, enrolled_at, revoked_at) VALUES (?1, ?2, ?3, NULL)
@@ -148,17 +165,22 @@ impl Devices {
         Ok(self.get(device)?.is_none_or(|d| d.revoked_at.is_some()))
     }
 
-    /// Revoke a device. Its open link closes within seconds and it cannot reconnect
-    /// until the operator issues a new code. Returns false if no such device exists.
-    pub fn revoke(&self, device: &str) -> BridgeResult<bool> {
-        let connection = self.connection.lock().expect("device lock");
-        let changed = connection
+    /// Revoke a device and cancel every unused code for it. Its open link closes within
+    /// seconds and nothing can enroll under the name until the operator issues a new code.
+    /// Returns whether an active device was revoked and how many codes were cancelled.
+    pub fn revoke(&self, device: &str) -> BridgeResult<(bool, usize)> {
+        let now = now_secs();
+        let mut connection = self.connection.lock().expect("device lock");
+        let transaction = connection.transaction().map_err(store_error)?;
+        let cancelled = cancel_codes(&transaction, device, now)?;
+        let revoked = transaction
             .execute(
                 "UPDATE devices SET revoked_at = ?1 WHERE name = ?2 AND revoked_at IS NULL",
-                params![now_secs(), device],
+                params![now, device],
             )
             .map_err(store_error)?;
-        Ok(changed == 1)
+        transaction.commit().map_err(store_error)?;
+        Ok((revoked == 1, cancelled))
     }
 
     pub fn list(&self) -> BridgeResult<Vec<Device>> {
@@ -217,6 +239,32 @@ mod tests {
     }
 
     #[test]
+    fn only_the_newest_code_lives_and_binding_or_revoking_ends_it() {
+        let (_dir, devices) = store();
+        let older = devices.issue_code("gus", [10; 16]).unwrap();
+        let newer = devices.issue_code("gus", [11; 16]).unwrap();
+        assert!(
+            devices.enroll("gus", &older, "aa").is_err(),
+            "a superseded code must not work"
+        );
+        let spare = devices.issue_code("dabo", [12; 16]).unwrap();
+        devices.enroll("gus", &newer, "aa").unwrap();
+        // A code for another device is untouched by gus's binding.
+        let pending = devices.issue_code("gus", [13; 16]).unwrap();
+        assert_eq!(devices.revoke("gus").unwrap(), (true, 1));
+        assert!(
+            devices.enroll("gus", &pending, "bb").is_err(),
+            "revoke must cancel pending codes"
+        );
+        assert_eq!(devices.get("gus").unwrap().unwrap().public_key, "aa");
+        devices.enroll("dabo", &spare, "cc").unwrap();
+        // Revoking a name that never enrolled still cancels its codes.
+        let orphan = devices.issue_code("solo", [14; 16]).unwrap();
+        assert_eq!(devices.revoke("solo").unwrap(), (false, 1));
+        assert!(devices.enroll("solo", &orphan, "dd").is_err());
+    }
+
+    #[test]
     fn expired_and_unknown_codes_are_refused() {
         let (_dir, devices) = store();
         let code = devices.issue_code("gus", [1; 16]).unwrap();
@@ -232,9 +280,9 @@ mod tests {
         let first = devices.issue_code("gus", [2; 16]).unwrap();
         devices.enroll("gus", &first, "aa").unwrap();
         assert!(!devices.is_revoked("gus").unwrap());
-        assert!(devices.revoke("gus").unwrap());
+        assert_eq!(devices.revoke("gus").unwrap(), (true, 0));
         assert!(devices.is_revoked("gus").unwrap());
-        assert!(!devices.revoke("gus").unwrap());
+        assert_eq!(devices.revoke("gus").unwrap(), (false, 0));
         let second = devices.issue_code("gus", [3; 16]).unwrap();
         devices.enroll("gus", &second, "cc").unwrap();
         assert!(!devices.is_revoked("gus").unwrap());
