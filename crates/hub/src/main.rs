@@ -8,6 +8,9 @@ mod config;
 mod devices;
 mod hub;
 mod link;
+mod nomen;
+#[cfg(test)]
+mod test_keys;
 
 use std::{
     env, ffi::OsString, net::SocketAddr, path::PathBuf, process::ExitCode, sync::Arc,
@@ -295,10 +298,15 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .map_err(|error| BridgeError::new("listen", format!("{listen}: {error}")))?;
+    // Everything worth reading at start comes before the ready line callers wait for.
+    if let Some(owner) = &config.owner {
+        eprintln!("devagotchi-hub owner: {owner} reaches every broker");
+    }
     eprintln!(
         "devagotchi-hub ready: http://{listen}/mcp ({} brokers, auth {})",
         config.brokers.len(),
         match &config.auth {
+            config::AuthConfig::Nomen { issuer, .. } => format!("nomen {issuer}"),
             config::AuthConfig::Oidc { issuer, .. } => format!("oidc {issuer}"),
             config::AuthConfig::Dev { .. } => "dev tokens".to_string(),
         }
@@ -344,7 +352,8 @@ async fn require_bearer(
             request.extensions_mut().insert(subject);
             next.run(request).await
         }
-        Err(AuthError::Invalid(_)) => {
+        Err(AuthError::Invalid(why)) => {
+            log_refusal(why);
             challenge(StatusCode::UNAUTHORIZED, &metadata, Some("invalid_token"))
         }
         Err(AuthError::Unavailable(why)) => {
@@ -355,6 +364,34 @@ async fn require_bearer(
             )
                 .into_response()
         }
+    }
+}
+
+/// Why a token was refused, for the operator: a wrong audience or client in the config
+/// looks to the caller exactly like a bad token. At most one line a second, never the token.
+fn log_refusal(why: &str) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    static SUPPRESSED: AtomicU64 = AtomicU64::new(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    let last = LAST.load(Ordering::Relaxed);
+    if now > last
+        && LAST
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    {
+        let quiet = SUPPRESSED.swap(0, Ordering::Relaxed);
+        let more = if quiet > 0 {
+            format!(" ({quiet} more refused since the last line)")
+        } else {
+            String::new()
+        };
+        eprintln!("devagotchi-hub: refused a bearer token: {why}{more}");
+    } else {
+        SUPPRESSED.fetch_add(1, Ordering::Relaxed);
     }
 }
 

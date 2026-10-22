@@ -6,9 +6,9 @@ own four handle-based tools to the broker that owns the target machine. The hub 
 admits a job; the broker does, and the job outlives the hub, the connection and the client.
 
 ```text
-claude.ai / ChatGPT ──OAuth (Nomen)──┐
-Claude Code / Codex ──device code────┤   ┌──────── devagotchi-hub ────────┐
-your own agents ──service user───────┴──▶│ bearer → subject → grants → route │──▶ bridge-broker (gold-ws)
+claude.ai / ChatGPT ──mcp.shippin.cloud──┐  (your own Nomen token, passed through)
+Claude Code / Codex ──device code────────┤   ┌──────── devagotchi-hub ────────┐
+your own agents ──service user───────────┴──▶│ bearer → subject → grants → route │──▶ bridge-broker (gold-ws)
                                           │ audit: hash-chained SQLite        │──▶ bridge-broker (gus)      (M1)
                                           └───────────────────────────────────┘──▶ bridge-broker (dabo)     (M1)
 ```
@@ -17,19 +17,27 @@ your own agents ──service user───────┴──▶│ bearer �
 
 ```bash
 devagotchi-hub --state-dir ~/.local/state/devagotchi-hub --config ~/.config/devagotchi-hub/hub.json
-# devagotchi-hub ready: http://127.0.0.1:8787/mcp (1 brokers, auth oidc https://id.shippin.cloud)
+# devagotchi-hub owner: 300000000000000001 reaches every broker
+# devagotchi-hub ready: http://127.0.0.1:8787/mcp (2 brokers, auth nomen https://id.shippin.cloud)
 ```
 
 ```json
 {
   "listen": "127.0.0.1:8787",
   "public_url": "https://hub.shippin.cloud",
-  "auth": { "mode": "oidc", "issuer": "https://id.shippin.cloud", "audiences": ["<hub client or project id>"] },
+  "auth": {
+    "mode": "nomen",
+    "issuer": "https://id.shippin.cloud",
+    "audiences": ["<Nomen project id the hub's API application belongs to>"],
+    "clients": ["<mcp.shippin.cloud's Nomen client id>", "<shippin-bridge's client id>"],
+    "key_file": "/etc/devagotchi-hub/nomen-key.json"
+  },
+  "owner": "<your Nomen account ID (sub)>",
   "brokers": [
     { "name": "gold-ws", "socket": "/home/dev/.local/state/devagotchi/broker.sock" },
     { "name": "gus", "link": true }
   ],
-  "grants": [ { "subject": "<Nomen sub>", "brokers": ["gold-ws", "gus"] } ]
+  "grants": [ { "subject": "<a teammate's Nomen sub>", "brokers": ["gold-ws"] } ]
 }
 ```
 
@@ -60,18 +68,65 @@ A linked broker that is not connected answers `broker_offline`; one that never e
 
 | Mode | Bearer token | Who it is for |
 |---|---|---|
-| `oidc` | A JWT from the issuer: `iss`, `exp`, `aud`, `sub` required; RS256/384/512 or ES256/384; keys from the issuer's JWKS, refreshed on an unknown `kid` at most once a minute | Nomen: device-code sessions (Claude Code, Codex, `shippin-bridge`), hosted clients registered through dynamic client registration, service users for your own agents |
+| `nomen` | Any Nomen access token, opaque or JWT, checked by asking Nomen (introspection) as the hub's own API application | Shippin: your sign-in at console.shippin.cloud, relayed by mcp.shippin.cloud; `shippin-bridge` sessions |
+| `oidc` | A JWT from any OpenID Connect issuer: `iss`, `exp`, `aud`, `sub` required; RS256/384/512 or ES256/384; keys from the issuer's JWKS, refreshed on an unknown `kid` at most once a minute | Self-hosters whose identity provider issues JWT access tokens |
 | `dev` | A static token from a 0600 file `{ "<token>": "<subject>" }` | Local tests; a single machine without an identity provider |
 
 Unauthenticated requests get `401` with `WWW-Authenticate: Bearer resource_metadata="<public_url>/.well-known/oauth-protected-resource"`;
-the metadata names the issuer, which is how claude.ai and ChatGPT find Nomen. A bad token adds
-`error="invalid_token"`. Nomen must issue JWT access tokens for the hub's audience (Zitadel:
-the application's auth token type set to JWT); opaque tokens need the introspection path,
-which is H2.
+the metadata names the issuer. A bad token adds `error="invalid_token"`. When the identity
+provider cannot be reached the hub answers `503`, never `401`.
+
+## Shippin sign-in (Nomen)
+
+Nomen's access tokens are opaque: only Nomen can say whose they are. The hub asks it about
+each token (RFC 7662 introspection), signing in as its own API application with a
+private-key JWT. Nomen answers `active` only when the token is live and the hub's
+application is in its audience; the hub then requires the issuer, an accepted project in
+`aud`, an accepted application in `client_id`, an unexpired `exp` and an account ID
+(`sub`) itself, taken exactly as Nomen states it.
+
+Any application in Nomen can ask for the hub's audience, and a person already signed in to
+Nomen can be handed a token by any of them without typing anything. So the audience only
+says a token may be shown to the hub: `auth.clients` names the applications whose
+sign-ins count (mcp.shippin.cloud, shippin-bridge), and grants match the account ID
+byte for byte.
+
+Set up once in Nomen (a Gold change, through gold-policy):
+
+1. In the project the hub belongs to, add an **API** application with **Private Key JWT**.
+2. Add a key and download it. That JSON (`type`, `keyId`, `key`, `clientId`) is `auth.key_file`;
+   keep it in Vaultix and write it at deploy as the hub's user, mode 0600. On Linux and
+   macOS the hub refuses a file others can read; on Windows, put it under the hub user's
+   private directory. Its errors never print the key.
+3. Put that project's id in `auth.audiences`. The applications whose tokens should reach
+   the hub (mcp.shippin.cloud's, shippin-bridge's) must be in the same project, or request
+   the scope `urn:zitadel:iam:org:project:id:<project id>:aud`; list their client ids in
+   `auth.clients`.
+4. Set `owner` to your account ID. Sign in and call `whoami` once if you are not sure which it is.
+
+What running Shippin taught, and what the hub does about it:
+
+| What happened running Shippin | What the hub does |
+|---|---|
+| Two active accounts with the same display name stopped a deploy until one was chosen | Grants and `owner` take the account ID (`sub`) only; an email or a name with spaces is refused at start. `whoami` shows the ID, the login name and whether you are the owner |
+| A devspace created by a machine user locked its owner out, because only the creator could connect | Access comes from `owner` and grants, never from who created something |
+| `tenant_owners` drifted from Nomen and was silently re-created | The hub keeps no copy of who owns what; it asks Nomen on every new token |
+| A failed membership lookup in the console quietly meant "no roles" | Nomen down, slow, or refusing the hub's own key is `503 issuer_unavailable`, never a refusal, and is never remembered |
+| One way in (SSH keys) became a lockout | `owner` reaches every broker and can only be changed by editing this file. The hub starts without Nomen, and `enroll`, `revoke` and `devices` work on the host with Nomen down |
+| Nobody could test as the owner without borrowing a session | `tests/nomen_probe.py` runs the real binary against a fake Nomen; a live check uses a throwaway test identity |
+
+Nomen's answer about a token is reused for one minute, so signing out of Nomen reaches the
+hub within a minute and a Nomen blip does not interrupt a session already confirmed. At most
+16 questions to Nomen are in flight; a flood of made-up tokens can slow new sign-ins but
+never evicts a confirmed one, so rate-limit `/mcp` per client address at the edge (Caddy).
+Each refused token logs its reason to stderr, at most one line a second, never the token. Agent
+personal access tokens are issued for Nomen's own API, so the hub does not accept them;
+agents get their own identity through token exchange in a later increment.
 
 ## Tools
 
-`whoami` returns the proven subject and the brokers it may use. `operation_start`,
+`whoami` returns the proven account ID, the login name, whether it is the owner, and the
+brokers it may use. `operation_start`,
 `operation_get`, `operation_read` and `operation_cancel` take `{ "broker": "<name>", "input": {…} }`
 where `input` is exactly the broker's own contract. A subject without a grant for that
 broker gets `not_granted`; an unknown name gets `unknown_broker`; the broker's own refusals
@@ -91,6 +146,8 @@ walks the surface end to end against a live broker and exits 0 only when every s
 
 ## Not in H1
 
-Trusting calls relayed by the Shippin front door (N19, D2), installer autostart for the
-link, introspection for opaque tokens, a web UI, the agent-hub board (H3), harness
-profiles (H4), the bundle (H5).
+mcp.shippin.cloud passing your Nomen token through to the hub (D2), approving a new
+machine from your phone after Shippin sign-in, grants read from the console's staff roles
+and server registry once they are live, agent identities by token exchange, installer
+autostart for the link, a web UI, the agent-hub board (H3), harness profiles (H4), the
+bundle (H5).
