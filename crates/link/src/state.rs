@@ -264,6 +264,17 @@ fn read_private(path: &Path) -> BridgeResult<String> {
 mod tests {
     use super::*;
 
+    /// A temp parent under its real path: on macOS the temp root sits under /var, a
+    /// symlink to /private/var, and a state directory may not have a symlinked ancestor.
+    fn temp_parent() -> (tempfile::TempDir, PathBuf) {
+        let parent = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let real = std::fs::canonicalize(parent.path()).unwrap();
+        #[cfg(windows)]
+        let real = parent.path().to_path_buf();
+        (parent, real)
+    }
+
     #[test]
     fn endpoints_require_tls_except_on_loopback() {
         assert_eq!(
@@ -295,8 +306,8 @@ mod tests {
 
     #[test]
     fn the_key_is_created_once_privately_and_reloads_the_same() {
-        let parent = tempfile::tempdir().unwrap();
-        let dir = parent.path().join("link-state");
+        let (_parent, real) = temp_parent();
+        let dir = real.join("link-state");
         prepare(&dir).unwrap();
         let first = device_key(&dir).unwrap();
         let again = device_key(&dir).unwrap();
@@ -324,8 +335,8 @@ mod tests {
 
     #[test]
     fn config_round_trips_and_rejects_bad_names() {
-        let parent = tempfile::tempdir().unwrap();
-        let dir = parent.path().join("s");
+        let (_parent, real) = temp_parent();
+        let dir = real.join("s");
         prepare(&dir).unwrap();
         #[cfg(unix)]
         let broker = "/run/broker.sock";
