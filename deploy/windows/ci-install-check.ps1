@@ -26,3 +26,61 @@ Write-Host 'ok   reinstall kept the endpoint'
 if (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Devagotchi Broker' -ErrorAction SilentlyContinue) { throw 'autostart entry survived uninstall' }
 if (Get-Process -Name 'bridge-broker' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) }) { throw 'broker survived uninstall' }
 Write-Host 'ok   uninstall stopped the broker and removed the autostart entry'
+
+# The link: join a hub running on this runner the way gus or dabo joins one, by installer.
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+$port = Get-Random -Minimum 20000 -Maximum 40000
+$hubUrl = "http://127.0.0.1:$port"
+$hubState = Join-Path $env:RUNNER_TEMP 'hub-state'
+$hubCfg = Join-Path $env:RUNNER_TEMP 'hub.json'
+$tokens = Join-Path $env:RUNNER_TEMP 'hub-tokens.json'
+$token = 'ci-installer-' + [guid]::NewGuid().ToString('N')
+[System.IO.File]::WriteAllText($tokens, "{`"$token`":`"ci`"}", $utf8)
+$hubConfig = [ordered]@{
+    listen = "127.0.0.1:$port"; public_url = $hubUrl
+    auth = [ordered]@{ mode = 'dev'; tokens_file = $tokens }
+    brokers = @([ordered]@{ name = 'ci-machine'; link = $true })
+    grants = @([ordered]@{ subject = 'ci'; brokers = @('ci-machine') })
+}
+[System.IO.File]::WriteAllText($hubCfg, ($hubConfig | ConvertTo-Json -Depth 5), $utf8)
+$hubExe = (Resolve-Path 'target\debug\devagotchi-hub.exe').ProviderPath
+$hubLog = Join-Path $env:RUNNER_TEMP 'hub.log'
+$hub = Start-Process -FilePath $hubExe -ArgumentList @('--state-dir', "`"$hubState`"", '--config', "`"$hubCfg`"") `
+    -WindowStyle Hidden -RedirectStandardError $hubLog -PassThru
+for ($i = 0; $i -lt 100; $i++) {
+    Start-Sleep -Milliseconds 100
+    if ((Test-Path $hubLog) -and (Select-String -Path $hubLog -Pattern 'devagotchi-hub ready:' -Quiet)) { break }
+}
+if (-not (Select-String -Path $hubLog -Pattern 'devagotchi-hub ready:' -Quiet)) { Get-Content $hubLog; throw 'hub did not start' }
+# stdout carries only the code; the note on stderr is dropped under 'Continue' (PowerShell 5.1).
+$ErrorActionPreference = 'Continue'
+$code = "$(& $hubExe enroll --state-dir $hubState --device ci-machine 2>$null)".Trim()
+$ErrorActionPreference = 'Stop' 
+if (-not $code.StartsWith('dvg-')) { throw "no enrollment code: $code" }
+
+try {
+    & "$PSScriptRoot\install-devagotchi.ps1" -BinDir (Resolve-Path 'target\debug').ProviderPath -Root $root -Workspace $ws `
+        -Autostart -Hub $hubUrl -Device ci-machine -EnrollCode $code
+    $linkRun = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Devagotchi Link' -ErrorAction SilentlyContinue
+    if (-not $linkRun) { throw 'link autostart entry missing' }
+    if ($linkRun.'Devagotchi Link' -match [regex]::Escape($code)) { throw 'the enrollment code leaked into the Run entry' }
+    Write-Host "ok   link autostart entry: $($linkRun.'Devagotchi Link')"
+    $git = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+    python tests/hub_probe.py $hubUrl --token $token --broker ci-machine --git $git --cwd $ws
+    if ($LASTEXITCODE -ne 0) { throw 'hub probe through the installed link failed' }
+
+    # An upgrade without the code keeps the enrollment and brings the link back.
+    & "$PSScriptRoot\install-devagotchi.ps1" -BinDir (Resolve-Path 'target\debug').ProviderPath -Root $root -Workspace $ws
+    python tests/hub_probe.py $hubUrl --token $token --broker ci-machine --git $git --cwd $ws
+    if ($LASTEXITCODE -ne 0) { throw 'hub probe after reinstall failed' }
+    Write-Host 'ok   reinstall kept the enrollment and the link'
+
+    & "$PSScriptRoot\install-devagotchi.ps1" -Root $root -Uninstall
+    if (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Devagotchi Link' -ErrorAction SilentlyContinue) { throw 'link autostart entry survived uninstall' }
+    if (Get-Process -Name 'devagotchi-link' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) }) { throw 'link survived uninstall' }
+    python tests/hub_probe.py $hubUrl --token $token --broker ci-machine --expect-error broker_offline
+    if ($LASTEXITCODE -ne 0) { throw 'hub did not see the link go away' }
+    Write-Host 'ok   uninstall stopped the link and removed its autostart entry'
+} finally {
+    Stop-Process -Id $hub.Id -Force -ErrorAction SilentlyContinue
+}
