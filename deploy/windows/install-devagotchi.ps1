@@ -236,8 +236,14 @@ $linked = $false
 if ($EnrollCode) {
     if (-not $Hub -or -not $Device) { throw '-EnrollCode needs -Hub and -Device' }
     Step "Enrolling this machine as '$Device' on $Hub"
-    # The code is spent here; it never goes into a file, a log or the Run entry.
-    $exit = Invoke-Native $linkExe @('enroll', '--state-dir', $LinkState, '--hub', $Hub, '--device', $Device, '--broker', $endpoint, '--code', $EnrollCode)
+    # The code is spent here. It reaches the link through this process's environment for
+    # one call, never a command line other users can list, a file, a log or the Run entry.
+    $env:DEVAGOTCHI_ENROLL_CODE = $EnrollCode
+    try {
+        $exit = Invoke-Native $linkExe @('enroll', '--state-dir', $LinkState, '--hub', $Hub, '--device', $Device, '--broker', $endpoint)
+    } finally {
+        Remove-Item Env:DEVAGOTCHI_ENROLL_CODE -ErrorAction SilentlyContinue
+    }
     if ($exit -ne 0) { throw "devagotchi-link enroll failed ($exit); ask the hub operator for a fresh code" }
 }
 if (Test-Path (Join-Path $LinkState 'link.json')) {
