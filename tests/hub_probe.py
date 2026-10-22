@@ -2,12 +2,15 @@
 """Probe a running devagotchi-hub over Streamable HTTP MCP.
 
     python3 tests/hub_probe.py http://127.0.0.1:8787 --token <bearer> --broker <name> [--git /usr/bin/git] [--cwd DIR]
+    python3 tests/hub_probe.py http://127.0.0.1:8787 --token <bearer> --broker <name> --expect-error broker_offline
 
 Checks, in order: an unauthenticated call is refused with a 401 that names the
 protected-resource metadata; /healthz answers; initialize and tools/list; whoami names
 the broker; operation_start of `git --version` on that broker succeeds and its output
 reads back; a broker the subject holds no grant for is refused with `not_granted`.
-Exit 0 only when every step holds.
+With --expect-error CODE it instead checks that one routed call to the broker fails
+with exactly CODE (a linked machine that is offline or revoked). Exit 0 only when every
+step holds.
 """
 import argparse
 import json
@@ -24,6 +27,7 @@ parser.add_argument("--broker", required=True)
 parser.add_argument("--ungranted", default="nobody-has-this")
 parser.add_argument("--git", default="/usr/bin/git")
 parser.add_argument("--cwd", default=None)
+parser.add_argument("--expect-error", default=None)
 args = parser.parse_args()
 base = args.base.rstrip("/")
 session = {"id": None, "rid": 0}
@@ -99,6 +103,10 @@ check("healthz", status == 200 and health.get("ok") is True, json.dumps(health)[
 init = rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "hub-probe", "version": "0"}})
 check("initialize", init["serverInfo"]["name"] == "devagotchi-hub", f"{init['serverInfo']} protocol {init['protocolVersion']}")
 http("POST", "/mcp", {"jsonrpc": "2.0", "method": "notifications/initialized"})
+if args.expect_error:
+    is_error, answer = call("operation_get", {"broker": args.broker, "input": {"operation_id": "probe-" + uuid.uuid4().hex}})
+    check(f"routed call fails with {args.expect_error}", is_error and answer.get("code") == args.expect_error, json.dumps(answer)[:200])
+    sys.exit(1 if failures else 0)
 tools = sorted(t["name"] for t in rpc("tools/list")["tools"])
 check("tools", tools == ["operation_cancel", "operation_get", "operation_read", "operation_start", "whoami"], ", ".join(tools))
 

@@ -26,11 +26,15 @@ tokio = { workspace = true }
 rusqlite = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio", "ws"] }
 jsonwebtoken = "10"
 http = "1"
 tower-service = "0.3"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+# The machine link: verify device keys, mint nonces and enrollment codes.
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+getrandom = "0.3"
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }

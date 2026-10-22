@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""End to end on this machine with the built binaries: broker, stdio adapter, hub.
+"""End to end on this machine with the built binaries: broker, stdio adapter, hub, link.
 
     python tests/e2e.py --bin-dir target/debug
 
 Starts `bridge-broker` with a fresh private state directory and a workspace that grants
-only git, drives it through `bridge-mcp` over stdio (tests/adapter_probe.py),
-then starts `devagotchi-hub` in dev-token mode in front of the same broker and drives it
-over Streamable HTTP MCP (tests/hub_probe.py). Linux uses a Unix socket, Windows a named
-pipe; the probes and the binaries are the same. Exit 0 only when both probes pass.
+only git, drives it through `bridge-mcp` over stdio (tests/adapter_probe.py), then starts
+`devagotchi-hub` in dev-token mode with two routes to that broker: `local` over IPC and
+`remote` over the machine link. It drives the local route over Streamable HTTP MCP
+(tests/hub_probe.py), then the link's whole life: not enrolled at first, a one-time
+code that works once, `devagotchi-link run`, the same probe through the link, offline when
+the link stops, back after it restarts, and a revoke that closes it and makes it exit 2.
+Linux uses a Unix socket, Windows a named pipe. Exit 0 only when every step passes.
 """
 import argparse
 import json
@@ -29,8 +32,10 @@ parser.add_argument("--bin-dir", required=True, type=Path)
 parser.add_argument("--keep", action="store_true", help="keep the work directory")
 args = parser.parse_args()
 bins = args.bin_dir.resolve()
-broker_bin, adapter_bin, hub_bin = (bins / f"{name}{EXE}" for name in ("bridge-broker", "bridge-mcp", "devagotchi-hub"))
-for path in (broker_bin, adapter_bin, hub_bin):
+broker_bin, adapter_bin, hub_bin, link_bin = (
+    bins / f"{name}{EXE}" for name in ("bridge-broker", "bridge-mcp", "devagotchi-hub", "devagotchi-link")
+)
+for path in (broker_bin, adapter_bin, hub_bin, link_bin):
     if not path.is_file():
         sys.exit(f"missing binary: {path} (cargo build --locked --bins)")
 
@@ -89,6 +94,18 @@ def run_probe(argv, label):
     return result.returncode == 0
 
 
+def run_cmd(argv, label, expect=0, env=None):
+    """Run a one-shot command; stderr echoed, stdout returned. True when it exits `expect`."""
+    print(f"--- {label}", flush=True)
+    result = subprocess.run([str(a) for a in argv], capture_output=True, text=True, timeout=60,
+                            env={**os.environ, **(env or {})}, stdin=subprocess.DEVNULL)
+    for line in result.stderr.splitlines():
+        print(f"  [{label}] {line}", flush=True)
+    ok = result.returncode == expect
+    print(f"--- {label}: exit {result.returncode}" + ("" if ok else f" (expected {expect})"), flush=True)
+    return ok, result.stdout.strip()
+
+
 ok = False
 try:
     print(f"work dir {work}; git {git}", flush=True)
@@ -112,15 +129,44 @@ try:
         "listen": f"127.0.0.1:{port}",
         "public_url": f"http://127.0.0.1:{port}",
         "auth": {"mode": "dev", "tokens_file": str(tokens)},
-        "brokers": [{"name": "local", "socket": endpoint}],
-        "grants": [{"subject": "e2e-operator", "brokers": ["local"]}],
+        "brokers": [{"name": "local", "socket": endpoint}, {"name": "remote", "link": True}],
+        "grants": [{"subject": "e2e-operator", "brokers": ["local", "remote"]}],
     }))
-    start([str(hub_bin), "--state-dir", str(work / "hub-state"), "--config", str(hub_config)], "ready:", "hub")
-    hub_ok = run_probe(
-        [str(HERE / "hub_probe.py"), f"http://127.0.0.1:{port}", "--token", token, "--broker", "local", "--git", git, "--cwd", str(workspace)],
-        "hub probe",
-    )
-    ok = adapter_ok and hub_ok
+    hub_state = work / "hub-state"
+    hub_url = f"http://127.0.0.1:{port}"
+    start([str(hub_bin), "--state-dir", str(hub_state), "--config", str(hub_config)], "ready:", "hub")
+    probe = [str(HERE / "hub_probe.py"), hub_url, "--token", token, "--git", git, "--cwd", str(workspace)]
+    hub_ok = run_probe(probe + ["--broker", "local"], "hub probe")
+
+    # The machine link: the same broker, reached the way gus or dabo would reach the hub.
+    link_state = work / "link-state"
+    steps = []
+    steps.append(run_probe(probe + ["--broker", "remote", "--expect-error", "not_enrolled"], "linked broker before enrollment"))
+    enrolled, code = run_cmd([hub_bin, "enroll", "--state-dir", hub_state, "--device", "remote"], "hub enroll")
+    steps.append(enrolled and code.startswith("dvg-"))
+    # The code travels in the environment, never on a command line other users can read.
+    enroll = [link_bin, "enroll", "--hub", hub_url, "--device", "remote", "--broker", endpoint]
+    code_env = {"DEVAGOTCHI_ENROLL_CODE": code}
+    steps.append(run_cmd(enroll + ["--state-dir", link_state], "link enroll", env=code_env)[0])
+    steps.append(run_cmd(enroll + ["--state-dir", work / "second-machine"], "link enroll with a spent code", expect=2, env=code_env)[0])
+    link, _ = start([str(link_bin), "run", "--state-dir", str(link_state)], "ready:", "link")
+    steps.append(run_probe(probe + ["--broker", "remote"], "hub probe through the link"))
+    link.terminate()
+    link.wait(10)
+    steps.append(run_probe(probe + ["--broker", "remote", "--expect-error", "broker_offline"], "linked broker after the link stops"))
+    link, _ = start([str(link_bin), "run", "--state-dir", str(link_state)], "ready:", "link")
+    steps.append(run_probe(probe + ["--broker", "remote"], "hub probe after the link restarts"))
+    steps.append(run_cmd([hub_bin, "revoke", "--state-dir", hub_state, "--device", "remote"], "hub revoke")[0])
+    try:
+        exit_code = link.wait(20)
+    except subprocess.TimeoutExpired:
+        exit_code = None
+    print(f"--- revoked link exit {exit_code} (expected 2)", flush=True)
+    steps.append(exit_code == 2)
+    steps.append(run_probe(probe + ["--broker", "remote", "--expect-error", "device_revoked"], "revoked device refused"))
+    link_ok = all(steps)
+    print(f"--- link steps: {['ok' if s else 'FAIL' for s in steps]}", flush=True)
+    ok = adapter_ok and hub_ok and link_ok
 finally:
     for process in reversed(processes):
         if process.poll() is None:

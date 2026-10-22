@@ -17,8 +17,8 @@ pub struct HubConfig {
     /// identifier (RFC 9728) and the `resource` hosted clients send.
     pub public_url: String,
     pub auth: AuthConfig,
-    /// Brokers this hub can route to. In H1 every broker is local to the hub
-    /// host (a Unix socket); the mesh (M1) adds remote brokers behind the same names.
+    /// Brokers this hub can route to: local ones by their IPC endpoint, and brokers on
+    /// other machines reached through the link their `devagotchi-link` holds open.
     pub brokers: Vec<BrokerEntry>,
     /// Which authenticated subject may use which brokers. No grant, no route.
     pub grants: Vec<Grant>,
@@ -47,10 +47,16 @@ pub enum AuthConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrokerEntry {
-    /// Stable name callers use in `broker` fields; `[a-z0-9][a-z0-9-]{0,62}`.
+    /// Stable name callers use in `broker` fields; `[a-z0-9][a-z0-9-]{0,62}`. For a
+    /// linked broker it is also the device name the machine enrolls under.
     pub name: String,
-    /// Absolute path to the broker's Unix socket (the broker's ready line).
-    pub socket: String,
+    /// A broker on this host: the absolute endpoint on its ready line (Unix socket path
+    /// or named pipe). Exactly one of `socket` and `link`.
+    #[serde(default)]
+    pub socket: Option<String>,
+    /// A broker on another machine, reached over the outbound link it dials to `/link`.
+    #[serde(default)]
+    pub link: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -117,11 +123,22 @@ impl HubConfig {
                     broker.name
                 )));
             }
-            if !Path::new(&broker.socket).is_absolute() {
-                return Err(invalid(format!(
-                    "broker {:?}: socket must be an absolute path",
-                    broker.name
-                )));
+            match (&broker.socket, broker.link) {
+                (Some(socket), false) if Path::new(socket).is_absolute() => {}
+                (Some(_), false) => {
+                    return Err(invalid(format!(
+                        "broker {:?}: socket must be an absolute path",
+                        broker.name
+                    )));
+                }
+                _ => {
+                    if broker.socket.is_some() || !broker.link {
+                        return Err(invalid(format!(
+                            "broker {:?}: give exactly one of socket or \"link\": true",
+                            broker.name
+                        )));
+                    }
+                }
             }
         }
         if self.grants.len() > 4096 {
@@ -160,7 +177,7 @@ impl HubConfig {
     }
 }
 
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     !bytes.is_empty()
         && bytes.len() <= 63
@@ -225,9 +242,33 @@ mod tests {
         relative["brokers"][0]["socket"] = serde_json::json!("broker.sock");
         assert_eq!(parse(&relative).unwrap_err().code, "invalid_config");
 
+        let mut both = good();
+        both["brokers"][0]["link"] = serde_json::json!(true);
+        assert_eq!(parse(&both).unwrap_err().code, "invalid_config");
+
+        let mut neither = good();
+        neither["brokers"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("socket");
+        assert_eq!(parse(&neither).unwrap_err().code, "invalid_config");
+
         let mut relative_tokens = good();
         relative_tokens["auth"]["tokens_file"] = serde_json::json!("tokens.json");
         assert_eq!(parse(&relative_tokens).unwrap_err().code, "invalid_config");
+    }
+
+    #[test]
+    fn a_linked_broker_needs_no_socket() {
+        let mut linked = good();
+        linked["brokers"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({ "name": "gus", "link": true }));
+        linked["grants"][0]["brokers"] = serde_json::json!(["gold-ws", "gus"]);
+        let config = parse(&linked).unwrap();
+        assert!(config.broker("gus").unwrap().link);
+        assert_eq!(config.brokers_for("jesse").len(), 2);
     }
 
     #[test]
