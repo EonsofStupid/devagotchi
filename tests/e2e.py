@@ -10,7 +10,8 @@ only git, drives it through `bridge-mcp` over stdio (tests/adapter_probe.py), th
 (tests/hub_probe.py), then the link's whole life: not enrolled at first, a one-time
 code that works once, `devagotchi-link run`, the same probe through the link, offline when
 the link stops, back after it restarts, and a revoke that closes it and makes it exit 2.
-Last, Shippin sign-in: a hub in `nomen` mode against a fake Nomen (tests/nomen_probe.py).
+Last, Shippin sign-in: a hub in `nomen` mode against a fake Nomen (tests/nomen_probe.py),
+and people signing in with a browser to see their machines (tests/web_probe.py).
 Linux uses a Unix socket, Windows a named pipe. Exit 0 only when every step passes.
 """
 import argparse
@@ -174,7 +175,12 @@ try:
          "--git", git, "--cwd", str(workspace), "--work", str(work / "nomen")],
         "Nomen sign-in",
     )
-    ok = adapter_ok and hub_ok and link_ok and nomen_ok
+    web_ok = run_probe(
+        [str(HERE / "web_probe.py"), "--hub-bin", str(hub_bin), "--endpoint", endpoint,
+         "--work", str(work / "web")],
+        "browser sign-in",
+    )
+    ok = adapter_ok and hub_ok and link_ok and nomen_ok and web_ok
 finally:
     for process in reversed(processes):
         if process.poll() is None:

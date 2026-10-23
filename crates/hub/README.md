@@ -123,6 +123,40 @@ Each refused token logs its reason to stderr, at most one line a second, never t
 personal access tokens are issued for Nomen's own API, so the hub does not accept them;
 agents get their own identity through token exchange in a later increment.
 
+## Browser sign-in: your account and machines
+
+With a `web` section, people sign in with their Shippin account at `<public_url>/account` and
+see who they are signed in as (login name and account ID) and the machines they can reach:
+each broker they hold a grant for (every broker for the owner), whether it is on the hub's
+host or a linked machine, and whether it is online, offline, revoked or not enrolled yet.
+`GET /api/v1/me` returns the same view as JSON, for a browser session or a bearer token.
+
+```json
+"auth": { "mode": "nomen", "clients": ["<mcp.shippin.cloud's id>", "<devagotchi web app's id>"], … },
+"web": { "client_id": "<devagotchi web app's id>" }
+```
+
+Set up once in Nomen, in the hub's project: a **User Agent** application with **PKCE** (no
+secret), redirect URI `<public_url>/auth/callback`. Its client id goes in `web.client_id`
+and in `auth.clients`; the hub refuses to start otherwise, and with any auth mode but
+`nomen`, or a `public_url` that is plain http anywhere but loopback.
+
+How it holds up:
+
+- Authorization code with PKCE (S256). The `state` is single-use and bound to the browser
+  by a ten-minute cookie, so another browser's callback, a replay or a forged link fails.
+- The access token Nomen returns goes through the same introspection as every bearer
+  token: accepted client, accepted project, exact account ID. A browser session is never
+  weaker than an MCP call, and Nomen down is a 503 page, never "not accepted".
+- The token stays in the hub's memory. The browser gets only a random session id, in a
+  `__Host-` cookie (`Secure`, `HttpOnly`, `SameSite=Lax`); the hub keeps only its SHA-256.
+- Every page re-checks the token (Nomen's answer is reused for a minute), and a session
+  ends with its token or after 12 hours, whichever is first. Sessions live in memory, so a
+  hub restart signs everyone out of the page; their machines are unaffected.
+- The return path after sign-in is kept on the hub and is only ever a path on it.
+- Pages carry no script; values are escaped and the CSP is `default-src 'none'` with the
+  hub's own stylesheet. Sign-out ends the hub session only; the Shippin sign-in stays.
+
 ## Tools
 
 `whoami` returns the proven account ID, the login name, whether it is the owner, and the
@@ -143,11 +177,13 @@ the chain (`{"ok": true, "brokers": [...], "audit": {"entries": N, "ok": true, "
 
 `python3 tests/hub_probe.py http://127.0.0.1:8787 --token <bearer> --broker gold-ws --cwd ~`
 walks the surface end to end against a live broker and exits 0 only when every step holds.
+`tests/web_probe.py` signs in through a browser's eyes against the real binary and a fake
+Nomen (PKCE, introspection, the account page, refusals, an outage and sign-out).
 
 ## Not in H1
 
 mcp.shippin.cloud passing your Nomen token through to the hub (D2), approving a new
 machine from your phone after Shippin sign-in, grants read from the console's staff roles
 and server registry once they are live, agent identities by token exchange, installer
-autostart for the link, a web UI, the agent-hub board (H3), harness profiles (H4), the
-bundle (H5).
+autostart for the link, adding your own machine from the account page (machines are
+still granted in this file), the agent-hub board (H3), harness profiles (H4), the bundle (H5).
