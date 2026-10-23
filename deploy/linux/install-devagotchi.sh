@@ -249,7 +249,9 @@ else
     grants=()
     for path in "${candidates[@]}"; do
         real=$(readlink -f -- "$path" || true)
-        [ -n "$real" ] && [ -f "$real" ] && [ -x "$real" ] || die "grant $path is not an executable file"
+        if [ -z "$real" ] || [ ! -f "$real" ] || [ ! -x "$real" ]; then
+            die "grant $path is not an executable file"
+        fi
         case " ${grants[*]} " in *" $real "*) ;; *) grants+=("$real") ;; esac
     done
     list=''
