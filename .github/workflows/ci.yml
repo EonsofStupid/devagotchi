@@ -74,3 +74,19 @@ jobs:
         if: matrix.os == 'windows-2022'
         shell: powershell
         run: ./deploy/windows/ci-install-check.ps1
+
+  host-install:
+    # The Linux server installer on a real systemd host: a dedicated account with lingering,
+    # user services from root-owned binaries, the link joining a hub with a piped code, upgrade,
+    # crash recovery, a revoke that leaves the link down, and uninstall.
+    name: host-install (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - run: shellcheck deploy/linux/*.sh
+      - run: rustup toolchain install
+      - run: cargo build --locked --bins
+      - run: deploy/linux/ci-install-check.sh
