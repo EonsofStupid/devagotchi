@@ -1,0 +1,30 @@
+# Keeps the two things a pinned build can silently fall behind on: the crates in
+# Cargo.lock and the commit SHAs the workflows pin. One PR per group per week; CI,
+# cargo deny and the four-OS matrix decide whether it merges, as for any other PR.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+    # Floors the plan pins on purpose: rmcp is exact, the toolchain is pinned by rust-toolchain.toml.
+    ignore:
+      - dependency-name: rmcp
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]
