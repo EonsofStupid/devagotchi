@@ -108,7 +108,14 @@ if args.expect_error:
     is_error, answer = call("operation_get", {"broker": args.broker, "input": {"operation_id": "probe-" + uuid.uuid4().hex}})
     check(f"routed call fails with {args.expect_error}", is_error and answer.get("code") == args.expect_error, json.dumps(answer)[:200])
     sys.exit(1 if failures else 0)
-tools = sorted(t["name"] for t in rpc("tools/list")["tools"])
+listed = rpc("tools/list")["tools"]
+tools = sorted(t["name"] for t in listed)
+# Directory gate (Claude and OpenAI): every tool has a title and says whether it only reads
+# or may destroy, and whether it reaches the open world.
+unannotated = [t["name"] for t in listed if not t.get("title") or not (
+    "readOnlyHint" in t.get("annotations", {}) and "openWorldHint" in t.get("annotations", {})
+    and (t["annotations"]["readOnlyHint"] or "destructiveHint" in t["annotations"]))]
+check("every tool has a title and annotations", not unannotated, ", ".join(unannotated))
 broker_tools = ["machines", "operation_cancel", "operation_get", "operation_read", "operation_start", "whoami"]
 board_tools = [t for t in tools if t.startswith("board_")]
 check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 17,

@@ -240,7 +240,9 @@ impl Hub {
 impl Hub {
     #[tool(
         name = "whoami",
-        description = "The subject this hub authenticated for the current request and the brokers it may route to. Identity comes from the bearer token, never from arguments."
+        description = "The subject this hub authenticated for the current request and the brokers it may route to. Identity comes from the bearer token, never from arguments.",
+        title = "Who am I",
+        annotations(title = "Who am I", read_only_hint = true, open_world_hint = false)
     )]
     async fn whoami(
         &self,
@@ -270,7 +272,13 @@ impl Hub {
 
     #[tool(
         name = "machines",
-        description = "Start here for anything on the user's own machines (servers, PCs, devspaces): every machine you can work on through this hub and whether it can be used right now. status is online, offline (the machine is off, asleep or its link is not running: tell the user rather than retrying), not_enrolled or revoked. Pass a machine's name as `broker` to operation_start, operation_get, operation_read and operation_cancel."
+        description = "Start here for anything on the user's own machines (servers, PCs, devspaces): every machine you can work on through this hub and whether it can be used right now. status is online, offline (the machine is off, asleep or its link is not running: tell the user rather than retrying), not_enrolled or revoked. Pass a machine's name as `broker` to operation_start, operation_get, operation_read and operation_cancel.",
+        title = "List my machines",
+        annotations(
+            title = "List my machines",
+            read_only_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn machines(
         &self,
@@ -284,7 +292,15 @@ impl Hub {
 
     #[tool(
         name = "operation_start",
-        description = "Start a broker-owned operation on the named broker using an explicitly granted executable and exact arguments. The broker validates the workspace, deadline and idempotency key; reuse the same key and inputs to reconcile a lost response."
+        description = "Start a broker-owned operation on the named broker using an explicitly granted executable and exact arguments. The broker validates the workspace, deadline and idempotency key; reuse the same key and inputs to reconcile a lost response.",
+        title = "Run a program on a machine",
+        annotations(
+            title = "Run a program on a machine",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = true
+        )
     )]
     async fn operation_start(
         &self,
@@ -307,7 +323,13 @@ impl Hub {
 
     #[tool(
         name = "operation_get",
-        description = "Read the named broker's retained state for an operation. This does not start, resume or cancel execution."
+        description = "Read the named broker's retained state for an operation. This does not start, resume or cancel execution.",
+        title = "Check an operation",
+        annotations(
+            title = "Check an operation",
+            read_only_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn operation_get(
         &self,
@@ -330,7 +352,13 @@ impl Hub {
 
     #[tool(
         name = "operation_read",
-        description = "Read bounded retained output from the named broker after a caller-owned sequence cursor. Lossless base64 bytes, a text view, retention gaps and the operation state."
+        description = "Read bounded retained output from the named broker after a caller-owned sequence cursor. Lossless base64 bytes, a text view, retention gaps and the operation state.",
+        title = "Read an operation's output",
+        annotations(
+            title = "Read an operation's output",
+            read_only_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn operation_read(
         &self,
@@ -353,7 +381,15 @@ impl Hub {
 
     #[tool(
         name = "operation_cancel",
-        description = "Explicitly request cancellation of a broker-owned operation on the named broker. Disconnecting never cancels."
+        description = "Explicitly request cancellation of a broker-owned operation on the named broker. Disconnecting never cancels.",
+        title = "Cancel an operation",
+        annotations(
+            title = "Cancel an operation",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn operation_cancel(
         &self,
