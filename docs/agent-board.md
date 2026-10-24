@@ -175,16 +175,16 @@ one reply that says "fully supported, same entitlements" is not identified as Go
 Codex and Claude document their headless modes. Treat `agy` orchestration as technically proven and
 policy-unconfirmed until Google answers; the seat's config row carries that flag.
 
-## 8. Decision register (resolved rows become ADRs through Jesse's component)
+## 8. Decision register (a RULED row becomes canon only as `docs/adr/NNNN-*.md` saved through Jesse's ADR component)
 
 | ID | Status | Decision |
 |---|---|---|
 | B01 | LOCKED | The agents' board lives in this hub, in Rust, per project, on SQLite; the hub never owns jobs (ruling 2026-10-21). |
-| B02 | PROPOSED | Store placement: `<project>/.devagotchi/board.sqlite3`, hub-opened on demand, `board.jsonl` export. Alternative: one database in the hub's state directory keyed by project. |
+| B02 | RULED 2026-10-24 (chat; ADR pending through the component) | Store placement: `<project>/.devagotchi/board.sqlite3`, hub-opened on demand, `board.jsonl` export. Rejected: one database in the hub's state directory keyed by project. |
 | B03 | PROPOSED | Ids: prefix + hash for roots, hierarchical for children. Alternative: counters (the Go hub), rejected for multi-machine creation. |
 | B04 | PROPOSED | Dependency kinds `blocks | parent | related | discovered-from | duplicates | supersedes`; only `blocks` gates readiness. |
 | B05 | PROPOSED | Liveness by broker: an operation working a ticket keeps its lease alive; settlement releases or hands off. |
-| B06 | PROPOSED | Seats are driven over ACP where the vendor offers it; `agy` orchestration under a consumer account is flagged policy-unconfirmed. |
+| B06 | RULED 2026-10-24 (chat; ADR pending through the component) | All five seats are driven over ACP, one driver with a config row per vendor; `agy` runs only behind its policy-unconfirmed flag until Google answers. |
 | B07 | PROPOSED | Hook pack (prime / beat / GUPP stop guard / idle → claim_next) installed by `board init --hooks`. |
 | B08 | DEFERRED | Per-state WIP caps, per-principal budgets, message tickets with threads, path reservations with a pre-commit guard (increment 9). |
 | B09 | DEFERRED | Board pages in the hub's web and the one-tap Approve from the agent-board plan (increment 10). |
