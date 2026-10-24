@@ -33,11 +33,36 @@ pub struct HubConfig {
     /// store answers the command line here and agents anywhere.
     #[serde(default)]
     pub boards: Vec<BoardEntry>,
+    /// Boards this hub hosts for accounts (D23, packet 15): one per account and project,
+    /// made by `board_bind`, kept under `dir`. Absent: only the `boards` above exist here.
+    #[serde(default)]
+    pub account_boards: Option<AccountBoardsConfig>,
     /// Browser sign-in for people: `/account` shows who you are signed in as and your
     /// machines. Nomen sign-in only. Absent: no pages, only `/mcp`, `/link` and the APIs.
     #[serde(default)]
     pub web: Option<WebConfig>,
 }
+
+/// The hosted tier's boards: an account binds a project and gets a board of its own on this
+/// hub, reached by name like a configured one; its seats (`X-Devagotchi-Seat`) are the
+/// account's own agent names on it.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccountBoardsConfig {
+    /// Absolute directory for the stores; default `<state dir>/account-boards`.
+    #[serde(default)]
+    pub dir: Option<String>,
+    /// How many projects a free account may bind here (D21: realistically one). The owner
+    /// and the `unlimited` accounts have no limit.
+    #[serde(default)]
+    pub free_limit: Option<u32>,
+    /// Account IDs with no limit (paid, or friends).
+    #[serde(default)]
+    pub unlimited: Vec<String>,
+}
+
+/// What a free account gets when the config does not say.
+pub const DEFAULT_FREE_LIMIT: u32 = 1;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -288,6 +313,19 @@ impl HubConfig {
                 )));
             }
         }
+        if let Some(accounts) = &self.account_boards {
+            if let Some(dir) = &accounts.dir
+                && !Path::new(dir).is_absolute()
+            {
+                return Err(invalid(
+                    "account_boards.dir must be an absolute path".into(),
+                ));
+            }
+            for subject in &accounts.unlimited {
+                valid_subject(subject)
+                    .map_err(|why| invalid(format!("account_boards.unlimited {why}")))?;
+            }
+        }
         if self.grants.len() > 4096 {
             return Err(invalid("at most 4096 grants".into()));
         }
@@ -458,13 +496,50 @@ mod tests {
     }
 
     #[test]
+    fn account_boards_need_an_absolute_dir_and_real_account_ids() {
+        let mut hosted = good();
+        hosted["account_boards"] = serde_json::json!({});
+        let config = parse(&hosted).unwrap();
+        let accounts = config.account_boards.as_ref().unwrap();
+        assert!(
+            accounts.dir.is_none()
+                && accounts.free_limit.is_none()
+                && accounts.unlimited.is_empty()
+        );
+
+        let mut relative = good();
+        relative["account_boards"] = serde_json::json!({ "dir": "boards" });
+        assert_eq!(parse(&relative).unwrap_err().code, "invalid_config");
+
+        let mut email = good();
+        email["account_boards"] = serde_json::json!({ "unlimited": ["someone@example.test"] });
+        assert_eq!(parse(&email).unwrap_err().code, "invalid_config");
+
+        let mut unknown = good();
+        unknown["account_boards"] = serde_json::json!({ "limit": 3 });
+        assert_eq!(
+            parse(&unknown).unwrap_err().code,
+            "invalid_config",
+            "unknown field fails closed"
+        );
+    }
+
+    #[test]
     fn dev_tokens_are_for_tests_a_reachable_hub_refuses_them() {
-        for public_url in ["https://hub.example", "http://hub.example:8787", "https://127.0.0.1"] {
+        for public_url in [
+            "https://hub.example",
+            "http://hub.example:8787",
+            "https://127.0.0.1",
+        ] {
             let mut reachable = good();
             reachable["public_url"] = serde_json::json!(public_url);
             let error = parse(&reachable).unwrap_err();
             assert_eq!(error.code, "invalid_config", "{public_url}");
-            assert!(error.message.contains("nomen or oidc"), "{public_url}: {}", error.message);
+            assert!(
+                error.message.contains("nomen or oidc"),
+                "{public_url}: {}",
+                error.message
+            );
         }
         for public_url in ["http://localhost:8787", "http://[::1]:8787"] {
             let mut local = good();

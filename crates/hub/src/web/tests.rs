@@ -216,7 +216,7 @@ async fn world() -> World {
         verifier: Arc::new(verifier),
         hub: Hub {
             push: Some(push),
-            boards: Arc::new(crate::board::mcp::Boards::from_config(&config)),
+            boards: Arc::new(crate::board::mcp::Boards::from_config(&config, dir.path())),
             config,
             audit,
             links,

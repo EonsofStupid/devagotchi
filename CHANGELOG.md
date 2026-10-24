@@ -28,6 +28,15 @@ heading. Agents draft the fragments below; they never tag.
   accountless choice. `devagotchi start` says which it is until one is on file. The hub
   accepts the token `login` lands when the CLI's client id is in `auth.clients`.
 
+### Account boards on the hub (increment 15a, D23)
+- `account_boards` in the hub config: `board_bind {project}` makes the calling account's own
+  board (one per account-project under `dir/<account>/`), listed first in `whoami.boards`; a
+  free account binds one project (`plan_limit`; the owner and `unlimited` accounts have no
+  limit); a shared board's name cannot be bound (`name_taken`); a hub without the section
+  answers `not_offered`.
+- Seats: `X-Devagotchi-Seat: <name>` makes one account's agents distinct actors on its own
+  board, and `<account>/<seat>` on a shared one; never a person; fences kept per seat.
+
 ### The account in the agent's session (increment 14c)
 - `devagotchi mcp --hub [URL]`: the stdio MCP server an agent already runs, relaying the
   session to the hosted hub's `/mcp` (default https://devagotchi.com) as the account on
