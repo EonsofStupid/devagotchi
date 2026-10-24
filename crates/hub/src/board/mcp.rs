@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Actor, Board, ChainStatus, Dep, DepKind, Event, Filter, Lease, NewTicket, NextFilter, Note,
-    Patch, Prime, Ticket, TicketView, approval::ApprovalStatus, open_project,
+    Patch, Prime, Ticket, TicketView, approval::ApprovalStatus, face::ME, open_project,
 };
 use crate::{
     audit::AuditEntry,
@@ -398,8 +398,10 @@ pub struct ListIn {
     pub project: String,
     #[serde(default)]
     pub state: Option<String>,
+    /// A holder's name, or `@me` for yourself as this board knows you.
     #[serde(default)]
     pub holder: Option<String>,
+    /// An assignee's name, or `@me`.
     #[serde(default)]
     pub assignee: Option<String>,
     #[serde(default)]
@@ -732,12 +734,14 @@ impl Hub {
     }
 
     /// Who the store sees: the seat on the account's own board, `<account>/<seat>` on a
-    /// shared one, the account itself without a seat. A seat is never a person.
+    /// shared one, the account itself without a seat. A seat is never a person; the account
+    /// is the person on its own board, and on a shared one when its grant says so.
     fn actor_for(&self, subject: &Subject, seat: Option<&str>, kind: Kind) -> (String, bool) {
         match (seat, kind) {
             (Some(seat), Kind::Account) => (seat.to_string(), false),
             (Some(seat), Kind::Shared) => (format!("{}/{seat}", subject.id), false),
-            (None, _) => (subject.id.clone(), self.config.is_human(&subject.id)),
+            (None, Kind::Account) => (subject.id.clone(), true),
+            (None, Kind::Shared) => (subject.id.clone(), self.config.is_human(&subject.id)),
         }
     }
 
@@ -897,7 +901,19 @@ impl Hub {
             &input.project,
             None,
             &context,
-            move |board, _| board.list(&filter),
+            move |board, actor| {
+                // `@me` is whoever the caller is on this board (a seat is spelled by the
+                // hub, so the command line cannot name itself).
+                let me = |who: Option<String>| {
+                    who.map(|w| if w == ME { actor.id.to_string() } else { w })
+                };
+                let filter = Filter {
+                    holder: me(filter.holder),
+                    assignee: me(filter.assignee),
+                    ..filter
+                };
+                board.list(&filter)
+            },
         )
         .await
     }
@@ -1605,6 +1621,7 @@ mod tests {
             project: project.into(),
             prefix: board.prefix().into(),
             created_at: 0,
+            hub: None,
         };
         std::fs::write(
             board_dir.join("config.json"),

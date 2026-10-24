@@ -824,6 +824,7 @@ mod cli {
                 actor_env: actor.map(str::to_string),
                 os_user: Some("jesse".into()),
                 stdout_is_terminal: terminal,
+                account_file: Some(cwd.join("account.json")),
             },
             &mut out,
             &mut err,
@@ -1224,4 +1225,252 @@ fn an_approval_waits_for_a_person_and_records_the_verdict() {
             .code,
         "invalid"
     );
+}
+
+/// A bound project (B11): the command line against the real hub, in process, as one
+/// account from two machines; the hub arbitrates, the agents are seats.
+mod bound {
+    use std::{collections::HashMap, ffi::OsString, path::Path, sync::Arc};
+
+    use serde_json::{Value, json};
+
+    use crate::{
+        AppState,
+        account::{self, Account, Stored},
+        audit::Audit,
+        auth::Verifier,
+        board::cli::{self, EXIT_OK, EXIT_REFUSED, EXIT_UNAVAILABLE, Invocation},
+        config::HubConfig,
+        devices::Devices,
+        hub::Hub,
+        link::Links,
+    };
+
+    const MEMBER: &str = "300000000000000002";
+
+    async fn hub(dir: &Path) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let config = Arc::new(
+            HubConfig::parse(
+                &json!({
+                    "listen": "127.0.0.1:1",
+                    "public_url": url,
+                    "auth": {"mode": "dev", "tokens_file": dir.join("tokens.json")},
+                    "brokers": [],
+                    "grants": [],
+                    "account_boards": { "dir": dir.join("accounts") }
+                })
+                .to_string(),
+            )
+            .unwrap(),
+        );
+        let devices = Arc::new(Devices::open(&dir.join("devices.sqlite3")).unwrap());
+        let audit = Arc::new(Audit::open(&dir.join("audit.sqlite3")).unwrap());
+        let links = Arc::new(Links::new(config.clone(), devices.clone(), audit.clone()));
+        let state = AppState {
+            verifier: Arc::new(Verifier::Dev(HashMap::from([(
+                "tok-member".to_string(),
+                MEMBER.to_string(),
+            )]))),
+            hub: Hub {
+                push: None,
+                boards: Arc::new(crate::board::mcp::Boards::from_config(&config, dir)),
+                config,
+                audit,
+                links,
+            },
+            web: None,
+        };
+        let app = crate::app(state);
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        url
+    }
+
+    fn signed_in(path: &Path, token: &str) {
+        let now = account::unix_now();
+        account::write(
+            path,
+            &Stored::Account(Account::for_tests(
+                "https://id.example",
+                MEMBER,
+                token,
+                now + 3600,
+            )),
+        )
+        .unwrap();
+    }
+
+    fn run(cwd: &Path, account: &Path, actor: Option<&str>, args: &[&str]) -> (u8, Value, String) {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = cli::run(
+            Invocation {
+                args: args.iter().map(OsString::from).collect(),
+                cwd: cwd.to_path_buf(),
+                actor_env: actor.map(str::to_string),
+                os_user: Some("jesse".into()),
+                stdout_is_terminal: false,
+                account_file: Some(account.to_path_buf()),
+            },
+            &mut out,
+            &mut err,
+        );
+        // JSON mode (stdout is not a terminal): records and errors alike are on stdout;
+        // the third element is everything written, for assertions on the words.
+        let out = String::from_utf8(out).unwrap();
+        let value = serde_json::from_str(out.trim()).unwrap_or(Value::Null);
+        (code, value, out + &String::from_utf8(err).unwrap())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn two_machines_one_account_one_board() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = hub(dir.path()).await;
+        let machine_a = dir.path().join("a").join("demo");
+        let machine_b = dir.path().join("b").join("demo");
+        std::fs::create_dir_all(&machine_a).unwrap();
+        std::fs::create_dir_all(&machine_b).unwrap();
+        let account_a = dir.path().join("a").join("account.json");
+        let account_b = dir.path().join("b").join("account.json");
+
+        // Not signed in: bind says so, with the command to run, and writes nothing.
+        let (code, _, err) = tokio::task::spawn_blocking({
+            let (machine_a, account_a, url) = (machine_a.clone(), account_a.clone(), url.clone());
+            move || run(&machine_a, &account_a, None, &["bind", "--hub", &url])
+        })
+        .await
+        .unwrap();
+        assert_eq!(code, EXIT_REFUSED, "{err}");
+        assert!(err.contains("devagotchi login"), "{err}");
+        assert!(!machine_a.join(".devagotchi").exists());
+
+        signed_in(&account_a, "tok-member");
+        signed_in(&account_b, "tok-member");
+
+        // Machine A binds (the hub makes the board), creates, and claims as seat claude.
+        let a = {
+            let (machine_a, account_a, url) = (machine_a.clone(), account_a.clone(), url.clone());
+            tokio::task::spawn_blocking(move || {
+                let (code, bound, err) =
+                    run(&machine_a, &account_a, None, &["bind", "--hub", &url]);
+                assert_eq!(code, EXIT_OK, "{err}");
+                assert_eq!(bound["project"], "demo");
+                assert_eq!(bound["created"], true);
+                assert!(
+                    !machine_a.join(".devagotchi").join("board.sqlite3").exists(),
+                    "no local store for a bound project"
+                );
+                let config: Value = serde_json::from_str(
+                    &std::fs::read_to_string(machine_a.join(".devagotchi").join("config.json"))
+                        .unwrap(),
+                )
+                .unwrap();
+                assert_eq!(config["hub"], url);
+                let (code, ticket, err) = run(
+                    &machine_a,
+                    &account_a,
+                    Some("claude"),
+                    &["new", "Prove the bound board"],
+                );
+                assert_eq!(code, EXIT_OK, "{err}");
+                let id = ticket["id"].as_str().unwrap().to_string();
+                let (code, lease, err) =
+                    run(&machine_a, &account_a, Some("claude"), &["claim", &id]);
+                assert_eq!(code, EXIT_OK, "{err}");
+                assert_eq!(
+                    lease["ticket"]["holder"], "claude",
+                    "the seat is the holder on the account's board"
+                );
+                (id, lease["fence"].as_i64().unwrap())
+            })
+            .await
+            .unwrap()
+        };
+        let (id, fence) = a;
+
+        // Machine B binds the same project (found, not made) and sees the claim at once.
+        {
+            let (machine_b, account_b, url, id) = (
+                machine_b.clone(),
+                account_b.clone(),
+                url.clone(),
+                id.clone(),
+            );
+            tokio::task::spawn_blocking(move || {
+                let (code, bound, err) = run(
+                    &machine_b,
+                    &account_b,
+                    None,
+                    &["bind", "--hub", &url, "--project", "demo"],
+                );
+                assert_eq!(code, EXIT_OK, "{err}");
+                assert_eq!(bound["created"], false, "{bound}");
+                let (code, prime, err) = run(&machine_b, &account_b, Some("codex"), &["prime"]);
+                assert_eq!(code, EXIT_OK, "{err}");
+                assert_eq!(prime["actor"], "codex");
+                assert_eq!(prime["ready"].as_array().unwrap().len(), 0, "{prime}");
+                let (code, _, err) = run(
+                    &machine_b,
+                    &account_b,
+                    Some("codex"),
+                    &["beat", &id, "--fence", &fence.to_string()],
+                );
+                assert_eq!(code, 2, "the other seat does not hold it: {err}");
+                assert!(err.contains("not_holder"), "{err}");
+                // `held` and `beat` with no id resolve `@me` on the hub.
+                let (code, held, err) = run(&machine_b, &account_b, Some("codex"), &["held"]);
+                assert_eq!(code, EXIT_OK, "{err}");
+                assert_eq!(held.as_array().map(Vec::len), Some(0));
+                // The person (no seat) sees the ticket and may force it free.
+                let (code, held, _) = run(&machine_b, &account_b, None, &["ls", "--open"]);
+                assert_eq!(code, EXIT_OK);
+                assert_eq!(held[0]["holder"], "claude");
+                let (code, freed, err) = run(
+                    &machine_b,
+                    &account_b,
+                    None,
+                    &["force", &id, "the demo moves on"],
+                );
+                assert_eq!(code, EXIT_OK, "{err}");
+                assert_eq!(freed["state"], "ready", "{freed}");
+            })
+            .await
+            .unwrap();
+        }
+
+        // Machine A: the stale fence is refused by the hub, as the local store would.
+        {
+            let (machine_a, account_a, id) = (machine_a.clone(), account_a.clone(), id.clone());
+            tokio::task::spawn_blocking(move || {
+                let (code, _, err) = run(&machine_a, &account_a, Some("claude"), &["beat", &id]);
+                assert_eq!(code, 2, "{err}");
+                // The hub's own chain verifies through the remote face.
+                let (code, status, err) = run(&machine_a, &account_a, Some("claude"), &["verify"]);
+                assert_eq!(code, EXIT_OK, "{err}");
+                assert_eq!(status["ok"], true);
+                // Unbind: the local store is the board again, and there is none yet.
+                let (code, _, err) = run(&machine_a, &account_a, None, &["unbind"]);
+                assert_eq!(code, EXIT_OK, "{err}");
+                let (code, _, err) = run(&machine_a, &account_a, None, &["ls"]);
+                assert_eq!(code, EXIT_UNAVAILABLE, "{err}");
+                assert!(err.contains("no_board"), "{err}");
+            })
+            .await
+            .unwrap();
+        }
+
+        // Signed out underneath a bound project: every command says what to run.
+        std::fs::remove_file(&account_b).unwrap();
+        let (code, _, err) = tokio::task::spawn_blocking({
+            let (machine_b, account_b) = (machine_b.clone(), account_b.clone());
+            move || run(&machine_b, &account_b, Some("codex"), &["prime"])
+        })
+        .await
+        .unwrap();
+        assert_eq!(code, EXIT_REFUSED, "{err}");
+        assert!(
+            err.contains("not_signed_in") && err.contains("devagotchi login"),
+            "{err}"
+        );
+    }
 }

@@ -54,7 +54,6 @@ enum Command {
     Enroll { state: PathBuf, device: String },
     Revoke { state: PathBuf, device: String },
     Devices { state: PathBuf },
-    Board { args: Vec<OsString> },
 }
 
 #[derive(Clone)]
@@ -69,11 +68,6 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> BridgeResult<Command>
     let mut args: Vec<OsString> = args.into_iter().collect();
     if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
         return Ok(Command::Help);
-    }
-    if args.first().is_some_and(|a| a == "board") {
-        return Ok(Command::Board {
-            args: args.into_iter().skip(1).collect(),
-        });
     }
     // `serve` is the verb's name in the nested command line; the bare form still works.
     if args.first().is_some_and(|a| a == "serve") {
@@ -205,7 +199,7 @@ fn manage(command: Command) -> BridgeResult<()> {
                 serde_json::to_string_pretty(&list).unwrap_or_default()
             );
         }
-        Command::Help | Command::Serve { .. } | Command::Board { .. } => unreachable!(),
+        Command::Help | Command::Serve { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -218,7 +212,6 @@ pub fn cli(args: Vec<OsString>) -> ExitCode {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
         }
-        Ok(Command::Board { args }) => return board_cli(args),
         Ok(command) => {
             return match manage(command) {
                 Ok(()) => ExitCode::SUCCESS,
@@ -233,7 +226,10 @@ pub fn cli(args: Vec<OsString>) -> ExitCode {
             return ExitCode::from(64);
         }
     };
-    let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("devagotchi hub: runtime: {error}");
@@ -251,7 +247,7 @@ pub fn cli(args: Vec<OsString>) -> ExitCode {
 
 /// The board's command line on this process's stdio, as the OS user, from the current
 /// directory: what `devagotchi board …` runs.
-pub fn board_cli(args: Vec<OsString>) -> ExitCode {
+pub fn board_cli(args: Vec<OsString>, account_file: Option<PathBuf>) -> ExitCode {
     use std::io::IsTerminal;
     let invocation = board::cli::Invocation {
         args,
@@ -261,6 +257,7 @@ pub fn board_cli(args: Vec<OsString>) -> ExitCode {
             .filter(|a| !a.trim().is_empty()),
         os_user: env::var("USER").or_else(|_| env::var("USERNAME")).ok(),
         stdout_is_terminal: std::io::stdout().is_terminal(),
+        account_file,
     };
     let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
     ExitCode::from(board::cli::run(invocation, &mut out, &mut err))
@@ -338,53 +335,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         web,
     };
 
-    let public_host = config
-        .public_url
-        .split("://")
-        .nth(1)
-        .and_then(|rest| rest.split('/').next())
-        .unwrap_or_default()
-        .to_string();
-    let mcp_config = StreamableHttpServerConfig::default()
-        .with_json_response(true)
-        .with_allowed_hosts([
-            public_host.clone(),
-            config.listen.clone(),
-            "localhost".into(),
-            "127.0.0.1".into(),
-        ])
-        .with_sse_keep_alive(Some(Duration::from_secs(15)));
-    let mcp = {
-        let hub = state.hub.clone();
-        StreamableHttpService::new(
-            move || Ok(hub.clone()),
-            Arc::new(LocalSessionManager::default()),
-            mcp_config,
-        )
-    };
-
-    let app = Router::new()
-        .route("/healthz", get(healthz))
-        .route("/link", get(link_upgrade))
-        .route(
-            "/.well-known/oauth-protected-resource",
-            get(protected_resource),
-        )
-        .route(
-            "/.well-known/oauth-protected-resource/mcp",
-            get(protected_resource),
-        )
-        .nest_service(
-            "/mcp",
-            Router::new()
-                .fallback_service(mcp)
-                .layer(middleware::from_fn_with_state(
-                    state.clone(),
-                    require_bearer,
-                )),
-        )
-        .merge(web::router())
-        .with_state(state.clone());
+    let app = app(state.clone());
 
     let listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -419,6 +370,58 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     .map_err(|error| BridgeError::new("serve", error.to_string()))?;
     eprintln!("devagotchi hub stopped");
     Ok(())
+}
+
+/// The whole hub as one router: `/mcp` behind the bearer check, `/link`, `/healthz`, the
+/// protected-resource metadata and the web pages.
+fn app(state: AppState) -> Router {
+    let config = &state.hub.config;
+    let public_host = config
+        .public_url
+        .split("://")
+        .nth(1)
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or_default()
+        .to_string();
+    let mcp_config = StreamableHttpServerConfig::default()
+        .with_json_response(true)
+        .with_allowed_hosts([
+            public_host,
+            config.listen.clone(),
+            "localhost".into(),
+            "127.0.0.1".into(),
+        ])
+        .with_sse_keep_alive(Some(Duration::from_secs(15)));
+    let mcp = {
+        let hub = state.hub.clone();
+        StreamableHttpService::new(
+            move || Ok(hub.clone()),
+            Arc::new(LocalSessionManager::default()),
+            mcp_config,
+        )
+    };
+    Router::new()
+        .route("/healthz", get(healthz))
+        .route("/link", get(link_upgrade))
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(protected_resource),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource/mcp",
+            get(protected_resource),
+        )
+        .nest_service(
+            "/mcp",
+            Router::new()
+                .fallback_service(mcp)
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    require_bearer,
+                )),
+        )
+        .merge(web::router())
+        .with_state(state)
 }
 
 async fn require_bearer(

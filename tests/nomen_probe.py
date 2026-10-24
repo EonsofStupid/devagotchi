@@ -15,8 +15,9 @@ working, and sign-in recovers when Nomen does. Then the terminal sign-in (D22, p
 `devagotchi login` against the fake, with no browser — the code and URL are shown, the
 tokens land owner-only in account.json, `whoami` names the account, the hub accepts the
 token that landed, a `devagotchi mcp --hub` session on stdio is answered as the account
-(an agent's call carries the account), and `logout` revokes it.
-Exit 0 only when every step holds.
+(an agent's call carries the account), the command line bound to the hub works one board
+from two machines of the account (B11), and `logout` revokes it. Exit 0 only when every
+step holds.
 """
 import argparse
 import json
@@ -141,6 +142,7 @@ config = {
     "public_url": base,
     "auth": {"mode": "nomen", "issuer": nomen.issuer, "audiences": [HUB_PROJECT],
              "clients": ["shippin-mcp", "devagotchi-cli@shippin"], "key_file": str(key_file)},
+    "account_boards": {},
     "owner": OWNER,
     "brokers": [{"name": "local", "socket": args.endpoint}, {"name": "elsewhere", "link": True}],
     "grants": [{"subject": MEMBER, "brokers": ["local"]}],
@@ -267,6 +269,28 @@ try:
     check("devagotchi mcp --hub: the hub's whoami answers as the account", init and init.get("result", {}).get("serverInfo", {}).get("name") == "devagotchi-hub"
           and content.get("subject") == MEMBER and content.get("via") == "nomen" and front.returncode == 0,
           json.dumps(content) or front.stderr.read()[:200])
+    # The command line bound to the hub (B11): two machines of one account, one board.
+    machines = [args.work / "machine-a" / "demo", args.work / "machine-b" / "demo"]
+    for m in machines:
+        m.mkdir(parents=True, exist_ok=True)
+    def board(machine, actor, *words):
+        e = {**env, "DEVAGOTCHI_ACTOR": actor} if actor else {k: v for k, v in env.items() if k != "DEVAGOTCHI_ACTOR"}
+        r = subprocess.run([args.devagotchi, "board", *words, "--json"], capture_output=True, text=True, timeout=60, env=e, cwd=machine)
+        try:
+            return r.returncode, json.loads(r.stdout or "null")
+        except json.JSONDecodeError:
+            return r.returncode, {"stdout": r.stdout[:200], "stderr": r.stderr[:200]}
+    code, bound = board(machines[0], None, "bind", "--hub", base)
+    check("machine A binds the project to the hub", code == 0 and bound.get("created") is True and bound.get("hub") == base, json.dumps(bound)[:200])
+    code, made = board(machines[0], "claude", "new", "Prove the bound command line")
+    code2, lease = board(machines[0], "claude", "claim", made.get("id", "?"))
+    check("machine A's seat claude claims on the hub", code == 0 and code2 == 0 and lease.get("ticket", {}).get("holder") == "claude", json.dumps(lease)[:160])
+    code, bound_b = board(machines[1], None, "bind", "--hub", base, "--project", "demo")
+    code2, prime = board(machines[1], "codex", "prime")
+    check("machine B binds the same board and sees the claim at once", code == 0 and bound_b.get("created") is False
+          and code2 == 0 and prime.get("actor") == "codex" and prime.get("ready") == [], json.dumps(prime)[:160])
+    check("no local store is written for a bound project", not (machines[0] / ".devagotchi" / "board.sqlite3").exists()
+          and not (machines[1] / ".devagotchi" / "board.sqlite3").exists())
     logout = subprocess.run([args.devagotchi, "logout"], capture_output=True, text=True, timeout=30, env=env)
     check("logout revokes both tokens and removes the file", logout.returncode == 0
           and nomen.revoked == ["tok-device", "rt-device"] and not account_file.exists(),

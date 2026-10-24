@@ -265,7 +265,12 @@ check("seat codex sees it held by another, nothing ready", prime.get("actor") ==
 seat_codex.refused("board_heartbeat", {"project": mine, "id": t["id"], "fence": lease["lease"]["fence"]}, "not_holder",
                    "the other seat cannot heartbeat a ticket it does not hold")
 plain = reader.ok("board_prime", {"project": mine})
-check("without a seat the account itself is the actor", plain.get("actor") == me.get("subject"), json.dumps(plain.get("actor")))
+check("without a seat the account itself is the actor, and the person on its own board",
+      plain.get("actor") == me.get("subject") and plain.get("human") is True, json.dumps({k: plain.get(k) for k in ("actor", "human")}))
+freed = reader.ok("board_force_release", {"project": mine, "id": t["id"], "reason": "the account decides on its own board"})
+check("the account may force a seat's lease free on its own board", freed.get("state") == "ready", json.dumps(freed)[:120])
+listed = seat_codex.ok("board_list", {"project": mine, "holder": "@me"})
+check("@me is the caller as the board names it", listed == [], json.dumps(listed)[:120])
 bad_seat = Client("reader", seat="Not Valid")
 is_error, answer = bad_seat.call("board_prime", {"project": mine})
 check("a malformed seat is refused", is_error and answer.get("code") == "invalid", json.dumps(answer)[:160])
