@@ -6,6 +6,7 @@ this file is how to work here. Read first:
 
 - `docs/product-and-platform-plan.md`: decisions D01–D18, gates G0–G5, the boundary test for any new crate, process or service.
 - `docs/performance-and-experience-spec.md` (workloads W01–W15, budgets B01–B14) and `docs/task-graph-and-mesh-contract.md`.
+- `docs/agent-board.md`: the agents' ticket board in `crates/hub/src/board/` — per-project store, claim/lease protocol, how a CLI agent starts (decisions B01–B09).
 - `deploy/devspace/README.md`: the canonical development environment and how to reach it remotely.
 
 ## Layout
