@@ -61,6 +61,12 @@ config_hash() { sudo sha256sum "$HOME_DIR/.config/devagotchi/broker.json" | cut 
 sudo install -d -m 0755 "$PROBES"
 sudo install -m 0644 tests/adapter_probe.py tests/hub_probe.py "$PROBES/"
 
+echo "--- the release build this machine takes"
+want=$(rustc -vV | sed -n 's/^host: //p')
+got=$("$INSTALL" --print-target)
+[ "$got" = "$want" ] || fail "the installer picks $got; this machine's toolchain builds $want"
+ok "the installer picks $got, the same target this runner builds"
+
 echo "--- install from the build"
 sudo "$INSTALL" --bin-dir "$BIN" "${COMMON[@]}" --grant /usr/bin/git
 broker_up || fail "broker not up"

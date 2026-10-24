@@ -2,7 +2,9 @@
 
 `install-devagotchi.sh` puts the broker and the link on a Linux server so AI reaches it through
 a Devagotchi hub, the same way on Gold, Platinum, Wisconsin and Texas (plan §11b, step 1). It
-needs systemd as init; it is tested on Ubuntu 24.04 in CI and targets Debian 12 and 13 too.
+needs systemd as init; it is tested on Ubuntu 24.04 in CI, on x86_64 and on 64-bit ARM
+(aarch64), and targets Debian 12 and 13 too. It picks the release build from the machine
+(`--print-target` shows which); release binaries need glibc 2.35 or newer.
 
 | | |
 |---|---|
@@ -46,8 +48,8 @@ so, because anything an AI runs through the broker can then use it.
 
 ## Check
 
-`deploy/linux/ci-install-check.sh` runs in CI on a real systemd host (`host-install` job):
-install, a real operation through the broker, recovery after `kill -9`, joining a hub with a
+`deploy/linux/ci-install-check.sh` runs in CI on a real systemd host, x86_64 and aarch64
+(`host-install` jobs): the release build it picks matches the runner, install, a real operation through the broker, recovery after `kill -9`, joining a hub with a
 piped code and a real operation through the hub and the link, an upgrade that keeps the config
 and the enrollment, recovery of the link, a revoke that leaves the link down with exit 2, and
 uninstall.

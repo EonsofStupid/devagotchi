@@ -33,10 +33,11 @@ python3 tests/mcp_smoke.py --broker "$PWD/target/debug/bridge-broker" --adapter 
 node scripts/generate-contracts.cjs --check      # after `npm ci` in apps/desktop
 ```
 
-CI runs the build and nextest on ubuntu-24.04, windows-2025, windows-2022 and macos-latest, the
-end-to-end run (and the Windows installer under PowerShell 7 and 5.1) on Linux and both Windows
-runners, `cargo deny` on every PR and weekly, and the release build for Linux and Windows. A PR
-merges only when all of it is green. `docs/security-baseline.md` is the checklist every PR clears.
+CI runs the build and nextest on ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-2022,
+windows-11-arm and macos-latest, the end-to-end run (and the Windows installer under PowerShell 7
+and 5.1) on both Linux and all three Windows runners, the Linux server installer on x86_64 and
+aarch64, `cargo deny` on every PR and weekly, and the release build for Linux and Windows on
+x86_64 and ARM64. A PR merges only when all of it is green. `docs/security-baseline.md` is the checklist every PR clears.
 
 ## Rules
 
