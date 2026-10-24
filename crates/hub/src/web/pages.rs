@@ -5,21 +5,10 @@ use axum::{
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use serde::Serialize;
 
 pub const CSS: &str = include_str!("hub.css");
 
-/// One machine as a person sees it on their page and in `/api/v1/me`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct Machine {
-    pub name: String,
-    /// `local`: a broker on the hub's own host. `linked`: a machine that dials in.
-    pub kind: &'static str,
-    /// `online`, `offline`, `not_enrolled` (a linked machine that never enrolled) or `revoked`.
-    pub status: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub enrolled_at: Option<u64>,
-}
+pub use crate::hub::Machine;
 
 pub struct Viewer<'a> {
     pub subject: &'a str,

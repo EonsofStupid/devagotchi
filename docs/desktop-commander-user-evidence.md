@@ -137,6 +137,28 @@ All Devagotchi requirements and acceptance cases below are **proposals**, not st
 
 **Measurable acceptance:** parser-only fixtures must distinguish literal source text from executable syntax, with positive and negative controls for every supported shell. Real forbidden executable forms must remain denied. Unsupported/ambiguous syntax must fail visibly. An operator-approved request must be bound to its exact canonical content, scope, and expiry; changing content or target invalidates approval. Avoid publishing private rejected commands in diagnostics.
 
+## 10. Why an AI reaches for Desktop Commander first (first-hand, 24 October 2026)
+
+**Source:** one Claude session working on Jesse's machines on 24 October 2026. Asked to run something on Jesse's Windows PC, it called Desktop Commander's `list_devices` before considering Devagotchi, and Jesse asked why. This is that session's own account, not a study.
+
+| Reason | Desktop Commander | Devagotchi that day |
+|---|---|---|
+| Already in the tool list | Added to the account once (a connector-directory entry, one click), so it is in every session; its local `setup` command writes itself into each AI client's config | `https://app.devagotchi.com/mcp` not yet added to claude.ai; nothing registers the hub with Claude Code, Codex, Claude Desktop or Cursor |
+| One call answers "where can I run?" | `list_devices`: every device, online or offline, last seen | `whoami`: broker names only, no status |
+| Tool verbs match the intent | `start_process` (any command line), `read_file`, `write_file`, `edit_block`, `start_search`, `interact_with_process` | `operation_start` of a pre-granted executable with exact arguments; no file tools through the hub |
+| Descriptions teach the model | Examples, when to use each tool, process states (waiting for input, finished, running) | Accurate but terse; the instructions spoke of a "bastion" |
+
+**What happened:** both Desktop Commander devices were offline (the PC last seen 137 hours earlier), so the call returned nothing usable. Presence decided the choice; reliability decided the result.
+
+**Requirements** (Jesse, 24 October 2026: Devagotchi has to be the dominant tool AIs use for his machines):
+
+1. **It adds itself.** The installer registers the hub's MCP endpoint with every AI client it finds on the machine (Claude Code, Codex, Claude Desktop, Cursor, Gemini CLI) and says which, so an AI can do the whole setup for the user. On claude.ai and ChatGPT a connector-directory listing makes it one click; until then a custom connector is added once per account by its owner, which no AI can do for them.
+2. **`machines` first.** One call lists every machine the identity can use with its live status. *Built in increment 12.*
+3. **Intent verbs.** Run a command, and read, write, edit and search files on a machine, each mapped onto a broker-owned operation; an ungranted program or a root step comes back as an approval request (B10), not a dead end.
+4. **Words written for the model.** The server instructions say Devagotchi is how to work on the user's machines; each tool says when to use it, with an example. *Instructions and `machines` built in increment 12.*
+
+**Measurable acceptance:** in a fresh session on a machine where the installer ran, an AI asked to "check the disk space on <machine>" uses Devagotchi without being told to: one call to `machines`, one to run the command.
+
 ## Five themes suitable for a public product page
 
 Use these as **design commitments or roadmap language until their acceptance evidence exists**. Keep the competitor evidence in a dated research note rather than turning resolved incidents into current accusations.
