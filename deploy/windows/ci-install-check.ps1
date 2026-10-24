@@ -6,6 +6,12 @@ $cfg = Join-Path $env:RUNNER_TEMP 'claude\claude_desktop_config.json'
 New-Item -ItemType Directory -Force -Path (Split-Path $cfg) | Out-Null
 [System.IO.File]::WriteAllText($cfg, '{"mcpServers":{"desktop-commander":{"command":"npx","args":["-y","@wonderwhy-er/desktop-commander"]}},"globalShortcut":""}', (New-Object System.Text.UTF8Encoding($false)))
 
+# The release build the installer picks is the one this runner's toolchain builds (x64 or Arm64).
+$want = ((rustc -vV) | Where-Object { $_ -like 'host: *' }) -replace '^host: ', ''
+$got = & "$PSScriptRoot\install-devagotchi.ps1" -PrintTarget
+if ($got -ne $want) { throw "the installer picks $got; this runner's toolchain builds $want" }
+Write-Host "ok   the installer picks $got, the same target this runner builds"
+
 & "$PSScriptRoot\install-devagotchi.ps1" -BinDir (Resolve-Path 'target\debug').ProviderPath -Root $root -Workspace $ws `
     -Autostart -RegisterClaudeDesktop -ClaudeDesktopConfig $cfg
 python tests/windows_install_check.py --root $root --claude-config $cfg --workspace $ws
