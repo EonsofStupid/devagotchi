@@ -228,6 +228,8 @@ asked = claude.ok("approval_request", {"project": P, "title": "Restart the hub",
                                        "why": "new build", "undo": "start the previous build"})
 check("an approval starts pending with a page to decide on",
       asked.get("status") == "pending" and asked.get("url", "").endswith(f"/approvals#{P}-{asked.get('id')}"), json.dumps(asked)[:200])
+check("with no phone subscribed the agent is told so (phones 0) and hands over the url",
+      asked.get("phones") == 0, json.dumps(asked)[:200])
 started = time.monotonic()
 waited = claude.ok("approval_wait", {"project": P, "id": asked["id"], "timeout_ms": 1200})
 elapsed = time.monotonic() - started

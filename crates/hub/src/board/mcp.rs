@@ -693,6 +693,10 @@ pub struct ApprovalOut {
     pub approval: ApprovalStatus,
     /// Where the person approves or denies it.
     pub url: String,
+    /// On a request: how many phones were sent a push. 0 means nobody who decides on this
+    /// board has turned on notifications: give the user the url yourself.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phones: Option<usize>,
 }
 
 // ----- the tools ---------------------------------------------------------------
@@ -702,21 +706,23 @@ type BoardOut<T> = Result<Json<T>, Json<BoardError>>;
 impl Hub {
     /// Push "approval needed" to the phones of the people who decide on `project`. The
     /// payload names the approval and links to it; it never carries the command text.
-    pub fn announce_approval(&self, project: &str, approval: &ApprovalStatus) {
-        self.announce_approval_to(self.config.people_for_board(project), project, approval);
+    /// Returns how many phones the push goes to.
+    pub fn announce_approval(&self, project: &str, approval: &ApprovalStatus) -> usize {
+        self.announce_approval_to(self.config.people_for_board(project), project, approval)
     }
 
     /// Push "approval needed" to these people's phones only (a test goes to the person
-    /// who asked for it).
+    /// who asked for it). Returns how many phones the push goes to.
     pub fn announce_approval_to(
         &self,
         people: Vec<String>,
         project: &str,
         approval: &ApprovalStatus,
-    ) {
+    ) -> usize {
         let Some(push) = self.push.clone() else {
-            return;
+            return 0;
         };
+        let phones = push.phones_for(&people);
         let payload = serde_json::json!({
             "title": "Approval needed",
             "body": approval.title,
@@ -724,6 +730,7 @@ impl Hub {
             "tag": approval.id,
         });
         tokio::spawn(async move { push.notify(&people, &payload).await });
+        phones
     }
 
     /// An approval with the page where a person decides it.
@@ -733,7 +740,11 @@ impl Hub {
             self.config.public_url.trim_end_matches('/'),
             approval.id
         );
-        ApprovalOut { approval, url }
+        ApprovalOut {
+            approval,
+            url,
+            phones: None,
+        }
     }
 
     /// The board `project` for this request's subject, after the grant check.
@@ -1494,7 +1505,7 @@ impl Hub {
 
     #[tool(
         name = "approval_request",
-        description = "Ask the user to approve one step before you take it: what will run or change, why, and how to undo it. It reaches them where they approve (their phone) and returns at once with the approval's id and status pending; then call approval_wait with that id and act only when it says approved. A denial means do not take the step.",
+        description = "Ask the user to approve one step before you take it: what will run or change, why, and how to undo it. It reaches them where they approve (their phone) and returns at once with the approval's id, status pending and phones (how many phones were notified; if 0, give the user the url yourself); then call approval_wait with that id and act only when it says approved. A denial means do not take the step.",
         title = "Ask the user to approve a step",
         annotations(
             title = "Ask the user to approve a step",
@@ -1527,8 +1538,10 @@ impl Hub {
                 },
             )
             .await?;
-        self.announce_approval(&project, &approval);
-        Ok(Json(self.approval_out(&project, approval)))
+        let phones = self.announce_approval(&project, &approval);
+        let mut out = self.approval_out(&project, approval);
+        out.phones = Some(phones);
+        Ok(Json(out))
     }
 
     #[tool(

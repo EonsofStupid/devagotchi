@@ -14,6 +14,21 @@ self.addEventListener("push", function (event) {
     icon: "/assets/icon.svg",
   }));
 });
+// The push service replaced this phone's subscription: subscribe again with the same key and
+// tell the hub, so pushes keep arriving without anyone opening the page.
+self.addEventListener("pushsubscriptionchange", function (event) {
+  var options = event.oldSubscription && event.oldSubscription.options;
+  var next = event.newSubscription ? Promise.resolve(event.newSubscription)
+    : options ? self.registration.pushManager.subscribe(options) : Promise.reject(new Error("no options"));
+  event.waitUntil(next.then(function (sub) {
+    return fetch("/push/subscribe", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(sub.toJSON()),
+    });
+  }).catch(function () {}));
+});
 self.addEventListener("notificationclick", function (event) {
   event.notification.close();
   var target = new URL((event.notification.data && event.notification.data.url) || "/approvals", self.location.origin);
