@@ -116,7 +116,7 @@ unannotated = [t["name"] for t in listed if not t.get("title") or not (
     "readOnlyHint" in t.get("annotations", {}) and "openWorldHint" in t.get("annotations", {})
     and (t["annotations"]["readOnlyHint"] or "destructiveHint" in t["annotations"]))]
 check("every tool has a title and annotations", not unannotated, ", ".join(unannotated))
-broker_tools = ["machines", "operation_cancel", "operation_get", "operation_read", "operation_start", "whoami"]
+broker_tools = ["approval_request", "approval_wait", "machines", "operation_cancel", "operation_get", "operation_read", "operation_start", "whoami"]
 board_tools = [t for t in tools if t.startswith("board_")]
 check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 17,
       ", ".join(tools))
