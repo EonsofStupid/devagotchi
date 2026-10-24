@@ -17,6 +17,7 @@ verified by a receipt; **planned** = the increment that brings it.
 | Hosted clients find the issuer by standard, not by configuration | RFC 9728 protected-resource metadata; `401` with `resource_metadata`; Nomen dynamic client registration for claude.ai/ChatGPT, CIMD later | hub `/.well-known/oauth-protected-resource`; Nomen settings | built (hub) / planned (Nomen DCR, ticket) |
 | People sign in with PKCE and MFA; agents on a laptop use device code; your own agents use service users with keys, never passwords | Nomen (Zitadel) flows; `shippin-bridge login`; service users with JWT profile | Nomen, `shippin-bridge`, hub audiences | built (Shippin N4) / planned (service users, H2) |
 | Tokens are short-lived and audience-bound; refresh tokens rotate for public clients | Nomen token settings; hub rejects any `aud` not in its list | Nomen, hub config `audiences` | built (hub) / planned (Nomen policy) |
+| A browser session outlasts a restart, never its person's account | session id only in a `__Host-` cookie, its SHA-256 on the hub; Nomen's tokens sealed (AES-256-GCM, key 0600, bound to the row) in a 0600 store; renewed with the rotated refresh token, one refresh at a time; ends on sign-out (refresh token revoked), 30 days unused, 90 days at most, or when Nomen refuses a refresh | hub `web.rs`, `web/sessions.rs` | built (18) |
 | Opaque tokens are introspected, never trusted | RFC 7662 introspection with the hub's own credentials | hub | planned (H2) |
 
 ## 2. Authorization

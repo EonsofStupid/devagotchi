@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::{
-    Exchange, WebLogin, approvals, notify,
+    Exchange, SessionToken, WebLogin, approvals, notify,
     pages::{self, Viewer},
     public,
 };
@@ -97,8 +97,10 @@ pub(super) fn unavailable() -> Response {
 }
 
 pub(super) async fn who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -> Who {
-    let Some(token) = web.token(headers) else {
-        return Who::SignedOut;
+    let token = match web.token(headers).await {
+        SessionToken::Token(token) => token,
+        SessionToken::None => return Who::SignedOut,
+        SessionToken::Unavailable => return Who::Unavailable,
     };
     match state.verifier.verify(&token).await {
         Ok(subject) => Who::Person(subject),
@@ -213,7 +215,13 @@ async fn callback(
             return unavailable();
         }
     }
-    let (id, lasts) = web.open_session(tokens.access_token, tokens.expires_in);
+    let (id, lasts) = match web.open_session(tokens) {
+        Ok(opened) => opened,
+        Err(error) => {
+            eprintln!("devagotchi-hub: session store: {}", error.message);
+            return unavailable();
+        }
+    };
     see_other(
         &pending.return_to,
         &[

@@ -289,6 +289,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             audiences,
             &web.client_id,
             &config.public_url,
+            &state_dir,
         )?)),
         _ => None,
     };

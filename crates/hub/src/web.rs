@@ -6,11 +6,16 @@
 //! checked by the same introspection as every bearer token (accepted clients, audience,
 //! exact account ID), so a browser session is never weaker than an MCP call.
 //!
-//! - The token stays in the hub's memory; the browser holds only a random session id, and
-//!   the hub keeps only that id's SHA-256.
-//! - Every page re-checks the token (Nomen's answer is reused for up to a minute), so an
-//!   account disabled in Nomen loses its page within a minute, and a session never
-//!   outlives its token or [`SESSION_MAX`].
+//! - The browser holds only a random session id; the hub keeps that id's SHA-256 and,
+//!   sealed on disk, Nomen's tokens (`sessions.rs`), so a restart signs nobody out.
+//! - The hub asks for `offline_access`. With a refresh token from Nomen, the session lasts
+//!   up to 90 days and ends after 30 days unused. The hub renews the access token through
+//!   Nomen as it runs out, one refresh at a time, keeping the rotated refresh token.
+//!   Nomen refusing a refresh ends the session. Without a refresh token, a session never
+//!   outlives its access token or [`NO_REFRESH_MAX`].
+//! - Every page re-checks the access token (Nomen's answer is reused for up to a minute),
+//!   so an account disabled in Nomen loses its page within a minute.
+//! - Signing out removes the session and revokes its refresh token at Nomen.
 //! - `state` is bound to the browser with a short-lived cookie (login CSRF), is single-use,
 //!   and the page to return to is kept on the hub, only ever a path on this hub.
 //! - Cookies carry the `__Host-` prefix, `Secure`, `HttpOnly` and `SameSite=Lax`
@@ -22,6 +27,7 @@ mod notify;
 mod pages;
 mod public;
 mod routes;
+mod sessions;
 #[cfg(test)]
 mod tests;
 
@@ -39,34 +45,35 @@ use sha2::{Digest, Sha256};
 
 pub use routes::router;
 
-/// The longest a browser session lasts, however long Nomen's token would.
-pub const SESSION_MAX: Duration = Duration::from_secs(12 * 3600);
+/// The longest a browser session lasts when Nomen gives no refresh token, however long
+/// its access token would.
+pub const NO_REFRESH_MAX: Duration = Duration::from_secs(12 * 3600);
+/// An access token this close to running out is renewed first.
+const RENEW_BEFORE_MS: u64 = 60_000;
 /// How long a started sign-in waits for Nomen to send the person back.
 const LOGIN_TTL: Duration = Duration::from_secs(600);
 const MAX_PENDING: usize = 10_000;
-const MAX_SESSIONS: usize = 10_000;
 const MAX_ANSWER_BYTES: usize = 64 * 1024;
 
 pub struct WebLogin {
     authorize: String,
     token: String,
+    revoke: String,
     client_id: String,
     scope: String,
     redirect_uri: String,
     secure: bool,
     http: reqwest::Client,
     pending: Mutex<HashMap<String, Pending>>,
-    sessions: Mutex<HashMap<[u8; 32], Session>>,
+    sessions: sessions::SessionStore,
+    /// One refresh at a time: Nomen rotates refresh tokens, so two requests renewing the
+    /// same session at once would spend the same token twice.
+    renewing: tokio::sync::Mutex<()>,
 }
 
 pub struct Pending {
     verifier: String,
     pub return_to: String,
-    until: Instant,
-}
-
-struct Session {
-    token: String,
     until: Instant,
 }
 
@@ -84,20 +91,33 @@ pub struct Tokens {
     pub access_token: String,
     #[serde(default)]
     pub expires_in: Option<u64>,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+}
+
+/// What a request's session cookie amounts to.
+pub enum SessionToken {
+    /// The access token to check, renewed if it was running out.
+    Token(String),
+    /// No session, or one that has ended.
+    None,
+    /// The session needs renewing and Nomen cannot be reached.
+    Unavailable,
 }
 
 impl WebLogin {
     /// Nomen's endpoints follow from its issuer, as introspection's does. Nomen is not
-    /// contacted until someone signs in.
+    /// contacted until someone signs in. Sessions are kept in `state_dir`.
     pub fn new(
         issuer: &str,
         audiences: &[String],
         client_id: &str,
         public_url: &str,
+        state_dir: &std::path::Path,
     ) -> BridgeResult<Self> {
         let issuer = issuer.trim_end_matches('/');
         // Nomen puts a project in a token's audience only when this scope asks for it.
-        let mut scope = String::from("openid profile");
+        let mut scope = String::from("openid profile offline_access");
         for audience in audiences {
             scope.push_str(&format!(" urn:zitadel:iam:org:project:id:{audience}:aud"));
         }
@@ -110,13 +130,15 @@ impl WebLogin {
         Ok(Self {
             authorize: format!("{issuer}/oauth/v2/authorize"),
             token: format!("{issuer}/oauth/v2/token"),
+            revoke: format!("{issuer}/oauth/v2/revoke"),
             client_id: client_id.to_string(),
             scope,
             redirect_uri: format!("{}/auth/callback", public_url.trim_end_matches('/')),
             secure: public_url.starts_with("https://"),
             http,
             pending: Mutex::new(HashMap::new()),
-            sessions: Mutex::new(HashMap::new()),
+            sessions: sessions::SessionStore::open(state_dir)?,
+            renewing: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -191,19 +213,34 @@ impl WebLogin {
         (pending.until > Instant::now()).then_some(pending)
     }
 
-    /// Trade the code Nomen sent back for an access token, proving with the PKCE verifier
-    /// that this hub started the sign-in.
+    /// Trade the code Nomen sent back for tokens, proving with the PKCE verifier that this
+    /// hub started the sign-in.
     pub async fn exchange(&self, code: &str, pending: &Pending) -> Result<Tokens, Exchange> {
+        self.post_token(&[
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", self.redirect_uri.as_str()),
+            ("client_id", self.client_id.as_str()),
+            ("code_verifier", pending.verifier.as_str()),
+        ])
+        .await
+    }
+
+    /// Renew an access token with a refresh token (RFC 6749 §6).
+    async fn refresh(&self, refresh_token: &str) -> Result<Tokens, Exchange> {
+        self.post_token(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token),
+            ("client_id", self.client_id.as_str()),
+        ])
+        .await
+    }
+
+    async fn post_token(&self, form: &[(&str, &str)]) -> Result<Tokens, Exchange> {
         let mut response = self
             .http
             .post(&self.token)
-            .form(&[
-                ("grant_type", "authorization_code"),
-                ("code", code),
-                ("redirect_uri", self.redirect_uri.as_str()),
-                ("client_id", self.client_id.as_str()),
-                ("code_verifier", pending.verifier.as_str()),
-            ])
+            .form(form)
             .send()
             .await
             .map_err(|error| Exchange::Unavailable(format!("Nomen token endpoint: {error}")))?;
@@ -234,53 +271,126 @@ impl WebLogin {
         })
     }
 
-    /// Keep the token on the hub and hand the browser a random id for it.
-    pub fn open_session(&self, token: String, expires_in: Option<u64>) -> (String, Duration) {
-        let lasts = expires_in
+    /// Keep Nomen's tokens on the hub, sealed, and hand the browser a random id for them.
+    /// Returns the id and how long the browser should keep it.
+    pub fn open_session(&self, tokens: Tokens) -> BridgeResult<(String, Duration)> {
+        let now = sessions::now_millis();
+        let access_for = tokens
+            .expires_in
             .map(Duration::from_secs)
-            .unwrap_or(SESSION_MAX)
-            .min(SESSION_MAX);
+            .unwrap_or(NO_REFRESH_MAX)
+            .min(NO_REFRESH_MAX);
+        let lasts = if tokens.refresh_token.is_some() {
+            Duration::from_millis(sessions::MAX)
+        } else {
+            access_for
+        };
         let id = random_token();
-        let now = Instant::now();
-        let mut sessions = self.sessions.lock().expect("sessions");
-        sessions.retain(|_, s| s.until > now);
-        if sessions.len() >= MAX_SESSIONS
-            && let Some(soonest) = sessions
-                .iter()
-                .min_by_key(|(_, s)| s.until)
-                .map(|(k, _)| *k)
-        {
-            sessions.remove(&soonest);
-        }
-        sessions.insert(
-            digest(&id),
-            Session {
-                token,
-                until: now + lasts,
+        self.sessions.put(
+            &digest(&id),
+            &sessions::Held {
+                access: tokens.access_token,
+                refresh: tokens.refresh_token,
             },
-        );
-        (id, lasts)
+            now + access_for.as_millis() as u64,
+            now + lasts.as_millis() as u64,
+            now,
+        )?;
+        Ok((id, lasts))
     }
 
-    /// The access token behind this request's session cookie, while the session lasts.
-    pub fn token(&self, headers: &HeaderMap) -> Option<String> {
-        let id = cookie_value(headers, self.session_cookie())?;
+    /// The access token behind this request's session cookie, renewed through Nomen when
+    /// it is about to run out.
+    pub async fn token(&self, headers: &HeaderMap) -> SessionToken {
+        let Some(id) = cookie_value(headers, self.session_cookie()) else {
+            return SessionToken::None;
+        };
         let key = digest(&id);
-        let mut sessions = self.sessions.lock().expect("sessions");
-        match sessions.get(&key) {
-            Some(session) if session.until > Instant::now() => Some(session.token.clone()),
-            Some(_) => {
-                sessions.remove(&key);
-                None
+        let now = sessions::now_millis();
+        let stored = match self.sessions.get(&key, now) {
+            Ok(Some(stored)) => stored,
+            Ok(None) => return SessionToken::None,
+            Err(error) => {
+                eprintln!("devagotchi-hub: session store: {}", error.message);
+                return SessionToken::Unavailable;
             }
-            None => None,
+        };
+        if stored.access_until > now + RENEW_BEFORE_MS || stored.held.refresh.is_none() {
+            if stored.access_until <= now {
+                self.sessions.remove(&key);
+                return SessionToken::None;
+            }
+            if now >= stored.last_seen + 60_000 {
+                let _ = self.sessions.touch(&key, now);
+            }
+            return SessionToken::Token(stored.held.access);
+        }
+        let _one_at_a_time = self.renewing.lock().await;
+        // Another request may have renewed it while this one waited.
+        let stored = match self.sessions.get(&key, now) {
+            Ok(Some(stored)) => stored,
+            Ok(None) => return SessionToken::None,
+            Err(_) => return SessionToken::Unavailable,
+        };
+        let Some(refresh) = stored.held.refresh.clone() else {
+            return SessionToken::None;
+        };
+        if stored.access_until > now + RENEW_BEFORE_MS {
+            return SessionToken::Token(stored.held.access);
+        }
+        match self.refresh(&refresh).await {
+            Ok(fresh) => {
+                let access_for = fresh
+                    .expires_in
+                    .map(Duration::from_secs)
+                    .unwrap_or(NO_REFRESH_MAX)
+                    .min(NO_REFRESH_MAX);
+                let held = sessions::Held {
+                    access: fresh.access_token,
+                    refresh: fresh.refresh_token.or(Some(refresh)),
+                };
+                let now = sessions::now_millis();
+                if let Err(error) =
+                    self.sessions
+                        .renew(&key, &held, now + access_for.as_millis() as u64, now)
+                {
+                    eprintln!("devagotchi-hub: session store: {}", error.message);
+                }
+                SessionToken::Token(held.access)
+            }
+            Err(Exchange::Refused) => {
+                self.sessions.remove(&key);
+                SessionToken::None
+            }
+            Err(Exchange::Unavailable(why)) => {
+                eprintln!("devagotchi-hub: issuer unavailable: {why}");
+                if stored.access_until > now {
+                    SessionToken::Token(stored.held.access)
+                } else {
+                    SessionToken::Unavailable
+                }
+            }
         }
     }
 
+    /// End the session and revoke its refresh token at Nomen (RFC 7009), best effort.
     pub fn end_session(&self, headers: &HeaderMap) {
-        if let Some(id) = cookie_value(headers, self.session_cookie()) {
-            self.sessions.lock().expect("sessions").remove(&digest(&id));
-        }
+        let Some(id) = cookie_value(headers, self.session_cookie()) else {
+            return;
+        };
+        let Some(refresh) = self.sessions.remove(&digest(&id)).and_then(|h| h.refresh) else {
+            return;
+        };
+        let request = self.http.post(&self.revoke).form(&[
+            ("token", refresh.as_str()),
+            ("token_type_hint", "refresh_token"),
+            ("client_id", self.client_id.as_str()),
+        ]);
+        tokio::spawn(async move {
+            if let Err(error) = request.send().await {
+                eprintln!("devagotchi-hub: could not revoke a refresh token: {error}");
+            }
+        });
     }
 
     pub fn login_state(&self, headers: &HeaderMap) -> Option<String> {

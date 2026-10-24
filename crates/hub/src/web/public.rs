@@ -67,8 +67,9 @@ says what the service keeps about you, why, and for how long.</p>\
 <h2>What we keep</h2>\
 <ul>\
 <li><strong>Your account.</strong> You sign in through Shippin (id.shippin.cloud). The hub receives \
-your account ID and login name from it. Your sign-in session lives in the hub's memory, is never \
-written to disk, and ends when you sign out, when it expires or when the hub restarts.</li>\
+your account ID and login name from it. So that your phone stays signed in, the hub keeps your sign-in \
+session on its own disk, with the tokens from Shippin encrypted. The session ends when you sign out, \
+after 30 days unused, after 90 days at most, or when Shippin stops accepting it.</li>\
 <li><strong>A record of every tool call.</strong> The time, your account ID, how you signed in, \
 the tool, the machine, the job's ID and the outcome. It does not record the program's arguments \
 or its output.</li>\
