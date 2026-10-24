@@ -34,7 +34,8 @@ pub const USAGE: &str = "Usage: devagotchi-hub board <command> [options]
   show      ID
   new       TITLE [--desc D] [--priority N] [--label L]... [--parent ID] [--assign ID] [--found-in ID] [--epic]
   claim     [ID] [--ttl SECONDS] [--label L] [--state S]   no ID: the best ready ticket
-  beat      ID [--progress JSON] [--fence N]
+  beat      [ID] [--progress JSON] [--fence N]   no ID: every ticket you hold (what the hook pack calls)
+  held                             the tickets you hold (empty output when none)
   note      ID TEXT [--kind K] [--to ID] [--fence N]
   done      ID [SUMMARY] [--fence N]
   handoff   ID NOTE [--to ID] [--fence N]
@@ -45,9 +46,10 @@ pub const USAGE: &str = "Usage: devagotchi-hub board <command> [options]
   reap                             expire lapsed leases
   verify                           recompute the event chain
   export    [--out PATH]           board.jsonl (export, never the truth)
+  hooks     [--for claude-code|codex|all]   write .devagotchi/hooks/ (prime at start, beat after tools, no stop while holding) and print the config to add
 
 Global: --dir PATH (project directory; default: walk up from here)  --as ID (act as this agent)
-        --json (also on when stdout is not a terminal)  --quiet
+        --json (also on when stdout is not a terminal)  --text (force the human form)  --quiet
 Exit codes: 0 ok · 2 conflict (fence, version, held, blocked, WIP) · 3 refused · 4 not found · 5 board unavailable · 64 usage";
 
 /// Everything the command line needs from its environment, so tests can supply it.
@@ -111,9 +113,11 @@ const VALUE_FLAGS: &[&str] = &[
     "--title",
     "--on",
     "--out",
+    "--for",
 ];
 const SWITCHES: &[&str] = &[
     "--json",
+    "--text",
     "--quiet",
     "--agents-md",
     "--epic",
@@ -314,7 +318,8 @@ pub fn run(invocation: Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
             return EXIT_USAGE;
         }
     };
-    let json = parsed.switch("--json") || !invocation.stdout_is_terminal;
+    let json =
+        parsed.switch("--json") || (!invocation.stdout_is_terminal && !parsed.switch("--text"));
     let mut output = Output {
         json,
         quiet: parsed.switch("--quiet"),
@@ -455,7 +460,7 @@ fn init(parsed: &Parsed, invocation: &Invocation, output: &mut Output<'_>) -> u8
     if !gitignore.exists() {
         let _ = std::fs::write(
             &gitignore,
-            "# the board itself is local state; board.jsonl is the export to commit if you want diffs\nboard.sqlite3\nboard.sqlite3-wal\nboard.sqlite3-shm\nclaims/\n",
+            "# the board itself is local state; board.jsonl is the export to commit if you want diffs\nboard.sqlite3\nboard.sqlite3-wal\nboard.sqlite3-shm\nclaims/\nhooks/.last-beat-*\n",
         );
     }
     let mut agents_md = "unchanged";
@@ -582,6 +587,100 @@ fn dispatch(
             output.value(&ready, || table(&ready));
             Ok(EXIT_OK)
         }
+        "held" => {
+            let held = no_id(board.list(&Filter {
+                holder: Some(actor.id.to_string()),
+                ..Filter::default()
+            }))?;
+            let now = board.now();
+            output.value(&held, || {
+                held.iter()
+                    .map(|t| {
+                        let left = t
+                            .lease_expires_at
+                            .map(|e| (e - now).max(0) / 60_000)
+                            .unwrap_or(0);
+                        format!(
+                            "{}  fence {}  {}m left  {}",
+                            t.id,
+                            t.fence,
+                            left,
+                            trim(&t.title, 60)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            Ok(EXIT_OK)
+        }
+        "hooks" => {
+            let targets = parsed.flag("--for").unwrap_or("all");
+            if !matches!(targets, "claude-code" | "codex" | "all") {
+                return Err(usage_error("--for must be claude-code, codex or all"));
+            }
+            let dir = board_dir.join("hooks");
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| (BridgeError::new("board_io", e.to_string()), None))?;
+            // The scripts are project config and may be committed; the beat markers are not.
+            let gitignore = board_dir.join(".gitignore");
+            let current = std::fs::read_to_string(&gitignore).unwrap_or_default();
+            if !current.lines().any(|l| l == HOOK_MARKER_IGNORE) {
+                let mut next = current;
+                if !next.is_empty() && !next.ends_with('\n') {
+                    next.push('\n');
+                }
+                next.push_str(HOOK_MARKER_IGNORE);
+                next.push('\n');
+                let _ = std::fs::write(&gitignore, next);
+            }
+            for (name, body) in HOOK_SCRIPTS {
+                let path = dir.join(name);
+                std::fs::write(&path, body).map_err(|e| {
+                    (
+                        BridgeError::new("board_io", format!("{}: {e}", path.display())),
+                        None,
+                    )
+                })?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+                }
+            }
+            let snippets: Vec<(&str, String)> = [
+                ("claude-code", claude_code_hooks()),
+                ("codex", codex_hooks()),
+            ]
+            .into_iter()
+            .filter(|(name, _)| targets == "all" || targets == *name)
+            .collect();
+            output.value(
+                &serde_json::json!({
+                    "hooks_dir": dir,
+                    "scripts": HOOK_SCRIPTS.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+                    "claude_code": snippets.iter().find(|(n, _)| *n == "claude-code").map(|(_, s)| serde_json::from_str::<serde_json::Value>(s).unwrap_or_default()),
+                    "codex": snippets.iter().find(|(n, _)| *n == "codex").map(|(_, s)| serde_json::from_str::<serde_json::Value>(s).unwrap_or_default()),
+                }),
+                || {
+                    let mut lines = vec![format!(
+                        "wrote {}/{{session-start,beat,stop}}.sh (prime at start · beat after tools · no stop while holding)",
+                        dir.display()
+                    )];
+                    for (name, snippet) in &snippets {
+                        lines.push(String::new());
+                        lines.push(match *name {
+                            "claude-code" => "Claude Code — add to .claude/settings.json (project) or ~/.claude/settings.json; the actor name is the last argument:".into(),
+                            _ => "Codex — .codex/hooks.json (needs `[features] codex_hooks = true` in ~/.codex/config.toml); the actor name is the last argument:".into(),
+                        });
+                        lines.push(snippet.clone());
+                    }
+                    lines.push(String::new());
+                    lines.push("Other CLIs: run the same three scripts from their hook events (session start, after a tool, before stop) with the actor name as the argument.".into());
+                    lines.join("\n")
+                },
+            );
+            Ok(EXIT_OK)
+        }
         "ls" => {
             let list = no_id(board.list(&Filter {
                 state: parsed.flag("--state").map(str::to_string),
@@ -703,6 +802,44 @@ fn dispatch(
                     lease.ticket.id,
                     lease.ticket.id
                 )
+            });
+            Ok(EXIT_OK)
+        }
+        "beat" if arg(0).is_none() => {
+            // Every ticket this actor holds, with the fence the store shows (the holder's
+            // fence is by definition the current one). What the hook pack calls after tools.
+            let held = no_id(board.list(&Filter {
+                holder: Some(actor.id.to_string()),
+                ..Filter::default()
+            }))?;
+            let mut beaten = Vec::new();
+            for ticket in &held {
+                let lease = with_id(
+                    &ticket.id,
+                    board.heartbeat(actor, &ticket.id, ticket.fence, None),
+                )?;
+                cache.claims.insert(
+                    ticket.id.clone(),
+                    CachedClaim {
+                        fence: lease.fence,
+                        version: lease.ticket.version,
+                        lease_expires_at: lease.lease_expires_at,
+                    },
+                );
+                beaten.push(lease);
+            }
+            output.value(&beaten, || {
+                if beaten.is_empty() {
+                    "holding nothing".into()
+                } else {
+                    beaten
+                        .iter()
+                        .map(|l| {
+                            format!("{}  lease extended to {}", l.ticket.id, l.lease_expires_at)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }
             });
             Ok(EXIT_OK)
         }
@@ -952,6 +1089,91 @@ fn write_cache(board_dir: &Path, actor: &str, cache: &ClaimCache) {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = write_json(&path, cache);
+}
+
+/// The hook pack: three POSIX shell scripts under `.devagotchi/hooks/`, called by the
+/// agent CLIs' hook events with the actor name as their argument. Session start primes;
+/// after a tool call every held lease is extended (at most once a minute, so the chain
+/// does not fill with heartbeats); a stop while holding a ticket is refused once (exit 2,
+/// which Claude Code and Codex treat as "do not stop, here is why"), and allowed on the
+/// second attempt so an agent that cannot finish does not loop — the lease then lapses
+/// and the reaper returns the ticket to its queue.
+pub const HOOK_MARKER_IGNORE: &str = "hooks/.last-beat-*";
+
+pub const HOOK_SCRIPTS: &[(&str, &str)] = &[
+    (
+        "session-start.sh",
+        "#!/bin/sh
+# Devagotchi board: what to do now, as context for the session. Argument: the actor name.
+cd \"$(dirname \"$0\")/../..\" || exit 0
+actor=${1:-${DEVAGOTCHI_ACTOR:-}}
+[ -z \"$actor\" ] || export DEVAGOTCHI_ACTOR=\"$actor\"
+\"${DEVAGOTCHI_HUB:-devagotchi-hub}\" board prime --text 2>/dev/null || true
+exit 0
+",
+    ),
+    (
+        "beat.sh",
+        "#!/bin/sh
+# Devagotchi board: extend every lease this actor holds, at most once a minute. Argument: the actor name.
+cd \"$(dirname \"$0\")/../..\" || exit 0
+actor=${1:-${DEVAGOTCHI_ACTOR:-}}
+[ -z \"$actor\" ] || export DEVAGOTCHI_ACTOR=\"$actor\"
+marker=.devagotchi/hooks/.last-beat-${actor:-$(id -un 2>/dev/null || echo operator)}
+if [ -f \"$marker\" ] && [ -n \"$(find \"$marker\" -mmin -1 2>/dev/null)\" ]; then exit 0; fi
+: > \"$marker\"
+\"${DEVAGOTCHI_HUB:-devagotchi-hub}\" board beat --quiet >/dev/null 2>&1 || true
+exit 0
+",
+    ),
+    (
+        "stop.sh",
+        "#!/bin/sh
+# Devagotchi board: never stop while holding a ticket. Argument: the actor name.
+# Exit 2 refuses the stop once and tells the agent why; a second attempt is allowed so an
+# agent that cannot finish does not loop (the lease lapses and the reaper requeues the ticket).
+cd \"$(dirname \"$0\")/../..\" || exit 0
+actor=${1:-${DEVAGOTCHI_ACTOR:-}}
+[ -z \"$actor\" ] || export DEVAGOTCHI_ACTOR=\"$actor\"
+input=$(cat 2>/dev/null)
+case $input in *'\"stop_hook_active\": true'*|*'\"stop_hook_active\":true'*) exit 0 ;; esac
+held=$(\"${DEVAGOTCHI_HUB:-devagotchi-hub}\" board held --text 2>/dev/null) || exit 0
+[ -n \"$held\" ] || exit 0
+printf 'You still hold tickets on the board:\\n%s\\nFinish each (board done <id> \"summary\") or hand it off (board handoff <id> \"note\" --to <who>) before stopping.\\n' \"$held\" >&2
+exit 2
+",
+    ),
+];
+
+fn hook_command(script: &str, project_dir: &str, actor: &str) -> String {
+    format!("{project_dir}/.devagotchi/hooks/{script} {actor}")
+}
+
+/// Claude Code's `hooks` block: SessionStart stdout is added to the context, PostToolUse
+/// runs after every tool, Stop exit 2 blocks the stop with stderr shown to the model.
+pub fn claude_code_hooks() -> String {
+    let dir = "\"$CLAUDE_PROJECT_DIR\"";
+    serde_json::to_string_pretty(&serde_json::json!({
+        "hooks": {
+            "SessionStart": [{ "hooks": [{ "type": "command", "command": hook_command("session-start.sh", dir, "claude") }] }],
+            "PostToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": hook_command("beat.sh", dir, "claude") }] }],
+            "Stop": [{ "hooks": [{ "type": "command", "command": hook_command("stop.sh", dir, "claude") }] }]
+        }
+    }))
+    .expect("hooks json")
+}
+
+/// Codex's `hooks.json` takes the same shape (feature `codex_hooks`); hooks run from the
+/// project directory, so the paths are relative.
+pub fn codex_hooks() -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "hooks": {
+            "SessionStart": [{ "hooks": [{ "type": "command", "command": hook_command("session-start.sh", ".", "codex") }] }],
+            "PostToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": hook_command("beat.sh", ".", "codex") }] }],
+            "Stop": [{ "hooks": [{ "type": "command", "command": hook_command("stop.sh", ".", "codex") }] }]
+        }
+    }))
+    .expect("hooks json")
 }
 
 pub const PROTOCOL_LINE: &str =

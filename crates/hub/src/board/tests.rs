@@ -924,6 +924,106 @@ mod cli {
     }
 
     #[test]
+    fn held_beat_all_and_the_hook_pack() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            run(dir.path(), None, false, &["init", "--project", "demo"]).0,
+            EXIT_OK
+        );
+        // Nothing held: `held` is an empty list, and empty text (the stop hook keys on that).
+        let (code, out, _) = run(dir.path(), Some("claude"), false, &["held"]);
+        assert_eq!(code, EXIT_OK);
+        assert_eq!(json(&out), serde_json::json!([]));
+        let (code, out, _) = run(dir.path(), Some("claude"), true, &["held"]);
+        assert_eq!(code, EXIT_OK);
+        assert_eq!(out.trim(), "");
+        let (code, out, _) = run(dir.path(), Some("claude"), false, &["beat"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        assert_eq!(json(&out), serde_json::json!([]));
+
+        for title in ["first", "second"] {
+            assert_eq!(run(dir.path(), None, false, &["new", title]).0, EXIT_OK);
+        }
+        for _ in 0..2 {
+            assert_eq!(
+                run(dir.path(), Some("claude"), false, &["claim"]).0,
+                EXIT_OK
+            );
+        }
+        let (code, out, _) = run(dir.path(), Some("claude"), false, &["held"]);
+        assert_eq!(code, EXIT_OK);
+        let held = json(&out);
+        assert_eq!(held.as_array().unwrap().len(), 2);
+        let before: Vec<i64> = held
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["lease_expires_at"].as_i64().unwrap())
+            .collect();
+        // `beat` with no id extends every held lease, with no cached fence needed.
+        std::fs::remove_dir_all(dir.path().join(".devagotchi/claims")).unwrap();
+        let (code, out, _) = run(dir.path(), Some("claude"), false, &["beat"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        let beaten = json(&out);
+        assert_eq!(beaten.as_array().unwrap().len(), 2);
+        for (lease, earlier) in beaten.as_array().unwrap().iter().zip(before) {
+            assert!(lease["lease_expires_at"].as_i64().unwrap() >= earlier);
+        }
+        let (_, out, _) = run(dir.path(), Some("claude"), true, &["held"]);
+        assert_eq!(out.lines().count(), 2, "{out}");
+        assert!(out.contains("fence"), "{out}");
+
+        // The hook pack: three executable scripts, the ignore line, both snippets.
+        let (code, out, _) = run(dir.path(), None, false, &["hooks"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        let hooks = json(&out);
+        for script in ["session-start.sh", "beat.sh", "stop.sh"] {
+            let path = dir.path().join(".devagotchi/hooks").join(script);
+            assert!(path.is_file(), "{script}");
+            let body = std::fs::read_to_string(&path).unwrap();
+            assert!(body.starts_with("#!/bin/sh\n"), "{script}");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(&path).unwrap().permissions().mode() & 0o111,
+                    0o111
+                );
+            }
+        }
+        assert!(
+            std::fs::read_to_string(dir.path().join(".devagotchi/hooks/stop.sh"))
+                .unwrap()
+                .contains("board held --text")
+        );
+        assert!(
+            std::fs::read_to_string(dir.path().join(".devagotchi/.gitignore"))
+                .unwrap()
+                .contains(cli::HOOK_MARKER_IGNORE)
+        );
+        assert!(
+            hooks["claude_code"]["hooks"]["Stop"][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("stop.sh claude")
+        );
+        assert!(
+            hooks["codex"]["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("session-start.sh codex")
+        );
+        let (code, out, _) = run(dir.path(), None, true, &["hooks", "--for", "codex"]);
+        assert_eq!(code, EXIT_OK);
+        assert!(
+            out.contains("Codex") && !out.contains("Claude Code"),
+            "{out}"
+        );
+        let (code, _, err) = run(dir.path(), None, false, &["hooks", "--for", "vim"]);
+        assert_eq!(code, EXIT_USAGE, "{err}");
+    }
+
+    #[test]
     fn exit_codes_and_next_hints_by_failure_class() {
         let dir = tempfile::tempdir().unwrap();
         let (code, _, err) = run(dir.path(), None, false, &["prime"]);
