@@ -7,8 +7,11 @@
 # broker; the broker comes back after kill -9; the link joins a hub with a code piped
 # through the installer (never on a command line) and a real operation runs through the
 # hub and the link; an upgrade keeps the config and the enrollment; the link comes back
-# after kill -9; a revoke makes the link exit 2 and systemd leaves it down; uninstall stops
-# everything. Exit 0 only when every step holds.
+# after kill -9; a revoke makes the link exit 2 and systemd leaves it down; the hub role on the
+# same host (a board initialised, a person and an agent with minted tokens, Caddy in front of
+# the loopback listener, the board worked over MCP through Caddy, a re-run that only mints a
+# token and leaves the hub running); uninstall stops everything. Exit 0 only when every step
+# holds.
 set -euo pipefail
 
 BIN=$(readlink -f target/debug)
@@ -51,7 +54,9 @@ new_main_pid() {  # new_main_pid UNIT OLD: running again under another, real pid
 }
 link_down() { [ "$(prop devagotchi-link.service ActiveState)" != active ]; }
 hub_ready() { grep -q 'devagotchi-hub ready:' "$WORK/hub.log"; }
-no_processes_left() { ! pgrep -u "$ACCOUNT" -f 'bridge-broker|devagotchi-link'; }
+no_processes_left() { ! pgrep -u "$ACCOUNT" -f 'bridge-broker|devagotchi-link|devagotchi-hub'; }
+hub_healthy() { curl -fsS -m 2 "http://127.0.0.1:$1/healthz" >/dev/null; }
+hub_config_hash() { sudo sha256sum "$HOME_DIR/.config/devagotchi/hub.json" | cut -d' ' -f1; }
 link_connected() {
     curl -s "http://127.0.0.1:$PORT/healthz" | python3 -c \
         'import json,sys; b=[x for x in json.load(sys.stdin)["brokers"] if x["name"]=="ci-server"]; sys.exit(0 if b and b[0].get("connected") else 1)'
@@ -149,6 +154,74 @@ sleep 8
 link_down || fail "systemd restarted a refused link"
 [ "$(prop devagotchi-link.service NRestarts)" = "$restarts" ] || fail "systemd kept restarting a refused link"
 ok "exit 2 and not restarted"
+
+echo "--- the hub role on the same host, behind Caddy"
+HPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+CPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+broker_pid=$(prop devagotchi-broker.service MainPID)
+# Tokens are printed once; keep them out of the log.
+out=$(sudo "$INSTALL" "${COMMON[@]}" --role hub --public-url "http://127.0.0.1:$CPORT" --listen "127.0.0.1:$HPORT" \
+    --board ci-project --person ci-op --agent ci-agent --caddy)
+printf '%s\n' "$out" | sed -E 's/^(    (ci-op|ci-agent)): [0-9a-f]{48}$/\1: <token>/'
+op_token=$(printf '%s\n' "$out" | sed -nE 's/^    ci-op: ([0-9a-f]{48})$/\1/p')
+agent_token=$(printf '%s\n' "$out" | sed -nE 's/^    ci-agent: ([0-9a-f]{48})$/\1/p')
+{ [ ${#op_token} = 48 ] && [ ${#agent_token} = 48 ]; } || fail "the installer did not print both tokens"
+[ "$(uctl is-enabled devagotchi-hub.service)" = enabled ] || fail "hub not enabled"
+[ "$(sudo stat -c '%U %a' "$HOME_DIR/.config/devagotchi/hub.json")" = "$ACCOUNT 600" ] || fail "hub config is not private"
+[ "$(sudo stat -c '%U %a' "$HOME_DIR/.config/devagotchi/hub-tokens.json")" = "$ACCOUNT 600" ] || fail "tokens file is not private"
+[ "$(prop devagotchi-broker.service MainPID)" = "$broker_pid" ] || fail "installing the hub restarted the broker"
+sudo test -f "$HOME_DIR/projects/ci-project/.devagotchi/board.sqlite3" || fail "the board was not initialised"
+sudo grep -q 'devagotchi-board:start' "$HOME_DIR/projects/ci-project/AGENTS.md" || fail "AGENTS.md block missing"
+hub_healthy "$HPORT" || fail "hub not healthy on its loopback port"
+wait_for 20 "Caddy answers in front of the hub" hub_healthy "$CPORT"
+ok "hub active and enabled from the installed version, config and tokens 0600, board initialised, Caddy at :$CPORT -> :$HPORT"
+python3 - "http://127.0.0.1:$CPORT" "$op_token" "$agent_token" <<'PY'
+import json, sys, urllib.request
+base, op, agent = sys.argv[1:4]
+class C:
+    def __init__(self, token):
+        self.token, self.sid, self.n = token, None, 0
+        self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "ci", "version": "0"}})
+        self.post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+    def post(self, body):
+        req = urllib.request.Request(base + "/mcp", data=json.dumps(body).encode(), method="POST")
+        for k, v in {"Accept": "application/json, text/event-stream", "Content-Type": "application/json",
+                     "Authorization": "Bearer " + self.token, "MCP-Protocol-Version": "2025-06-18"}.items():
+            req.add_header(k, v)
+        if self.sid: req.add_header("Mcp-Session-Id", self.sid)
+        with urllib.request.urlopen(req, timeout=30) as r:
+            self.sid = self.sid or r.headers.get("Mcp-Session-Id"); text = r.read().decode(); ct = r.headers.get("Content-Type", "")
+        if ct.startswith("text/event-stream"):
+            text = [l[5:].strip() for l in text.splitlines() if l.startswith("data:")][-1]
+        return json.loads(text) if text else {}
+    def rpc(self, method, params):
+        self.n += 1
+        r = self.post({"jsonrpc": "2.0", "id": self.n, "method": method, "params": params})
+        assert "error" not in r, r
+        return r["result"]
+    def call(self, tool, args):
+        r = self.rpc("tools/call", {"name": tool, "arguments": args})
+        return r.get("isError", False), r.get("structuredContent")
+person, bot = C(op), C(agent)
+_, me = person.call("whoami", {}); assert me["human"] and me["boards"] == ["ci-project"], me
+_, me = bot.call("whoami", {}); assert not me["human"] and me["boards"] == ["ci-project"], me
+err, t = person.call("board_create", {"project": "ci-project", "title": "Prove the hub role through Caddy"}); assert not err, t
+err, lease = bot.call("board_claim", {"project": "ci-project"}); assert not err and lease["claimed"] and lease["lease"]["ticket"]["id"] == t["id"], lease
+err, done = bot.call("board_complete", {"project": "ci-project", "id": t["id"], "summary": "claimed and completed over MCP through Caddy"}); assert not err and done["state"] == "review", done
+err, refused = bot.call("board_force_release", {"project": "ci-project", "id": t["id"], "reason": "no"}); assert err and refused["code"] == "humans_only", refused
+print("ok   a person created, the agent claimed and completed, force-release refused to the agent: all through Caddy")
+PY
+echo "--- a hub re-run only mints a token"
+before=$(hub_config_hash)
+hub_pid=$(prop devagotchi-hub.service MainPID)
+out=$(sudo "$INSTALL" "${COMMON[@]}" --role hub --agent ci-agent-2)
+printf '%s\n' "$out" | sed -E 's/^(    ci-agent-2): [0-9a-f]{48}$/\1: <token>/'
+token2=$(printf '%s\n' "$out" | sed -nE 's/^    ci-agent-2: ([0-9a-f]{48})$/\1/p')
+[ ${#token2} = 48 ] || fail "no token for ci-agent-2"
+[ "$before" = "$(hub_config_hash)" ] || fail "the re-run changed hub.json"
+[ "$(prop devagotchi-hub.service MainPID)" = "$hub_pid" ] || fail "the re-run restarted the hub"
+printf '%s\n' "$out" | grep -q '"subject": "ci-agent-2"' || fail "the re-run did not print the grant line to add"
+ok "token minted, config kept, hub left running, grant line printed"
 
 echo "--- uninstall"
 sudo "$INSTALL" "${COMMON[@]}" --uninstall

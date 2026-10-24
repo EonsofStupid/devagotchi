@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # install-devagotchi.sh: Devagotchi on a Linux server, reached by AI through a hub.
 #
-# Installs the broker (owns this machine's jobs) and the link (one outbound connection to the
-# hub) as systemd user services of a dedicated non-root account, started at boot by lingering.
-# Nothing here listens on the network. Run it as root; the services never run as root.
+# Role machine (default): the broker (owns this machine's jobs) and the link (one outbound
+# connection to the hub) as systemd user services of a dedicated non-root account, started at
+# boot by lingering. Nothing listens on the network. Role hub: the hub itself (the bastion:
+# /mcp for agents, /link for machines, the project boards), listening on loopback behind Caddy
+# for TLS. Run it as root; the services never run as root.
 #
 #   sudo ./install-devagotchi.sh --version 0.2.0                  # from a GitHub release (sha256 checked)
 #   sudo ./install-devagotchi.sh --bin-dir ./target/release       # from a local build
 #   sudo ./install-devagotchi.sh --hub https://hub.example.com --device wi1 --enroll < code
+#   sudo ./install-devagotchi.sh --role hub --version 0.2.0 --public-url https://devagotchi.com \
+#        --board devagotchi --person jesse --agent claude-on-gus --caddy
+#   sudo ./install-devagotchi.sh --role hub --agent codex-on-dabo   # one more token (printed once)
 #   sudo ./install-devagotchi.sh --uninstall
 #   ./install-devagotchi.sh --print-target                       # the release build this machine takes
 #
@@ -33,11 +38,12 @@ PREFIX=/opt/devagotchi
 ACCOUNT=devagotchi
 ACCOUNT_HOME=/var/lib/devagotchi
 VERSION='' BIN_DIR='' ARTIFACT_DIR='' WORKSPACE='' HUB='' DEVICE='' ENROLL=0 UNINSTALL=0
-GRANTS=()
+ROLE=machine PUBLIC_URL='' LISTEN=127.0.0.1:8787 CADDY=0
+GRANTS=() BOARDS=() PEOPLE=() AGENTS=()
 
 die() { echo "install-devagotchi: $*" >&2; exit 1; }
 step() { printf '\n==> %s\n' "$*"; }
-usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; }
 need_target() {
     [ -n "$TARGET" ] || die "no Devagotchi release for this machine ($(uname -m), $(getconf LONG_BIT 2>/dev/null || echo '?')-bit userland); releases cover 64-bit x86_64 and aarch64. Build it here and use --bin-dir"
 }
@@ -57,6 +63,13 @@ while [ $# -gt 0 ]; do
         --enroll) ENROLL=1; shift ;;
         --uninstall) UNINSTALL=1; shift ;;
         --repo) REPO=${2:?--repo needs a value}; shift 2 ;;
+        --role) ROLE=${2:?--role needs machine or hub}; shift 2 ;;
+        --public-url) PUBLIC_URL=${2:?--public-url needs a value}; shift 2 ;;
+        --listen) LISTEN=${2:?--listen needs host:port}; shift 2 ;;
+        --board) BOARDS+=("${2:?--board needs NAME or NAME=DIR}"); shift 2 ;;
+        --person) PEOPLE+=("${2:?--person needs a name}"); shift 2 ;;
+        --agent) AGENTS+=("${2:?--agent needs a name}"); shift 2 ;;
+        --caddy) CADDY=1; shift ;;
         --print-target) need_target; echo "$TARGET"; exit 0 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option $1 (see --help)" ;;
@@ -76,18 +89,35 @@ case $PREFIX in /*) ;; *) die "--prefix must be absolute" ;; esac
 [ -z "$DEVICE" ] || [[ $DEVICE =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || die "--device must be [a-z0-9][a-z0-9-]{0,62}, the broker name in the hub config"
 [ $ENROLL = 0 ] || { [ -n "$HUB" ] && [ -n "$DEVICE" ]; } || die "--enroll needs --hub and --device"
 [ -z "$VERSION" ] || [[ $VERSION =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "--version $VERSION is not a version"
+case $ROLE in machine|hub) ;; *) die "--role must be machine or hub" ;; esac
+if [ "$ROLE" = hub ]; then
+    { [ -z "$HUB$DEVICE" ] && [ $ENROLL = 0 ]; } || die "--hub, --device and --enroll belong to the machine role"
+    [ -z "$PUBLIC_URL" ] || [[ $PUBLIC_URL =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
+        || die "--public-url must be https://host or http://host:port, with no path"
+    [[ $LISTEN =~ ^[]A-Za-z0-9.:[-]+:[0-9]+$ ]] || die "--listen must be host:port"
+    for spec in "${BOARDS[@]}"; do
+        [[ ${spec%%=*} =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || die "--board ${spec%%=*}: a project name is [a-z0-9][a-z0-9-]{0,62}"
+    done
+    for name in "${PEOPLE[@]}" "${AGENTS[@]}"; do
+        [[ $name =~ ^[^[:space:][:cntrl:]\"\\]{1,256}$ ]] || die "--person/--agent $name: no spaces, quotes or control characters"
+    done
+else
+    { [ -z "$PUBLIC_URL" ] && [ ${#BOARDS[@]} = 0 ] && [ ${#PEOPLE[@]} = 0 ] && [ ${#AGENTS[@]} = 0 ] && [ $CADDY = 0 ]; } \
+        || die "--public-url, --board, --person, --agent and --caddy belong to --role hub"
+fi
 
 uid_of() { getent passwd "$ACCOUNT" | cut -d: -f3; }
 home_of() { getent passwd "$ACCOUNT" | cut -d: -f6; }
-UNITS=(devagotchi-link.service devagotchi-broker.service)
+UNITS=(devagotchi-link.service devagotchi-broker.service devagotchi-hub.service)
 
 # Everything that writes into the account's home runs as that account, so root never follows
-# a link the account could have planted there.
+# a link the account could have planted there. From /, so a working directory the account
+# cannot read never trips a command.
 as_user() {
     local uid; uid=$(uid_of)
     runuser -u "$ACCOUNT" -- env -i HOME="$(home_of)" USER="$ACCOUNT" LOGNAME="$ACCOUNT" \
         PATH=/usr/local/bin:/usr/bin:/bin XDG_RUNTIME_DIR="/run/user/$uid" \
-        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" "$@"
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" sh -c 'cd / && exec "$@"' sh "$@"
 }
 user_systemctl() { as_user systemctl --user "$@"; }
 # write_as_user PATH MODE < content: atomic replace, as the account.
@@ -118,12 +148,16 @@ if [ $UNINSTALL = 1 ]; then
         if [ -S "/run/user/$(uid_of)/bus" ]; then
             user_systemctl disable --now "${UNITS[@]}" 2>/dev/null || true
         fi
-        as_user rm -f "$home/.config/systemd/user/devagotchi-broker.service" "$home/.config/systemd/user/devagotchi-link.service"
+        as_user rm -f "$home/.config/systemd/user/devagotchi-broker.service" "$home/.config/systemd/user/devagotchi-link.service" \
+            "$home/.config/systemd/user/devagotchi-hub.service"
         [ -S "/run/user/$(uid_of)/bus" ] && { user_systemctl daemon-reload || true; }
         loginctl disable-linger "$ACCOUNT" || true
         echo "    stopped and removed the services of $ACCOUNT; lingering is off"
-        echo "    left in place: the account $ACCOUNT, $home (config, journal, the link's key), $PREFIX (binaries)"
-        echo "    revoke this machine on the hub too: devagotchi-hub revoke --device <name>"
+        echo "    left in place: the account $ACCOUNT, $home (configs, journals, keys, boards), $PREFIX (binaries)"
+        echo "    a machine: revoke it on its hub too (devagotchi-hub revoke --device <name>)"
+        if [ -f /etc/caddy/devagotchi-hub.caddy ]; then
+            echo "    a hub: /etc/caddy/devagotchi-hub.caddy and its import line in /etc/caddy/Caddyfile are left for you to remove"
+        fi
     else
         echo "    no account $ACCOUNT; nothing to stop"
     fi
@@ -168,7 +202,9 @@ SOCKET=$STATE/broker.sock
 as_user sh -c 'umask 077; mkdir -p "$1"' sh "$HOME_DIR/.local/state"
 
 # ------------------------------------------------------------------ binaries
-BINARIES=(bridge-broker bridge-mcp devagotchi-link)
+# Every version directory holds all four, whichever role this run installs, so a host
+# that runs both roles from one prefix never has `current` point at a half set.
+BINARIES=(bridge-broker bridge-mcp devagotchi-link devagotchi-hub)
 install -d -o root -g root -m 0755 "$PREFIX" "$PREFIX/versions"
 if [ -n "$BIN_DIR" ]; then
     step "Binaries from build directory $BIN_DIR"
@@ -188,7 +224,7 @@ elif [ -n "$VERSION" ]; then
     step "Devagotchi $VERSION for $TARGET"
     dest=$PREFIX/versions/$VERSION
     work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
-    for app in devagotchi-broker devagotchi-mcp devagotchi-link; do
+    for app in devagotchi-broker devagotchi-mcp devagotchi-link devagotchi-hub; do
         archive=$app-$TARGET.tar.xz
         for name in "$archive" "$archive.sha256"; do
             if [ -n "$ARTIFACT_DIR" ]; then
@@ -240,11 +276,186 @@ step "User services for $ACCOUNT (lingering: they start at boot with nobody logg
 loginctl enable-linger "$ACCOUNT"
 wait_for_user_manager
 
-# ------------------------------------------------------------------ broker config
 json_string() {
     case $1 in *[[:cntrl:]]*) die "path with a control character: $1" ;; esac
     local s=${1//\\/\\\\}; s=${s//\"/\\\"}; printf '"%s"' "$s"
 }
+# put_unit NAME TEXT: write the unit when its text differs; returns 0 when it changed.
+put_unit() {
+    local now; now=$(as_user cat "$UNIT_DIR/$1" 2>/dev/null || true)
+    [ "$now" != "$2" ] || return 1
+    printf '%s\n' "$2" | write_as_user "$UNIT_DIR/$1" 0644
+}
+
+# ================================================================== role hub
+if [ "$ROLE" = hub ]; then
+    HUB_CONFIG=$HOME_DIR/.config/devagotchi/hub.json
+    TOKENS=$HOME_DIR/.config/devagotchi/hub-tokens.json
+    HUB_CHANGED=$BROKER_CHANGED
+
+    # ---- boards: one per project, initialised as the account so the hub can write them
+    board_names=() board_entries=''
+    if [ ${#BOARDS[@]} -gt 0 ]; then
+        step "Boards"
+        for spec in "${BOARDS[@]}"; do
+            name=${spec%%=*}; dir=${spec#*=}
+            [ "$dir" != "$spec" ] || dir=$HOME_DIR/projects/$name
+            case $dir in /*) ;; *) die "--board $name: the directory must be absolute" ;; esac
+            case $dir in "$HOME_DIR"/*) as_user sh -c 'umask 077; mkdir -p "$1"' sh "$dir" ;; esac
+            as_user test -d "$dir" -a -w "$dir" -a -x "$dir" \
+                || die "$ACCOUNT cannot write the project directory $dir (chown it, or keep boards under $HOME_DIR/projects)"
+            as_user "$dest/devagotchi-hub" board init --dir "$dir" --project "$name" --agents-md --quiet >/dev/null \
+                || die "board init failed for $name in $dir"
+            board_names+=("$name")
+            board_entries+="${board_entries:+, }{ \"project\": $(json_string "$name"), \"dir\": $(json_string "$dir") }"
+            echo "    $name: $dir/.devagotchi/board.sqlite3 (AGENTS.md block in place)"
+        done
+    fi
+    board_list=''
+    for name in "${board_names[@]}"; do board_list+="${board_list:+, }$(json_string "$name")"; done
+
+    # ---- config: written once; afterwards it is the operator's file
+    step "Hub config"
+    grant_line() {  # grant_line NAME HUMAN
+        printf '{ "subject": %s, "boards": [%s], "human": %s }' "$(json_string "$1")" "$board_list" "$2"
+    }
+    config_field() {  # config_field KEY: from the existing hub.json, or empty
+        as_user python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$HUB_CONFIG" "$1" 2>/dev/null || true
+    }
+    if as_user test -e "$HUB_CONFIG"; then
+        echo "    kept existing $HUB_CONFIG"
+        # The running hub's addresses are the config's, whatever this run was given.
+        LISTEN=$(config_field listen); [ -n "$LISTEN" ] || die "cannot read listen from $HUB_CONFIG (python3 missing or the file is not JSON)"
+        PUBLIC_URL=$(config_field public_url)
+        if [ ${#board_names[@]} -gt 0 ]; then
+            echo "    add to \"boards\" there (then restart the hub): $board_entries"
+        fi
+        for name in "${PEOPLE[@]}"; do echo "    add to \"grants\": $(grant_line "$name" true)"; done
+        for name in "${AGENTS[@]}"; do echo "    add to \"grants\": $(grant_line "$name" false)"; done
+    else
+        [ -n "$PUBLIC_URL" ] || die "--public-url https://… is required the first time: the hub's address as agents and machines see it"
+        as_user test -s "$TOKENS" || [ ${#PEOPLE[@]} -gt 0 ] || [ ${#AGENTS[@]} -gt 0 ] \
+            || die "the first install needs at least one --person or --agent: the hub refuses to start with nobody to let in"
+        grants=''
+        for name in "${PEOPLE[@]}"; do grants+="${grants:+, }$(grant_line "$name" true)"; done
+        for name in "${AGENTS[@]}"; do grants+="${grants:+, }$(grant_line "$name" false)"; done
+        {
+            printf '{\n  "listen": %s,\n  "public_url": %s,\n' "$(json_string "$LISTEN")" "$(json_string "$PUBLIC_URL")"
+            printf '  "auth": { "mode": "dev", "tokens_file": %s },\n' "$(json_string "$TOKENS")"
+            printf '  "brokers": [],\n  "boards": [%s],\n  "grants": [%s]\n}\n' "$board_entries" "$grants"
+        } | write_as_user "$HUB_CONFIG" 0600
+        HUB_CHANGED=1
+        echo "    wrote $HUB_CONFIG: listen $LISTEN, public_url $PUBLIC_URL, ${#board_names[@]} boards, $(( ${#PEOPLE[@]} + ${#AGENTS[@]} )) grants"
+        echo "    machines join by adding {\"name\": \"<device>\", \"link\": true} to \"brokers\" and a grant, then devagotchi-hub enroll"
+    fi
+
+    # ---- tokens: minted here, shown once, never logged
+    if [ ${#PEOPLE[@]} -gt 0 ] || [ ${#AGENTS[@]} -gt 0 ]; then
+        step "Tokens (shown once; put each in that agent's MCP config as the bearer token)"
+        command -v python3 >/dev/null || die "minting tokens needs python3 (or add them to $TOKENS by hand: {\"<token>\": \"<subject>\"})"
+        as_user test -e "$TOKENS" || printf '{}\n' | write_as_user "$TOKENS" 0600
+        for name in "${PEOPLE[@]}" "${AGENTS[@]}"; do
+            token=$(od -An -N24 -tx1 /dev/urandom | tr -d ' \n')
+            as_user python3 - "$TOKENS" "$token" "$name" <<'PY' || die "could not update $TOKENS"
+import json, os, sys
+path, token, subject = sys.argv[1:4]
+with open(path) as f:
+    tokens = json.load(f)
+if not isinstance(tokens, dict):
+    sys.exit("tokens file is not a JSON object")
+tokens[token] = subject
+tmp = path + ".tmp"
+with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+    json.dump(tokens, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PY
+            echo "    $name: $token"
+        done
+        echo "    the hub reads $TOKENS at each request; no restart needed"
+    fi
+
+    # ---- unit
+    step "Unit in $UNIT_DIR"
+    HUB_UNIT=$(cat <<EOF
+# Written by install-devagotchi.sh; re-running the installer rewrites it.
+[Unit]
+Description=Devagotchi hub (the bastion: /mcp for agents, /link for machines, the boards)
+Documentation=https://github.com/$REPO/tree/main/deploy/linux
+
+[Service]
+Type=simple
+ExecStart=$PREFIX/current/devagotchi-hub --state-dir %h/.local/state/devagotchi-hub --config %h/.config/devagotchi/hub.json
+WorkingDirectory=%h
+Restart=always
+RestartSec=2
+UMask=0077
+
+[Install]
+WantedBy=default.target
+EOF
+)
+    if put_unit devagotchi-hub.service "$HUB_UNIT"; then HUB_CHANGED=1; echo "    wrote devagotchi-hub.service"; fi
+    user_systemctl daemon-reload
+
+    step "Starting the hub"
+    user_systemctl enable devagotchi-hub.service >/dev/null
+    if [ $HUB_CHANGED = 1 ]; then
+        user_systemctl restart devagotchi-hub.service
+    else
+        user_systemctl start devagotchi-hub.service
+        echo "    nothing it runs changed: left running"
+    fi
+    hub_healthy() {
+        if command -v curl >/dev/null; then curl -fsS -m 2 "http://$LISTEN/healthz" >/dev/null 2>&1
+        elif command -v python3 >/dev/null; then python3 -c "import urllib.request,sys; urllib.request.urlopen('http://$LISTEN/healthz', timeout=2)" >/dev/null 2>&1
+        else user_systemctl is-active --quiet devagotchi-hub.service; fi
+    }
+    for _ in $(seq 1 40); do hub_healthy && break; sleep 0.5; done
+    if ! hub_healthy; then
+        journalctl --no-pager -n 20 _UID="$(uid_of)" _SYSTEMD_USER_UNIT=devagotchi-hub.service || true
+        die "the hub did not come up (systemctl --user status devagotchi-hub as $ACCOUNT)"
+    fi
+    echo "    healthy: http://$LISTEN/healthz"
+
+    # ---- Caddy: TLS at the edge, the hub stays on loopback
+    if [ $CADDY = 1 ]; then
+        public=$PUBLIC_URL
+        [ -n "$public" ] || die "--caddy needs the hub's public_url (from the config, or --public-url)"
+        step "Caddy at $public"
+        if ! command -v caddy >/dev/null; then
+            command -v apt-get >/dev/null || die "caddy is not installed; install it (https://caddyserver.com/docs/install), then re-run with --caddy"
+            DEBIAN_FRONTEND=noninteractive apt-get update -q >/dev/null
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -q caddy >/dev/null
+            echo "    installed caddy from the distribution"
+        fi
+        case $public in
+            https://*) site=${public#https://} ;;      # Caddy fetches and renews the certificate itself
+            http://*) site=$public ;;                  # plain http, only for a loopback or test address
+        esac
+        site_file=/etc/caddy/devagotchi-hub.caddy
+        printf '# Written by install-devagotchi.sh: the Devagotchi hub behind this edge.\n%s {\n    reverse_proxy %s\n}\n' "$site" "$LISTEN" > "$site_file.tmp"
+        chmod 0644 "$site_file.tmp" && mv -f "$site_file.tmp" "$site_file"
+        [ -f /etc/caddy/Caddyfile ] || install -m 0644 /dev/null /etc/caddy/Caddyfile
+        grep -qx "import $site_file" /etc/caddy/Caddyfile || printf '\nimport %s\n' "$site_file" >> /etc/caddy/Caddyfile
+        caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null || die "caddy validate failed on /etc/caddy/Caddyfile"
+        systemctl enable --now caddy >/dev/null 2>&1 || true
+        systemctl reload caddy || systemctl restart caddy
+        echo "    $site_file: $site -> $LISTEN; Caddyfile imports it"
+        case $public in https://*) echo "    DNS: point ${site%%:*} at this host (A/AAAA) and open 80/443; the certificate follows by itself" ;; esac
+    fi
+
+    step "Done"
+    echo "    Version:   $VERSION ($PREFIX/current)"
+    echo "    Account:   $ACCOUNT, service: systemctl --user status devagotchi-hub (as $ACCOUNT)"
+    echo "    Hub:       http://$LISTEN (loopback) behind $PUBLIC_URL"
+    echo "    Config:    $HUB_CONFIG (boards, brokers, grants; restart the hub after editing)"
+    echo "    Agents:    MCP endpoint <public_url>/mcp with a bearer token; start with whoami, then board_prime"
+    exit 0
+fi
+
+# ================================================================== role machine
+# ------------------------------------------------------------------ broker config
 step "Broker config"
 if as_user test -e "$CONFIG"; then
     echo "    kept existing $CONFIG"
@@ -277,12 +488,6 @@ else
 fi
 
 # ------------------------------------------------------------------ units
-# put_unit NAME TEXT: write the unit when its text differs; returns 0 when it changed.
-put_unit() {
-    local now; now=$(as_user cat "$UNIT_DIR/$1" 2>/dev/null || true)
-    [ "$now" != "$2" ] || return 1
-    printf '%s\n' "$2" | write_as_user "$UNIT_DIR/$1" 0644
-}
 step "Units in $UNIT_DIR"
 BROKER_UNIT=$(cat <<EOF
 # Written by install-devagotchi.sh; re-running the installer rewrites it.
