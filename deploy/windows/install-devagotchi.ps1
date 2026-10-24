@@ -43,12 +43,26 @@ param(
     [string]$Hub = '',
     [string]$Device = '',
     [string]$EnrollCode = '',
-    [switch]$Uninstall
+    [switch]$Uninstall,
+    [switch]$PrintTarget
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
-$Target = 'x86_64-pc-windows-msvc'
+# The release build for this machine, from the OS's own architecture: the machine-level
+# variable, which x64 emulation on an Arm64 PC and 32-bit (WOW64) PowerShell leave alone,
+# unlike the process-level one. Releases exist for x64 and Arm64.
+$HostArch = [Environment]::GetEnvironmentVariable('PROCESSOR_ARCHITECTURE', 'Machine')
+if (-not $HostArch) { $HostArch = $env:PROCESSOR_ARCHITECTURE }
+$Target = switch ($HostArch.ToUpperInvariant()) {
+    'AMD64' { 'x86_64-pc-windows-msvc' }
+    'ARM64' { 'aarch64-pc-windows-msvc' }
+    default { '' }
+}
+function Assert-Target {
+    if (-not $Target) { throw "no Devagotchi release for this machine ($HostArch); releases cover x64 and Arm64. Build it here and use -BinDir" }
+}
+if ($PrintTarget) { Assert-Target; Write-Output $Target; return }
 $RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 $RunName = 'Devagotchi Broker'
 $LinkRunName = 'Devagotchi Link'
@@ -155,6 +169,7 @@ if ($BinDir) {
         Copy-Item -Force $source $dest
     }
 } else {
+    Assert-Target
     if (-not $Version) {
         Step "Resolving the latest release of $Repo"
         $latest = Invoke-RestMethod -UseBasicParsing "https://api.github.com/repos/$Repo/releases/latest"
