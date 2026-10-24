@@ -18,6 +18,7 @@
 //! - Redirects are not followed when talking to Nomen.
 
 mod approvals;
+mod notify;
 mod pages;
 mod public;
 mod routes;

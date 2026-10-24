@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::{
-    Exchange, WebLogin, approvals,
+    Exchange, WebLogin, approvals, notify,
     pages::{self, Viewer},
     public,
 };
@@ -32,6 +32,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/me", get(me))
         .route("/approvals", get(approvals::list))
         .route("/approvals/decide", post(approvals::decide))
+        .route("/push/subscribe", post(notify::subscribe))
+        .route("/sw.js", get(notify::service_worker))
+        .route("/manifest.webmanifest", get(notify::manifest))
+        .route("/assets/push.js", get(notify::script))
+        .route("/assets/icon.svg", get(notify::icon))
         .route("/docs", get(public::docs))
         .route("/privacy", get(public::privacy))
         .route("/terms", get(public::terms))
