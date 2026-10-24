@@ -12,6 +12,8 @@
 //! `login --local` records the other choice D22 allows: this machine runs without an
 //! account. Until one of the two is on file, `devagotchi start` says so once per run.
 //!
+//! `front` carries the account into an agent's MCP session (`devagotchi mcp --hub`).
+//!
 //! Offline grace (D22, PROPOSED): the access token is refreshed when within five minutes
 //! of expiry; when Nomen cannot be reached, the account on file stays "signed in (offline)"
 //! for seven days past expiry, then "expired", and nothing here deletes it — only `logout`
@@ -691,6 +693,8 @@ fn standing_name(standing: Standing) -> &'static str {
         Standing::Expired => "expired",
     }
 }
+
+pub mod front;
 
 #[cfg(test)]
 mod tests;

@@ -14,7 +14,8 @@ outage answers 503 (never a refusal) while a session Nomen already confirmed kee
 working, and sign-in recovers when Nomen does. Then the terminal sign-in (D22, packet 14):
 `devagotchi login` against the fake, with no browser — the code and URL are shown, the
 tokens land owner-only in account.json, `whoami` names the account, the hub accepts the
-token that landed (an agent's call carries the account), and `logout` revokes it.
+token that landed, a `devagotchi mcp --hub` session on stdio is answered as the account
+(an agent's call carries the account), and `logout` revokes it.
 Exit 0 only when every step holds.
 """
 import argparse
@@ -243,6 +244,29 @@ try:
     status, _, me = whoami(base, stored.get("access_token", ""))
     check("the hub accepts the token login landed", status == 200 and me and me.get("subject") == MEMBER
           and me.get("via") == "nomen" and me.get("brokers") == ["local"], json.dumps(me))
+    # An agent's MCP call carries the account: `devagotchi mcp --hub` on stdio, the hub's
+    # whoami answering as the signed-in account, the token never leaving this machine.
+    front = subprocess.Popen([args.devagotchi, "mcp", "--hub", base], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, bufsize=1, env=env)
+    def ask(rid, method, params):
+        front.stdin.write(json.dumps({"jsonrpc": "2.0", "id": rid, "method": method, "params": params}) + "\n")
+        front.stdin.flush()
+        while True:
+            line = front.stdout.readline()
+            if not line:
+                return None
+            reply = json.loads(line)
+            if reply.get("id") == rid:
+                return reply
+    init = ask(1, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "headless", "version": "0"}})
+    front.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n"); front.stdin.flush()
+    me_front = ask(2, "tools/call", {"name": "whoami", "arguments": {}})
+    front.stdin.close()
+    front.wait(10)
+    content = (me_front or {}).get("result", {}).get("structuredContent") or {}
+    check("devagotchi mcp --hub: the hub's whoami answers as the account", init and init.get("result", {}).get("serverInfo", {}).get("name") == "devagotchi-hub"
+          and content.get("subject") == MEMBER and content.get("via") == "nomen" and front.returncode == 0,
+          json.dumps(content) or front.stderr.read()[:200])
     logout = subprocess.run([args.devagotchi, "logout"], capture_output=True, text=True, timeout=30, env=env)
     check("logout revokes both tokens and removes the file", logout.returncode == 0
           and nomen.revoked == ["tok-device", "rt-device"] and not account_file.exists(),

@@ -43,6 +43,53 @@ fn help_names_every_command_and_each_answers_help() {
 }
 
 #[test]
+fn mcp_hub_without_an_account_answers_on_the_wire_and_refuses_bad_flags() {
+    use std::io::{BufRead, BufReader, Write};
+    let dir = tempfile::tempdir().unwrap();
+    let out = devagotchi()
+        .args(["mcp", "--hub", "--socket"])
+        .env("DEVAGOTCHI_CONFIG_DIR", dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(64),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Not signed in: the front still serves MCP, answering each request with the reason.
+    let mut front = devagotchi()
+        .args(["mcp", "--hub", "https://hub.example"])
+        .env("DEVAGOTCHI_CONFIG_DIR", dir.path())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = front.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{}}}}"#
+    )
+    .unwrap();
+    drop(stdin);
+    let mut line = String::new();
+    BufReader::new(front.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(reply["id"], 1);
+    assert!(
+        reply["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("devagotchi login"),
+        "{line}"
+    );
+    assert!(front.wait().unwrap().success());
+}
+
+#[test]
 fn mcp_without_a_broker_says_what_to_run() {
     let dir = tempfile::tempdir().unwrap();
     let out = devagotchi()

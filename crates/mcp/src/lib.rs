@@ -6,7 +6,7 @@ use std::{ffi::OsString, path::PathBuf, process::ExitCode};
 
 use devagotchi_contracts::{BridgeError, BridgeResult};
 
-pub const USAGE: &str = "Usage:\n  devagotchi mcp --socket ABS_PATH\n  devagotchi mcp --help\n\nConnects MCP tools to an already running local broker.\nABS_PATH is the endpoint on the broker's ready line: a Unix socket path, or a\n\\\\.\\pipe\\ named-pipe path on Windows. Without --socket, `devagotchi mcp` uses this user's own broker.";
+pub const USAGE: &str = "Usage:\n  devagotchi mcp --socket ABS_PATH\n  devagotchi mcp --hub [URL]\n  devagotchi mcp --help\n\nConnects MCP tools to an already running local broker.\nABS_PATH is the endpoint on the broker's ready line: a Unix socket path, or a\n\\\\.\\pipe\\ named-pipe path on Windows. Without --socket, `devagotchi mcp` uses this user's own broker.\n--hub relays the session to the hosted hub's MCP (default https://devagotchi.com) as the\naccount `devagotchi login` signed in with; the token stays on this machine.";
 
 enum Command {
     Help,
