@@ -10,6 +10,7 @@ mod devices;
 mod hub;
 mod link;
 mod nomen;
+mod push;
 #[cfg(test)]
 mod test_keys;
 mod web;
@@ -302,6 +303,14 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let state = AppState {
         verifier,
         hub: Hub {
+            push: match &config.web {
+                Some(_) => Some(Arc::new(push::Push::open(
+                    &state_dir,
+                    &config.public_url,
+                    devices.clone(),
+                )?)),
+                None => None,
+            },
             config: config.clone(),
             audit,
             links,

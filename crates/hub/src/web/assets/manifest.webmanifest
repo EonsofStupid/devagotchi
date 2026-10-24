@@ -1,0 +1,11 @@
+{
+  "name": "Devagotchi",
+  "short_name": "Devagotchi",
+  "description": "Approve what your AI wants to do on your machines.",
+  "start_url": "/approvals",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f7f6f2",
+  "theme_color": "#2f6b4f",
+  "icons": [{ "src": "/assets/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

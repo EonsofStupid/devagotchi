@@ -86,6 +86,7 @@ struct World {
     http: reqwest::Client,
     /// The `estate` board's project directory (an initialised board the owner reaches).
     board_dir: std::path::PathBuf,
+    hub: Hub,
     _dir: tempfile::TempDir,
 }
 
@@ -150,9 +151,11 @@ async fn world() -> World {
         ("tok-other".to_string(), OTHER.to_string()),
     ]));
     let web = WebLogin::new(&fake.issuer, &["hub-project".to_string()], WEB_CLIENT, &url).unwrap();
+    let push = Arc::new(crate::push::Push::open(dir.path(), &url, devices.clone()).unwrap());
     let state = AppState {
         verifier: Arc::new(verifier),
         hub: Hub {
+            push: Some(push),
             boards: Arc::new(crate::board::mcp::Boards::from_config(&config)),
             config,
             audit,
@@ -160,6 +163,7 @@ async fn world() -> World {
         },
         web: Some(Arc::new(web)),
     };
+    let hub = state.hub.clone();
     let app = router().with_state(state);
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let http = reqwest::Client::builder()
@@ -171,6 +175,7 @@ async fn world() -> World {
         url,
         http,
         board_dir,
+        hub,
         _dir: dir,
     }
 }
@@ -700,7 +705,12 @@ async fn a_person_approves_on_the_phone_page_and_the_agent_sees_it() {
     let body = page.text().await.unwrap();
     assert!(body.contains("Restart the hub on Texas"));
     assert!(body.contains(&format!("value=\"{}\"", asked.id)));
-    assert!(!body.contains("<script"));
+    assert_eq!(
+        body.matches("<script").count(),
+        1,
+        "one script, the hub's own file; nothing inline"
+    );
+    assert!(body.contains("<script src=\"/assets/push.js\" defer></script>"));
 
     let form = [
         ("project", "estate".to_string()),
@@ -751,4 +761,159 @@ async fn a_person_approves_on_the_phone_page_and_the_agent_sees_it() {
     assert_eq!(page.status(), StatusCode::FORBIDDEN, "only people approve");
     let signed_out = w.get("/approvals", None).await;
     assert_eq!(signed_out.status(), StatusCode::SEE_OTHER);
+}
+
+#[tokio::test]
+async fn notify_this_phone_then_an_approval_buzzes_it_encrypted() {
+    use crate::board::{Actor, open_project};
+    use aws_lc_rs::{
+        agreement::{ECDH_P256, PrivateKey},
+        rand::{SecureRandom, SystemRandom},
+    };
+
+    // A fake push service: records what it is sent; `/gone/*` answers 410.
+    type Seen = Arc<Mutex<Vec<(axum::http::HeaderMap, Vec<u8>)>>>;
+    let seen: Seen = Arc::default();
+    async fn receive(
+        State(seen): State<Seen>,
+        axum::extract::Path(id): axum::extract::Path<String>,
+        headers: axum::http::HeaderMap,
+        body: axum::body::Bytes,
+    ) -> StatusCode {
+        seen.lock().unwrap().push((headers, body.to_vec()));
+        if id.starts_with("gone") {
+            StatusCode::GONE
+        } else {
+            StatusCode::CREATED
+        }
+    }
+    let service = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", service.local_addr().unwrap());
+    let app = axum::Router::new()
+        .route("/push/{id}", post(receive))
+        .with_state(seen.clone());
+    tokio::spawn(async move { axum::serve(service, app).await.unwrap() });
+
+    let w = world().await;
+    let page = {
+        let owner = w.sign_in("tok-owner").await;
+        let body = w.get("/approvals", Some(&owner)).await;
+        let csp = body.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(csp.contains("script-src 'self'") && csp.contains("worker-src 'self'"));
+        (owner, body.text().await.unwrap())
+    };
+    let (owner, html) = page;
+    let key = w.hub.push.as_ref().unwrap().public_key.clone();
+    assert!(
+        html.contains(&format!("data-key=\"{key}\"")),
+        "the page carries the public key only"
+    );
+    assert!(html.contains("/assets/push.js") && html.contains("/manifest.webmanifest"));
+    for (path, kind) in [
+        ("/sw.js", "text/javascript"),
+        ("/assets/push.js", "text/javascript"),
+        ("/manifest.webmanifest", "application/manifest+json"),
+        ("/assets/icon.svg", "image/svg+xml"),
+    ] {
+        let r = w.get(path, None).await;
+        assert_eq!(r.status(), StatusCode::OK, "{path}");
+        assert!(
+            r.headers()[header::CONTENT_TYPE]
+                .to_str()
+                .unwrap()
+                .starts_with(kind),
+            "{path}"
+        );
+    }
+
+    let phone = PrivateKey::generate(&ECDH_P256).unwrap();
+    let mut auth = [0u8; 16];
+    SystemRandom::new().fill(&mut auth).unwrap();
+    let b64 = |b: &[u8]| URL_SAFE_NO_PAD.encode(b);
+    let subscribe = |endpoint: String, site: &'static str, cookie: String| {
+        let body = json!({"endpoint": endpoint, "keys": {"p256dh": b64(phone.compute_public_key().unwrap().as_ref()), "auth": b64(&auth)}});
+        w.http
+            .post(format!("{}/push/subscribe", w.url))
+            .header(header::COOKIE, cookie)
+            .header("sec-fetch-site", site)
+            .json(&body)
+    };
+    let refused = subscribe(format!("{base}/push/phone"), "cross-site", owner.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    let other = w.sign_in("tok-other").await;
+    let refused = subscribe(format!("{base}/push/phone"), "same-origin", other)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        refused.status(),
+        StatusCode::FORBIDDEN,
+        "only people get approval pushes"
+    );
+    for endpoint in [
+        format!("{base}/push/phone"),
+        format!("{base}/push/gone-tablet"),
+    ] {
+        let ok = subscribe(endpoint, "same-origin", owner.clone())
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(ok.status(), StatusCode::NO_CONTENT);
+    }
+
+    let (_, board) = open_project(&w.board_dir).unwrap();
+    let asked = board
+        .request_approval(
+            &Actor::agent("claude"),
+            "Restart the hub on Texas",
+            "systemctl restart devagotchi-hub",
+            "",
+            "",
+        )
+        .unwrap();
+    w.hub.announce_approval("estate", &asked);
+    for _ in 0..100 {
+        if seen.lock().unwrap().len() >= 2 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 2, "both subscriptions were tried");
+    let (headers, body) = &seen[0];
+    assert_eq!(headers["content-encoding"], "aes128gcm");
+    assert_eq!(headers["ttl"], "86400");
+    let authorization = headers["authorization"].to_str().unwrap();
+    assert!(
+        authorization.starts_with("vapid t=") && authorization.ends_with(&format!(", k={key}"))
+    );
+    let payload: Value =
+        serde_json::from_slice(&crate::push::decrypt(&phone, &auth, body)).unwrap();
+    assert_eq!(payload["title"], "Approval needed");
+    assert_eq!(payload["body"], "Restart the hub on Texas");
+    assert_eq!(payload["url"], format!("/approvals#estate-{}", asked.id));
+    assert!(
+        !payload.to_string().contains("systemctl"),
+        "the command never travels in a push"
+    );
+    let left = w
+        .hub
+        .push
+        .as_ref()
+        .unwrap()
+        .devices()
+        .push_for(OWNER)
+        .unwrap();
+    assert_eq!(
+        left.len(),
+        1,
+        "the subscription the service called gone is dropped"
+    );
+    assert!(left[0].endpoint.ends_with("/push/phone"));
 }

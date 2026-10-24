@@ -30,6 +30,8 @@ pub struct Hub {
     pub links: Arc<Links>,
     /// The project boards this hub serves (`board_*` tools, `crate::board::mcp`).
     pub boards: Arc<Boards>,
+    /// Web Push to people's phones when an approval waits; present with browser sign-in.
+    pub push: Option<Arc<crate::push::Push>>,
 }
 
 /// One machine as a person sees it on their page and in `/api/v1/me`, and as an AI sees it

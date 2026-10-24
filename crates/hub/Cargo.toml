@@ -29,6 +29,8 @@ hex = { workspace = true }
 axum = { version = "0.8", default-features = false, features = ["form", "http1", "json", "query", "tokio", "ws"] }
 # aws_lc_rs: the signature backend. Without one, jsonwebtoken 10 panics on the first real token.
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
+# Web Push (RFC 8291 encryption, RFC 8292 VAPID): the same aws-lc-rs jsonwebtoken already uses.
+aws-lc-rs = "1"
 http = "1"
 tower-service = "0.3"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }

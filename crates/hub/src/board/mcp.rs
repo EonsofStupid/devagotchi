@@ -462,6 +462,22 @@ pub struct ApprovalOut {
 type BoardOut<T> = Result<Json<T>, Json<BoardError>>;
 
 impl Hub {
+    /// Push "approval needed" to the phones of the people who decide on `project`. The
+    /// payload names the approval and links to it; it never carries the command text.
+    pub fn announce_approval(&self, project: &str, approval: &ApprovalStatus) {
+        let Some(push) = self.push.clone() else {
+            return;
+        };
+        let people = self.config.people_for_board(project);
+        let payload = serde_json::json!({
+            "title": "Approval needed",
+            "body": approval.title,
+            "url": format!("/approvals#{project}-{}", approval.id),
+            "tag": approval.id,
+        });
+        tokio::spawn(async move { push.notify(&people, &payload).await });
+    }
+
     /// An approval with the page where a person decides it.
     fn approval_out(&self, project: &str, approval: ApprovalStatus) -> ApprovalOut {
         let url = format!(
@@ -1189,6 +1205,7 @@ impl Hub {
                 },
             )
             .await?;
+        self.announce_approval(&project, &approval);
         Ok(Json(self.approval_out(&project, approval)))
     }
 

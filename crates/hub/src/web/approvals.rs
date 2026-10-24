@@ -2,7 +2,8 @@
 //! for a phone. A signed-in person sees the pending approvals on every board they may use;
 //! deciding names the version they saw, so a request that changed is shown again first.
 //! Forms only, no script: the session cookie is `SameSite=Lax` and a decision must also
-//! come from this hub's own pages (`Sec-Fetch-Site` / `Origin`).
+//! come from this hub's own pages (`Sec-Fetch-Site` / `Origin`). "Notify this phone" turns
+//! on push for the browser it is tapped in (`notify.rs`).
 
 use axum::{
     Form,
@@ -40,7 +41,7 @@ pub struct Decide {
 }
 
 /// A decision must come from this hub's own page, not another site's form.
-fn same_origin(headers: &HeaderMap, public_url: &str) -> bool {
+pub(super) fn same_origin(headers: &HeaderMap, public_url: &str) -> bool {
     let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
     if let Some(site) = header("sec-fetch-site") {
         return site == "same-origin";
@@ -93,7 +94,8 @@ pub async fn list(
     })
     .await
     .unwrap_or_default();
-    page(&pending, shown.done.as_deref())
+    let key = state.hub.push.as_ref().map(|p| p.public_key.clone());
+    page(&pending, shown.done.as_deref(), key.as_deref())
 }
 
 pub async fn decide(
@@ -161,7 +163,11 @@ pub async fn decide(
     }
 }
 
-fn page(pending: &[(String, ApprovalStatus)], done: Option<&str>) -> Response {
+fn page(
+    pending: &[(String, ApprovalStatus)],
+    done: Option<&str>,
+    push_key: Option<&str>,
+) -> Response {
     let flash = done
         .map(|id| {
             format!(
@@ -196,9 +202,18 @@ fn page(pending: &[(String, ApprovalStatus)], done: Option<&str>) -> Response {
     } else {
         cards
     };
-    pages::html(
+    let notify = push_key
+        .map(|key| {
+            format!(
+                "<p><button id=\"notify\" type=\"button\" data-key=\"{}\">Notify this phone</button> \
+<span id=\"notify-status\" class=\"note\" role=\"status\"></span></p>",
+                escape(key)
+            )
+        })
+        .unwrap_or_default();
+    pages::app(
         StatusCode::OK,
         "Approvals",
-        &format!("<h1>Approvals</h1>{flash}{body}"),
+        &format!("<h1>Approvals</h1>{notify}{flash}{body}"),
     )
 }
