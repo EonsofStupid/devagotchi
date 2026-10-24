@@ -122,7 +122,7 @@ try:
     )
     # The one binary: `devagotchi mcp --socket` is the same adapter, from the same library.
     adapter_ok = adapter_ok and run_probe(
-        [str(HERE / "adapter_probe.py"), endpoint, "--adapter", f"{one_binary} mcp", "--git", git, "--cwd", str(workspace)],
+        [str(HERE / "adapter_probe.py"), endpoint, "--adapter", str(one_binary), "mcp", "--git", git, "--cwd", str(workspace)],
         "stdio adapter probe through `devagotchi mcp`",
     )
 

@@ -53,7 +53,9 @@ check("backup made", len(backups) >= 1, ", ".join(b.name for b in backups))
 
 if git and entry.get("command"):
     probe = Path(__file__).resolve().parent / "adapter_probe.py"
-    result = subprocess.run([sys.executable, str(probe), entry["args"][1], "--adapter", entry["command"],
+    # Exactly the registered command: its executable and words, with the probe supplying
+    # the trailing `--socket <endpoint>` the entry ends in.
+    result = subprocess.run([sys.executable, str(probe), entry["args"][-1], "--adapter", entry["command"], *entry["args"][:-2],
                              "--git", git, "--cwd", str(args.workspace)], timeout=120)
     check("registered command works (adapter probe)", result.returncode == 0)
 

@@ -3,12 +3,7 @@
 //! Linux only for the broker (the macOS provider is pending; Windows has its own install
 //! check); the help tree runs everywhere.
 
-use std::{
-    io::{BufRead, BufReader, Write},
-    path::Path,
-    process::{Command, Stdio},
-    time::{Duration, Instant},
-};
+use std::process::Command;
 
 fn devagotchi() -> Command {
     Command::new(env!("CARGO_BIN_EXE_devagotchi"))
@@ -58,6 +53,13 @@ fn mcp_without_a_broker_says_what_to_run() {
 #[cfg(target_os = "linux")]
 #[test]
 fn start_then_mcp_then_board_from_one_binary() {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        path::Path,
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+
     let home = tempfile::tempdir().unwrap();
     let state = home.path().join("state");
     let config_dir = home.path().join("config");
