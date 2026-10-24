@@ -217,6 +217,20 @@ check("wait returns the new event at once", len(waited) == 1 and waited[0]["acti
 chain = operator.ok("board_verify", {"project": P})
 check("board chain verified", chain.get("ok") is True and chain.get("entries") == last + 1, json.dumps(chain))
 
+# Approvals: an agent asks, waits, and never decides; people decide on /approvals.
+asked = claude.ok("approval_request", {"project": P, "title": "Restart the hub", "what": "systemctl restart devagotchi-hub",
+                                       "why": "new build", "undo": "start the previous build"})
+check("an approval starts pending with a page to decide on",
+      asked.get("status") == "pending" and asked.get("url", "").endswith(f"/approvals#{P}-{asked.get('id')}"), json.dumps(asked)[:200])
+started = time.monotonic()
+waited = claude.ok("approval_wait", {"project": P, "id": asked["id"], "timeout_ms": 1200})
+elapsed = time.monotonic() - started
+check("approval_wait holds, then says pending", waited.get("status") == "pending" and 1.0 <= elapsed < 10, f"{elapsed:.1f}s")
+ticket = claude.ok("board_get", {"project": P, "id": asked["id"]})["ticket"]
+claude.refused("board_update", {"project": P, "id": asked["id"], "version": ticket["version"], "state": "ready"},
+               "approval_decide_only", "an agent cannot move an approval")
+claude.refused("approval_wait", {"project": P, "id": first["id"], "timeout_ms": 0}, "not_an_approval")
+
 # The command line, on the hub's host, is the other face of the same store.
 result = subprocess.run([args.hub_bin, "board", "ls", "--dir", args.dir, "--json"], capture_output=True, text=True, timeout=30)
 try:

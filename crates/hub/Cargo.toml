@@ -26,7 +26,7 @@ tokio = { workspace = true }
 rusqlite = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
-axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "ws"] }
+axum = { version = "0.8", default-features = false, features = ["form", "http1", "json", "query", "tokio", "ws"] }
 # aws_lc_rs: the signature backend. Without one, jsonwebtoken 10 panics on the first real token.
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 http = "1"
