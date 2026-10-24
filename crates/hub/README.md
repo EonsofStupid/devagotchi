@@ -137,7 +137,7 @@ host or a linked machine, and whether it is online, offline, revoked or not enro
 ```
 
 Set up once in Nomen, in the hub's project: a **User Agent** application with **PKCE** (no
-secret), redirect URI `<public_url>/auth/callback`. Its client id goes in `web.client_id`
+secret) and the **Refresh Token** grant, redirect URI `<public_url>/auth/callback`. Its client id goes in `web.client_id`
 and in `auth.clients`; the hub refuses to start otherwise, and with any auth mode but
 `nomen`, or a `public_url` that is plain http anywhere but loopback.
 
@@ -148,14 +148,21 @@ How it holds up:
 - The access token Nomen returns goes through the same introspection as every bearer
   token: accepted client, accepted project, exact account ID. A browser session is never
   weaker than an MCP call, and Nomen down is a 503 page, never "not accepted".
-- The token stays in the hub's memory. The browser gets only a random session id, in a
-  `__Host-` cookie (`Secure`, `HttpOnly`, `SameSite=Lax`); the hub keeps only its SHA-256.
-- Every page re-checks the token (Nomen's answer is reused for a minute), and a session
-  ends with its token or after 12 hours, whichever is first. Sessions live in memory, so a
-  hub restart signs everyone out of the page; their machines are unaffected.
+- The browser gets only a random session id, in a `__Host-` cookie (`Secure`, `HttpOnly`,
+  `SameSite=Lax`). The hub keeps only its SHA-256, and Nomen's tokens sealed on disk:
+  AES-256-GCM under `session.key` (0600) in the state directory, in `sessions.sqlite3`
+  (0600). A restart signs nobody out, so a phone that turned on notifications opens a
+  push straight onto Approve.
+- The hub asks for `offline_access`. With a refresh token, a session lasts up to 90 days
+  and ends after 30 days unused. The hub renews the access token through Nomen as it runs
+  out, one refresh at a time, keeping the rotated refresh token. If Nomen refuses a
+  refresh (account disabled, token revoked), the session ends. Without a refresh token,
+  a session ends with its access token or after 12 hours, whichever is first. The Nomen
+  app needs the refresh-token grant for the long session.
+- Every page re-checks the access token (Nomen's answer is reused for a minute).
 - The return path after sign-in is kept on the hub and is only ever a path on it.
 - Pages carry no script; values are escaped and the CSP is `default-src 'none'` with the
-  hub's own stylesheet. Sign-out ends the hub session only; the Shippin sign-in stays.
+  hub's own stylesheet. Sign-out ends the hub session and revokes its refresh token at Nomen; the Shippin sign-in stays.
 
 ## Tools
 

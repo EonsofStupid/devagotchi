@@ -203,7 +203,10 @@ impl Push {
     }
 }
 
-fn write_private(path: &Path, bytes: &[u8]) -> BridgeResult<()> {
+/// Write a new file only its owner can read (0600 on Unix); refuses to replace one.
+pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> BridgeResult<()> {
+    let failed =
+        |e: std::io::Error| BridgeError::new("state_file", format!("{}: {e}", path.display()));
     #[cfg(unix)]
     {
         use std::{io::Write, os::unix::fs::OpenOptionsExt};
@@ -212,12 +215,12 @@ fn write_private(path: &Path, bytes: &[u8]) -> BridgeResult<()> {
             .create_new(true)
             .mode(0o600)
             .open(path)
-            .map_err(|e| push_error(format!("{}: {e}", path.display())))?;
-        file.write_all(bytes).map_err(|e| push_error(e.to_string()))
+            .map_err(failed)?;
+        file.write_all(bytes).map_err(failed)
     }
     #[cfg(not(unix))]
     {
-        std::fs::write(path, bytes).map_err(|e| push_error(format!("{}: {e}", path.display())))
+        std::fs::write(path, bytes).map_err(failed)
     }
 }
 

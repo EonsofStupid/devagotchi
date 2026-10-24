@@ -6,7 +6,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU16, Ordering::SeqCst},
+        atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering::SeqCst},
     },
 };
 
@@ -46,6 +46,37 @@ struct FakeNomen {
     redirect_uri: Mutex<String>,
     codes: Mutex<HashMap<String, Grant>>,
     status: AtomicU16,
+    /// Codes also buy a refresh token (the app has the refresh grant and the hub asked
+    /// for `offline_access`).
+    refresh_on_code: AtomicBool,
+    /// Live refresh tokens and the access token each buys; spent on use (rotation).
+    refreshes: Mutex<HashMap<String, String>>,
+    refreshed: AtomicUsize,
+    revoked: Mutex<Vec<String>>,
+}
+
+impl FakeNomen {
+    fn mint_refresh(&self, access: &str) -> String {
+        let mut refreshes = self.refreshes.lock().unwrap();
+        let token = format!(
+            "refresh-token-{}",
+            self.refreshed.load(SeqCst) + refreshes.len()
+        );
+        refreshes.insert(token.clone(), access.to_string());
+        token
+    }
+}
+
+async fn revoke(
+    State(fake): State<Arc<FakeNomen>>,
+    Form(form): Form<HashMap<String, String>>,
+) -> StatusCode {
+    let token = form.get("token").cloned().unwrap_or_default();
+    if form.get("client_id").map(String::as_str) == Some(WEB_CLIENT) {
+        fake.refreshes.lock().unwrap().remove(&token);
+        fake.revoked.lock().unwrap().push(token);
+    }
+    StatusCode::OK
 }
 
 async fn token(
@@ -62,6 +93,20 @@ async fn token(
     )
         .into_response();
     let field = |key: &str| form.get(key).cloned().unwrap_or_default();
+    if field("grant_type") == "refresh_token" && field("client_id") == WEB_CLIENT {
+        let Some(access) = fake
+            .refreshes
+            .lock()
+            .unwrap()
+            .remove(&field("refresh_token"))
+        else {
+            return bad;
+        };
+        let rotated = fake.mint_refresh(&access);
+        fake.refreshed.fetch_add(1, SeqCst);
+        return axum::Json(json!({"access_token": access, "token_type": "Bearer", "expires_in": 3600, "refresh_token": rotated}))
+            .into_response();
+    }
     if field("grant_type") != "authorization_code"
         || field("client_id") != WEB_CLIENT
         || field("redirect_uri") != *fake.redirect_uri.lock().unwrap()
@@ -76,8 +121,11 @@ async fn token(
     {
         return bad;
     }
-    axum::Json(json!({"access_token": grant.token, "token_type": "Bearer", "expires_in": grant.expires_in, "id_token": "unused"}))
-        .into_response()
+    let mut answer = json!({"access_token": grant.token, "token_type": "Bearer", "expires_in": grant.expires_in, "id_token": "unused"});
+    if fake.refresh_on_code.load(SeqCst) {
+        answer["refresh_token"] = json!(fake.mint_refresh(&grant.token));
+    }
+    axum::Json(answer).into_response()
 }
 
 struct World {
@@ -87,7 +135,7 @@ struct World {
     /// The `estate` board's project directory (an initialised board the owner reaches).
     board_dir: std::path::PathBuf,
     hub: Hub,
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
 }
 
 async fn world() -> World {
@@ -97,9 +145,14 @@ async fn world() -> World {
         redirect_uri: Mutex::new(String::new()),
         codes: Mutex::new(HashMap::new()),
         status: AtomicU16::new(200),
+        refresh_on_code: AtomicBool::new(false),
+        refreshes: Mutex::new(HashMap::new()),
+        refreshed: AtomicUsize::new(0),
+        revoked: Mutex::new(Vec::new()),
     });
     let app = axum::Router::new()
         .route("/oauth/v2/token", post(token))
+        .route("/oauth/v2/revoke", post(revoke))
         .with_state(fake.clone());
     tokio::spawn(async move { axum::serve(nomen, app).await.unwrap() });
 
@@ -150,7 +203,14 @@ async fn world() -> World {
         ("tok-owner".to_string(), OWNER.to_string()),
         ("tok-other".to_string(), OTHER.to_string()),
     ]));
-    let web = WebLogin::new(&fake.issuer, &["hub-project".to_string()], WEB_CLIENT, &url).unwrap();
+    let web = WebLogin::new(
+        &fake.issuer,
+        &["hub-project".to_string()],
+        WEB_CLIENT,
+        &url,
+        dir.path(),
+    )
+    .unwrap();
     let push = Arc::new(crate::push::Push::open(dir.path(), &url, devices.clone()).unwrap());
     let state = AppState {
         verifier: Arc::new(verifier),
@@ -176,7 +236,7 @@ async fn world() -> World {
         http,
         board_dir,
         hub,
-        _dir: dir,
+        dir,
     }
 }
 
@@ -262,7 +322,7 @@ impl World {
         assert_eq!(params["code_challenge_method"], "S256");
         assert_eq!(
             params["scope"],
-            "openid profile urn:zitadel:iam:org:project:id:hub-project:aud"
+            "openid profile offline_access urn:zitadel:iam:org:project:id:hub-project:aud"
         );
         let login = set_cookie(&start, "dg_login").expect("login cookie");
         assert!(
@@ -608,11 +668,13 @@ fn return_paths_cookies_dates_and_escaping() {
     ] {
         assert_eq!(safe_return_to(asked), kept, "{asked}");
     }
+    let state = tempfile::tempdir().unwrap();
     let public = WebLogin::new(
         "https://id.example",
         &["p".into()],
         "web",
         "https://hub.example",
+        state.path(),
     )
     .unwrap();
     assert_eq!(public.session_cookie(), "__Host-dg_session");
@@ -916,4 +978,102 @@ async fn notify_this_phone_then_an_approval_buzzes_it_encrypted() {
         "the subscription the service called gone is dropped"
     );
     assert!(left[0].endpoint.ends_with("/push/phone"));
+}
+
+#[tokio::test]
+async fn the_phone_stays_signed_in_across_a_restart_and_through_refreshes() {
+    let w = world().await;
+    w.fake.refresh_on_code.store(true, SeqCst);
+    let (login, state, code) = w.authorize("/approvals", "tok-owner", 1).await;
+    let back = w
+        .get(
+            &format!("/auth/callback?code={code}&state={state}"),
+            Some(&login),
+        )
+        .await;
+    let set = set_cookie(&back, "dg_session").unwrap();
+    assert!(
+        set.contains(&format!("Max-Age={}", 90 * 24 * 3600)),
+        "with a refresh token the phone keeps its session for 90 days: {set}"
+    );
+    let session = cookie_pair(&set);
+
+    // The one-second access token is renewed through Nomen on the next page; the
+    // refresh token it was renewed with is spent and replaced.
+    assert_eq!(
+        w.get("/approvals", Some(&session)).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(w.fake.refreshed.load(SeqCst), 1);
+    let live: Vec<String> = w.fake.refreshes.lock().unwrap().keys().cloned().collect();
+    assert_eq!(live.len(), 1, "rotation leaves one live refresh token");
+
+    // Neither token is on disk in the clear.
+    for name in ["sessions.sqlite3", "sessions.sqlite3-wal"] {
+        let bytes = std::fs::read(w.dir.path().join(name)).unwrap_or_default();
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            !text.contains("tok-owner") && !text.contains("refresh-token-"),
+            "{name} holds a token in the clear"
+        );
+    }
+
+    // The hub restarts: a new sign-in service over the same state directory finds the
+    // session, with no new sign-in and no extra refresh.
+    let restarted = WebLogin::new(
+        &w.fake.issuer,
+        &["hub-project".to_string()],
+        WEB_CLIENT,
+        &w.url,
+        w.dir.path(),
+    )
+    .unwrap();
+    let mut headers = HeaderMap::new();
+    headers.insert(header::COOKIE, session.parse().unwrap());
+    assert!(matches!(restarted.token(&headers).await, SessionToken::Token(t) if t == "tok-owner"));
+    assert_eq!(w.fake.refreshed.load(SeqCst), 1);
+
+    // Signing out ends the session and revokes its refresh token at Nomen.
+    let out = w
+        .http
+        .post(format!("{}/auth/logout", w.url))
+        .header(header::COOKIE, &session)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(out.status(), StatusCode::SEE_OTHER);
+    for _ in 0..50 {
+        if !w.fake.revoked.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(*w.fake.revoked.lock().unwrap(), live);
+    assert_eq!(
+        w.get("/approvals", Some(&session)).await.status(),
+        StatusCode::SEE_OTHER
+    );
+    assert!(matches!(
+        restarted.token(&headers).await,
+        SessionToken::None
+    ));
+
+    // Nomen refusing a refresh (account disabled, token revoked) signs the phone out.
+    let (login, state, code) = w.authorize("/approvals", "tok-owner", 1).await;
+    let back = w
+        .get(
+            &format!("/auth/callback?code={code}&state={state}"),
+            Some(&login),
+        )
+        .await;
+    let due = cookie_pair(&set_cookie(&back, "dg_session").unwrap());
+    w.fake.refreshes.lock().unwrap().clear();
+    let refused = w.get("/approvals", Some(&due)).await;
+    assert_eq!(refused.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&refused), "/auth/login?return_to=/approvals");
+    assert_eq!(
+        w.get("/approvals", Some(&due)).await.status(),
+        StatusCode::SEE_OTHER,
+        "and the session is gone, not retried"
+    );
 }
