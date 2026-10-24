@@ -234,7 +234,7 @@ policy-unconfirmed until Google answers; the seat's config row carries that flag
 | ID | Status | Decision |
 |---|---|---|
 | B01 | LOCKED | The agents' board lives in this hub, in Rust, per project, on SQLite; the hub never owns jobs (ruling 2026-10-21). |
-| B02 | RULED 2026-10-24 (chat; ADR pending through the component) | Store placement: `<project>/.devagotchi/board.sqlite3`, hub-opened on demand, `board.jsonl` export. Rejected: one database in the hub's state directory keyed by project. |
+| B02 | RULED 2026-10-24 (chat; ADR pending through the component) | Store placement: `<project>/.devagotchi/board.sqlite3`, hub-opened on demand, `board.jsonl` export. Rejected: one database in the hub's state directory keyed by project. Plan D23 (same day) adds: the local file stays the board of record and syncs to the account's hosted hub when signed in; the hosted hub keeps one board per account-project (packet 15 in plan §13). |
 | B03 | PROPOSED | Ids: prefix + hash for roots, hierarchical for children. Alternative: counters (the Go hub), rejected for multi-machine creation. |
 | B04 | PROPOSED | Dependency kinds `blocks | parent | related | discovered-from | duplicates | supersedes`; only `blocks` gates readiness. |
 | B05 | PROPOSED | Liveness by broker: an operation working a ticket keeps its lease alive; settlement releases or hands off. |

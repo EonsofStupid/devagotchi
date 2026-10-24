@@ -277,6 +277,10 @@ Status describes the decision, not delivery: **LOCKED** is user direction; **COM
 | D17 | PROPOSED | Bounded immutable DAGs, attempt-operation links, local graph aggregation, fixed task owner, durable delivery, target admission contexts, and epoch fencing. Adopt through G1.GA/G1.GB/A1/M1 evidence. |
 | D18 | DEFERRED | Autonomous fleet scheduling, plugin marketplace, agent memory/indexing, WSL-specific integration, and screen/input automation. The mesh instruction does not automatically select these capabilities. |
 | D19 | PROPOSED | `shippinAI/agent-hub` is frozen for reference; its design (`docs/devagotchi/`, imported 2026-10-24) lives here and its capabilities are ported per the [absorption ledger](devagotchi/README.md). Two conflicts need a ruling: GUI control (Go D7 v0.1 vs D18 deferred) and the bridge tool set (28 Go tools as the parity target for the Rust broker). |
+| D20 | LOCKED | **One `devagotchi` binary.** Vibers download and run one thing: a multicall binary carrying the broker, the stdio adapter, the link, the hub and the board (`devagotchi start`, `devagotchi mcp`, `devagotchi login`, `devagotchi board …`, `devagotchi link`, `devagotchi hub`). The process boundaries stay (D03: the broker owns jobs, the adapter stays thin, `core`/`mcp` code paths make no network call); only the packaging changes. Ruled 2026-10-24; ADR through the component. §13. |
+| D21 | LOCKED | **Three tiers, hosted by default.** (1) Vibers run locally; (2) the default hub is hosted — friends-and-family private cloud at devagotchi.com first, extending into shippin.cloud as it evolves into the bridge for all a user's systems; a free account is required and enforced there, realistically one project per free account; (3) the advanced tier self-hosts from a Docker image or on their own VM/server (`install-devagotchi.sh --role hub`). Dev tokens are for tests only. Ruled 2026-10-24. §13. |
+| D22 | LOCKED | **Sign-in rule "both".** The default build signs in on first run with a free Shippin account (device-link, RFC 8628, like `shippin_connect`) and keeps working through an offline grace; local-only and self-hosted runs may be accountless (`--local`). Ruled 2026-10-24; the grace period and what `--local` loses are PROPOSED. §13. |
+| D23 | LOCKED | **Board of record is the user's choice; both must work.** The project's board stays a local file (B02) and syncs to the account's hosted hub when signed in — the hosted path is the one made smooth, because most users will take it. How a machine reaches the hub is pluggable: Shippin's own link first, then Tailscale, Cloudflare Tunnel and custom bridges, chosen without being told ("smart"). Direction ruled 2026-10-24; the sync protocol and bridge selection are PROPOSED. §13. |
 
 Repository access is an observed external blocker, not a product decision. It blocks reconciliation with and publication to that GitHub repository; it does not block the existing Site, reference publication, or useful isolated work. Website publication is already authorized. Nonblocking future implementation details remain proposed rather than becoming artificial permission gates.
 
@@ -316,3 +320,27 @@ verbatim under [`docs/devagotchi/`](devagotchi/README.md) with a ledger that map
 capability to its owner here, its status, and the increment that ports it. Where those documents
 and this plan disagree, this plan wins; where this plan is silent, they govern. D19 records the
 freeze and the two conflicts.
+
+## 13. Distribution tiers (D20–D23, ruled 2026-10-24)
+
+What today's merged work is measured against, and what it still lacks. "Live" is never the
+goal; reliable, clean, efficient binaries that work are, in this order of users:
+
+| Tier | Who | What they get | Exists on `main` | Missing |
+|---|---|---|---|---|
+| Local | Vibers | One `devagotchi` binary from the release installer (`curl \| sh`, PowerShell): `devagotchi start` runs the broker and the local board, `devagotchi mcp` is what their CLI agent points at, `devagotchi board …` and the hook pack keep the agent on the protocol. No systemd, no Caddy, no account unless they sync. | The four binaries (`bridge-broker`, `bridge-mcp`, `devagotchi-link`, `devagotchi-hub`), cargo-dist installers, the board, the CLI, the hook pack | The one binary (packet 13); `devagotchi start` writing its own config (toolchains detected, state under the XDG dirs) |
+| Hosted (default) | Everyone who is lazy, which is most | Sign in with a free Shippin account on first run; their boards sync to the hosted hub; their machines reach it through whichever bridge works; one project per free account, more when they pay. devagotchi.com first (friends and family), shippin.cloud as it grows into the bridge for all their systems. | The hub with Nomen sign-in and the board over MCP; the live hub signing in as the owner with three linked machines; `--role hub --caddy` for the host | `devagotchi login` (packet 14), board sync (15), per-account boards on the hosted hub and the free-account rule (15), bridge selection (later) |
+| Self-hosted (advanced) | Operators | A Docker image and compose (hub + Caddy), or the bare-server installer; their own accounts or Nomen. | `install-devagotchi.sh --role hub --caddy`, proven on real systemd hosts behind Caddy | The image, built by the release workflow, and compose (packet 16) |
+
+Packets, one decision each, in order:
+
+| Packet | Scope | Exit |
+|---|---|---|
+| 13a | Library entry points for the four binaries; the `devagotchi` multicall binary (`start`, `mcp`, `link`, `hub`, `board`, `version`); `start` writes `broker.json` when absent; the release ships it beside the four | `devagotchi start` on a clean machine runs the broker and answers `devagotchi board prime`; `tests/e2e.py` drives the adapter through `devagotchi mcp` |
+| 13b | Clean cut: installers, tests, CI, the desktop app and the docs call `devagotchi <verb>`; the four binaries go | every harness green with one artifact per target |
+| 14 | `devagotchi login`: device-link sign-in against Nomen, token at rest 0600, offline grace, `--local`; the hosted hub refuses dev tokens outside tests | a fresh install signs in from a terminal with no browser on the machine; an agent's MCP call carries the account |
+| 15 | Board sync: the local board pushes its chain to the account's hosted hub and pulls what others wrote; the hosted hub keeps one board per account-project; the free-account rule | two machines, one account, one board: a ticket claimed on one is held on the other within a heartbeat |
+| 16 | Docker: image for the hub from the release workflow (GHCR), compose with Caddy, documented self-host | `docker compose up` serves `/healthz` and a board behind Caddy on a clean VM |
+
+The bridge choice (own link, Tailscale, Cloudflare Tunnel, custom) stays after 16: the link is
+the only bridge today and it works; the others are adapters over the same `/link` contract.
