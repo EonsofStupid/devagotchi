@@ -4,6 +4,7 @@
 
 mod audit;
 mod auth;
+mod board;
 mod config;
 mod devices;
 mod hub;
