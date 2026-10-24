@@ -22,8 +22,9 @@ jobs:
         # windows-2022 keeps the pre-24H2 console path; windows-2025 (build 26100)
         # has ReleasePseudoConsole. macOS has no provider yet: the contracts, the
         # IPC crate and the adapter build and test there, and the broker binary
-        # reports unsupported_platform.
-        os: [ubuntu-24.04, windows-2025, windows-2022, macos-latest]
+        # reports unsupported_platform. ubuntu-24.04-arm and windows-11-arm run the same
+        # tests natively on 64-bit ARM (aarch64 Linux, Arm64 Windows 11).
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-2022, windows-11-arm, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -50,7 +51,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, windows-2025, windows-2022]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025, windows-2022, windows-11-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
@@ -65,9 +66,10 @@ jobs:
       - run: python tests/e2e.py --bin-dir target/debug
       # The Windows installer, as a user would run it: install from the build, start the
       # broker, register with a Claude Desktop config that already has Desktop Commander,
-      # then use exactly the registered command. PowerShell 7 on 2025, 5.1 on 2022.
+      # then use exactly the registered command. PowerShell 7 on 2025 and on Arm64
+      # (windows-11-arm), 5.1 on 2022.
       - name: Windows installer (PowerShell 7)
-        if: matrix.os == 'windows-2025'
+        if: matrix.os == 'windows-2025' || matrix.os == 'windows-11-arm'
         shell: pwsh
         run: ./deploy/windows/ci-install-check.ps1
       - name: Windows installer (Windows PowerShell 5.1)
@@ -78,9 +80,13 @@ jobs:
   host-install:
     # The Linux server installer on a real systemd host: a dedicated account with lingering,
     # user services from root-owned binaries, the link joining a hub with a piped code, upgrade,
-    # crash recovery, a revoke that leaves the link down, and uninstall.
-    name: host-install (ubuntu-24.04)
-    runs-on: ubuntu-24.04
+    # crash recovery, a revoke that leaves the link down, and uninstall. x86_64 and aarch64.
+    name: host-install (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6

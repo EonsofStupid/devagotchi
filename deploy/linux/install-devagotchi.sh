@@ -9,18 +9,26 @@
 #   sudo ./install-devagotchi.sh --bin-dir ./target/release       # from a local build
 #   sudo ./install-devagotchi.sh --hub https://hub.example.com --device wi1 --enroll < code
 #   sudo ./install-devagotchi.sh --uninstall
+#   ./install-devagotchi.sh --print-target                       # the release build this machine takes
 #
 # The one-time enrollment code (from `devagotchi-hub enroll --device NAME`) is read from stdin,
 # never from the command line, and reaches the link on its stdin. Re-running upgrades the
 # binaries and keeps the config and the enrollment. Binaries live in root-owned
 # <prefix>/versions/<version>; <prefix>/current points at one of them, so a rollback is one
-# re-run with the previous --version.
+# re-run with the previous --version. Releases exist for x86_64 and aarch64 (64-bit ARM).
 # shellcheck disable=SC2016  # the `sh -c '...'` scripts take their arguments as $1 and $2
 set -euo pipefail
 umask 022
 
 REPO=EonsofStupid/devagotchi
-TARGET=x86_64-unknown-linux-gnu
+# The release build for this machine: the kernel's architecture, and a 64-bit userland (a
+# 32-bit ARM system on a 64-bit kernel reports aarch64 but cannot run aarch64 binaries).
+case $(uname -m) in
+    x86_64|amd64) TARGET=x86_64-unknown-linux-gnu ;;
+    aarch64|arm64) TARGET=aarch64-unknown-linux-gnu ;;
+    *) TARGET='' ;;
+esac
+[ "$(getconf LONG_BIT 2>/dev/null || echo 64)" = 64 ] || TARGET=''
 PREFIX=/opt/devagotchi
 ACCOUNT=devagotchi
 ACCOUNT_HOME=/var/lib/devagotchi
@@ -29,7 +37,10 @@ GRANTS=()
 
 die() { echo "install-devagotchi: $*" >&2; exit 1; }
 step() { printf '\n==> %s\n' "$*"; }
-usage() { sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; }
+need_target() {
+    [ -n "$TARGET" ] || die "no Devagotchi release for this machine ($(uname -m), $(getconf LONG_BIT 2>/dev/null || echo '?')-bit userland); releases cover 64-bit x86_64 and aarch64. Build it here and use --bin-dir"
+}
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -46,6 +57,7 @@ while [ $# -gt 0 ]; do
         --enroll) ENROLL=1; shift ;;
         --uninstall) UNINSTALL=1; shift ;;
         --repo) REPO=${2:?--repo needs a value}; shift 2 ;;
+        --print-target) need_target; echo "$TARGET"; exit 0 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option $1 (see --help)" ;;
     esac
@@ -172,6 +184,7 @@ if [ -n "$BIN_DIR" ]; then
         install -o root -g root -m 0755 "$BIN_DIR/$bin" "$dest/$bin"
     done
 elif [ -n "$VERSION" ]; then
+    need_target
     step "Devagotchi $VERSION for $TARGET"
     dest=$PREFIX/versions/$VERSION
     work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
