@@ -165,7 +165,7 @@ out=$(sudo "$INSTALL" "${COMMON[@]}" --role hub --public-url "http://127.0.0.1:$
 printf '%s\n' "$out" | sed -E 's/^(    (ci-op|ci-agent)): [0-9a-f]{48}$/\1: <token>/'
 op_token=$(printf '%s\n' "$out" | sed -nE 's/^    ci-op: ([0-9a-f]{48})$/\1/p')
 agent_token=$(printf '%s\n' "$out" | sed -nE 's/^    ci-agent: ([0-9a-f]{48})$/\1/p')
-[ ${#op_token} = 48 ] && [ ${#agent_token} = 48 ] || fail "the installer did not print both tokens"
+{ [ ${#op_token} = 48 ] && [ ${#agent_token} = 48 ]; } || fail "the installer did not print both tokens"
 [ "$(uctl is-enabled devagotchi-hub.service)" = enabled ] || fail "hub not enabled"
 [ "$(sudo stat -c '%U %a' "$HOME_DIR/.config/devagotchi/hub.json")" = "$ACCOUNT 600" ] || fail "hub config is not private"
 [ "$(sudo stat -c '%U %a' "$HOME_DIR/.config/devagotchi/hub-tokens.json")" = "$ACCOUNT 600" ] || fail "tokens file is not private"

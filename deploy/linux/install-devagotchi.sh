@@ -91,7 +91,7 @@ case $PREFIX in /*) ;; *) die "--prefix must be absolute" ;; esac
 [ -z "$VERSION" ] || [[ $VERSION =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "--version $VERSION is not a version"
 case $ROLE in machine|hub) ;; *) die "--role must be machine or hub" ;; esac
 if [ "$ROLE" = hub ]; then
-    [ -z "$HUB$DEVICE" ] && [ $ENROLL = 0 ] || die "--hub, --device and --enroll belong to the machine role"
+    { [ -z "$HUB$DEVICE" ] && [ $ENROLL = 0 ]; } || die "--hub, --device and --enroll belong to the machine role"
     [ -z "$PUBLIC_URL" ] || [[ $PUBLIC_URL =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
         || die "--public-url must be https://host or http://host:port, with no path"
     [[ $LISTEN =~ ^[A-Za-z0-9.:\[\]-]+:[0-9]+$ ]] || die "--listen must be host:port"
@@ -102,7 +102,7 @@ if [ "$ROLE" = hub ]; then
         [[ $name =~ ^[^[:space:][:cntrl:]\"\\]{1,256}$ ]] || die "--person/--agent $name: no spaces, quotes or control characters"
     done
 else
-    [ -z "$PUBLIC_URL" ] && [ ${#BOARDS[@]} = 0 ] && [ ${#PEOPLE[@]} = 0 ] && [ ${#AGENTS[@]} = 0 ] && [ $CADDY = 0 ] \
+    { [ -z "$PUBLIC_URL" ] && [ ${#BOARDS[@]} = 0 ] && [ ${#PEOPLE[@]} = 0 ] && [ ${#AGENTS[@]} = 0 ] && [ $CADDY = 0 ]; } \
         || die "--public-url, --board, --person, --agent and --caddy belong to --role hub"
 fi
 
