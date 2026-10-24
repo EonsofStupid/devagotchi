@@ -12,7 +12,8 @@
 //! `login --local` records the other choice D22 allows: this machine runs without an
 //! account. Until one of the two is on file, `devagotchi start` says so once per run.
 //!
-//! `front` carries the account into an agent's MCP session (`devagotchi mcp --hub`).
+//! `client` is one MCP session with a hub as the account; `front` carries that into an
+//! agent's stdio session (`devagotchi mcp --hub`); the board's remote face calls through it.
 //!
 //! Offline grace (D22, PROPOSED): the access token is refreshed when within five minutes
 //! of expiry; when Nomen cannot be reached, the account on file stays "signed in (offline)"
@@ -111,6 +112,22 @@ pub enum Standing {
 impl Account {
     pub fn access_token(&self) -> &str {
         &self.access_token
+    }
+
+    /// An account as a test would have it: a token that is good until `expires_at`.
+    #[cfg(test)]
+    pub(crate) fn for_tests(issuer: &str, subject: &str, token: &str, expires_at: u64) -> Self {
+        Self {
+            issuer: issuer.into(),
+            client_id: DEFAULT_CLIENT_ID.into(),
+            subject: subject.into(),
+            username: None,
+            email: None,
+            access_token: token.into(),
+            refresh_token: None,
+            expires_at,
+            signed_in_at: unix_now(),
+        }
     }
 
     pub fn standing(&self, now: u64) -> Standing {
@@ -694,6 +711,7 @@ fn standing_name(standing: Standing) -> &'static str {
     }
 }
 
+pub mod client;
 pub mod front;
 
 #[cfg(test)]

@@ -399,7 +399,7 @@ mod front {
         let base = serve(hub.clone()).await;
         let dir = tempfile::tempdir().unwrap();
         let path = account_on_file(dir.path(), "at-1");
-        let mut front = Front::new(&base, &path).unwrap();
+        let mut front = Front::new(&base, &path, Some("claude")).unwrap();
 
         let init = front
             .relay(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)
@@ -462,8 +462,12 @@ mod front {
         );
         assert_eq!(hub.calls.load(SeqCst), calls);
         assert!(
-            Front::new("http://hub.example", &path).is_err(),
+            Front::new("http://hub.example", &path, None).is_err(),
             "https only"
+        );
+        assert!(
+            Front::new(&base, &path, Some("Not Valid")).is_err(),
+            "a seat is a name"
         );
     }
 }

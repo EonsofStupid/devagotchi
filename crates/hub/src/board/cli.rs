@@ -7,6 +7,11 @@
 //! Identity on this surface is the OS user: the board file is theirs, as the broker's
 //! trust scope is (plan §5.4). An agent names itself with `--as` or `DEVAGOTCHI_ACTOR`
 //! and is then an agent (no force-release); a bare OS user is the human.
+//!
+//! Two faces behind one command line (`face.rs`): a project's local store, or — once
+//! `board bind` has named a hub in `.devagotchi/config.json` and an account is on file —
+//! the hub's board as that account (B11: the hub arbitrates; the agent's name is its seat
+//! there). Every command and every hook runs the same either way.
 
 use std::{
     collections::BTreeMap,
@@ -20,12 +25,18 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Actor, BOARD_DIR, BOARD_FILE, Board, DepKind, Filter, NewTicket, NextFilter, Patch,
-    ProjectConfig, Ticket, default_prefix, open_project, read_project_config,
+    ProjectConfig, Ticket, default_prefix,
+    face::{Face, ME},
+    open_project, read_project_config,
+    remote::Remote,
 };
+use crate::account::{self, client::HubClient};
 
 pub const USAGE: &str = "Usage: devagotchi board <command> [options]
 
   init      [--project NAME] [--prefix P] [--agents-md]   create .devagotchi/ here; --agents-md appends the AGENTS.md block
+  bind      [--hub URL] [--project NAME]   make this project's board of record the hub's, as your account (devagotchi login first)
+  unbind                           back to the local store (the hub keeps its board)
   prime     [--limit N]            what to do now: held, ready, notes to you, the protocol (≤ 50 lines)
   onboard                          print the AGENTS.md block
   agent                            print the full workflow for an agent
@@ -50,6 +61,7 @@ pub const USAGE: &str = "Usage: devagotchi board <command> [options]
 
 Global: --dir PATH (project directory; default: walk up from here)  --as ID (act as this agent)
         --json (also on when stdout is not a terminal)  --text (force the human form)  --quiet
+Bound project: every command above runs on the hub as the signed-in account; --as / DEVAGOTCHI_ACTOR is your seat there.
 Exit codes: 0 ok · 2 conflict (fence, version, held, blocked, WIP) · 3 refused · 4 not found · 5 board unavailable · 64 usage";
 
 /// Everything the command line needs from its environment, so tests can supply it.
@@ -61,7 +73,12 @@ pub struct Invocation {
     /// The OS user (`USER` / `USERNAME`).
     pub os_user: Option<String>,
     pub stdout_is_terminal: bool,
+    /// `account.json`, for a bound project; none when the environment has no home.
+    pub account_file: Option<PathBuf>,
 }
+
+/// What `.devagotchi/` keeps out of the repo: the store, the claim cache, the beat markers.
+const LOCAL_GITIGNORE: &str = "# the board itself is local state; board.jsonl is the export to commit if you want diffs\nboard.sqlite3\nboard.sqlite3-wal\nboard.sqlite3-shm\nclaims/\nhooks/.last-beat-*\n";
 
 pub const EXIT_OK: u8 = 0;
 pub const EXIT_CONFLICT: u8 = 2;
@@ -95,6 +112,7 @@ const VALUE_FLAGS: &[&str] = &[
     "--as",
     "--project",
     "--prefix",
+    "--hub",
     "--limit",
     "--state",
     "--label",
@@ -192,11 +210,13 @@ impl Parsed {
     }
 }
 
-/// Walk up from `start` to the first directory holding `.devagotchi/board.sqlite3`.
+/// Walk up from `start` to the first directory holding `.devagotchi/config.json`.
 pub fn find_project_dir(start: &Path) -> Option<PathBuf> {
     let mut dir = Some(start.to_path_buf());
     while let Some(d) = dir {
-        if d.join(BOARD_DIR).join(BOARD_FILE).is_file() {
+        // A project is wherever `.devagotchi/config.json` is: a local store (`init`) or a
+        // binding to a hub (`bind`) — both write it.
+        if d.join(BOARD_DIR).join("config.json").is_file() {
             return Some(d);
         }
         dir = d.parent().map(Path::to_path_buf);
@@ -212,7 +232,9 @@ fn exit_code_for(code: &str) -> u8 {
         }
         "not_found" => EXIT_NOT_FOUND,
         "board_store" | "board_open" | "board_mismatch" | "board_version" | "board_random"
-        | "board_id" | "no_board" | "board_io" => EXIT_UNAVAILABLE,
+        | "board_id" | "no_board" | "board_io" | "hub_unreachable" | "hub_error" => {
+            EXIT_UNAVAILABLE
+        }
         "usage" => EXIT_USAGE,
         _ => EXIT_REFUSED,
     }
@@ -221,6 +243,13 @@ fn exit_code_for(code: &str) -> u8 {
 fn next_for(code: &str, id: Option<&str>) -> String {
     let id = id.unwrap_or("<id>");
     match code {
+        "not_signed_in" | "signed_out" => {
+            "devagotchi login (this project's board is on the hub); board unbind to work locally".into()
+        }
+        "hub_unreachable" => "retry when the hub answers; board unbind to work locally".into(),
+        "not_offered" | "plan_limit" | "name_taken" => {
+            "devagotchi whoami lists your boards there; bind another name, or ask the hub's operator".into()
+        }
         "stale_fence" | "lease_expired" | "not_holder" => {
             format!("board show {id} — see who holds it; board claim {id} to take it if it is free")
         }
@@ -364,12 +393,13 @@ pub fn run(invocation: Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
             return EXIT_OK;
         }
         "init" => return init(&parsed, &invocation, &mut output),
+        "bind" => return bind(&parsed, &invocation, &actor, &mut output),
         _ => {}
     }
     let project_dir = match parsed.flag("--dir") {
         Some(dir) => {
             let dir = invocation.cwd.join(dir);
-            if dir.join(BOARD_DIR).join(BOARD_FILE).is_file() {
+            if dir.join(BOARD_DIR).join("config.json").is_file() {
                 dir
             } else {
                 return output.error(
@@ -382,24 +412,180 @@ pub fn run(invocation: Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
             Some(dir) => dir,
             None => {
                 return output.error(
-                    &BridgeError::new("no_board", "no .devagotchi/board.sqlite3 here or above"),
+                    &BridgeError::new("no_board", "no .devagotchi/ here or above"),
                     None,
                 );
             }
         },
     };
     let board_dir = project_dir.join(BOARD_DIR);
-    let (_config, board) = match open_project(&project_dir) {
-        Ok(opened) => opened,
+    if parsed.command == "unbind" {
+        return unbind(&board_dir, &mut output);
+    }
+    let config = match read_project_config(&board_dir) {
+        Ok(config) => config,
         Err(error) => return output.error(&error, None),
     };
+    // The face: the hub's board as the account when bound, else the local store.
+    let face: Box<dyn Face> = match &config.hub {
+        Some(hub) => match remote_face(hub, &config, &invocation, &actor) {
+            Ok(remote) => Box::new(remote),
+            Err(error) => return output.error(&error, None),
+        },
+        None => match open_project(&project_dir) {
+            Ok((_, board)) => Box::new(board),
+            Err(error) => return output.error(&error, None),
+        },
+    };
     let mut cache = read_cache(&board_dir, &actor_id);
-    let result = dispatch(&parsed, &board, &actor, &mut cache, &board_dir, &mut output);
+    let result = dispatch(
+        &parsed,
+        face.as_ref(),
+        &actor,
+        &mut cache,
+        &board_dir,
+        &mut output,
+    );
     write_cache(&board_dir, &actor_id, &cache);
     match result {
         Ok(code) => code,
         Err((error, id)) => output.error(&error, id.as_deref()),
     }
+}
+
+/// The hub's board as the account on file; the agent's name is its seat there, a person
+/// (the bare OS user) is the account itself.
+fn remote_face(
+    hub: &str,
+    config: &ProjectConfig,
+    invocation: &Invocation,
+    actor: &Actor<'_>,
+) -> BridgeResult<Remote> {
+    let Some(account_file) = &invocation.account_file else {
+        return Err(BridgeError::new(
+            "not_signed_in",
+            "this project is bound to a hub, but there is no home directory to hold an account; set DEVAGOTCHI_CONFIG_DIR",
+        ));
+    };
+    let seat = (!actor.human).then_some(actor.id);
+    let client = HubClient::new(hub, account_file, seat)?;
+    Ok(Remote::new(client, &config.project, &config.prefix))
+}
+
+/// `board bind [--hub URL] [--project NAME]`: the hub makes (or finds) the account's board
+/// for this project, and `.devagotchi/config.json` remembers the hub. A project without a
+/// local board gets its `.devagotchi/` here; one with a local board keeps it, unread from
+/// now on (the hub is the board of record; `unbind` goes back).
+fn bind(
+    parsed: &Parsed,
+    invocation: &Invocation,
+    actor: &Actor<'_>,
+    output: &mut Output<'_>,
+) -> u8 {
+    let project_dir = parsed
+        .flag("--dir")
+        .map(|d| invocation.cwd.join(d))
+        .or_else(|| find_project_dir(&invocation.cwd))
+        .unwrap_or_else(|| invocation.cwd.clone());
+    let board_dir = project_dir.join(BOARD_DIR);
+    let existing = read_project_config(&board_dir).ok();
+    let project = parsed
+        .flag("--project")
+        .map(str::to_string)
+        .or_else(|| existing.as_ref().map(|c| c.project.clone()))
+        .or_else(|| {
+            project_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        })
+        .unwrap_or_else(|| "project".into());
+    let hub = parsed
+        .flag("--hub")
+        .map(str::to_string)
+        .or_else(|| existing.as_ref().and_then(|c| c.hub.clone()))
+        .unwrap_or_else(|| account::client::DEFAULT_HUB.to_string());
+    let Some(account_file) = &invocation.account_file else {
+        return output.error(
+            &BridgeError::new(
+                "not_signed_in",
+                "no home directory to hold an account; set DEVAGOTCHI_CONFIG_DIR",
+            ),
+            None,
+        );
+    };
+    // Binding is the account's act, never a seat's: no seat on this session.
+    let mut client = match HubClient::new(&hub, account_file, None) {
+        Ok(client) => client,
+        Err(error) => return output.error(&error, None),
+    };
+    let bound: serde_json::Value =
+        match client.call_tool("board_bind", serde_json::json!({ "project": project })) {
+            Ok(bound) => bound,
+            Err(error) => return output.error(&error, None),
+        };
+    if let Err(error) = std::fs::create_dir_all(&board_dir) {
+        return output.error(&BridgeError::new("board_io", error.to_string()), None);
+    }
+    let config = ProjectConfig {
+        prefix: existing
+            .as_ref()
+            .map(|c| c.prefix.clone())
+            .unwrap_or_else(|| default_prefix(&project)),
+        created_at: existing
+            .as_ref()
+            .map(|c| c.created_at)
+            .unwrap_or_else(now_ms),
+        project: project.clone(),
+        hub: Some(hub.clone()),
+    };
+    if let Err(error) = write_json(&board_dir.join("config.json"), &config) {
+        return output.error(&error, None);
+    }
+    let gitignore = board_dir.join(".gitignore");
+    if !gitignore.exists() {
+        let _ = std::fs::write(&gitignore, LOCAL_GITIGNORE);
+    }
+    let _ = actor;
+    output.value(
+        &serde_json::json!({ "project": project, "hub": hub, "created": bound["created"], "boards": bound["boards"], "limit": bound["limit"], "config": board_dir.join("config.json") }),
+        || {
+            format!(
+                "{} is bound to {hub} ({}); every `devagotchi board` command here now runs there as your account, your agents as seats. Local board file, if any, is no longer read. `board unbind` goes back.",
+                project,
+                if bound["created"].as_bool() == Some(true) { "board made" } else { "board found" }
+            )
+        },
+    );
+    EXIT_OK
+}
+
+/// `board unbind`: forget the hub; the local store (if any) is the board again.
+fn unbind(board_dir: &Path, output: &mut Output<'_>) -> u8 {
+    let mut config = match read_project_config(board_dir) {
+        Ok(config) => config,
+        Err(error) => return output.error(&error, None),
+    };
+    let Some(hub) = config.hub.take() else {
+        output.lines("not bound: this project's board is the local store");
+        return EXIT_OK;
+    };
+    if let Err(error) = write_json(&board_dir.join("config.json"), &config) {
+        return output.error(&error, None);
+    }
+    output.value(&serde_json::json!({ "project": config.project, "unbound_from": hub }), || {
+        format!(
+            "{} is no longer bound to {hub}; the local store is the board here (run `board init` if there is none). The hub keeps its board.",
+            config.project
+        )
+    });
+    EXIT_OK
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 type CommandResult = Result<u8, (BridgeError, Option<String>)>;
@@ -449,8 +635,10 @@ fn init(parsed: &Parsed, invocation: &Invocation, output: &mut Output<'_>) -> u8
         project: project.clone(),
         prefix: board.prefix().to_string(),
         created_at: existing
+            .as_ref()
             .map(|c| c.created_at)
             .unwrap_or_else(|| board.now()),
+        hub: existing.and_then(|c| c.hub),
     };
     if prefix != config.prefix {
         output.lines(&format!(
@@ -463,10 +651,7 @@ fn init(parsed: &Parsed, invocation: &Invocation, output: &mut Output<'_>) -> u8
     }
     let gitignore = board_dir.join(".gitignore");
     if !gitignore.exists() {
-        let _ = std::fs::write(
-            &gitignore,
-            "# the board itself is local state; board.jsonl is the export to commit if you want diffs\nboard.sqlite3\nboard.sqlite3-wal\nboard.sqlite3-shm\nclaims/\nhooks/.last-beat-*\n",
-        );
+        let _ = std::fs::write(&gitignore, LOCAL_GITIGNORE);
     }
     let mut agents_md = "unchanged";
     if parsed.switch("--agents-md") {
@@ -511,7 +696,7 @@ fn init(parsed: &Parsed, invocation: &Invocation, output: &mut Output<'_>) -> u8
 
 fn dispatch(
     parsed: &Parsed,
-    board: &Board,
+    board: &dyn Face,
     actor: &Actor<'_>,
     cache: &mut ClaimCache,
     board_dir: &Path,
@@ -593,10 +778,13 @@ fn dispatch(
             Ok(EXIT_OK)
         }
         "held" => {
-            let held = no_id(board.list(&Filter {
-                holder: Some(actor.id.to_string()),
-                ..Filter::default()
-            }))?;
+            let held = no_id(board.list(
+                actor,
+                &Filter {
+                    holder: Some(ME.to_string()),
+                    ..Filter::default()
+                },
+            ))?;
             let now = board.now();
             output.value(&held, || {
                 held.iter()
@@ -687,14 +875,17 @@ fn dispatch(
             Ok(EXIT_OK)
         }
         "ls" => {
-            let list = no_id(board.list(&Filter {
-                state: parsed.flag("--state").map(str::to_string),
-                label: parsed.flag("--label").map(str::to_string),
-                text: parsed.flag("--text").map(str::to_string),
-                open_only: parsed.switch("--open"),
-                limit: Some(limit),
-                ..Filter::default()
-            }))?;
+            let list = no_id(board.list(
+                actor,
+                &Filter {
+                    state: parsed.flag("--state").map(str::to_string),
+                    label: parsed.flag("--label").map(str::to_string),
+                    text: parsed.flag("--text").map(str::to_string),
+                    open_only: parsed.switch("--open"),
+                    limit: Some(limit),
+                    ..Filter::default()
+                },
+            ))?;
             output.value(&list, || table(&list));
             Ok(EXIT_OK)
         }
@@ -813,10 +1004,13 @@ fn dispatch(
         "beat" if arg(0).is_none() => {
             // Every ticket this actor holds, with the fence the store shows (the holder's
             // fence is by definition the current one). What the hook pack calls after tools.
-            let held = no_id(board.list(&Filter {
-                holder: Some(actor.id.to_string()),
-                ..Filter::default()
-            }))?;
+            let held = no_id(board.list(
+                actor,
+                &Filter {
+                    holder: Some(ME.to_string()),
+                    ..Filter::default()
+                },
+            ))?;
             let mut beaten = Vec::new();
             for ticket in &held {
                 let lease = with_id(
@@ -1005,10 +1199,13 @@ fn dispatch(
                 .flag("--out")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| board_dir.join("board.jsonl"));
-            let tickets = no_id(board.list(&Filter {
-                limit: Some(100_000),
-                ..Filter::default()
-            }))?;
+            let tickets = no_id(board.list(
+                actor,
+                &Filter {
+                    limit: Some(100_000),
+                    ..Filter::default()
+                },
+            ))?;
             let mut text = String::new();
             for ticket in &tickets {
                 let view = with_id(&ticket.id, board.get(&ticket.id))?;

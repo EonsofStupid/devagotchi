@@ -52,7 +52,10 @@ fn run(args: Vec<OsString>) -> ExitCode {
     match command.to_str() {
         Some("start") => start::run(args),
         Some("mcp") => mcp(args),
-        Some("board") => devagotchi_hub::board_cli(args),
+        Some("board") => devagotchi_hub::board_cli(
+            args,
+            paths::config_dir().map(|d| d.join(devagotchi_hub::account::FILE_NAME)),
+        ),
         Some("broker") => devagotchi_broker::cli(args),
         Some("hub") => devagotchi_hub::cli(args),
         Some("link") => devagotchi_link::cli(args),
@@ -115,9 +118,13 @@ fn mcp(args: Vec<OsString>) -> ExitCode {
             );
             return ExitCode::from(64);
         };
+        let seat = std::env::var("DEVAGOTCHI_ACTOR")
+            .ok()
+            .filter(|a| !a.trim().is_empty());
         return devagotchi_hub::account::front::cli(
             hub.as_deref(),
-            config_dir.join(devagotchi_hub::account::FILE_NAME),
+            &config_dir.join(devagotchi_hub::account::FILE_NAME),
+            seat.as_deref(),
         );
     }
     if args.is_empty() {

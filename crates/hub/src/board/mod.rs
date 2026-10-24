@@ -9,8 +9,10 @@
 
 pub mod approval;
 pub mod cli;
+pub mod face;
 mod lease;
 pub mod mcp;
+pub mod remote;
 pub mod workflow;
 
 #[cfg(test)]
@@ -303,6 +305,10 @@ pub struct ProjectConfig {
     pub project: String,
     pub prefix: String,
     pub created_at: i64,
+    /// The hub this project is bound to (B11): with an account on file, every board
+    /// command runs there as the account; absent, the board is the local store.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub: Option<String>,
 }
 
 pub fn read_project_config(board_dir: &Path) -> BridgeResult<ProjectConfig> {

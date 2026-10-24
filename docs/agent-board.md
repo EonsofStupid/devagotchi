@@ -202,9 +202,29 @@ agent on that machine (the CLI face sets it from `DEVAGOTCHI_ACTOR`; `devagotchi
 too). On the account's own board the seat is the actor outright (`holder: "claude"`), so one
 account's Claude and Codex coordinate as two seats; on a shared board it is `<account>/<seat>`,
 so no account can pose as another's seat. A seat is never a person, and the fence memory is kept
-per seat. `tests/board_probe.py` binds a project for the ungranted subject, works it from two
-seats (a claim on one is held against the other), hits the free limit and the taken name, and
-shows the unlimited list binding more.
+per seat. The account is the person on its own board (it may force a seat's lease free); on a
+shared board its grant says. `tests/board_probe.py` binds a project for the ungranted subject,
+works it from two seats (a claim on one is held against the other), hits the free limit and the
+taken name, and shows the unlimited list binding more. `board_list` takes `@me` as a holder or
+assignee: the caller as the board names it, since a seat's spelling is the hub's.
+
+**The command line bound to the hub (15b, built; B11).** `devagotchi board bind [--hub URL]
+[--project NAME]` asks the hub for the account's board (`board_bind`, idempotent) and writes
+`hub` into `.devagotchi/config.json`; from then on every `board` command and every hook script
+here runs on the hub as the account on file (`devagotchi login`), through one MCP session
+(`account::client`). The agent's name (`--as`, `DEVAGOTCHI_ACTOR`) travels as its seat; a bare OS
+user is the account itself. The command line renders the hub's records exactly as the local
+store's — one `Face` trait (`board/face.rs`), two implementations (`Board`, `remote::Remote`) —
+and the hub's refusals keep their codes and the CLI's `next` hints; `not_signed_in`,
+`signed_out` and `hub_unreachable` say what to run. No local store is written for a bound
+project; `board unbind` makes the local store the board again (the hub keeps its board). A
+project is found by `.devagotchi/config.json`, bound or local. `devagotchi hub board …` is gone:
+`devagotchi board` is the one command line. Proof: `board::tests::bound` runs the real hub in
+process — two machines of one account, a claim on one held on the other at once, the stale fence
+refused by the hub, force by the account, `held`/`beat` resolving `@me`, unbind, and the words
+when signed out; `tests/nomen_probe.py` does the same through the binary after a real
+`devagotchi login`. Not yet: the offline snapshot (reads from the last answer when the hub is
+unreachable) — 15c.
 
 ## 7. What the CLI agents can do now, and what the board does for them
 
@@ -281,4 +301,6 @@ policy-unconfirmed until Google answers; the seat's config row carries that flag
 | 8b (in) | MCP tools on `/mcp` (one board per `project`; **built**, §6: `boards` config, grants with `boards`/`human`, 17 tools, fence memory, audit, reaper, `tests/board_probe.py`); the hook pack (`board hooks`, **built**); the skill with the MCP snippet per CLI (**built**, agent-skills); still open: project registration with the hub, `request_id` | `tests/e2e.py` works a board over MCP as a person and two agents (**green**); the hook scripts exercised against the CLI (stop refused once while holding, beat throttled) in the CLI tests and by hand; on Claude Code and Codex themselves: open |
 | 9 | Broker liveness (B05), attempts link, message tickets, path reservations, per-state WIP, budgets | A lease survives an agent that never heartbeats while its operation runs; two agents cannot edit one reserved path |
 | 10 | Web: `/board`, `/board/<id>`, Approve; approval events; phone push (installable web app, iPhone and Android) and email (B10). **10a built:** approvals as board tickets (`board/approval.rs`), `approval_request` / `approval_wait` on `/mcp`, `/approvals` with one-tap Approve / Deny. **10b built:** Web Push (RFC 8291 / 8292 on aws-lc-rs), "Notify this phone" on `/approvals`, service worker and installable manifest. Next: 10c passkey and email | Phone-width pages served by the existing axum app; a request an agent raises reaches a phone and an inbox, one tap approves, and the agent continues on the event |
+| 15a/15b (built) | Account boards and seats on the hub; the command line bound to the hub as the account (B11, D23) | `board::tests::bound` and `tests/board_probe.py` / `tests/nomen_probe.py` in `tests/e2e.py` |
+| 15c | The offline snapshot: a bound project's last answers kept in `.devagotchi/` so `prime`, `ls` and `show` read with a banner when the hub is unreachable; writes stay refused | offline, `board prime` shows the last snapshot and says so |
 | 11 | Freeze the Go `agent-hub` | Parity tests pass here; banner there |
