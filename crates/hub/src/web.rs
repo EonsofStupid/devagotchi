@@ -18,6 +18,7 @@
 //! - Redirects are not followed when talking to Nomen.
 
 mod pages;
+mod public;
 mod routes;
 #[cfg(test)]
 mod tests;
