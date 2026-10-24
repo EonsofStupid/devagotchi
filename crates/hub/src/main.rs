@@ -216,7 +216,9 @@ async fn main() -> ExitCode {
             let invocation = board::cli::Invocation {
                 args,
                 cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-                actor_env: env::var("DEVAGOTCHI_ACTOR").ok().filter(|a| !a.trim().is_empty()),
+                actor_env: env::var("DEVAGOTCHI_ACTOR")
+                    .ok()
+                    .filter(|a| !a.trim().is_empty()),
                 os_user: env::var("USER").or_else(|_| env::var("USERNAME")).ok(),
                 stdout_is_terminal: std::io::stdout().is_terminal(),
             };
@@ -276,12 +278,35 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         .listen
         .parse()
         .map_err(|_| BridgeError::new("invalid_config", "listen"))?;
+    let boards = Arc::new(board::mcp::Boards::from_config(&config));
+    if !boards.is_empty() {
+        // Lapsed leases go back to their queue on an interval, as the Go hub's reaper
+        // did; claims also expire them lazily, so this is the backstop, not the path.
+        let reaper = boards.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            tick.tick().await;
+            loop {
+                tick.tick().await;
+                let reaper = reaper.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    for (project, result) in reaper.reap_all() {
+                        if let Err(error) = result {
+                            eprintln!("devagotchi-hub: board {project}: reap failed: {error}");
+                        }
+                    }
+                })
+                .await;
+            }
+        });
+    }
     let state = AppState {
         verifier,
         hub: Hub {
             config: config.clone(),
             audit,
             links,
+            boards,
         },
         devices,
         web,
