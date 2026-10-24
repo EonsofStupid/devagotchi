@@ -94,7 +94,7 @@ if [ "$ROLE" = hub ]; then
     { [ -z "$HUB$DEVICE" ] && [ $ENROLL = 0 ]; } || die "--hub, --device and --enroll belong to the machine role"
     [ -z "$PUBLIC_URL" ] || [[ $PUBLIC_URL =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
         || die "--public-url must be https://host or http://host:port, with no path"
-    [[ $LISTEN =~ ^[A-Za-z0-9.:\[\]-]+:[0-9]+$ ]] || die "--listen must be host:port"
+    [[ $LISTEN =~ ^[]A-Za-z0-9.:[-]+:[0-9]+$ ]] || die "--listen must be host:port"
     for spec in "${BOARDS[@]}"; do
         [[ ${spec%%=*} =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || die "--board ${spec%%=*}: a project name is [a-z0-9][a-z0-9-]{0,62}"
     done
