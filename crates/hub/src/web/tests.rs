@@ -1129,3 +1129,137 @@ async fn every_page_says_whether_you_are_signed_in_with_one_tap_in_or_out() {
         "{after}"
     );
 }
+
+#[tokio::test]
+async fn a_new_board_says_how_to_start_and_one_tap_tests_the_phone() {
+    use crate::board::{Actor, Filter, open_project};
+    use aws_lc_rs::{
+        agreement::{ECDH_P256, PrivateKey},
+        rand::{SecureRandom, SystemRandom},
+    };
+
+    type Seen = Arc<Mutex<Vec<Vec<u8>>>>;
+    let seen: Seen = Arc::default();
+    async fn receive(State(seen): State<Seen>, body: axum::body::Bytes) -> StatusCode {
+        seen.lock().unwrap().push(body.to_vec());
+        StatusCode::CREATED
+    }
+    let service = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", service.local_addr().unwrap());
+    let app = axum::Router::new()
+        .route("/push/phone", post(receive))
+        .with_state(seen.clone());
+    tokio::spawn(async move { axum::serve(service, app).await.unwrap() });
+
+    let w = world().await;
+    let owner = w.sign_in("tok-owner").await;
+    let html = w
+        .get("/approvals", Some(&owner))
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        html.contains("action=\"/approvals/test\"") && html.contains("Send me a test approval"),
+        "{html}"
+    );
+    // Opening the never-used board put the getting-started steps on it.
+    let (_, board) = open_project(&w.board_dir).unwrap();
+    let tickets = board.list(&Filter::default()).unwrap();
+    assert_eq!(tickets.len(), 1);
+    assert_eq!(tickets[0].title, crate::board::welcome::TITLE);
+    assert!(
+        tickets[0]
+            .description
+            .contains(&format!("{}/approvals", w.url))
+    );
+
+    let post_test = |cookie: &str, site: &'static str| {
+        w.http
+            .post(format!("{}/approvals/test", w.url))
+            .header(header::COOKIE, cookie.to_string())
+            .header("sec-fetch-site", site)
+            .send()
+    };
+    let no_phone = post_test(&owner, "same-origin").await.unwrap();
+    assert_eq!(no_phone.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&no_phone), "/approvals?test=no-phone");
+    let html = w
+        .get("/approvals?test=no-phone", Some(&owner))
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert!(html.contains("Tap Notify this phone first"), "{html}");
+    assert_eq!(
+        post_test(&owner, "cross-site").await.unwrap().status(),
+        StatusCode::FORBIDDEN
+    );
+    let other = w.sign_in("tok-other").await;
+    assert_eq!(
+        post_test(&other, "same-origin").await.unwrap().status(),
+        StatusCode::FORBIDDEN,
+        "an account with no board it decides on cannot send one"
+    );
+
+    let phone = PrivateKey::generate(&ECDH_P256).unwrap();
+    let mut auth = [0u8; 16];
+    SystemRandom::new().fill(&mut auth).unwrap();
+    let b64 = |b: &[u8]| URL_SAFE_NO_PAD.encode(b);
+    let subscribed = w
+        .http
+        .post(format!("{}/push/subscribe", w.url))
+        .header(header::COOKIE, &owner)
+        .header("sec-fetch-site", "same-origin")
+        .json(&json!({"endpoint": format!("{base}/push/phone"),
+                      "keys": {"p256dh": b64(phone.compute_public_key().unwrap().as_ref()), "auth": b64(&auth)}}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(subscribed.status(), StatusCode::NO_CONTENT);
+
+    let sent = post_test(&owner, "same-origin").await.unwrap();
+    assert_eq!(location(&sent), "/approvals?test=sent");
+    for _ in 0..100 {
+        if !seen.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let pushes = seen.lock().unwrap().clone();
+    assert_eq!(
+        pushes.len(),
+        1,
+        "the test goes to the person who asked, once"
+    );
+    let payload: Value =
+        serde_json::from_slice(&crate::push::decrypt(&phone, &auth, &pushes[0])).unwrap();
+    assert_eq!(payload["title"], "Approval needed");
+    assert_eq!(payload["body"], "Test: tap Approve");
+
+    // The owner's AI asks for something real with the owner's own account.
+    board
+        .request_approval(
+            &Actor::agent(OWNER),
+            "Restart nginx",
+            "systemctl restart nginx",
+            "",
+            "",
+        )
+        .unwrap();
+    let html = w
+        .get("/approvals?test=sent", Some(&owner))
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert!(html.contains("Test sent."), "{html}");
+    assert!(
+        html.contains("<h2>Test: tap Approve</h2><p class=\"meta\">Devagotchi asks"),
+        "{html}"
+    );
+    assert!(
+        html.contains("<h2>Restart nginx</h2><p class=\"meta\">Your AI asks"),
+        "{html}"
+    );
+}

@@ -1422,9 +1422,17 @@ mod bound {
                 assert_eq!(code, EXIT_OK, "{err}");
                 assert_eq!(held.as_array().map(Vec::len), Some(0));
                 // The person (no seat) sees the ticket and may force it free.
-                let (code, held, _) = run(&machine_b, &account_b, None, &["ls", "--open"]);
+                let (code, open, _) = run(&machine_b, &account_b, None, &["ls", "--open"]);
                 assert_eq!(code, EXIT_OK);
-                assert_eq!(held[0]["holder"], "claude");
+                let open = open.as_array().unwrap();
+                let claimed = open.iter().find(|t| t["id"] == id.as_str()).unwrap();
+                assert_eq!(claimed["holder"], "claude");
+                assert!(
+                    open.iter()
+                        .any(|t| t["title"] == crate::board::welcome::TITLE
+                            && t["state"] == "needs_attention"),
+                    "a new account board starts with the getting-started steps (B12): {open:?}"
+                );
                 let (code, freed, err) = run(
                     &machine_b,
                     &account_b,
@@ -1473,4 +1481,57 @@ mod bound {
             "{err}"
         );
     }
+}
+
+#[test]
+fn a_new_board_starts_with_the_getting_started_steps_once() {
+    let f = fixture();
+    let hub = Actor::agent("devagotchi");
+    let id = f
+        .board
+        .welcome_if_new(&hub, "https://app.devagotchi.com/")
+        .expect("welcome")
+        .expect("a new board is welcomed");
+    let tickets = f.board.list(&Filter::default()).expect("list");
+    assert_eq!(tickets.len(), 1);
+    let welcome = &tickets[0];
+    assert_eq!(welcome.id, id);
+    assert_eq!(welcome.title, super::welcome::TITLE);
+    assert_eq!(welcome.state, "needs_attention");
+    assert_eq!(welcome.labels, vec![super::welcome::LABEL.to_string()]);
+    assert!(
+        welcome
+            .description
+            .contains("https://app.devagotchi.com/approvals")
+            && welcome.description.contains("Send me a test approval"),
+        "{}",
+        welcome.description
+    );
+
+    // An agent priming the board sees it under attention, never as work to claim.
+    let claude = Actor::agent("claude");
+    let prime = f.board.prime(&claude, 10).expect("prime");
+    assert!(prime.ready.is_empty() && prime.held.is_empty());
+    assert_eq!(
+        prime
+            .attention
+            .iter()
+            .map(|t| t.id.as_str())
+            .collect::<Vec<_>>(),
+        [id.as_str()]
+    );
+
+    // Once only, and never on a board that has tickets.
+    assert_eq!(
+        f.board.welcome_if_new(&hub, "https://x").expect("again"),
+        None
+    );
+    let used = fixture();
+    used.new_ticket(&claude, "real work");
+    assert_eq!(
+        used.board.welcome_if_new(&hub, "https://x").expect("used"),
+        None
+    );
+    assert_eq!(used.board.list(&Filter::default()).expect("list").len(), 1);
+    assert!(f.board.verify_chain().expect("chain").ok);
 }

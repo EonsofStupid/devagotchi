@@ -32,6 +32,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/v1/me", get(me))
         .route("/approvals", get(approvals::list))
         .route("/approvals/decide", post(approvals::decide))
+        .route("/approvals/test", post(approvals::test))
         .route("/push/subscribe", post(notify::subscribe))
         .route("/sw.js", get(notify::service_worker))
         .route("/manifest.webmanifest", get(notify::manifest))

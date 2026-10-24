@@ -13,6 +13,7 @@ pub mod face;
 mod lease;
 pub mod mcp;
 pub mod remote;
+pub mod welcome;
 pub mod workflow;
 
 #[cfg(test)]
