@@ -68,7 +68,12 @@ unsafe_code = "deny"
 [workspace.lints.clippy]
 all = "warn"
 
-# The profile that 'dist' will build with
+# The profile that 'dist' will build with. Fat LTO and one codegen unit let the
+# optimizer see the whole program (smaller, faster binaries at a slower build);
+# symbols are stripped because a release binary is debugged from its journal, not
+# a debugger, and the attested archive is what ships.
 [profile.dist]
 inherits = "release"
-lto = "thin"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
