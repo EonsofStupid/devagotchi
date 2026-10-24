@@ -105,6 +105,18 @@ fn path_string(path: &Path) -> BridgeResult<String> {
         .ok_or_else(|| invalid("Canonical paths must be representable as UTF-8"))
 }
 
+/// Whether this broker would accept `path` as an executable grant or request target: a
+/// regular file the platform runs directly (Linux: an execute bit; Windows: an `.exe` or
+/// `.com` image). `devagotchi start` asks before it writes a grant, so a config it writes
+/// is one `Broker::open` accepts.
+pub fn is_directly_executable(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|metadata| platform::is_directly_executable(path, &metadata))
+}
+
+/// The platform's addition to "an executable regular file", for messages about a refused
+/// grant.
+pub const EXECUTABLE_RULE: &str = platform::EXECUTABLE_RULE;
+
 impl Broker {
     pub fn open(config: BrokerConfig, state_dir: &Path) -> BridgeResult<Arc<Self>> {
         if !(1024..=16 * 1024 * 1024).contains(&config.output_limit_bytes)

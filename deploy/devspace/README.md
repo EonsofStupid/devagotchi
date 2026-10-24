@@ -57,7 +57,7 @@ cargo build --locked --release --bins
 ln -sf /devspace/repos/devagotchi/target/release/devagotchi /devspace/bin/devagotchi
 systemctl --user start devagotchi-broker && systemctl --user status devagotchi-broker
 journalctl --user -u devagotchi-broker -n 20     # "devagotchi broker ready: /devspace/state/devagotchi/broker.sock"
-python3 tests/adapter_probe.py /devspace/state/devagotchi/broker.sock --adapter "/devspace/bin/devagotchi mcp" --cwd /devspace/repos   # git --version under the broker, exit 0
+python3 tests/adapter_probe.py /devspace/state/devagotchi/broker.sock --adapter /devspace/bin/devagotchi mcp --cwd /devspace/repos   # git --version under the broker, exit 0
 ```
 
 Point any local MCP host at the adapter the usual way: `/devspace/bin/devagotchi mcp --socket <path from the ready line>`.

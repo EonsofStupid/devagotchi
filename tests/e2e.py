@@ -40,7 +40,7 @@ if not devagotchi.is_file():
     sys.exit(f"missing binary: {devagotchi} (cargo build --locked --bins)")
 # One binary, nested verbs: each role is the same executable with its command in front.
 broker_cmd = [str(devagotchi), "broker", "run"]
-adapter_cmd = f"{devagotchi} mcp"
+adapter_cmd = [str(devagotchi), "mcp"]
 hub_cmd = [str(devagotchi), "hub"]
 link_cmd = [str(devagotchi), "link"]
 
@@ -119,7 +119,7 @@ try:
     print(f"broker endpoint {endpoint}", flush=True)
 
     adapter_ok = run_probe(
-        [str(HERE / "adapter_probe.py"), endpoint, "--adapter", adapter_cmd, "--git", git, "--cwd", str(workspace)],
+        [str(HERE / "adapter_probe.py"), endpoint, "--adapter", *adapter_cmd, "--git", git, "--cwd", str(workspace)],
         "stdio adapter probe",
     )
 

@@ -88,7 +88,7 @@ link_down || fail "link runs before enrollment"
 ok "no link before enrollment"
 
 echo "--- a real operation through the broker"
-as_account python3 "$PROBES/adapter_probe.py" "$SOCKET" --adapter "$PREFIX/current/devagotchi mcp" \
+as_account python3 "$PROBES/adapter_probe.py" "$SOCKET" --adapter "$PREFIX/current/devagotchi" mcp \
     --git /usr/bin/git --cwd "$WORKSPACE"
 ok "git --version through the installed broker"
 

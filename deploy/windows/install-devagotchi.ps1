@@ -335,6 +335,6 @@ if ($RegisterClaudeCode) {
 
 Step 'Done'
 if ($linked) { Write-Host "    Link:        this machine answers the hub as its broker; log $LinkLog" }
-Write-Host "    MCP command: `"$mcpExe`" --socket $endpoint"
-Write-Host "    Claude Code: claude mcp add --scope user devagotchi -- `"$mcpExe`" --socket $endpoint"
-Write-Host "    Check:       python tests\adapter_probe.py $endpoint --adapter `"$mcpExe`" --git <path to git.exe> --cwd `"$Workspace`""
+Write-Host "    MCP command: `"$mcpExe`" mcp --socket $endpoint"
+Write-Host "    Claude Code: claude mcp add --scope user devagotchi -- `"$mcpExe`" mcp --socket $endpoint"
+Write-Host "    Check:       python tests\adapter_probe.py $endpoint --adapter `"$mcpExe`" mcp --git <path to git.exe> --cwd `"$Workspace`""
