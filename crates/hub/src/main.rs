@@ -57,7 +57,6 @@ enum Command {
 struct AppState {
     verifier: Arc<Verifier>,
     hub: Hub,
-    devices: Arc<Devices>,
     /// Browser sign-in, when the config has a `web` section.
     web: Option<Arc<web::WebLogin>>,
 }
@@ -308,7 +307,6 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             links,
             boards,
         },
-        devices,
         web,
     };
 

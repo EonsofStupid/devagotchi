@@ -133,6 +133,11 @@ impl Links {
         }
     }
 
+    /// The enrolled record for `device`, if any (revoked ones included).
+    pub fn device(&self, device: &str) -> BridgeResult<Option<crate::devices::Device>> {
+        self.devices.get(device)
+    }
+
     pub fn connected(&self, device: &str) -> bool {
         self.sessions.lock().expect("links").contains_key(device)
     }

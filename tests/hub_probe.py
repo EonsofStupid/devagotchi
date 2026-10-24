@@ -6,8 +6,9 @@
 
 Checks, in order: an unauthenticated call is refused with a 401 that names the
 protected-resource metadata; /healthz answers; initialize and tools/list; whoami names
-the broker; operation_start of `git --version` on that broker succeeds and its output
-reads back; a broker the subject holds no grant for is refused with `not_granted`.
+the broker and `machines` lists it online; operation_start of `git --version` on that
+broker succeeds and its output reads back; a broker the subject holds no grant for is
+refused with `not_granted`.
 With --expect-error CODE it instead checks that one routed call to the broker fails
 with exactly CODE (a linked machine that is offline or revoked). Exit 0 only when every
 step holds.
@@ -108,13 +109,17 @@ if args.expect_error:
     check(f"routed call fails with {args.expect_error}", is_error and answer.get("code") == args.expect_error, json.dumps(answer)[:200])
     sys.exit(1 if failures else 0)
 tools = sorted(t["name"] for t in rpc("tools/list")["tools"])
-broker_tools = ["operation_cancel", "operation_get", "operation_read", "operation_start", "whoami"]
+broker_tools = ["machines", "operation_cancel", "operation_get", "operation_read", "operation_start", "whoami"]
 board_tools = [t for t in tools if t.startswith("board_")]
 check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 17,
       ", ".join(tools))
 
 is_error, me = call("whoami", {})
 check("whoami", not is_error and args.broker in me.get("brokers", []), json.dumps(me))
+
+is_error, seen = call("machines", {})
+mine = [m for m in seen.get("machines", []) if m.get("name") == args.broker] if not is_error else []
+check("machines lists the broker online", len(mine) == 1 and mine[0].get("status") == "online", json.dumps(seen)[:200])
 
 is_error, started = call("operation_start", {"broker": args.broker, "input": {
     "idempotency_key": str(uuid.uuid4()), "executable": args.git, "args": ["--version"],

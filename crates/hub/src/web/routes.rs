@@ -12,7 +12,7 @@ use serde::Deserialize;
 
 use super::{
     Exchange, WebLogin,
-    pages::{self, Machine, Viewer},
+    pages::{self, Viewer},
 };
 use crate::{
     AppState,
@@ -99,49 +99,6 @@ async fn who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -> Who {
             Who::Unavailable
         }
     }
-}
-
-/// The machines this subject reaches, each with whether it can be used right now.
-pub async fn machines(state: &AppState, subject: &str) -> Vec<Machine> {
-    let checks = state
-        .hub
-        .config
-        .brokers_for(subject)
-        .into_iter()
-        .map(|broker| async move {
-            match &broker.socket {
-                Some(socket) => Machine {
-                    name: broker.name.clone(),
-                    kind: "local",
-                    status: if crate::reachable(socket).await {
-                        "online"
-                    } else {
-                        "offline"
-                    },
-                    enrolled_at: None,
-                },
-                None => {
-                    let (status, enrolled_at) = match state.devices.get(&broker.name) {
-                        Ok(Some(device)) if device.revoked_at.is_some() => {
-                            ("revoked", Some(device.enrolled_at))
-                        }
-                        Ok(Some(device)) if state.hub.links.connected(&broker.name) => {
-                            ("online", Some(device.enrolled_at))
-                        }
-                        Ok(Some(device)) => ("offline", Some(device.enrolled_at)),
-                        Ok(None) => ("not_enrolled", None),
-                        Err(_) => ("offline", None),
-                    };
-                    Machine {
-                        name: broker.name.clone(),
-                        kind: "linked",
-                        status,
-                        enrolled_at,
-                    }
-                }
-            }
-        });
-    futures_util::future::join_all(checks).await
 }
 
 async fn root() -> Response {
@@ -259,7 +216,7 @@ async fn account(State(state): State<AppState>, headers: HeaderMap) -> Response 
     };
     match who(&state, &web, &headers).await {
         Who::Person(subject) => {
-            let machines = machines(&state, &subject.id).await;
+            let machines = state.hub.machine_status(&subject.id).await;
             pages::account(
                 &Viewer {
                     subject: &subject.id,
@@ -329,7 +286,7 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> Response {
         },
         (None, None) => return json_error(StatusCode::UNAUTHORIZED, "signed_out"),
     };
-    let machines = machines(&state, &subject.id).await;
+    let machines = state.hub.machine_status(&subject.id).await;
     let mut response = axum::Json(serde_json::json!({
         "subject": subject.id,
         "via": subject.via,

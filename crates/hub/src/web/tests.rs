@@ -146,7 +146,6 @@ async fn world() -> World {
             audit,
             links,
         },
-        devices,
         web: Some(Arc::new(web)),
     };
     let app = router().with_state(state);

@@ -159,8 +159,10 @@ How it holds up:
 
 ## Tools
 
-`whoami` returns the proven account ID, the login name, whether it is the owner, and the
-brokers it may use. `operation_start`,
+`machines` is where an AI starts: every machine the subject may use, local or linked, with its
+status right now (`online`, `offline`, `not_enrolled`, `revoked`), the same list the account
+page and `/api/v1/me` show. `whoami` returns the proven account ID, the login name, whether it
+is the owner, and the brokers it may use. `operation_start`,
 `operation_get`, `operation_read` and `operation_cancel` take `{ "broker": "<name>", "input": {…} }`
 where `input` is exactly the broker's own contract. A subject without a grant for that
 broker gets `not_granted`; an unknown name gets `unknown_broker`; the broker's own refusals
