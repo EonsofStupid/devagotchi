@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     Actor, Board, ChainStatus, Dep, DepKind, Event, Filter, Lease, NewTicket, NextFilter, Note,
-    Patch, Prime, Ticket, TicketView, open_project,
+    Patch, Prime, Ticket, TicketView, approval::ApprovalStatus, open_project,
 };
 use crate::{audit::AuditEntry, auth::Subject, config::HubConfig, hub::Hub};
 
@@ -425,11 +425,69 @@ pub struct WaitIn {
     pub timeout_ms: Option<u64>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ApprovalRequestIn {
+    pub project: String,
+    /// One line a person reads on their phone, e.g. "Restart the hub on Texas".
+    pub title: String,
+    /// Exactly what will run or change.
+    pub what: String,
+    /// Why it is needed now.
+    #[serde(default)]
+    pub why: Option<String>,
+    /// How to undo it if it goes wrong.
+    #[serde(default)]
+    pub undo: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ApprovalWaitIn {
+    pub project: String,
+    pub id: String,
+    /// How long to wait for the decision (default 25000, max 50000). 0 reads the status now.
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ApprovalOut {
+    #[serde(flatten)]
+    pub approval: ApprovalStatus,
+    /// Where the person approves or denies it.
+    pub url: String,
+}
+
 // ----- the tools ---------------------------------------------------------------
 
 type BoardOut<T> = Result<Json<T>, Json<BoardError>>;
 
 impl Hub {
+    /// Push "approval needed" to the phones of the people who decide on `project`. The
+    /// payload names the approval and links to it; it never carries the command text.
+    pub fn announce_approval(&self, project: &str, approval: &ApprovalStatus) {
+        let Some(push) = self.push.clone() else {
+            return;
+        };
+        let people = self.config.people_for_board(project);
+        let payload = serde_json::json!({
+            "title": "Approval needed",
+            "body": approval.title,
+            "url": format!("/approvals#{project}-{}", approval.id),
+            "tag": approval.id,
+        });
+        tokio::spawn(async move { push.notify(&people, &payload).await });
+    }
+
+    /// An approval with the page where a person decides it.
+    fn approval_out(&self, project: &str, approval: ApprovalStatus) -> ApprovalOut {
+        let url = format!(
+            "{}/approvals#{project}-{}",
+            self.config.public_url.trim_end_matches('/'),
+            approval.id
+        );
+        ApprovalOut { approval, url }
+    }
+
     /// The board `project` for this request's subject, after the grant check.
     fn board_for(&self, subject: &Subject, project: &str) -> BridgeResult<Arc<Board>> {
         let granted = self
@@ -1110,6 +1168,99 @@ impl Hub {
             return Err(refuse(error, None));
         }
         Ok(Json(events))
+    }
+
+    #[tool(
+        name = "approval_request",
+        description = "Ask the user to approve one step before you take it: what will run or change, why, and how to undo it. It reaches them where they approve (their phone) and returns at once with the approval's id and status pending; then call approval_wait with that id and act only when it says approved. A denial means do not take the step.",
+        title = "Ask the user to approve a step",
+        annotations(
+            title = "Ask the user to approve a step",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn approval_request(
+        &self,
+        Parameters(input): Parameters<ApprovalRequestIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<ApprovalOut> {
+        let project = input.project.clone();
+        let Json(approval) = self
+            .board_call(
+                "approval_request",
+                &input.project,
+                None,
+                &context,
+                move |board, actor| {
+                    board.request_approval(
+                        actor,
+                        &input.title,
+                        &input.what,
+                        input.why.as_deref().unwrap_or_default(),
+                        input.undo.as_deref().unwrap_or_default(),
+                    )
+                },
+            )
+            .await?;
+        self.announce_approval(&project, &approval);
+        Ok(Json(self.approval_out(&project, approval)))
+    }
+
+    #[tool(
+        name = "approval_wait",
+        description = "Wait for the user's decision on an approval you requested: returns as soon as they approve or deny, or with status pending when timeout_ms passes (call again). status approved: take the step. denied: do not; read note for why.",
+        title = "Wait for the user's decision",
+        annotations(
+            title = "Wait for the user's decision",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn approval_wait(
+        &self,
+        Parameters(input): Parameters<ApprovalWaitIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<ApprovalOut> {
+        let subject = self.board_subject(&context)?;
+        let board = self
+            .board_for(&subject, &input.project)
+            .map_err(|e| refuse(e, Some(&input.id)))?;
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_millis(input.timeout_ms.unwrap_or(25_000).min(50_000));
+        let approval = loop {
+            let (board, id) = (board.clone(), input.id.clone());
+            let status = tokio::task::spawn_blocking(move || board.approval_status(&id))
+                .await
+                .unwrap_or_else(|join| {
+                    Err(BridgeError::new(
+                        "board_store",
+                        format!("board call did not complete: {join}"),
+                    ))
+                })
+                .map_err(|e| refuse(e, Some(&input.id)))?;
+            if status.status != "pending" || tokio::time::Instant::now() >= deadline {
+                break status;
+            }
+            tokio::select! {
+                biased;
+                _ = context.ct.cancelled() => break status,
+                _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+            }
+        };
+        if let Err(error) = self.audit.record(&AuditEntry {
+            subject: &subject.id,
+            via: subject.via,
+            tool: "approval_wait",
+            broker: &input.project,
+            operation_id: &input.id,
+            outcome: &approval.status,
+        }) {
+            return Err(refuse(error, Some(&input.id)));
+        }
+        Ok(Json(self.approval_out(&input.project, approval)))
     }
 
     #[tool(

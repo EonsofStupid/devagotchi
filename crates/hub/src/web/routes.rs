@@ -1,5 +1,5 @@
 //! The browser routes: sign in, the account page, sign out, `/api/v1/me` (which also
-//! takes a bearer token, so scripts and AI clients see the same view), and the public
+//! takes a bearer token, so scripts and AI clients see the same view), `/approvals`, and the public
 //! pages the AI directories link to (`/docs`, `/privacy`, `/terms`, `/support`).
 
 use axum::{
@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::{
-    Exchange, WebLogin,
+    Exchange, WebLogin, approvals, notify,
     pages::{self, Viewer},
     public,
 };
@@ -30,6 +30,13 @@ pub fn router() -> Router<AppState> {
         .route("/auth/callback", get(callback))
         .route("/auth/logout", post(logout))
         .route("/api/v1/me", get(me))
+        .route("/approvals", get(approvals::list))
+        .route("/approvals/decide", post(approvals::decide))
+        .route("/push/subscribe", post(notify::subscribe))
+        .route("/sw.js", get(notify::service_worker))
+        .route("/manifest.webmanifest", get(notify::manifest))
+        .route("/assets/push.js", get(notify::script))
+        .route("/assets/icon.svg", get(notify::icon))
         .route("/docs", get(public::docs))
         .route("/privacy", get(public::privacy))
         .route("/terms", get(public::terms))
@@ -50,13 +57,13 @@ struct CallbackQuery {
 }
 
 /// Who the browser's session belongs to, checked against Nomen like any bearer token.
-enum Who {
+pub(super) enum Who {
     Person(Subject),
     SignedOut,
     Unavailable,
 }
 
-fn see_other(location: &str, cookies: &[String]) -> Response {
+pub(super) fn see_other(location: &str, cookies: &[String]) -> Response {
     let mut response = StatusCode::SEE_OTHER.into_response();
     let headers = response.headers_mut();
     if let Ok(value) = HeaderValue::from_str(location) {
@@ -71,7 +78,7 @@ fn see_other(location: &str, cookies: &[String]) -> Response {
     response
 }
 
-fn not_set_up() -> Response {
+pub(super) fn not_set_up() -> Response {
     pages::message(
         StatusCode::NOT_FOUND,
         "Browser sign-in is not set up",
@@ -80,7 +87,7 @@ fn not_set_up() -> Response {
     )
 }
 
-fn unavailable() -> Response {
+pub(super) fn unavailable() -> Response {
     pages::message(
         StatusCode::SERVICE_UNAVAILABLE,
         "Shippin sign-in is unavailable",
@@ -89,7 +96,7 @@ fn unavailable() -> Response {
     )
 }
 
-async fn who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -> Who {
+pub(super) async fn who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -> Who {
     let Some(token) = web.token(headers) else {
         return Who::SignedOut;
     };

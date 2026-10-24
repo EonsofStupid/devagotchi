@@ -49,6 +49,7 @@ Connect, and sign in with your Shippin account.</p>\
 <tr><td><code>operation_start</code></td><td>Runs a program the machine's owner has allowed, with exact arguments, as a job the machine's broker owns.</td></tr>\
 <tr><td><code>operation_get</code>, <code>operation_read</code></td><td>A job's state, and its output after a cursor.</td></tr>\
 <tr><td><code>operation_cancel</code></td><td>Stops a job. Disconnecting never does.</td></tr>\
+<tr><td><code>approval_request</code>, <code>approval_wait</code></td><td>Asks you to approve a step, with what, why and how to undo it; you decide on <a href=\"/approvals\">Approvals</a> and the AI continues on your answer.</td></tr>\
 <tr><td><code>whoami</code></td><td>The account you are signed in as and what it may use.</td></tr>\
 <tr><td><code>board_*</code></td><td>The agents' ticket board for a project: claim work, leave notes, hand off, complete.</td></tr>\
 </tbody></table>"

@@ -1,6 +1,7 @@
 //! Machines enrolled to reach this hub over the link (plan N20). A device is a name
 //! bound to one Ed25519 public key. Binding happens once, with a one-time code the hub
-//! operator issues; the code itself is never stored, only its SHA-256.
+//! operator issues; the code itself is never stored, only its SHA-256. People's phones
+//! and browsers that receive approval notifications (Web Push) are kept here too.
 
 use std::{
     path::Path,
@@ -56,7 +57,70 @@ fn code_hash(code: &str) -> String {
     hex::encode(Sha256::digest(code.trim().as_bytes()))
 }
 
+/// A phone or browser a person turned notifications on from (Web Push). The keys are the
+/// browser's public half; the hub cannot read anything with them, only encrypt to it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PushSubscription {
+    pub endpoint: String,
+    pub subject: String,
+    pub p256dh: String,
+    pub auth: String,
+}
+
 impl Devices {
+    /// Remember a push subscription for `subject`; the same endpoint again replaces it.
+    pub fn add_push(
+        &self,
+        subject: &str,
+        endpoint: &str,
+        p256dh: &str,
+        auth: &str,
+    ) -> BridgeResult<()> {
+        self.connection
+            .lock()
+            .expect("devices")
+            .execute(
+                "INSERT INTO push_subscriptions (endpoint, subject, p256dh, auth, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(endpoint) DO UPDATE SET subject = ?2, p256dh = ?3, auth = ?4",
+                params![endpoint, subject, p256dh, auth, now_secs() as i64],
+            )
+            .map_err(store_error)?;
+        Ok(())
+    }
+
+    pub fn push_for(&self, subject: &str) -> BridgeResult<Vec<PushSubscription>> {
+        let connection = self.connection.lock().expect("devices");
+        let mut statement = connection
+            .prepare(
+                "SELECT endpoint, subject, p256dh, auth FROM push_subscriptions WHERE subject = ?1",
+            )
+            .map_err(store_error)?;
+        let rows = statement
+            .query_map(params![subject], |row| {
+                Ok(PushSubscription {
+                    endpoint: row.get(0)?,
+                    subject: row.get(1)?,
+                    p256dh: row.get(2)?,
+                    auth: row.get(3)?,
+                })
+            })
+            .map_err(store_error)?;
+        rows.collect::<Result<_, _>>().map_err(store_error)
+    }
+
+    pub fn drop_push(&self, endpoint: &str) -> BridgeResult<()> {
+        self.connection
+            .lock()
+            .expect("devices")
+            .execute(
+                "DELETE FROM push_subscriptions WHERE endpoint = ?1",
+                params![endpoint],
+            )
+            .map_err(store_error)?;
+        Ok(())
+    }
+
     pub fn open(path: &Path) -> BridgeResult<Self> {
         let connection = Connection::open(path).map_err(store_error)?;
         connection
@@ -75,6 +139,13 @@ impl Devices {
                    device TEXT NOT NULL,
                    expires_at INTEGER NOT NULL,
                    used_at INTEGER
+                 );
+                 CREATE TABLE IF NOT EXISTS push_subscriptions (
+                   endpoint TEXT PRIMARY KEY,
+                   subject TEXT NOT NULL,
+                   p256dh TEXT NOT NULL,
+                   auth TEXT NOT NULL,
+                   created_at INTEGER NOT NULL
                  );",
             )
             .map_err(store_error)?;
