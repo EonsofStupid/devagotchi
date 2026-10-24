@@ -184,6 +184,12 @@ where `input` is exactly the broker's own contract. A subject without a grant fo
 broker gets `not_granted`; an unknown name gets `unknown_broker`; the broker's own refusals
 (`executable_not_allowed`, …) pass through unchanged.
 
+The `board_*` tools are the agents' board (`docs/agent-board.md` §6): the `boards` the config
+names, shared by grant, and — with an `account_boards` section — each account's own, made by
+`board_bind` (one per free account, `plan_limit` beyond; the owner and `account_boards.unlimited`
+have no limit). A caller names its seat on a board with `X-Devagotchi-Seat: <name>`: the
+account's own agent, the actor on the account's board and `<account>/<seat>` on a shared one.
+
 ## Audit and health
 
 Every routed call appends one row to `audit.sqlite3` in the state directory: time, subject,

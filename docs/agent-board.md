@@ -179,6 +179,33 @@ Not built yet from the 8b list: `request_id` idempotent retries on writes (the s
 check and `already_held` cover the common retries) and project registration from the CLI
 (`board init --hub`). They stay in packet 8b.
 
+**Account boards and seats (15a, built; D23).** Two kinds of board answer to a project name.
+A *configured* board is the above: a directory on the hub's host, shared by grant. An *account*
+board is the hosted tier's: with
+
+```json
+"account_boards": { "dir": "/var/lib/devagotchi/account-boards", "free_limit": 1, "unlimited": ["300000000000000003"] }
+```
+
+in the hub config (`dir` defaults to `<state>/account-boards`; `free_limit` to one, D21's free
+account; the owner is always unlimited), `board_bind {project}` makes the calling account's own
+board under `dir/<account>/<project>.sqlite3` — idempotent, `created` says which — and from then
+on `project` means that board in every `board_*` tool, from any of the account's machines.
+`whoami.boards` lists the account's own boards first, then the shared ones. Refusals:
+`not_offered` on a hub without `account_boards`, `plan_limit` at the free limit, `name_taken`
+when the name is a shared board the account already reaches (one name never means two boards),
+`invalid` for a name that is not `[a-z0-9][a-z0-9-]{0,62}`. An unknown project's message now
+names `board_bind` as the way in. Nothing unbinds yet; the operator removes the file.
+
+A caller may name its **seat** with the header `X-Devagotchi-Seat: claude` — the account's own
+agent on that machine (the CLI face sets it from `DEVAGOTCHI_ACTOR`; `devagotchi mcp --hub` will
+too). On the account's own board the seat is the actor outright (`holder: "claude"`), so one
+account's Claude and Codex coordinate as two seats; on a shared board it is `<account>/<seat>`,
+so no account can pose as another's seat. A seat is never a person, and the fence memory is kept
+per seat. `tests/board_probe.py` binds a project for the ungranted subject, works it from two
+seats (a claim on one is held against the other), hits the free limit and the taken name, and
+shows the unlimited list binding more.
+
 ## 7. What the CLI agents can do now, and what the board does for them
 
 Re-probed 2026-10-24 against vendor documentation (chatmaton `docs/51` of 2026-08-15 is stale on two
@@ -242,6 +269,7 @@ policy-unconfirmed until Google answers; the seat's config row carries that flag
 | B07 | PROPOSED | Hook pack (prime / beat / GUPP stop guard / idle → claim_next) installed by `board init --hooks`. |
 | B08 | DEFERRED | Per-state WIP caps, per-principal budgets, message tickets with threads, path reservations with a pre-commit guard (increment 9). |
 | B09 | DEFERRED | Board pages in the hub's web and the one-tap Approve from the agent-board plan (increment 10). |
+| B11 | RULED 2026-10-24 (chat; ADR pending through the component) | The board of record for a bound project is the hosted hub, which arbitrates claims, leases and fences; the local file is a read-only mirror for offline reads, never a second writer (D23's sync model). Account boards are one per account-project on the hub, seats are the account's own agent names, a free account binds one project (D21). |
 | B10 | RULED 2026-10-24 (chat; ADR pending through the component) | Approvals reach the user by phone push and email first, on both iPhone and Android; Slack and Discord follow as one-click connects. Which channels, in what order and for which kinds of request are per-user settings whose defaults need no setup. Every approval step (requested, seen, approved or denied, running, verified, done or rolled back) is an event the requesting agent continues from; nothing polls. |
 
 ## 9. Packets

@@ -297,7 +297,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         .listen
         .parse()
         .map_err(|_| BridgeError::new("invalid_config", "listen"))?;
-    let boards = Arc::new(board::mcp::Boards::from_config(&config));
+    let boards = Arc::new(board::mcp::Boards::from_config(&config, &state_dir));
     if !boards.is_empty() {
         // Lapsed leases go back to their queue on an interval, as the Go hub's reaper
         // did; claims also expire them lazily, so this is the backstop, not the path.

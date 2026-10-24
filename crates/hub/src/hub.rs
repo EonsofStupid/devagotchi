@@ -98,7 +98,8 @@ pub struct WhoAmI {
     pub human: bool,
     /// Brokers this subject holds a grant for, by name.
     pub brokers: Vec<String>,
-    /// Project boards this subject may work on, by project name.
+    /// Project boards this subject may work on, by project name: the account's own
+    /// (`board_bind`) first, then the shared ones it holds a grant for.
     pub boards: Vec<String>,
 }
 
@@ -258,12 +259,16 @@ impl Hub {
                 .into_iter()
                 .map(|b| b.name.clone())
                 .collect(),
-            boards: self
-                .config
-                .boards_for(&subject.id)
-                .into_iter()
-                .map(|b| b.project.clone())
-                .collect(),
+            boards: {
+                let mut boards = self.boards.account_boards(&subject.id);
+                boards.extend(
+                    self.config
+                        .boards_for(&subject.id)
+                        .into_iter()
+                        .map(|b| b.project.clone()),
+                );
+                boards
+            },
             owner: self.config.is_owner(&subject.id),
             human: self.config.is_human(&subject.id),
             subject: subject.id,

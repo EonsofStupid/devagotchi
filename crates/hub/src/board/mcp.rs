@@ -8,10 +8,19 @@
 //! heartbeat, the way the command line's claim cache does. The store still checks it,
 //! so a lost lease is refused either way. Every call lands on the audit chain under
 //! the project's name.
+//!
+//! Two kinds of board answer to a project name. A configured board (`boards` in the hub
+//! config) is a directory on this host that grants open to several accounts. An account
+//! board (D23, packet 15) is the hosted tier's: `board_bind` makes one for the calling
+//! account under `account_boards.dir`, reached by that account alone, counted against the
+//! free limit. On either, a caller may name its seat (`X-Devagotchi-Seat: claude`): the
+//! account's own agent on that machine. On the account's own board the seat is the
+//! actor outright; on a shared board it is `<account>/<seat>`, so no account can pose
+//! as another's seat. A seat is never a person.
 
 use std::{
-    collections::{BTreeMap, HashMap},
-    path::PathBuf,
+    collections::{BTreeMap, HashMap, HashSet},
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -28,31 +37,204 @@ use super::{
     Actor, Board, ChainStatus, Dep, DepKind, Event, Filter, Lease, NewTicket, NextFilter, Note,
     Patch, Prime, Ticket, TicketView, approval::ApprovalStatus, open_project,
 };
-use crate::{audit::AuditEntry, auth::Subject, config::HubConfig, hub::Hub};
+use crate::{
+    audit::AuditEntry,
+    auth::Subject,
+    config::{DEFAULT_FREE_LIMIT, HubConfig, valid_name},
+    hub::Hub,
+};
+
+/// The header a caller names its seat in: the account's own agent on that machine.
+pub const SEAT_HEADER: &str = "x-devagotchi-seat";
 
 /// The boards a hub serves, opened on first use and kept open; plus the last fence
 /// handed to each subject per ticket, so a caller may omit it.
 pub struct Boards {
     dirs: BTreeMap<String, PathBuf>,
+    accounts: Option<Accounts>,
     open: Mutex<BTreeMap<String, Arc<Board>>>,
     fences: Mutex<HashMap<(String, String, String), i64>>,
 }
 
+/// Where account boards live and who may have how many.
+struct Accounts {
+    dir: PathBuf,
+    free_limit: usize,
+    unlimited: HashSet<String>,
+}
+
+/// What `board_bind` says.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct Bound {
+    pub project: String,
+    /// False when the board already existed: binding is idempotent.
+    pub created: bool,
+    /// Every board this account may work on now, account boards first.
+    pub boards: Vec<String>,
+    /// How many account boards this account may hold here; absent for no limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<usize>,
+}
+
+/// Which kind of board answered a project name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    /// The calling account's own board.
+    Account,
+    /// A board from the hub config, shared by grant.
+    Shared,
+}
+
 impl Boards {
-    pub fn from_config(config: &HubConfig) -> Self {
+    pub fn from_config(config: &HubConfig, state_dir: &Path) -> Self {
+        let accounts = config.account_boards.as_ref().map(|a| {
+            let mut unlimited: HashSet<String> = a.unlimited.iter().cloned().collect();
+            if let Some(owner) = &config.owner {
+                unlimited.insert(owner.clone());
+            }
+            Accounts {
+                dir: a
+                    .dir
+                    .as_deref()
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| state_dir.join("account-boards")),
+                free_limit: a.free_limit.unwrap_or(DEFAULT_FREE_LIMIT) as usize,
+                unlimited,
+            }
+        });
         Self {
             dirs: config
                 .boards
                 .iter()
                 .map(|b| (b.project.clone(), PathBuf::from(&b.dir)))
                 .collect(),
+            accounts,
             open: Mutex::new(BTreeMap::new()),
             fences: Mutex::new(HashMap::new()),
         }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.dirs.is_empty()
+        self.dirs.is_empty() && self.accounts.is_none()
+    }
+
+    /// Whether this hub hosts account boards at all.
+    pub fn hosts_accounts(&self) -> bool {
+        self.accounts.is_some()
+    }
+
+    fn account_file(accounts: &Accounts, subject: &str, project: &str) -> PathBuf {
+        accounts
+            .dir
+            .join(subject)
+            .join(format!("{project}.sqlite3"))
+    }
+
+    /// The account boards `subject` holds here, by name, sorted.
+    pub fn account_boards(&self, subject: &str) -> Vec<String> {
+        let Some(accounts) = &self.accounts else {
+            return Vec::new();
+        };
+        let Ok(entries) = std::fs::read_dir(accounts.dir.join(subject)) else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let name = e.file_name().into_string().ok()?;
+                let project = name.strip_suffix(".sqlite3")?;
+                (valid_name(project) && e.path().is_file()).then(|| project.to_string())
+            })
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// The account's own board named `project`, if it has one.
+    pub fn open_account(&self, subject: &str, project: &str) -> BridgeResult<Option<Arc<Board>>> {
+        let Some(accounts) = &self.accounts else {
+            return Ok(None);
+        };
+        if !valid_name(project) {
+            return Ok(None);
+        }
+        let key = format!("{subject}/{project}");
+        let mut open = self.open.lock().expect("boards lock");
+        if let Some(board) = open.get(&key) {
+            return Ok(Some(board.clone()));
+        }
+        let file = Self::account_file(accounts, subject, project);
+        if !file.is_file() {
+            return Ok(None);
+        }
+        let board = Arc::new(Board::open(&file, project)?);
+        open.insert(key, board.clone());
+        Ok(Some(board))
+    }
+
+    /// Make (or find) the account's board for `project`. `shared` is every configured
+    /// board the account already reaches: the same name cannot mean two boards.
+    pub fn bind(&self, subject: &str, project: &str, shared: &[String]) -> BridgeResult<Bound> {
+        let Some(accounts) = &self.accounts else {
+            return Err(BridgeError::new(
+                "not_offered",
+                "this hub does not host account boards; its boards are the ones its operator configured",
+            ));
+        };
+        if !valid_name(project) {
+            return Err(BridgeError::new(
+                "invalid",
+                format!("project {project:?} is not [a-z0-9][a-z0-9-]{{0,62}}"),
+            ));
+        }
+        if shared.iter().any(|name| name == project) {
+            return Err(BridgeError::new(
+                "name_taken",
+                format!(
+                    "{project:?} is a board this hub already lets you work on; bind another name"
+                ),
+            ));
+        }
+        let held = self.account_boards(subject);
+        let limit = (!accounts.unlimited.contains(subject)).then_some(accounts.free_limit);
+        let existed = held.iter().any(|name| name == project);
+        if !existed && limit.is_some_and(|limit| held.len() >= limit) {
+            return Err(BridgeError::new(
+                "plan_limit",
+                format!(
+                    "a free account holds {} project{} on this hub and this one already has {}; unbind one, or ask the operator",
+                    accounts.free_limit,
+                    if accounts.free_limit == 1 { "" } else { "s" },
+                    held.join(", ")
+                ),
+            ));
+        }
+        if !existed {
+            let dir = accounts.dir.join(subject);
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| BridgeError::new("board_io", format!("{}: {e}", dir.display())))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ =
+                    std::fs::set_permissions(&accounts.dir, std::fs::Permissions::from_mode(0o700));
+                let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+            }
+            let file = Self::account_file(accounts, subject, project);
+            let board = Arc::new(Board::open(&file, project)?);
+            self.open
+                .lock()
+                .expect("boards lock")
+                .insert(format!("{subject}/{project}"), board);
+        }
+        let mut boards = self.account_boards(subject);
+        boards.extend(shared.iter().cloned());
+        Ok(Bound {
+            project: project.to_string(),
+            created: !existed,
+            boards,
+            limit,
+        })
     }
 
     /// The board named `project`, opened if this is its first use. A directory that was
@@ -155,6 +337,9 @@ pub struct BoardError {
 fn next_for(code: &str, id: Option<&str>) -> String {
     let id = id.unwrap_or("<id>");
     match code {
+        "not_offered" => "whoami lists the boards this hub serves you; ask its operator for a grant".to_string(),
+        "name_taken" => "whoami lists that shared board; use it, or board_bind another name".to_string(),
+        "plan_limit" => "whoami lists the project you hold; work in it, or ask the operator for more".to_string(),
         "stale_fence" | "lease_expired" | "not_holder" => {
             format!("board_get {id} to see who holds it; board_claim {id} to take it if it is free")
         }
@@ -489,7 +674,12 @@ impl Hub {
     }
 
     /// The board `project` for this request's subject, after the grant check.
-    fn board_for(&self, subject: &Subject, project: &str) -> BridgeResult<Arc<Board>> {
+    /// The board `project` names for this account: its own first, then a shared one by
+    /// grant. An account board and a shared board never share a name (`bind` refuses).
+    fn board_for(&self, subject: &Subject, project: &str) -> BridgeResult<(Arc<Board>, Kind)> {
+        if let Some(board) = self.boards.open_account(&subject.id, project)? {
+            return Ok((board, Kind::Account));
+        }
         let granted = self
             .config
             .boards_for(&subject.id)
@@ -499,7 +689,13 @@ impl Hub {
             return Err(if self.config.board(project).is_none() {
                 BridgeError::new(
                     "unknown_board",
-                    format!("no board for project {project:?} is configured on this hub"),
+                    if self.boards.hosts_accounts() {
+                        format!(
+                            "no board for project {project:?} here: board_bind makes yours, or ask for a grant on a shared one"
+                        )
+                    } else {
+                        format!("no board for project {project:?} is configured on this hub")
+                    },
                 )
             } else {
                 BridgeError::new(
@@ -508,7 +704,41 @@ impl Hub {
                 )
             });
         }
-        self.boards.open(project)
+        Ok((self.boards.open(project)?, Kind::Shared))
+    }
+
+    /// The seat the caller named (`X-Devagotchi-Seat`), checked like any board name.
+    fn seat(
+        &self,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<Option<String>, Json<BoardError>> {
+        let Some(value) = context
+            .extensions
+            .get::<http::request::Parts>()
+            .and_then(|parts| parts.headers.get(SEAT_HEADER))
+        else {
+            return Ok(None);
+        };
+        match value.to_str() {
+            Ok(seat) if valid_name(seat) => Ok(Some(seat.to_string())),
+            _ => Err(refuse(
+                BridgeError::new(
+                    "invalid",
+                    "X-Devagotchi-Seat must be a name like a board's: [a-z0-9][a-z0-9-]{0,62}",
+                ),
+                None,
+            )),
+        }
+    }
+
+    /// Who the store sees: the seat on the account's own board, `<account>/<seat>` on a
+    /// shared one, the account itself without a seat. A seat is never a person.
+    fn actor_for(&self, subject: &Subject, seat: Option<&str>, kind: Kind) -> (String, bool) {
+        match (seat, kind) {
+            (Some(seat), Kind::Account) => (seat.to_string(), false),
+            (Some(seat), Kind::Shared) => (format!("{}/{seat}", subject.id), false),
+            (None, _) => (subject.id.clone(), self.config.is_human(&subject.id)),
+        }
     }
 
     /// Run one store call for the authenticated subject, on a blocking thread, and
@@ -526,10 +756,10 @@ impl Hub {
         F: FnOnce(&Board, &Actor<'_>) -> BridgeResult<T> + Send + 'static,
     {
         let subject = self.board_subject(context)?;
-        let human = self.config.is_human(&subject.id);
+        let seat = self.seat(context)?;
         let result = match self.board_for(&subject, project) {
-            Ok(board) => {
-                let id = subject.id.clone();
+            Ok((board, kind)) => {
+                let (id, human) = self.actor_for(&subject, seat.as_deref(), kind);
                 tokio::task::spawn_blocking(move || {
                     let actor = Actor {
                         id: &id,
@@ -574,8 +804,14 @@ impl Hub {
             .map_err(|Json(error)| refuse(error, None))
     }
 
+    /// The key the fence memory uses: the account, and the seat when one is named, so two
+    /// seats of one account never pick up each other's fences.
     fn subject_id(&self, context: &RequestContext<RoleServer>) -> Result<String, Json<BoardError>> {
-        Ok(self.board_subject(context)?.id)
+        let subject = self.board_subject(context)?;
+        Ok(match self.seat(context)? {
+            Some(seat) => format!("{}#{seat}", subject.id),
+            None => subject.id,
+        })
     }
 }
 
@@ -1130,7 +1366,7 @@ impl Hub {
         context: RequestContext<RoleServer>,
     ) -> BoardOut<Vec<Event>> {
         let subject = self.board_subject(&context)?;
-        let board = self
+        let (board, _) = self
             .board_for(&subject, &input.project)
             .map_err(|e| refuse(e, None))?;
         let deadline = tokio::time::Instant::now()
@@ -1225,7 +1461,7 @@ impl Hub {
         context: RequestContext<RoleServer>,
     ) -> BoardOut<ApprovalOut> {
         let subject = self.board_subject(&context)?;
-        let board = self
+        let (board, _) = self
             .board_for(&subject, &input.project)
             .map_err(|e| refuse(e, Some(&input.id)))?;
         let deadline = tokio::time::Instant::now()
@@ -1287,6 +1523,58 @@ impl Hub {
         )
         .await
     }
+
+    #[tool(
+        name = "board_bind",
+        description = "Make this account's own board for a project on this hub (or find it: binding again is harmless), so `project` works in every board_* tool from any of the account's machines. A free account holds one project here. Refused as not_offered on a hub that only serves configured boards, name_taken when the name is a shared board you already reach, plan_limit at the limit.",
+        title = "Bind a project to this account's board",
+        annotations(
+            title = "Bind a project to this account's board",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn board_bind(
+        &self,
+        Parameters(input): Parameters<ProjectIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Bound> {
+        let subject = self.board_subject(&context)?;
+        let shared: Vec<String> = self
+            .config
+            .boards_for(&subject.id)
+            .iter()
+            .map(|b| b.project.clone())
+            .collect();
+        let boards = self.boards.clone();
+        let (id, project) = (subject.id.clone(), input.project.clone());
+        let result = tokio::task::spawn_blocking(move || boards.bind(&id, &project, &shared))
+            .await
+            .unwrap_or_else(|join| {
+                Err(BridgeError::new(
+                    "board_store",
+                    format!("board call did not complete: {join}"),
+                ))
+            });
+        let outcome = match &result {
+            Ok(bound) if bound.created => "created".to_string(),
+            Ok(_) => "ok".to_string(),
+            Err(error) => error.code.clone(),
+        };
+        if let Err(error) = self.audit.record(&AuditEntry {
+            subject: &subject.id,
+            via: subject.via,
+            tool: "board_bind",
+            broker: &input.project,
+            operation_id: "",
+            outcome: &outcome,
+        }) {
+            return Err(refuse(error, None));
+        }
+        result.map(Json).map_err(|error| refuse(error, None))
+    }
 }
 
 #[cfg(test)]
@@ -1325,10 +1613,127 @@ mod tests {
         .unwrap();
     }
 
+    fn hosted_config(dir: &std::path::Path, unlimited: &[&str]) -> HubConfig {
+        HubConfig::parse(
+            &serde_json::json!({
+                "listen": "127.0.0.1:1",
+                "public_url": "http://127.0.0.1:1",
+                "auth": { "mode": "dev", "tokens_file": dir.join("tokens.json") },
+                "owner": "300000000000000001",
+                "brokers": [],
+                "boards": [{ "project": "shared", "dir": dir.join("project") }],
+                "grants": [{ "subject": "300000000000000002", "boards": ["shared"] }],
+                "account_boards": { "dir": dir.join("accounts"), "unlimited": unlimited },
+            })
+            .to_string(),
+        )
+        .expect("config")
+    }
+
+    #[test]
+    fn account_boards_are_bound_per_account_counted_and_never_named_like_a_shared_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let only_configured =
+            Boards::from_config(&hub_config("devagotchi", dir.path()), dir.path());
+        assert_eq!(
+            only_configured
+                .bind("someone", "theirs", &[])
+                .expect_err("refused")
+                .code,
+            "not_offered"
+        );
+        assert!(!only_configured.hosts_accounts());
+
+        let boards = Boards::from_config(
+            &hosted_config(dir.path(), &["300000000000000003"]),
+            dir.path(),
+        );
+        assert!(boards.hosts_accounts());
+        let free = "300000000000000002";
+        assert!(boards.account_boards(free).is_empty());
+        assert!(
+            boards.open_account(free, "mine").unwrap().is_none(),
+            "nothing until bound"
+        );
+
+        let bound = boards.bind(free, "mine", &["shared".into()]).unwrap();
+        assert!(bound.created);
+        assert_eq!(bound.boards, vec!["mine".to_string(), "shared".to_string()]);
+        assert_eq!(bound.limit, Some(1));
+        assert!(
+            dir.path()
+                .join("accounts")
+                .join(free)
+                .join("mine.sqlite3")
+                .is_file()
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.path().join("accounts").join(free))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700, "{mode:o}");
+        }
+        let again = boards.bind(free, "mine", &["shared".into()]).unwrap();
+        assert!(!again.created, "binding is idempotent");
+        assert_eq!(boards.account_boards(free), vec!["mine".to_string()]);
+        let opened = boards.open_account(free, "mine").unwrap().expect("bound");
+        assert_eq!(
+            opened.prefix(),
+            Board::open(
+                &dir.path().join("accounts").join(free).join("mine.sqlite3"),
+                "mine"
+            )
+            .unwrap()
+            .prefix()
+        );
+
+        assert_eq!(
+            boards.bind(free, "another", &[]).expect_err("limit").code,
+            "plan_limit"
+        );
+        assert_eq!(
+            boards
+                .bind(free, "shared", &["shared".into()])
+                .expect_err("taken")
+                .code,
+            "name_taken"
+        );
+        assert_eq!(
+            boards
+                .bind(free, "Bad Name", &[])
+                .expect_err("invalid")
+                .code,
+            "invalid"
+        );
+        assert!(
+            boards.open_account(free, "../etc").unwrap().is_none(),
+            "a bad name opens nothing"
+        );
+
+        // The owner and the unlimited list bind as many as they like.
+        for subject in ["300000000000000001", "300000000000000003"] {
+            for project in ["a", "b", "c"] {
+                let bound = boards.bind(subject, project, &[]).unwrap();
+                assert!(
+                    bound.created && bound.limit.is_none(),
+                    "{subject} {project}"
+                );
+            }
+            assert_eq!(boards.account_boards(subject), vec!["a", "b", "c"]);
+        }
+        // Another account's board is not this account's, whatever the name.
+        assert!(boards.open_account(free, "a").unwrap().is_none());
+        assert!(!boards.is_empty());
+    }
+
     #[test]
     fn an_uninitialised_or_renamed_project_is_refused_not_created() {
         let dir = tempfile::tempdir().unwrap();
-        let boards = Boards::from_config(&hub_config("devagotchi", dir.path()));
+        let boards = Boards::from_config(&hub_config("devagotchi", dir.path()), dir.path());
         assert!(!boards.is_empty());
         let error = boards.open("devagotchi").err().expect("refused");
         assert_eq!(error.code, "no_board");
@@ -1356,7 +1761,7 @@ mod tests {
     fn a_board_opens_once_and_the_fence_memory_follows_the_lease() {
         let dir = tempfile::tempdir().unwrap();
         init(dir.path(), "devagotchi");
-        let boards = Boards::from_config(&hub_config("devagotchi", dir.path()));
+        let boards = Boards::from_config(&hub_config("devagotchi", dir.path()), dir.path());
         let first = boards.open("devagotchi").unwrap();
         let again = boards.open("devagotchi").unwrap();
         assert!(Arc::ptr_eq(&first, &again), "one open board per project");

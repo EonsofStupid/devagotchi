@@ -142,6 +142,7 @@ try:
         "auth": {"mode": "dev", "tokens_file": str(tokens)},
         "brokers": [{"name": "local", "socket": endpoint}, {"name": "remote", "link": True}],
         "boards": [{"project": "e2e-board", "dir": str(project_dir)}],
+        "account_boards": {"unlimited": ["e2e-operator"]},
         "grants": [
             {"subject": "e2e-operator", "brokers": ["local", "remote"], "boards": ["e2e-board"], "human": True},
             {"subject": "e2e-claude", "boards": ["e2e-board"]},

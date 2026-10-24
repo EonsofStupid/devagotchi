@@ -13,7 +13,10 @@ is never the author); a second agent reviews it to done; a person force-releases
 held ticket and the agent's stale fence is refused; an ungranted subject is refused
 with `not_granted` and an unknown project with `unknown_board`; events, long-poll
 wait and the hash chain answer; and the command line, run against the same directory,
-sees the tickets the tools made. Exit 0 only when every step holds.
+sees the tickets the tools made. Then account boards (D23, packet 15a): the ungranted
+subject binds its own project, works it from two seats of the one account (a claim on one
+seat is held against the other), hits the free limit on a second project, and the shared
+board's name cannot be bound by someone who reaches it. Exit 0 only when every step holds.
 """
 import argparse
 import json
@@ -48,9 +51,10 @@ def check(name, ok, detail=""):
 class Client:
     """One MCP session per subject, as each agent would hold its own."""
 
-    def __init__(self, who):
-        self.who = who
+    def __init__(self, who, seat=None):
+        self.who = who if seat is None else f"{who} as {seat}"
         self.token = tokens[who]
+        self.seat = seat
         self.session = None
         self.rid = 0
         init = self.rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
@@ -66,6 +70,8 @@ class Client:
             req.add_header("Content-Type", "application/json")
         req.add_header("Authorization", "Bearer " + self.token)
         req.add_header("MCP-Protocol-Version", "2025-06-18")
+        if self.seat:
+            req.add_header("X-Devagotchi-Seat", self.seat)
         if self.session:
             req.add_header("Mcp-Session-Id", self.session)
         try:
@@ -230,6 +236,43 @@ ticket = claude.ok("board_get", {"project": P, "id": asked["id"]})["ticket"]
 claude.refused("board_update", {"project": P, "id": asked["id"], "version": ticket["version"], "state": "ready"},
                "approval_decide_only", "an agent cannot move an approval")
 claude.refused("approval_wait", {"project": P, "id": first["id"], "timeout_ms": 0}, "not_an_approval")
+
+# Account boards (15a): the subject with no grants gets a board of its own by binding.
+mine = "reader-project"
+reader.refused("board_prime", {"project": mine}, "unknown_board", "an unbound project is unknown, with bind as the next step")
+bound = reader.ok("board_bind", {"project": mine})
+check("bind makes the account's board", bound.get("created") is True and bound.get("boards") == [mine] and bound.get("limit") == 1,
+      json.dumps(bound))
+again = reader.ok("board_bind", {"project": mine})
+check("binding again is harmless", again.get("created") is False and again.get("boards") == [mine], json.dumps(again))
+me = reader.ok("whoami", {})
+check("whoami lists the account board", me.get("boards") == [mine], json.dumps(me.get("boards")))
+reader.refused("board_bind", {"project": "second-project"}, "plan_limit", "a free account holds one project")
+reader.refused("board_bind", {"project": "Not Valid"}, "invalid")
+claude.refused("board_bind", {"project": P}, "name_taken", "a shared board's name cannot be bound by one who reaches it")
+owner_bound = [operator.ok("board_bind", {"project": name}) for name in ("owner-a", "owner-b")]
+check("an unlimited account binds more than one", all(b.get("created") for b in owner_bound) and owner_bound[-1].get("limit") is None,
+      json.dumps(owner_bound[-1]))
+# Two seats of the one account: the seat is the actor on the account's own board.
+seat_claude = Client("reader", seat="claude")
+seat_codex = Client("reader", seat="codex")
+t = reader.ok("board_create", {"project": mine, "title": "Prove seats on an account board"})
+lease = seat_claude.ok("board_claim", {"project": mine, "id": t["id"]})
+check("seat claude holds it as claude", lease.get("claimed") is True and lease["lease"]["ticket"].get("holder") == "claude", json.dumps(lease)[:200])
+prime = seat_codex.ok("board_prime", {"project": mine})
+check("seat codex sees it held by another, nothing ready", prime.get("actor") == "codex" and prime.get("ready") == [] and prime.get("held") == [],
+      json.dumps({k: prime.get(k) for k in ("actor", "ready", "held")}))
+seat_codex.refused("board_heartbeat", {"project": mine, "id": t["id"], "fence": lease["lease"]["fence"]}, "not_holder",
+                   "the other seat cannot heartbeat a ticket it does not hold")
+plain = reader.ok("board_prime", {"project": mine})
+check("without a seat the account itself is the actor", plain.get("actor") == me.get("subject"), json.dumps(plain.get("actor")))
+bad_seat = Client("reader", seat="Not Valid")
+is_error, answer = bad_seat.call("board_prime", {"project": mine})
+check("a malformed seat is refused", is_error and answer.get("code") == "invalid", json.dumps(answer)[:160])
+# On a shared board the seat is the account's own agent, named with the account.
+shared_seat = Client("claude", seat="codex")
+sp = shared_seat.ok("board_prime", {"project": P})
+check("a seat on a shared board is <account>/<seat>", sp.get("actor") == f"{claude.ok('whoami', {})['subject']}/codex", json.dumps(sp.get("actor")))
 
 # The command line, on the hub's host, is the other face of the same store.
 result = subprocess.run([args.devagotchi, "board", "ls", "--dir", args.dir, "--json"], capture_output=True, text=True, timeout=30)
