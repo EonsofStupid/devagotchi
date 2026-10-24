@@ -41,7 +41,7 @@ use crate::{
     link::Links,
 };
 
-const USAGE: &str = "Usage:\n  devagotchi-hub --state-dir ABS_PATH --config ABS_JSON\n  devagotchi-hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi-hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi-hub devices --state-dir ABS_PATH\n\nStarts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\noperation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' devagotchi-link connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.";
+const USAGE: &str = "Usage:\n  devagotchi-hub --state-dir ABS_PATH --config ABS_JSON\n  devagotchi-hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi-hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi-hub devices --state-dir ABS_PATH\n  devagotchi-hub board <command> …            the agents' board in this project (board --help)\n\nStarts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\noperation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' devagotchi-link connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -50,6 +50,7 @@ enum Command {
     Enroll { state: PathBuf, device: String },
     Revoke { state: PathBuf, device: String },
     Devices { state: PathBuf },
+    Board { args: Vec<OsString> },
 }
 
 #[derive(Clone)]
@@ -65,6 +66,11 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> BridgeResult<Command>
     let mut args: Vec<OsString> = args.into_iter().collect();
     if args.len() == 1 && args[0] == "--help" {
         return Ok(Command::Help);
+    }
+    if args.first().is_some_and(|a| a == "board") {
+        return Ok(Command::Board {
+            args: args.into_iter().skip(1).collect(),
+        });
     }
     let verb = match args.first().and_then(|a| a.to_str()) {
         Some(v @ ("enroll" | "revoke" | "devices")) => {
@@ -192,7 +198,7 @@ fn manage(command: Command) -> BridgeResult<()> {
                 serde_json::to_string_pretty(&list).unwrap_or_default()
             );
         }
-        Command::Help | Command::Serve { .. } => unreachable!(),
+        Command::Help | Command::Serve { .. } | Command::Board { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -204,6 +210,18 @@ async fn main() -> ExitCode {
         Ok(Command::Help) => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
+        }
+        Ok(Command::Board { args }) => {
+            use std::io::IsTerminal;
+            let invocation = board::cli::Invocation {
+                args,
+                cwd: env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+                actor_env: env::var("DEVAGOTCHI_ACTOR").ok().filter(|a| !a.trim().is_empty()),
+                os_user: env::var("USER").or_else(|_| env::var("USERNAME")).ok(),
+                stdout_is_terminal: std::io::stdout().is_terminal(),
+            };
+            let (mut out, mut err) = (std::io::stdout(), std::io::stderr());
+            return ExitCode::from(board::cli::run(invocation, &mut out, &mut err));
         }
         Ok(command) => {
             return match manage(command) {
