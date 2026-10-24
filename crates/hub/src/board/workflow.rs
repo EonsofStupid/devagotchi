@@ -147,10 +147,14 @@ impl Workflow {
     /// A workflow the store can run: every lane and transition names a known state,
     /// lane queues are claimable kinds, lane actives are active, and the two special
     /// states exist.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn validate(&self) -> Result<(), String> {
         let known = |key: &str| self.state(key).is_some();
         if !known(&self.initial_state) {
-            return Err(format!("initial_state {:?} is not a state", self.initial_state));
+            return Err(format!(
+                "initial_state {:?} is not a state",
+                self.initial_state
+            ));
         }
         if !known(&self.attention_state) {
             return Err(format!(
@@ -159,16 +163,30 @@ impl Workflow {
             ));
         }
         for lane in &self.lanes {
-            for key in [&lane.queue, &lane.active, &lane.complete_to, &lane.release_to] {
+            for key in [
+                &lane.queue,
+                &lane.active,
+                &lane.complete_to,
+                &lane.release_to,
+            ] {
                 if !known(key) {
                     return Err(format!("lane names unknown state {key:?}"));
                 }
             }
-            if !matches!(self.kind(&lane.queue), Some(StateKind::Queue | StateKind::Review)) {
-                return Err(format!("lane queue {:?} is not a queue or review state", lane.queue));
+            if !matches!(
+                self.kind(&lane.queue),
+                Some(StateKind::Queue | StateKind::Review)
+            ) {
+                return Err(format!(
+                    "lane queue {:?} is not a queue or review state",
+                    lane.queue
+                ));
             }
             if self.kind(&lane.active) != Some(StateKind::Active) {
-                return Err(format!("lane active {:?} is not an active state", lane.active));
+                return Err(format!(
+                    "lane active {:?} is not an active state",
+                    lane.active
+                ));
             }
         }
         for t in &self.transitions {

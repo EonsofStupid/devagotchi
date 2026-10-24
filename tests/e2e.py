@@ -6,8 +6,9 @@
 Starts `bridge-broker` with a fresh private state directory and a workspace that grants
 only git, drives it through `bridge-mcp` over stdio (tests/adapter_probe.py), then starts
 `devagotchi-hub` in dev-token mode with two routes to that broker: `local` over IPC and
-`remote` over the machine link. It drives the local route over Streamable HTTP MCP
-(tests/hub_probe.py), then the link's whole life: not enrolled at first, a one-time
+`remote` over the machine link, and one project board on this host. It drives the local
+route over Streamable HTTP MCP (tests/hub_probe.py), works the board as three
+subscriptions would (tests/board_probe.py), then the link's whole life: not enrolled at first, a one-time
 code that works once, `devagotchi-link run`, the same probe through the link, offline when
 the link stops, back after it restarts, and a revoke that closes it and makes it exit 2.
 Last, Shippin sign-in: a hub in `nomen` mode against a fake Nomen (tests/nomen_probe.py),
@@ -121,10 +122,16 @@ try:
     )
 
     token = "e2e-dev-token-" + os.urandom(12).hex()
+    # The board's subjects: a person, two agents, and one token that holds no board.
+    board_tokens = {who: f"e2e-{who}-" + os.urandom(12).hex() for who in ("claude", "codex", "reader")}
     tokens = work / "tokens.json"
-    tokens.write_text(json.dumps({token: "e2e-operator"}))
+    tokens.write_text(json.dumps({token: "e2e-operator", **{t: f"e2e-{who}" for who, t in board_tokens.items()}}))
     if os.name != "nt":
         tokens.chmod(0o600)
+    # One project's board on the hub's host, initialised the way an operator would.
+    project_dir = work / "board-project"
+    project_dir.mkdir()
+    board_init, _ = run_cmd([hub_bin, "board", "init", "--dir", project_dir, "--project", "e2e-board", "--agents-md"], "board init")
     port = free_port()
     hub_config = work / "hub.json"
     hub_config.write_text(json.dumps({
@@ -132,13 +139,25 @@ try:
         "public_url": f"http://127.0.0.1:{port}",
         "auth": {"mode": "dev", "tokens_file": str(tokens)},
         "brokers": [{"name": "local", "socket": endpoint}, {"name": "remote", "link": True}],
-        "grants": [{"subject": "e2e-operator", "brokers": ["local", "remote"]}],
+        "boards": [{"project": "e2e-board", "dir": str(project_dir)}],
+        "grants": [
+            {"subject": "e2e-operator", "brokers": ["local", "remote"], "boards": ["e2e-board"], "human": True},
+            {"subject": "e2e-claude", "boards": ["e2e-board"]},
+            {"subject": "e2e-codex", "boards": ["e2e-board"]},
+            {"subject": "e2e-reader", "brokers": ["local"]},
+        ],
     }))
     hub_state = work / "hub-state"
     hub_url = f"http://127.0.0.1:{port}"
     start([str(hub_bin), "--state-dir", str(hub_state), "--config", str(hub_config)], "ready:", "hub")
     probe = [str(HERE / "hub_probe.py"), hub_url, "--token", token, "--git", git, "--cwd", str(workspace)]
     hub_ok = run_probe(probe + ["--broker", "local"], "hub probe")
+    board_ok = board_init and run_probe(
+        [str(HERE / "board_probe.py"), hub_url, "--project", "e2e-board", "--dir", str(project_dir),
+         "--hub-bin", str(hub_bin), "--tokens", f"operator={token}",
+         *[f"{who}={t}" for who, t in board_tokens.items()]],
+        "board probe: three subscriptions, one board",
+    )
 
     # The machine link: the same broker, reached the way gus or dabo would reach the hub.
     link_state = work / "link-state"
@@ -180,7 +199,7 @@ try:
          "--work", str(work / "web")],
         "browser sign-in",
     )
-    ok = adapter_ok and hub_ok and link_ok and nomen_ok and web_ok
+    ok = adapter_ok and hub_ok and board_ok and link_ok and nomen_ok and web_ok
 finally:
     for process in reversed(processes):
         if process.poll() is None:

@@ -108,7 +108,10 @@ if args.expect_error:
     check(f"routed call fails with {args.expect_error}", is_error and answer.get("code") == args.expect_error, json.dumps(answer)[:200])
     sys.exit(1 if failures else 0)
 tools = sorted(t["name"] for t in rpc("tools/list")["tools"])
-check("tools", tools == ["operation_cancel", "operation_get", "operation_read", "operation_start", "whoami"], ", ".join(tools))
+broker_tools = ["operation_cancel", "operation_get", "operation_read", "operation_start", "whoami"]
+board_tools = [t for t in tools if t.startswith("board_")]
+check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 17,
+      ", ".join(tools))
 
 is_error, me = call("whoami", {})
 check("whoami", not is_error and args.broker in me.get("brokers", []), json.dumps(me))

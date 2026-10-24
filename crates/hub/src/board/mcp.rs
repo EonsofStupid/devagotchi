@@ -1,0 +1,1149 @@
+//! The board's MCP face: `board_*` tools on the hub's `/mcp`, one per protocol verb,
+//! for agents on any machine. The command line (`cli.rs`) and these tools open the
+//! same store, so an agent on the hub's host and one across the world see one board.
+//!
+//! Identity is the hub's: the actor is the authenticated subject, a person only when
+//! the config says so (`grants[].human`, or the owner). A fence may be omitted on a
+//! held ticket; the hub then supplies the one it handed that subject at claim or
+//! heartbeat, the way the command line's claim cache does. The store still checks it,
+//! so a lost lease is refused either way. Every call lands on the audit chain under
+//! the project's name.
+
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+use devagotchi_contracts::{BridgeError, BridgeResult};
+use rmcp::{
+    Json, RoleServer, handler::server::wrapper::Parameters, service::RequestContext, tool,
+    tool_router,
+};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use super::{
+    Actor, Board, ChainStatus, Dep, DepKind, Event, Filter, Lease, NewTicket, NextFilter, Note,
+    Patch, Prime, Ticket, TicketView, open_project,
+};
+use crate::{audit::AuditEntry, auth::Subject, config::HubConfig, hub::Hub};
+
+/// The boards a hub serves, opened on first use and kept open; plus the last fence
+/// handed to each subject per ticket, so a caller may omit it.
+pub struct Boards {
+    dirs: BTreeMap<String, PathBuf>,
+    open: Mutex<BTreeMap<String, Arc<Board>>>,
+    fences: Mutex<HashMap<(String, String, String), i64>>,
+}
+
+impl Boards {
+    pub fn from_config(config: &HubConfig) -> Self {
+        Self {
+            dirs: config
+                .boards
+                .iter()
+                .map(|b| (b.project.clone(), PathBuf::from(&b.dir)))
+                .collect(),
+            open: Mutex::new(BTreeMap::new()),
+            fences: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.dirs.is_empty()
+    }
+
+    /// The board named `project`, opened if this is its first use. A directory that was
+    /// initialised under another project name is refused: ids embed the prefix.
+    pub fn open(&self, project: &str) -> BridgeResult<Arc<Board>> {
+        let mut open = self.open.lock().expect("boards lock");
+        if let Some(board) = open.get(project) {
+            return Ok(board.clone());
+        }
+        let dir = self.dirs.get(project).ok_or_else(|| {
+            BridgeError::new(
+                "unknown_board",
+                format!("no board for project {project:?} is configured on this hub"),
+            )
+        })?;
+        let (config, board) = open_project(dir)?;
+        if config.project != project {
+            return Err(BridgeError::new(
+                "board_mismatch",
+                format!(
+                    "{} was initialised as project {:?}; the hub config names it {project:?}",
+                    dir.display(),
+                    config.project
+                ),
+            ));
+        }
+        let board = Arc::new(board);
+        open.insert(project.to_string(), board.clone());
+        Ok(board)
+    }
+
+    /// Expire lapsed leases on every open board. Run on an interval from `main`.
+    pub fn reap_all(&self) -> Vec<(String, BridgeResult<usize>)> {
+        let open: Vec<_> = self
+            .open
+            .lock()
+            .expect("boards lock")
+            .iter()
+            .map(|(name, board)| (name.clone(), board.clone()))
+            .collect();
+        open.into_iter()
+            .map(|(name, board)| {
+                let reaped = board.reap();
+                (name, reaped)
+            })
+            .collect()
+    }
+
+    fn remember_fence(&self, subject: &str, project: &str, ticket: &str, fence: i64) {
+        self.fences.lock().expect("fence lock").insert(
+            (subject.to_string(), project.to_string(), ticket.to_string()),
+            fence,
+        );
+    }
+
+    fn forget_fence(&self, subject: &str, project: &str, ticket: &str) {
+        self.fences.lock().expect("fence lock").remove(&(
+            subject.to_string(),
+            project.to_string(),
+            ticket.to_string(),
+        ));
+    }
+
+    fn fence_for(
+        &self,
+        subject: &str,
+        project: &str,
+        ticket: &str,
+        given: Option<i64>,
+    ) -> BridgeResult<i64> {
+        if let Some(fence) = given {
+            return Ok(fence);
+        }
+        self.fences
+            .lock()
+            .expect("fence lock")
+            .get(&(subject.to_string(), project.to_string(), ticket.to_string()))
+            .copied()
+            .ok_or_else(|| {
+                BridgeError::new(
+                    "stale_fence",
+                    format!(
+                        "no fence known for {ticket}: pass the fence from your claim, or claim it again"
+                    ),
+                )
+            })
+    }
+}
+
+/// A refused board call: the store's stable code, its message, and what to call next.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct BoardError {
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ticket: Option<String>,
+    pub next: String,
+}
+
+fn next_for(code: &str, id: Option<&str>) -> String {
+    let id = id.unwrap_or("<id>");
+    match code {
+        "stale_fence" | "lease_expired" | "not_holder" => {
+            format!("board_get {id} to see who holds it; board_claim {id} to take it if it is free")
+        }
+        "held_by_other" => format!("board_get {id}; wait, or board_claim with no id for another ticket"),
+        "version_conflict" => format!("board_get {id} and retry board_update with the current version"),
+        "wip_limit" => "board_complete, board_handoff or board_release one of the tickets you hold first".into(),
+        "blocked" => format!("board_get {id}: finish or hand off the blockers it lists"),
+        "distinct_required" => "someone else must take this lane; leave it for them".into(),
+        "not_claimable" => format!("board_get {id}: only a lane queue is claimable; board_update moves it along the workflow"),
+        "use_lease_ops" => "use board_claim / board_complete / board_handoff / board_release; held tickets do not move by board_update".into(),
+        "transition_not_allowed" => "board_prime names the states; the workflow allows only its transitions".into(),
+        "humans_only" => "ask the person who owns this board".into(),
+        "not_found" => "board_list with open_only to see the ids on this board".into(),
+        "not_granted" | "unknown_board" => "whoami lists the boards your identity may work on".into(),
+        "no_board" | "board_mismatch" | "board_version" => "the hub's operator must initialise or fix this board; nothing an agent can do".into(),
+        "nothing_ready" => "board_create what you found, or wait with board_wait".into(),
+        _ => "board_prime to re-orient".into(),
+    }
+}
+
+fn refuse(error: BridgeError, ticket: Option<&str>) -> Json<BoardError> {
+    Json(BoardError {
+        next: next_for(&error.code, ticket),
+        code: error.code,
+        message: error.message,
+        ticket: ticket.map(str::to_string),
+    })
+}
+
+// ----- inputs ------------------------------------------------------------------
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ProjectIn {
+    /// The project whose board to use, as the hub names it (whoami lists yours).
+    pub project: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct PrimeIn {
+    pub project: String,
+    /// How many ready tickets to list (1..=10, default 10).
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReadyIn {
+    pub project: String,
+    /// At most this many (default 20).
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListIn {
+    pub project: String,
+    #[serde(default)]
+    pub state: Option<String>,
+    #[serde(default)]
+    pub holder: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Children of this ticket only.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// task, epic or message.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Leave out done and cancelled tickets.
+    #[serde(default)]
+    pub open_only: bool,
+    /// Substring of the title or description.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// At most this many (default 50).
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TicketIn {
+    pub project: String,
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateIn {
+    pub project: String,
+    /// 1 to 300 characters.
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    /// task (default), epic or message.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// 0 is most urgent; the board default is 2.
+    #[serde(default)]
+    pub priority: Option<i64>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// Makes this a child (`parent.n` id) and records a `parent` dependency.
+    #[serde(default)]
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    /// The ticket you were working when you found this one; recorded as `discovered-from`.
+    #[serde(default)]
+    pub discovered_from: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ClaimIn {
+    pub project: String,
+    /// A ticket to claim. Omit it to claim the best ready ticket for you.
+    #[serde(default)]
+    pub id: Option<String>,
+    /// Lease length; the board clamps it to its min and max.
+    #[serde(default)]
+    pub ttl_ms: Option<i64>,
+    /// Without an id: only tickets carrying this label.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// Without an id: only tickets in these queue states.
+    #[serde(default)]
+    pub states: Vec<String>,
+    /// Without an id: only children of this ticket.
+    #[serde(default)]
+    pub parent: Option<String>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct ClaimOut {
+    /// False when nothing was ready for you; `lease` is then absent.
+    pub claimed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lease: Option<Lease>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HeartbeatIn {
+    pub project: String,
+    pub id: String,
+    /// The fence from your claim. Omit it to use the one this hub last gave you for this ticket.
+    #[serde(default)]
+    pub fence: Option<i64>,
+    /// Anything watchers should see about where you are; replaces the previous progress.
+    #[serde(default)]
+    pub progress: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateIn {
+    pub project: String,
+    pub id: String,
+    /// The ticket's current version (optimistic concurrency); from board_get.
+    pub version: i64,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub priority: Option<i64>,
+    /// Replaces the label set.
+    #[serde(default)]
+    pub labels: Option<Vec<String>>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    #[serde(default)]
+    pub clear_assignee: bool,
+    /// A declared workflow transition for an unheld ticket (blocked, cancelled, back to
+    /// ready). Active states and held tickets move only through claim / complete /
+    /// handoff / release.
+    #[serde(default)]
+    pub state: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct NoteIn {
+    pub project: String,
+    pub id: String,
+    /// 1 to 20000 characters; notes are append-only and travel with the ticket.
+    pub body: String,
+    /// note (default), handoff, review, decision, question …
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Address the note to a subject; it shows in their board_prime.
+    #[serde(default)]
+    pub to: Option<String>,
+    /// Required while you hold the ticket; omit to use the one this hub last gave you.
+    #[serde(default)]
+    pub fence: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct HandoffIn {
+    pub project: String,
+    pub id: String,
+    #[serde(default)]
+    pub fence: Option<i64>,
+    /// What the next worker must know. Required.
+    pub note: String,
+    /// Who should pick it up; they become the assignee.
+    #[serde(default)]
+    pub to: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReleaseIn {
+    pub project: String,
+    pub id: String,
+    #[serde(default)]
+    pub fence: Option<i64>,
+    /// Why you are letting it go without finishing.
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CompleteIn {
+    pub project: String,
+    pub id: String,
+    #[serde(default)]
+    pub fence: Option<i64>,
+    /// What was done, for the reviewer. Required.
+    pub summary: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DepIn {
+    pub project: String,
+    pub id: String,
+    pub depends_on: String,
+    /// blocks (default; the only kind readiness uses), parent, related, discovered-from,
+    /// duplicates or supersedes.
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(default)]
+    pub remove: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ForceIn {
+    pub project: String,
+    pub id: String,
+    /// At least three characters; recorded on the ticket.
+    pub reason: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct EventsIn {
+    pub project: String,
+    /// Events with a higher sequence number than this (0 for all).
+    #[serde(default)]
+    pub after_seq: i64,
+    /// At most this many (default 100, max 1000).
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WaitIn {
+    pub project: String,
+    /// Return as soon as an event newer than this exists.
+    pub after_seq: i64,
+    /// How long to wait before returning an empty list (default 20000, max 25000).
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+// ----- the tools ---------------------------------------------------------------
+
+type BoardOut<T> = Result<Json<T>, Json<BoardError>>;
+
+impl Hub {
+    /// The board `project` for this request's subject, after the grant check.
+    fn board_for(&self, subject: &Subject, project: &str) -> BridgeResult<Arc<Board>> {
+        let granted = self
+            .config
+            .boards_for(&subject.id)
+            .iter()
+            .any(|b| b.project == project);
+        if !granted {
+            return Err(if self.config.board(project).is_none() {
+                BridgeError::new(
+                    "unknown_board",
+                    format!("no board for project {project:?} is configured on this hub"),
+                )
+            } else {
+                BridgeError::new(
+                    "not_granted",
+                    format!("{} holds no grant for board {project:?}", subject.id),
+                )
+            });
+        }
+        self.boards.open(project)
+    }
+
+    /// Run one store call for the authenticated subject, on a blocking thread, and
+    /// audit it: who, which tool, which project, which ticket, how it ended.
+    async fn board_call<T, F>(
+        &self,
+        tool: &'static str,
+        project: &str,
+        ticket: Option<&str>,
+        context: &RequestContext<RoleServer>,
+        f: F,
+    ) -> BoardOut<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&Board, &Actor<'_>) -> BridgeResult<T> + Send + 'static,
+    {
+        let subject = self.board_subject(context)?;
+        let human = self.config.is_human(&subject.id);
+        let result = match self.board_for(&subject, project) {
+            Ok(board) => {
+                let id = subject.id.clone();
+                tokio::task::spawn_blocking(move || {
+                    let actor = Actor {
+                        id: &id,
+                        human,
+                        wip_limit: None,
+                    };
+                    f(&board, &actor)
+                })
+                .await
+                .unwrap_or_else(|join| {
+                    Err(BridgeError::new(
+                        "board_store",
+                        format!("board call did not complete: {join}"),
+                    ))
+                })
+            }
+            Err(error) => Err(error),
+        };
+        let outcome = match &result {
+            Ok(_) => "ok".to_string(),
+            Err(error) => error.code.clone(),
+        };
+        if let Err(error) = self.audit.record(&AuditEntry {
+            subject: &subject.id,
+            via: subject.via,
+            tool,
+            broker: project,
+            operation_id: ticket.unwrap_or_default(),
+            outcome: &outcome,
+        }) {
+            // A call that cannot be audited is not a call this bastion made.
+            return Err(refuse(error, ticket));
+        }
+        result.map(Json).map_err(|error| refuse(error, ticket))
+    }
+
+    fn board_subject(
+        &self,
+        context: &RequestContext<RoleServer>,
+    ) -> Result<Subject, Json<BoardError>> {
+        self.subject(context)
+            .map_err(|Json(error)| refuse(error, None))
+    }
+
+    fn subject_id(&self, context: &RequestContext<RoleServer>) -> Result<String, Json<BoardError>> {
+        Ok(self.board_subject(context)?.id)
+    }
+}
+
+#[tool_router(router = board_router, vis = "pub(crate)")]
+impl Hub {
+    #[tool(
+        name = "board_prime",
+        description = "Start here, every session: the tickets you hold (with their fences), what is ready for you to claim, what needs a person, notes addressed to you, and the heartbeat interval. Your identity is the bearer token; `project` is the board."
+    )]
+    async fn board_prime(
+        &self,
+        Parameters(input): Parameters<PrimeIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Prime> {
+        let limit = input.limit.unwrap_or(10) as usize;
+        self.board_call(
+            "board_prime",
+            &input.project,
+            None,
+            &context,
+            move |board, actor| board.prime(actor, limit),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "board_ready",
+        description = "Tickets you could claim right now, best first: assigned to you, then priority, then age. Only lane queues with no open blocker and no live lease."
+    )]
+    async fn board_ready(
+        &self,
+        Parameters(input): Parameters<ReadyIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Vec<Ticket>> {
+        let limit = input.limit.unwrap_or(20).clamp(1, 200) as usize;
+        self.board_call(
+            "board_ready",
+            &input.project,
+            None,
+            &context,
+            move |board, actor| board.ready(actor, limit),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "board_list",
+        description = "Tickets on the board, filtered by state, holder, assignee, label, parent, kind or text. open_only leaves out done and cancelled."
+    )]
+    async fn board_list(
+        &self,
+        Parameters(input): Parameters<ListIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Vec<Ticket>> {
+        let filter = Filter {
+            state: input.state,
+            holder: input.holder,
+            assignee: input.assignee,
+            label: input.label,
+            parent: input.parent,
+            kind: input.kind,
+            ready: false,
+            open_only: input.open_only,
+            text: input.text,
+            limit: Some(input.limit.unwrap_or(50).clamp(1, 500) as usize),
+        };
+        self.board_call(
+            "board_list",
+            &input.project,
+            None,
+            &context,
+            move |board, _| board.list(&filter),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "board_get",
+        description = "One ticket in full: fields, version, holder and lease, dependencies both ways, children, and every note."
+    )]
+    async fn board_get(
+        &self,
+        Parameters(input): Parameters<TicketIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<TicketView> {
+        let id = input.id.clone();
+        self.board_call(
+            "board_get",
+            &input.project,
+            Some(&input.id),
+            &context,
+            move |board, _| board.get(&id),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "board_create",
+        description = "Create a ticket. Work you discover while holding another ticket goes on the board with discovered_from set, never silently done. parent makes a child with a `parent.n` id."
+    )]
+    async fn board_create(
+        &self,
+        Parameters(input): Parameters<CreateIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Ticket> {
+        let new = NewTicket {
+            title: input.title,
+            description: input.description,
+            kind: input.kind,
+            priority: input.priority,
+            labels: input.labels,
+            parent: input.parent,
+            assignee: input.assignee,
+            discovered_from: input.discovered_from,
+        };
+        self.board_call(
+            "board_create",
+            &input.project,
+            None,
+            &context,
+            move |board, actor| board.create(actor, new),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "board_claim",
+        description = "Take a lease on a ticket (by id, or the best ready one for you when id is omitted). Returns the fence every later call on it needs and the heartbeat interval. Re-claiming what you hold returns the current lease. A ticket held by someone else, blocked, or over your WIP limit is refused."
+    )]
+    async fn board_claim(
+        &self,
+        Parameters(input): Parameters<ClaimIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<ClaimOut> {
+        let subject = self.subject_id(&context)?;
+        let project = input.project.clone();
+        let id = input.id.clone();
+        let wanted = id.clone();
+        let result = self
+            .board_call(
+                "board_claim",
+                &input.project,
+                id.as_deref(),
+                &context,
+                move |board, actor| match &wanted {
+                    Some(id) => board.claim(actor, id, input.ttl_ms).map(Some),
+                    None => board.claim_next(
+                        actor,
+                        &NextFilter {
+                            label: input.label,
+                            states: input.states,
+                            parent: input.parent,
+                            ttl_ms: input.ttl_ms,
+                        },
+                    ),
+                },
+            )
+            .await?;
+        let Json(lease) = result;
+        if let Some(lease) = &lease {
+            self.boards
+                .remember_fence(&subject, &project, &lease.ticket.id, lease.fence);
+        }
+        Ok(Json(ClaimOut {
+            claimed: lease.is_some(),
+            lease,
+        }))
+    }
+
+    #[tool(
+        name = "board_heartbeat",
+        description = "Extend your lease on a ticket you hold, at least as often as board_prime's heartbeat_every_ms says; optionally record progress for watchers. A lapsed lease is refused: claim again."
+    )]
+    async fn board_heartbeat(
+        &self,
+        Parameters(input): Parameters<HeartbeatIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Lease> {
+        let subject = self.subject_id(&context)?;
+        let fence = self
+            .boards
+            .fence_for(&subject, &input.project, &input.id, input.fence)
+            .map_err(|e| refuse(e, Some(&input.id)))?;
+        let id = input.id.clone();
+        let result = self
+            .board_call(
+                "board_heartbeat",
+                &input.project,
+                Some(&input.id),
+                &context,
+                move |board, actor| board.heartbeat(actor, &id, fence, input.progress),
+            )
+            .await?;
+        self.boards
+            .remember_fence(&subject, &input.project, &input.id, result.0.fence);
+        Ok(result)
+    }
+
+    #[tool(
+        name = "board_update",
+        description = "Edit a ticket's title, description, priority, labels or assignee, or move an unheld ticket along a declared workflow transition (blocked, cancelled, back to ready). version must be current; active states and held tickets change only through claim / complete / handoff / release."
+    )]
+    async fn board_update(
+        &self,
+        Parameters(input): Parameters<UpdateIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Ticket> {
+        let patch = Patch {
+            title: input.title,
+            description: input.description,
+            priority: input.priority,
+            labels: input.labels,
+            assignee: if input.clear_assignee {
+                Some(None)
+            } else {
+                input.assignee.map(Some)
+            },
+            state: input.state,
+        };
+        let id = input.id.clone();
+        let version = input.version;
+        self.board_call(
+            "board_update",
+            &input.project,
+            Some(&input.id),
+            &context,
+            move |board, actor| board.update(actor, &id, version, patch),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "board_note",
+        description = "Append a note to a ticket: what you learned, a decision, a question, a review. Notes are append-only and travel with the ticket; `to` addresses one to a subject, who sees it in board_prime."
+    )]
+    async fn board_note(
+        &self,
+        Parameters(input): Parameters<NoteIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Note> {
+        // A fence is only needed while the caller holds the ticket; use the cached one
+        // when the caller gave none and the hub knows one, and let the store decide.
+        let subject = self.subject_id(&context)?;
+        let fence = input.fence.or_else(|| {
+            self.boards
+                .fence_for(&subject, &input.project, &input.id, None)
+                .ok()
+        });
+        let id = input.id.clone();
+        self.board_call(
+            "board_note",
+            &input.project,
+            Some(&input.id),
+            &context,
+            move |board, actor| {
+                board.add_note(
+                    actor,
+                    &id,
+                    input.kind.as_deref().unwrap_or("note"),
+                    &input.body,
+                    input.to.as_deref(),
+                    fence,
+                )
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        name = "board_handoff",
+        description = "Stop working a ticket you hold and leave it for someone else, with the note they need; `to` makes them the assignee. The ticket goes back to its queue unfinished."
+    )]
+    async fn board_handoff(
+        &self,
+        Parameters(input): Parameters<HandoffIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Ticket> {
+        let subject = self.subject_id(&context)?;
+        let fence = self
+            .boards
+            .fence_for(&subject, &input.project, &input.id, input.fence)
+            .map_err(|e| refuse(e, Some(&input.id)))?;
+        let id = input.id.clone();
+        let result = self
+            .board_call(
+                "board_handoff",
+                &input.project,
+                Some(&input.id),
+                &context,
+                move |board, actor| {
+                    board.handoff(actor, &id, fence, &input.note, input.to.as_deref())
+                },
+            )
+            .await?;
+        self.boards
+            .forget_fence(&subject, &input.project, &input.id);
+        Ok(result)
+    }
+
+    #[tool(
+        name = "board_release",
+        description = "Give a ticket you hold back to its queue without finishing it, with a reason. Nothing is recorded as done."
+    )]
+    async fn board_release(
+        &self,
+        Parameters(input): Parameters<ReleaseIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Ticket> {
+        let subject = self.subject_id(&context)?;
+        let fence = self
+            .boards
+            .fence_for(&subject, &input.project, &input.id, input.fence)
+            .map_err(|e| refuse(e, Some(&input.id)))?;
+        let id = input.id.clone();
+        let result = self
+            .board_call(
+                "board_release",
+                &input.project,
+                Some(&input.id),
+                &context,
+                move |board, actor| board.release(actor, &id, fence, &input.reason),
+            )
+            .await?;
+        self.boards
+            .forget_fence(&subject, &input.project, &input.id);
+        Ok(result)
+    }
+
+    #[tool(
+        name = "board_complete",
+        description = "Finish a ticket you hold with a summary for the reviewer. It moves to the next lane (review), where someone other than you must take it; a review completed moves it to done."
+    )]
+    async fn board_complete(
+        &self,
+        Parameters(input): Parameters<CompleteIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Ticket> {
+        let subject = self.subject_id(&context)?;
+        let fence = self
+            .boards
+            .fence_for(&subject, &input.project, &input.id, input.fence)
+            .map_err(|e| refuse(e, Some(&input.id)))?;
+        let id = input.id.clone();
+        let result = self
+            .board_call(
+                "board_complete",
+                &input.project,
+                Some(&input.id),
+                &context,
+                move |board, actor| board.complete(actor, &id, fence, &input.summary),
+            )
+            .await?;
+        self.boards
+            .forget_fence(&subject, &input.project, &input.id);
+        Ok(result)
+    }
+
+    #[tool(
+        name = "board_dep",
+        description = "Record (or remove) a dependency: `id` depends on `depends_on`. Only `blocks` gates readiness; parent, related, discovered-from, duplicates and supersedes are memory. Cycles are refused."
+    )]
+    async fn board_dep(
+        &self,
+        Parameters(input): Parameters<DepIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Vec<Dep>> {
+        let kind = match input.kind.as_deref() {
+            None => DepKind::Blocks,
+            Some(name) => DepKind::parse(name).ok_or_else(|| {
+                refuse(
+                    BridgeError::new(
+                        "invalid",
+                        format!("kind {name:?} is not blocks, parent, related, discovered-from, duplicates or supersedes"),
+                    ),
+                    Some(&input.id),
+                )
+            })?,
+        };
+        let id = input.id.clone();
+        self.board_call(
+            "board_dep",
+            &input.project,
+            Some(&input.id),
+            &context,
+            move |board, actor| {
+                if input.remove {
+                    board.remove_dep(actor, &id, &input.depends_on, kind)
+                } else {
+                    board.add_dep(actor, &id, &input.depends_on, kind)
+                }
+            },
+        )
+        .await
+    }
+
+    #[tool(
+        name = "board_force_release",
+        description = "A person's act only: take a ticket away from whoever holds it, with a reason, and put it back in its queue. Agents are refused."
+    )]
+    async fn board_force_release(
+        &self,
+        Parameters(input): Parameters<ForceIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Ticket> {
+        let id = input.id.clone();
+        self.board_call(
+            "board_force_release",
+            &input.project,
+            Some(&input.id),
+            &context,
+            move |board, actor| board.force_release(actor, &id, &input.reason),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "board_events",
+        description = "The board's append-only, hash-chained event log after a sequence number: every create, claim, note, handoff and completion, by whom and when."
+    )]
+    async fn board_events(
+        &self,
+        Parameters(input): Parameters<EventsIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Vec<Event>> {
+        let limit = input.limit.unwrap_or(100).clamp(1, 1000) as usize;
+        let after = input.after_seq;
+        self.board_call(
+            "board_events",
+            &input.project,
+            None,
+            &context,
+            move |board, _| board.events(after, limit),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "board_wait",
+        description = "Long-poll: return the events newer than after_seq as soon as there is one, or an empty list when timeout_ms passes. Use it instead of polling board_events in a loop."
+    )]
+    async fn board_wait(
+        &self,
+        Parameters(input): Parameters<WaitIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<Vec<Event>> {
+        let subject = self.board_subject(&context)?;
+        let board = self
+            .board_for(&subject, &input.project)
+            .map_err(|e| refuse(e, None))?;
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_millis(input.timeout_ms.unwrap_or(20_000).min(25_000));
+        let after = input.after_seq;
+        let events = loop {
+            let board = board.clone();
+            let found = tokio::task::spawn_blocking(move || board.events(after, 100))
+                .await
+                .unwrap_or_else(|join| {
+                    Err(BridgeError::new(
+                        "board_store",
+                        format!("board call did not complete: {join}"),
+                    ))
+                })
+                .map_err(|e| refuse(e, None))?;
+            if !found.is_empty() || tokio::time::Instant::now() >= deadline {
+                break found;
+            }
+            tokio::select! {
+                biased;
+                _ = context.ct.cancelled() => break Vec::new(),
+                _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+            }
+        };
+        // One audit line per wait, however long it blocked.
+        if let Err(error) = self.audit.record(&AuditEntry {
+            subject: &subject.id,
+            via: subject.via,
+            tool: "board_wait",
+            broker: &input.project,
+            operation_id: "",
+            outcome: "ok",
+        }) {
+            return Err(refuse(error, None));
+        }
+        Ok(Json(events))
+    }
+
+    #[tool(
+        name = "board_verify",
+        description = "Recompute the board's event hash chain and report the first broken entry, if any."
+    )]
+    async fn board_verify(
+        &self,
+        Parameters(input): Parameters<ProjectIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<ChainStatus> {
+        self.board_call(
+            "board_verify",
+            &input.project,
+            None,
+            &context,
+            move |board, _| board.verify_chain(),
+        )
+        .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::board::{BOARD_DIR, BOARD_FILE, ProjectConfig};
+
+    fn hub_config(project: &str, dir: &std::path::Path) -> HubConfig {
+        HubConfig::parse(
+            &serde_json::json!({
+                "listen": "127.0.0.1:1",
+                "public_url": "http://127.0.0.1:1",
+                "auth": { "mode": "dev", "tokens_file": dir.join("tokens.json") },
+                "brokers": [],
+                "boards": [{ "project": project, "dir": dir.join("project") }],
+                "grants": [{ "subject": "agent", "boards": [project] }],
+            })
+            .to_string(),
+        )
+        .expect("config")
+    }
+
+    fn init(dir: &std::path::Path, project: &str) {
+        let board_dir = dir.join("project").join(BOARD_DIR);
+        std::fs::create_dir_all(&board_dir).unwrap();
+        let board = Board::open(&board_dir.join(BOARD_FILE), project).unwrap();
+        let config = ProjectConfig {
+            project: project.into(),
+            prefix: board.prefix().into(),
+            created_at: 0,
+        };
+        std::fs::write(
+            board_dir.join("config.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn an_uninitialised_or_renamed_project_is_refused_not_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let boards = Boards::from_config(&hub_config("devagotchi", dir.path()));
+        assert!(!boards.is_empty());
+        let error = boards.open("devagotchi").err().expect("refused");
+        assert_eq!(error.code, "no_board");
+        assert!(error.message.contains("board init"), "{}", error.message);
+        assert!(
+            !dir.path().join("project").join(BOARD_DIR).exists(),
+            "nothing was created"
+        );
+        assert_eq!(
+            boards.open("other").err().expect("refused").code,
+            "unknown_board"
+        );
+
+        init(dir.path(), "something-else");
+        let error = boards.open("devagotchi").err().expect("refused");
+        assert_eq!(error.code, "board_mismatch");
+        assert!(
+            error.message.contains("something-else"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn a_board_opens_once_and_the_fence_memory_follows_the_lease() {
+        let dir = tempfile::tempdir().unwrap();
+        init(dir.path(), "devagotchi");
+        let boards = Boards::from_config(&hub_config("devagotchi", dir.path()));
+        let first = boards.open("devagotchi").unwrap();
+        let again = boards.open("devagotchi").unwrap();
+        assert!(Arc::ptr_eq(&first, &again), "one open board per project");
+        assert_eq!(boards.reap_all().len(), 1);
+
+        let missing = boards
+            .fence_for("agent", "devagotchi", "dvg-1", None)
+            .unwrap_err();
+        assert_eq!(missing.code, "stale_fence");
+        assert_eq!(
+            boards
+                .fence_for("agent", "devagotchi", "dvg-1", Some(7))
+                .unwrap(),
+            7,
+            "a given fence wins"
+        );
+        boards.remember_fence("agent", "devagotchi", "dvg-1", 3);
+        assert_eq!(
+            boards
+                .fence_for("agent", "devagotchi", "dvg-1", None)
+                .unwrap(),
+            3
+        );
+        assert_eq!(
+            boards
+                .fence_for("someone-else", "devagotchi", "dvg-1", None)
+                .unwrap_err()
+                .code,
+            "stale_fence",
+            "fences are remembered per subject"
+        );
+        boards.forget_fence("agent", "devagotchi", "dvg-1");
+        assert_eq!(
+            boards
+                .fence_for("agent", "devagotchi", "dvg-1", None)
+                .unwrap_err()
+                .code,
+            "stale_fence"
+        );
+    }
+
+    #[test]
+    fn refusals_name_what_to_call_next() {
+        let refused = refuse(BridgeError::new("held_by_other", "leased"), Some("dvg-1"));
+        assert_eq!(refused.0.code, "held_by_other");
+        assert_eq!(refused.0.ticket.as_deref(), Some("dvg-1"));
+        assert!(
+            refused.0.next.contains("board_get dvg-1"),
+            "{}",
+            refused.0.next
+        );
+        let unknown = refuse(BridgeError::new("something_new", "?"), None);
+        assert!(unknown.0.next.contains("board_prime"));
+    }
+}
