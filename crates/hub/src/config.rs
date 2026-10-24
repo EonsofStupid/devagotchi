@@ -91,8 +91,8 @@ pub enum AuthConfig {
         /// (`type`, `keyId`, `key`, `clientId`). Owner-only (chmod 0600).
         key_file: String,
     },
-    /// Static tokens from a file the hub owner controls (mode 0600). For local
-    /// tests and single-machine self-hosting without an identity provider.
+    /// Static tokens from a file the hub owner controls (mode 0600). For tests only
+    /// (D21): accepted when `public_url` is loopback http, refused for a hub people reach.
     Dev {
         /// Absolute path to a JSON object `{ "<token>": "<subject>" }`.
         tokens_file: String,
@@ -197,6 +197,15 @@ impl HubConfig {
             AuthConfig::Dev { tokens_file } => {
                 if !Path::new(tokens_file).is_absolute() {
                     return Err(invalid("auth.tokens_file must be an absolute path".into()));
+                }
+                // D21: dev tokens are for tests. A hub with an address people reach signs
+                // them in with Nomen or an OpenID Connect issuer; a static token would be
+                // a password in a file, on the network, with no one to revoke it.
+                if !loopback_http(&self.public_url) {
+                    return Err(invalid(format!(
+                        "auth.mode dev is for tests (public_url on loopback http); a hub at {} signs people in with auth.mode nomen or oidc",
+                        self.public_url
+                    )));
                 }
             }
         }
@@ -429,7 +438,7 @@ mod tests {
     fn good() -> serde_json::Value {
         serde_json::json!({
             "listen": "127.0.0.1:8787",
-            "public_url": "https://hub.example",
+            "public_url": "http://127.0.0.1:8787",
             "auth": { "mode": "dev", "tokens_file": TOKENS },
             "brokers": [ { "name": "gold-ws", "socket": SOCKET } ],
             "grants": [ { "subject": "jesse", "brokers": ["gold-ws"] } ]
@@ -446,6 +455,22 @@ mod tests {
         assert_eq!(config.brokers_for("jesse").len(), 1);
         assert!(config.brokers_for("someone-else").is_empty());
         assert!(config.broker("gold-ws").is_some());
+    }
+
+    #[test]
+    fn dev_tokens_are_for_tests_a_reachable_hub_refuses_them() {
+        for public_url in ["https://hub.example", "http://hub.example:8787", "https://127.0.0.1"] {
+            let mut reachable = good();
+            reachable["public_url"] = serde_json::json!(public_url);
+            let error = parse(&reachable).unwrap_err();
+            assert_eq!(error.code, "invalid_config", "{public_url}");
+            assert!(error.message.contains("nomen or oidc"), "{public_url}: {}", error.message);
+        }
+        for public_url in ["http://localhost:8787", "http://[::1]:8787"] {
+            let mut local = good();
+            local["public_url"] = serde_json::json!(public_url);
+            parse(&local).unwrap_or_else(|e| panic!("{public_url}: {}", e.message));
+        }
     }
 
     #[test]
