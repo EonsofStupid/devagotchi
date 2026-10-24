@@ -322,7 +322,7 @@ impl World {
         assert_eq!(params["code_challenge_method"], "S256");
         assert_eq!(
             params["scope"],
-            "openid profile offline_access urn:zitadel:iam:org:project:id:hub-project:aud"
+            "openid profile offline_access urn:zitadel:iam:user:resourceowner urn:zitadel:iam:org:project:id:hub-project:aud"
         );
         let login = set_cookie(&start, "dg_login").expect("login cookie");
         assert!(

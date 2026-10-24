@@ -81,6 +81,8 @@ pub struct Bound {
 pub enum Kind {
     /// The calling account's own board.
     Account,
+    /// A board the caller's org owns: every member of the org works it (B13).
+    Org,
     /// A board from the hub config, shared by grant.
     Shared,
 }
@@ -150,6 +152,16 @@ impl Boards {
         names
     }
 
+    /// Who owns the boards `subject` makes and finds: its org when the identity provider
+    /// named one (B13), otherwise the account itself. Org ids and account ids never
+    /// collide on disk: an org's directory is `org-<id>`.
+    pub fn owner_of(subject: &Subject) -> String {
+        match &subject.org {
+            Some(org) => format!("org-{org}"),
+            None => subject.id.clone(),
+        }
+    }
+
     /// The account's own board named `project`, if it has one.
     pub fn open_account(&self, subject: &str, project: &str) -> BridgeResult<Option<Arc<Board>>> {
         let Some(accounts) = &self.accounts else {
@@ -175,6 +187,19 @@ impl Boards {
     /// Make (or find) the account's board for `project`. `shared` is every configured
     /// board the account already reaches: the same name cannot mean two boards.
     pub fn bind(&self, subject: &str, project: &str, shared: &[String]) -> BridgeResult<Bound> {
+        self.bind_for(subject, &[subject], project, shared)
+    }
+
+    /// Make (or find) `owner`'s board for `project` (an account, or `org-<id>`); the free
+    /// limit counts `owner`'s boards and is lifted when any of `who` (the caller, its org)
+    /// is unlimited.
+    pub fn bind_for(
+        &self,
+        subject: &str,
+        who: &[&str],
+        project: &str,
+        shared: &[String],
+    ) -> BridgeResult<Bound> {
         let Some(accounts) = &self.accounts else {
             return Err(BridgeError::new(
                 "not_offered",
@@ -196,13 +221,19 @@ impl Boards {
             ));
         }
         let held = self.account_boards(subject);
-        let limit = (!accounts.unlimited.contains(subject)).then_some(accounts.free_limit);
+        let limit =
+            (!who.iter().any(|id| accounts.unlimited.contains(*id))).then_some(accounts.free_limit);
         let existed = held.iter().any(|name| name == project);
         if !existed && limit.is_some_and(|limit| held.len() >= limit) {
             return Err(BridgeError::new(
                 "plan_limit",
                 format!(
-                    "a free account holds {} project{} on this hub and this one already has {}; unbind one, or ask the operator",
+                    "a free {} holds {} project{} on this hub and this one already has {}; unbind one, or ask the operator",
+                    if subject.starts_with("org-") {
+                        "org"
+                    } else {
+                        "account"
+                    },
                     accounts.free_limit,
                     if accounts.free_limit == 1 { "" } else { "s" },
                     held.join(", ")
@@ -679,8 +710,16 @@ impl Hub {
     /// The board `project` names for this account: its own first, then a shared one by
     /// grant. An account board and a shared board never share a name (`bind` refuses).
     fn board_for(&self, subject: &Subject, project: &str) -> BridgeResult<(Arc<Board>, Kind)> {
-        if let Some(board) = self.boards.open_account(&subject.id, project)? {
-            return Ok((board, Kind::Account));
+        if let Some(board) = self
+            .boards
+            .open_account(&Boards::owner_of(subject), project)?
+        {
+            let kind = if subject.org.is_some() {
+                Kind::Org
+            } else {
+                Kind::Account
+            };
+            return Ok((board, kind));
         }
         let granted = self
             .config
@@ -733,14 +772,15 @@ impl Hub {
         }
     }
 
-    /// Who the store sees: the seat on the account's own board, `<account>/<seat>` on a
-    /// shared one, the account itself without a seat. A seat is never a person; the account
-    /// is the person on its own board, and on a shared one when its grant says so.
+    /// Who the store sees: the seat on the account's own board, `<account>/<seat>` on an
+    /// org's or a shared one (two members' Claudes are two actors), the account itself
+    /// without a seat. A seat is never a person; the account is the person on its own
+    /// board and on its org's, and on a shared one when its grant says so.
     fn actor_for(&self, subject: &Subject, seat: Option<&str>, kind: Kind) -> (String, bool) {
         match (seat, kind) {
             (Some(seat), Kind::Account) => (seat.to_string(), false),
-            (Some(seat), Kind::Shared) => (format!("{}/{seat}", subject.id), false),
-            (None, Kind::Account) => (subject.id.clone(), true),
+            (Some(seat), Kind::Org | Kind::Shared) => (format!("{}/{seat}", subject.id), false),
+            (None, Kind::Account | Kind::Org) => (subject.id.clone(), true),
             (None, Kind::Shared) => (subject.id.clone(), self.config.is_human(&subject.id)),
         }
     }
@@ -1565,15 +1605,22 @@ impl Hub {
             .map(|b| b.project.clone())
             .collect();
         let boards = self.boards.clone();
-        let (id, project) = (subject.id.clone(), input.project.clone());
-        let result = tokio::task::spawn_blocking(move || boards.bind(&id, &project, &shared))
-            .await
-            .unwrap_or_else(|join| {
-                Err(BridgeError::new(
-                    "board_store",
-                    format!("board call did not complete: {join}"),
-                ))
-            });
+        let owner = Boards::owner_of(&subject);
+        let who: Vec<String> = std::iter::once(subject.id.clone())
+            .chain(subject.org.clone())
+            .collect();
+        let project = input.project.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            let who: Vec<&str> = who.iter().map(String::as_str).collect();
+            boards.bind_for(&owner, &who, &project, &shared)
+        })
+        .await
+        .unwrap_or_else(|join| {
+            Err(BridgeError::new(
+                "board_store",
+                format!("board call did not complete: {join}"),
+            ))
+        });
         let outcome = match &result {
             Ok(bound) if bound.created => "created".to_string(),
             Ok(_) => "ok".to_string(),
@@ -1645,6 +1692,95 @@ mod tests {
             .to_string(),
         )
         .expect("config")
+    }
+
+    #[test]
+    fn org_boards_belong_to_the_org_and_every_member_works_them() {
+        use crate::auth::Subject;
+        let member = |id: &str, org: Option<&str>| Subject {
+            id: id.into(),
+            via: "nomen",
+            name: None,
+            org: org.map(str::to_string),
+        };
+        let (alice, bob) = (
+            member("300000000000000011", Some("395263680805142530")),
+            member("300000000000000012", Some("395263680805142530")),
+        );
+        let carol = member("300000000000000013", Some("400000000000000001"));
+        let solo = member("300000000000000014", None);
+        assert_eq!(Boards::owner_of(&alice), "org-395263680805142530");
+        assert_eq!(Boards::owner_of(&bob), Boards::owner_of(&alice));
+        assert_eq!(
+            Boards::owner_of(&solo),
+            solo.id,
+            "no org: the account's own"
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        // The paid org is unlimited by its org id; Carol's org is free.
+        let boards = Boards::from_config(
+            &hosted_config(dir.path(), &["395263680805142530"]),
+            dir.path(),
+        );
+        let bind = |who: &Subject, project: &str| {
+            let ids: Vec<&str> = std::iter::once(who.id.as_str())
+                .chain(who.org.as_deref())
+                .collect();
+            boards.bind_for(&Boards::owner_of(who), &ids, project, &[])
+        };
+        assert!(bind(&alice, "site").unwrap().created);
+        assert!(
+            !bind(&bob, "site").unwrap().created,
+            "Bob finds the org's board"
+        );
+        let a = boards
+            .open_account(&Boards::owner_of(&alice), "site")
+            .unwrap()
+            .unwrap();
+        let b = boards
+            .open_account(&Boards::owner_of(&bob), "site")
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&a, &b), "one board, not two");
+        assert!(
+            bind(&bob, "api").unwrap().created,
+            "an unlimited org binds more"
+        );
+        assert_eq!(
+            boards.account_boards(&Boards::owner_of(&alice)),
+            vec!["api", "site"]
+        );
+
+        assert!(
+            boards
+                .open_account(&Boards::owner_of(&carol), "site")
+                .unwrap()
+                .is_none(),
+            "another org never reaches it"
+        );
+        assert!(
+            bind(&carol, "site").unwrap().created,
+            "its own board of the same name"
+        );
+        assert_eq!(
+            bind(&carol, "more").unwrap_err().code,
+            "plan_limit",
+            "a free org holds one"
+        );
+        assert!(
+            boards.open_account(&solo.id, "site").unwrap().is_none(),
+            "an account with no org has only its own"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(dir.path().join("accounts/org-395263680805142530"))
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o700);
+        }
     }
 
     #[test]

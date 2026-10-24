@@ -91,6 +91,10 @@ pub struct WhoAmI {
     /// Grants never use it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    /// The org (tenant) the identity provider proved this account belongs to. Projects
+    /// bound by any member belong to it and every member works them (B13).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub org: Option<String>,
     /// Whether this is the hub's configured owner, who reaches every broker and board.
     pub owner: bool,
     /// Whether this subject acts as a person on boards (force-release, moving tickets by
@@ -98,8 +102,8 @@ pub struct WhoAmI {
     pub human: bool,
     /// Brokers this subject holds a grant for, by name.
     pub brokers: Vec<String>,
-    /// Project boards this subject may work on, by project name: the account's own
-    /// (`board_bind`) first, then the shared ones it holds a grant for.
+    /// Project boards this subject may work on, by project name: its org's (or, with no
+    /// org, the account's own; `board_bind`) first, then the shared ones it holds a grant for.
     pub boards: Vec<String>,
 }
 
@@ -260,7 +264,9 @@ impl Hub {
                 .map(|b| b.name.clone())
                 .collect(),
             boards: {
-                let mut boards = self.boards.account_boards(&subject.id);
+                let mut boards = self
+                    .boards
+                    .account_boards(&crate::board::mcp::Boards::owner_of(&subject));
                 boards.extend(
                     self.config
                         .boards_for(&subject.id)
@@ -274,6 +280,7 @@ impl Hub {
             subject: subject.id,
             via: subject.via.to_string(),
             name: subject.name,
+            org: subject.org,
         }))
     }
 

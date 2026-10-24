@@ -24,6 +24,7 @@ verified by a receipt; **planned** = the increment that brings it.
 
 | Rule | Mechanism | Where | Status |
 |---|---|---|---|
+| A project board belongs to the org the identity provider proved; another org never reaches it | Nomen's `urn:zitadel:iam:user:resourceowner:id` (asked for by every sign-in and in RFC 9728 `scopes_supported`); org boards under `org-<id>/` (0700); seats `<account>/<seat>` so members' agents never share a lease; the free limit per org | hub `auth.rs`, `nomen.rs`, `board/mcp.rs` | built (21a) |
 | A subject reaches only the brokers it holds a grant for | `grants` by subject and broker name; `not_granted` otherwise | hub config, `Hub::route` | built (H1) |
 | A broker runs only explicitly granted executables, exact arguments, inside the workspace | canonical executable grants, workspace jail, `executable_not_allowed` | `crates/core/src/broker.rs` | enforced (foundation tests) |
 | Identity and delegation never come from caller-controlled fields | subject from the token; dispatch envelope authenticated outside attribution fields | hub; mesh contract §6 | built (hub) / planned (M1) |

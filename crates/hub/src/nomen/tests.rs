@@ -22,6 +22,8 @@ use super::*;
 use crate::test_keys::{self, TestKey};
 
 const OWNER: &str = "300000000000000001";
+/// The org Nomen reports the accounts belong to (`urn:zitadel:iam:user:resourceowner:id`).
+const OWNER_ORG: &str = "300000000000000900";
 const HUB_PROJECT: &str = "hub-project";
 const CLIENT_ID: &str = "devagotchi-hub@shippin";
 const RELAY: &str = "shippin-mcp";
@@ -125,7 +127,8 @@ fn verifier(issuer: &str, key: &TestKey) -> NomenVerifier {
 
 fn active(issuer: &str, sub: &str, aud: Value) -> Value {
     json!({"active": true, "iss": issuer, "aud": aud, "sub": sub, "exp": unix_now() + 3600,
-           "username": "jessay@example.test", "client_id": RELAY, "token_type": "Bearer"})
+           "username": "jessay@example.test", "client_id": RELAY, "token_type": "Bearer",
+           "urn:zitadel:iam:user:resourceowner:id": OWNER_ORG})
 }
 
 fn with(mut answer: Value, field: &str, value: Value) -> Value {
@@ -158,6 +161,7 @@ async fn a_live_token_for_this_hub_signs_in_and_is_remembered() {
                 id: OWNER.into(),
                 via: "nomen",
                 name: Some("jessay@example.test".into()),
+                org: Some(OWNER_ORG.into()),
             }
         );
     }
@@ -369,6 +373,7 @@ fn a_full_cache_never_evicts_a_confirmed_sign_in_and_late_answers_never_win() {
             id: OWNER.into(),
             via: "nomen",
             name: None,
+            org: None,
         })
     };
     let digest = |i: usize| -> [u8; 32] { Sha256::digest(i.to_le_bytes()).into() };
@@ -407,8 +412,31 @@ fn every_check_on_the_answer_is_the_hubs_own() {
         exp: Some(now + 60),
         sub: Some(OWNER.into()),
         username: Some("jessay@gmail.com".into()),
+        org: Some(OWNER_ORG.into()),
     };
     assert_eq!(assess(&base(), &accepts, now).unwrap().id, OWNER);
+    assert_eq!(
+        assess(&base(), &accepts, now).unwrap().org.as_deref(),
+        Some(OWNER_ORG),
+        "the org Nomen proved comes through"
+    );
+    for (org, kept) in [
+        (None, None),
+        (Some("../etc"), None),
+        (Some(""), None),
+        (Some("org with spaces"), None),
+        (Some(" 395263680805142530 "), Some("395263680805142530")),
+    ] {
+        let answer = Introspection {
+            org: org.map(str::to_string),
+            ..base()
+        };
+        assert_eq!(
+            assess(&answer, &accepts, now).unwrap().org.as_deref(),
+            kept,
+            "{org:?} is not a usable org"
+        );
+    }
 
     let refused = [
         Introspection {

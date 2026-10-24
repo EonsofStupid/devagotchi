@@ -116,11 +116,9 @@ impl WebLogin {
         state_dir: &std::path::Path,
     ) -> BridgeResult<Self> {
         let issuer = issuer.trim_end_matches('/');
-        // Nomen puts a project in a token's audience only when this scope asks for it.
-        let mut scope = String::from("openid profile offline_access");
-        for audience in audiences {
-            scope.push_str(&format!(" urn:zitadel:iam:org:project:id:{audience}:aud"));
-        }
+        // Nomen puts a project in a token's audience, and the account's org in its
+        // answers, only when the scope asks for them.
+        let scope = crate::auth::sign_in_scopes(audiences);
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(5))

@@ -126,8 +126,14 @@ try:
     token = "e2e-dev-token-" + os.urandom(12).hex()
     # The board's subjects: a person, two agents, and one token that holds no board.
     board_tokens = {who: f"e2e-{who}-" + os.urandom(12).hex() for who in ("claude", "codex", "reader")}
+    # Three people with no grants: alice and bob in one org, carol in another (B13). A dev
+    # token's subject names its org after an @.
+    org_tokens = {who: f"e2e-{who}-" + os.urandom(12).hex() for who in ("alice", "bob", "carol")}
+    org_of = {"alice": "e2e-acme", "bob": "e2e-acme", "carol": "e2e-other"}
     tokens = work / "tokens.json"
-    tokens.write_text(json.dumps({token: "e2e-operator", **{t: f"e2e-{who}" for who, t in board_tokens.items()}}))
+    tokens.write_text(json.dumps({token: "e2e-operator",
+                                  **{t: f"e2e-{who}" for who, t in board_tokens.items()},
+                                  **{t: f"e2e-{who}@{org_of[who]}" for who, t in org_tokens.items()}}))
     if os.name != "nt":
         tokens.chmod(0o600)
     # One project's board on the hub's host, initialised the way an operator would.
@@ -158,7 +164,8 @@ try:
     board_ok = board_init and run_probe(
         [str(HERE / "board_probe.py"), hub_url, "--project", "e2e-board", "--dir", str(project_dir),
          "--devagotchi", str(devagotchi), "--tokens", f"operator={token}",
-         *[f"{who}={t}" for who, t in board_tokens.items()]],
+         *[f"{who}={t}" for who, t in board_tokens.items()],
+         *[f"{who}={t}" for who, t in org_tokens.items()]],
         "board probe: three subscriptions, one board",
     )
 
