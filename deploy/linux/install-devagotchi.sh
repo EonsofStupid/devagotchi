@@ -11,11 +11,15 @@
 #   sudo ./install-devagotchi.sh --bin-dir ./target/release       # from a local build
 #   sudo ./install-devagotchi.sh --hub https://hub.example.com --device wi1 --enroll < code
 #   sudo ./install-devagotchi.sh --role hub --version 0.2.0 --public-url https://devagotchi.com \
-#        --board devagotchi --person jesse --agent claude-on-gus --caddy
-#   sudo ./install-devagotchi.sh --role hub --agent codex-on-dabo   # one more token (printed once)
+#        --auth-config ./auth.json --person 395290028818825218 --board devagotchi --caddy
+#   sudo ./install-devagotchi.sh --role hub --public-url http://127.0.0.1:8787 --person jesse --agent claude   # dev tokens: tests only
 #   sudo ./install-devagotchi.sh --uninstall
 #   ./install-devagotchi.sh --print-target                       # the release build this machine takes
 #
+# --auth-config is a JSON file with the hub's "auth" object (mode nomen or oidc; see
+# crates/hub/README.md) and, for nomen, "owner"; --person/--agent are then account IDs, let
+# in by grant. Without it the hub runs on dev tokens, minted for each --person/--agent and
+# printed once — for tests only, so --public-url must be loopback http (plan D21).
 # The one-time enrollment code (from `devagotchi hub enroll --device NAME`) is read from stdin,
 # never from the command line, and reaches the link on its stdin. Re-running upgrades the
 # binaries and keeps the config and the enrollment. Binaries live in root-owned
@@ -38,12 +42,12 @@ PREFIX=/opt/devagotchi
 ACCOUNT=devagotchi
 ACCOUNT_HOME=/var/lib/devagotchi
 VERSION='' BIN_DIR='' ARTIFACT_DIR='' WORKSPACE='' HUB='' DEVICE='' ENROLL=0 UNINSTALL=0
-ROLE=machine PUBLIC_URL='' LISTEN=127.0.0.1:8787 CADDY=0
+ROLE=machine PUBLIC_URL='' LISTEN=127.0.0.1:8787 CADDY=0 AUTH_CONFIG=''
 GRANTS=() BOARDS=() PEOPLE=() AGENTS=()
 
 die() { echo "install-devagotchi: $*" >&2; exit 1; }
 step() { printf '\n==> %s\n' "$*"; }
-usage() { sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; }
 need_target() {
     [ -n "$TARGET" ] || die "no Devagotchi release for this machine ($(uname -m), $(getconf LONG_BIT 2>/dev/null || echo '?')-bit userland); releases cover 64-bit x86_64 and aarch64. Build it here and use --bin-dir"
 }
@@ -70,6 +74,7 @@ while [ $# -gt 0 ]; do
         --person) PEOPLE+=("${2:?--person needs a name}"); shift 2 ;;
         --agent) AGENTS+=("${2:?--agent needs a name}"); shift 2 ;;
         --caddy) CADDY=1; shift ;;
+        --auth-config) AUTH_CONFIG=${2:?--auth-config needs a file}; shift 2 ;;
         --print-target) need_target; echo "$TARGET"; exit 0 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown option $1 (see --help)" ;;
@@ -101,9 +106,20 @@ if [ "$ROLE" = hub ]; then
     for name in "${PEOPLE[@]}" "${AGENTS[@]}"; do
         [[ $name =~ ^[^[:space:][:cntrl:]\"\\]{1,256}$ ]] || die "--person/--agent $name: no spaces, quotes or control characters"
     done
+    if [ -n "$AUTH_CONFIG" ]; then
+        [ -r "$AUTH_CONFIG" ] || die "--auth-config $AUTH_CONFIG: cannot read it"
+        command -v python3 >/dev/null || die "--auth-config needs python3 to check and embed the file"
+        AUTH_MODE=$(python3 -c 'import json,sys; a=json.load(open(sys.argv[1])); print(a["auth"]["mode"])' "$AUTH_CONFIG" 2>/dev/null) \
+            || die "--auth-config $AUTH_CONFIG: not JSON with an \"auth\" object that has a \"mode\""
+        case $AUTH_MODE in nomen|oidc) ;; *) die "--auth-config: auth.mode must be nomen or oidc (dev tokens are minted by --person/--agent, for tests only)" ;; esac
+    elif [ -n "$PUBLIC_URL" ] && [[ ! $PUBLIC_URL =~ ^http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?$ ]]; then
+        # Plan D21: dev tokens are for tests; the hub itself refuses to start with them at an
+        # address people reach, so say so here, before anything is written.
+        die "a hub at $PUBLIC_URL signs people in with Nomen or an OpenID Connect issuer: pass --auth-config FILE (dev tokens from --person/--agent are for tests only, with --public-url http://127.0.0.1:PORT)"
+    fi
 else
-    { [ -z "$PUBLIC_URL" ] && [ ${#BOARDS[@]} = 0 ] && [ ${#PEOPLE[@]} = 0 ] && [ ${#AGENTS[@]} = 0 ] && [ $CADDY = 0 ]; } \
-        || die "--public-url, --board, --person, --agent and --caddy belong to --role hub"
+    { [ -z "$PUBLIC_URL" ] && [ ${#BOARDS[@]} = 0 ] && [ ${#PEOPLE[@]} = 0 ] && [ ${#AGENTS[@]} = 0 ] && [ $CADDY = 0 ] && [ -z "$AUTH_CONFIG" ]; } \
+        || die "--public-url, --board, --person, --agent, --auth-config and --caddy belong to --role hub"
 fi
 
 uid_of() { getent passwd "$ACCOUNT" | cut -d: -f3; }
@@ -334,23 +350,51 @@ if [ "$ROLE" = hub ]; then
         for name in "${AGENTS[@]}"; do echo "    add to \"grants\": $(grant_line "$name" false)"; done
     else
         [ -n "$PUBLIC_URL" ] || die "--public-url https://… is required the first time: the hub's address as agents and machines see it"
-        as_user test -s "$TOKENS" || [ ${#PEOPLE[@]} -gt 0 ] || [ ${#AGENTS[@]} -gt 0 ] \
-            || die "the first install needs at least one --person or --agent: the hub refuses to start with nobody to let in"
+        if [ -z "$AUTH_CONFIG" ]; then
+            as_user test -s "$TOKENS" || [ ${#PEOPLE[@]} -gt 0 ] || [ ${#AGENTS[@]} -gt 0 ] \
+                || die "the first install needs at least one --person or --agent: the hub refuses to start with nobody to let in"
+        fi
         grants=''
         for name in "${PEOPLE[@]}"; do grants+="${grants:+, }$(grant_line "$name" true)"; done
         for name in "${AGENTS[@]}"; do grants+="${grants:+, }$(grant_line "$name" false)"; done
+        if [ -n "$AUTH_CONFIG" ]; then
+            # The operator's auth object (and owner) verbatim, except the key: the hub's
+            # API-application key named by auth.key_file is installed as the account's own
+            # file (0600; the hub refuses one others can read) and the config points there.
+            key_src=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["auth"].get("key_file", ""))' "$AUTH_CONFIG")
+            key_dest=''
+            if [ -n "$key_src" ]; then
+                key_dest=$HOME_DIR/.config/devagotchi/idp-key.json
+                [ -r "$key_src" ] || die "auth.key_file $key_src: cannot read it"
+                write_as_user "$key_dest" 0600 < "$key_src"
+                echo "    installed the identity provider key as $key_dest"
+            fi
+            auth_json=$(python3 - "$AUTH_CONFIG" "$key_dest" <<'PY'
+import json, sys
+a = json.load(open(sys.argv[1]))
+auth = a["auth"]
+if sys.argv[2]:
+    auth["key_file"] = sys.argv[2]
+owner = a.get("owner")
+print(json.dumps(auth) + ("" if owner is None else ",\n  \"owner\": " + json.dumps(owner)))
+PY
+)
+        else
+            auth_json="{ \"mode\": \"dev\", \"tokens_file\": $(json_string "$TOKENS") }"
+        fi
         {
             printf '{\n  "listen": %s,\n  "public_url": %s,\n' "$(json_string "$LISTEN")" "$(json_string "$PUBLIC_URL")"
-            printf '  "auth": { "mode": "dev", "tokens_file": %s },\n' "$(json_string "$TOKENS")"
+            printf '  "auth": %s,\n' "$auth_json"
             printf '  "brokers": [],\n  "boards": [%s],\n  "grants": [%s]\n}\n' "$board_entries" "$grants"
         } | write_as_user "$HUB_CONFIG" 0600
         HUB_CHANGED=1
-        echo "    wrote $HUB_CONFIG: listen $LISTEN, public_url $PUBLIC_URL, ${#board_names[@]} boards, $(( ${#PEOPLE[@]} + ${#AGENTS[@]} )) grants"
+        echo "    wrote $HUB_CONFIG: listen $LISTEN, public_url $PUBLIC_URL, auth ${AUTH_MODE:-dev}, ${#board_names[@]} boards, $(( ${#PEOPLE[@]} + ${#AGENTS[@]} )) grants"
         echo "    machines join by adding {\"name\": \"<device>\", \"link\": true} to \"brokers\" and a grant, then devagotchi hub enroll"
     fi
 
-    # ---- tokens: minted here, shown once, never logged
-    if [ ${#PEOPLE[@]} -gt 0 ] || [ ${#AGENTS[@]} -gt 0 ]; then
+    # ---- tokens: minted here, shown once, never logged (dev mode only; with an identity
+    # provider --person/--agent are account IDs and sign in there)
+    if [ -z "$AUTH_CONFIG" ] && { [ ${#PEOPLE[@]} -gt 0 ] || [ ${#AGENTS[@]} -gt 0 ]; }; then
         step "Tokens (shown once; put each in that agent's MCP config as the bearer token)"
         command -v python3 >/dev/null || die "minting tokens needs python3 (or add them to $TOKENS by hand: {\"<token>\": \"<subject>\"})"
         as_user test -e "$TOKENS" || printf '{}\n' | write_as_user "$TOKENS" 0600

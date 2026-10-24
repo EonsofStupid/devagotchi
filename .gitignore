@@ -2,3 +2,7 @@
 /.bridge-state/
 /test-results/
 node_modules/
+
+# Python harnesses leave no cache in the tree
+__pycache__/
+*.pyc

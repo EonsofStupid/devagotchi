@@ -28,6 +28,14 @@ heading. Agents draft the fragments below; they never tag.
   accountless choice. `devagotchi start` says which it is until one is on file. The hub
   accepts the token `login` lands when the CLI's client id is in `auth.clients`.
 
+### Dev tokens are for tests (increment 14b, D21)
+- The hub accepts `auth.mode dev` only when `public_url` is loopback http; at an address
+  people reach it refuses to start and names the alternatives (`nomen`, `oidc`).
+- `install-devagotchi.sh --role hub --auth-config FILE`: the `auth` object (and `owner`) from
+  FILE, the identity provider's key installed as the hub account's own 0600 file, no tokens
+  minted; `--person`/`--agent` are account IDs. A reachable `--public-url` without it is
+  refused before anything is written.
+
 ### The agents' board (increments 7–8)
 - `devagotchi-hub board …`: a per-project ticket board in `<project>/.devagotchi/board.sqlite3`
   — hash ids `<prefix>-xxxx` with hierarchical children, workflow lanes (ready → in_progress →

@@ -10,8 +10,10 @@
 # after kill -9; a revoke makes the link exit 2 and systemd leaves it down; the hub role on the
 # same host (a board initialised, a person and an agent with minted tokens, Caddy in front of
 # the loopback listener, the board worked over MCP through Caddy, a re-run that only mints a
-# token and leaves the hub running); uninstall stops everything. Exit 0 only when every step
-# holds.
+# token and leaves the hub running); a hub at a public address on dev tokens is refused before
+# anything is written (D21), and one with an identity provider (--auth-config, nomen) comes up
+# as a second account with the key installed 0600 and sign-in metadata naming the issuer;
+# uninstall stops everything. Exit 0 only when every step holds.
 set -euo pipefail
 
 BIN=$(readlink -f target/debug)
@@ -64,7 +66,7 @@ link_connected() {
 config_hash() { sudo sha256sum "$HOME_DIR/.config/devagotchi/broker.json" | cut -d' ' -f1; }
 
 sudo install -d -m 0755 "$PROBES"
-sudo install -m 0644 tests/adapter_probe.py tests/hub_probe.py "$PROBES/"
+sudo install -m 0644 tests/adapter_probe.py tests/hub_probe.py tests/fake_nomen.py "$PROBES/"
 
 echo "--- the release build this machine takes"
 want=$(rustc -vV | sed -n 's/^host: //p')
@@ -222,6 +224,48 @@ token2=$(printf '%s\n' "$out" | sed -nE 's/^    ci-agent-2: ([0-9a-f]{48})$/\1/p
 [ "$(prop devagotchi-hub.service MainPID)" = "$hub_pid" ] || fail "the re-run restarted the hub"
 printf '%s\n' "$out" | grep -q '"subject": "ci-agent-2"' || fail "the re-run did not print the grant line to add"
 ok "token minted, config kept, hub left running, grant line printed"
+
+echo "--- a reachable hub on dev tokens is refused before anything is written (D21)"
+IDP_ACCOUNT=dvg-ci-idp IDP_HOME=/var/lib/dvg-ci-idp IDP_PREFIX=/opt/dvg-ci-idp
+IDP=(--user "$IDP_ACCOUNT" --home "$IDP_HOME" --prefix "$IDP_PREFIX" --bin-dir "$BIN")
+if out=$(sudo "$INSTALL" "${IDP[@]}" --role hub --public-url https://hub.example --person someone 2>&1); then
+    fail "a hub at a public address on dev tokens was accepted"
+fi
+printf '%s\n' "$out" | grep -q -- '--auth-config' || fail "the refusal does not say what to pass: $out"
+{ [ ! -e "$IDP_PREFIX" ] && ! getent passwd "$IDP_ACCOUNT" >/dev/null; } || fail "the refused install left the prefix or the account behind"
+ok "refused early with the way forward, nothing written"
+
+echo "--- the hub role with an identity provider (--auth-config, nomen) as a second account"
+NPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+python3 - "$WORK" <<'PY'
+import json, sys
+sys.path.insert(0, "/tmp/dvg-ci-probes")
+from fake_nomen import rsa_key
+work = sys.argv[1]
+pem, _, _ = rsa_key()
+key = {"type": "application", "keyId": "ci-key", "key": pem, "appId": "300000000000000900", "clientId": "devagotchi-hub@shippin"}
+json.dump(key, open(f"{work}/hub-key.json", "w"))
+auth = {"auth": {"mode": "nomen", "issuer": "https://id.example", "audiences": ["300000000000000500"],
+                 "clients": ["shippin-mcp", "devagotchi-cli@shippin"], "key_file": f"{work}/hub-key.json"},
+        "owner": "300000000000000001"}
+json.dump(auth, open(f"{work}/auth.json", "w"))
+PY
+sudo "$INSTALL" "${IDP[@]}" --role hub --public-url https://hub.example --listen "127.0.0.1:$NPORT" \
+    --auth-config "$WORK/auth.json" --person 300000000000000002 --board idp-project
+[ "$(sudo stat -c '%U %a' "$IDP_HOME/.config/devagotchi/idp-key.json")" = "$IDP_ACCOUNT 600" ] || fail "the identity provider key is not the account's private file"
+sudo grep -q '"mode": "nomen"' "$IDP_HOME/.config/devagotchi/hub.json" || fail "hub.json is not in nomen mode"
+sudo grep -q "\"key_file\": \"$IDP_HOME/.config/devagotchi/idp-key.json\"" "$IDP_HOME/.config/devagotchi/hub.json" || fail "hub.json does not point at the installed key"
+sudo test ! -e "$IDP_HOME/.config/devagotchi/hub-tokens.json" || fail "a tokens file was written for an identity-provider hub"
+wait_for 20 "the identity-provider hub answers /healthz" hub_healthy "$NPORT"
+meta=$(curl -fsS -m 5 "http://127.0.0.1:$NPORT/.well-known/oauth-protected-resource")
+printf '%s\n' "$meta" | grep -q '"authorization_servers":\["https://id.example"\]' || fail "protected-resource metadata does not name the issuer: $meta"
+code=$(curl -s -m 5 -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer not-a-token' -H 'Accept: application/json, text/event-stream' \
+    -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' \
+    "http://127.0.0.1:$NPORT/mcp")
+[ "$code" = 401 ] || [ "$code" = 503 ] || fail "a made-up token got HTTP $code from the identity-provider hub (want 401, or 503 while the issuer is unreachable)"
+ok "nomen-mode hub up as $IDP_ACCOUNT: key installed 0600, no tokens file, metadata names the issuer, a made-up token is not let in (HTTP $code)"
+sudo "$INSTALL" "${IDP[@]}" --uninstall
+wait_for 20 "no process left for $IDP_ACCOUNT" bash -c "! pgrep -u $IDP_ACCOUNT -f 'devagotchi (broker|link|hub) '"
 
 echo "--- uninstall"
 sudo "$INSTALL" "${COMMON[@]}" --uninstall

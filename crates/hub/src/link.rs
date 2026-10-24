@@ -520,7 +520,7 @@ mod tests {
     const TOKENS: &str = "/tmp/tokens.json";
     #[cfg(windows)]
     const TOKENS: &str = r"C:\tmp\tokens.json";
-    const HUB: &str = "https://hub.example";
+    const HUB: &str = "http://127.0.0.1:8787";
 
     fn links(dir: &std::path::Path) -> Links {
         let config = HubConfig::parse(

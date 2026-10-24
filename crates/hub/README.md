@@ -70,7 +70,7 @@ A linked broker that is not connected answers `broker_offline`; one that never e
 |---|---|---|
 | `nomen` | Any Nomen access token, opaque or JWT, checked by asking Nomen (introspection) as the hub's own API application | Shippin: your sign-in at console.shippin.cloud, relayed by mcp.shippin.cloud; `shippin-bridge` sessions |
 | `oidc` | A JWT from any OpenID Connect issuer: `iss`, `exp`, `aud`, `sub` required; RS256/384/512 or ES256/384; keys from the issuer's JWKS, refreshed on an unknown `kid` at most once a minute | Self-hosters whose identity provider issues JWT access tokens |
-| `dev` | A static token from a 0600 file `{ "<token>": "<subject>" }` | Local tests; a single machine without an identity provider |
+| `dev` | A static token from a 0600 file `{ "<token>": "<subject>" }` | Tests only (plan D21): accepted when `public_url` is loopback http; a hub at an address people reach refuses to start with it |
 
 Unauthenticated requests get `401` with `WWW-Authenticate: Bearer resource_metadata="<public_url>/.well-known/oauth-protected-resource"`;
 the metadata names the issuer. A bad token adds `error="invalid_token"`. When the identity
@@ -103,6 +103,10 @@ Set up once in Nomen (a Gold change, through gold-policy):
    the scope `urn:zitadel:iam:org:project:id:<project id>:aud`; list their client ids in
    `auth.clients`.
 4. Set `owner` to your account ID. Sign in and call `whoami` once if you are not sure which it is.
+   On a server, `install-devagotchi.sh --role hub --auth-config FILE` takes the `auth` object
+   (and `owner`) from FILE, installs the key named by `auth.key_file` as the hub account's own
+   0600 file and points the config at it; `--person`/`--agent` are then account IDs, let in
+   by grant.
 5. For sign-in from a terminal (`devagotchi login`, D22), add a **Native** application to the
    same project with **Device Authorization** and **Refresh Token** grants, client id
    `devagotchi-cli@shippin` (or pass `--client-id`), and list it in `auth.clients`: the token
