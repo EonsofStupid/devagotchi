@@ -41,7 +41,7 @@ verified by a receipt; **planned** = the increment that brings it.
 
 | Rule | Mechanism | Where | Status |
 |---|---|---|---|
-| TLS terminates at the edge; the hub speaks HTTP on loopback or the tenant network only | Caddy with Let's Encrypt at `public_url`; hub `listen` on a private address | Gold edge, hub config | built (edge) / planned (hub route, H5) |
+| TLS terminates at the edge; the hub speaks HTTP on loopback or the tenant network only | Caddy with Let's Encrypt at `public_url`; hub `listen` on a private address; `install-devagotchi.sh --role hub --caddy` writes exactly that | Gold edge, hub config, `deploy/linux` | built (edge, installer; CI runs the hub behind Caddy) |
 | DNS-rebinding and cross-origin calls are refused | rmcp `allowed_hosts` = public host + listen; origin allow-list when a browser UI exists | hub `main.rs` | built |
 | Local IPC is a private socket or a named pipe with an owner-only DACL | Unix socket 0600 in a 0700 directory; `FIRST_PIPE_INSTANCE`, `REJECT_REMOTE_CLIENTS`, owner check | `crates/ipc` | enforced |
 | No network code in `core` or `mcp`, ever | `cargo deny` bans every HTTP client crate except for the hub (`wrappers`) | `deny.toml`, `security.yml` | enforced (PR #8) |
