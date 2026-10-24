@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Probe a running broker through the stdio MCP adapter.
 
-    python3 tests/adapter_probe.py <broker endpoint> --adapter PATH [--git PATH] [--cwd DIR]
+    python3 tests/adapter_probe.py <broker endpoint> --adapter EXE [WORD...] [--git PATH] [--cwd DIR]
 
 Speaks MCP over the adapter's stdio: initialize, list the tools, run `git --version`
 under the broker in the given cwd, read its output, and confirm an ungranted
 executable is refused. Exit 0 only when every step holds. The endpoint is the broker's
-ready line: a Unix socket path, or a named pipe on Windows. A liveness receipt used by
-tests/e2e.py and the deployment runbooks, not a conformance suite (that is
-tests/mcp_smoke.py and tests/security_boundary.py).
+ready line: a Unix socket path, or a named pipe on Windows. The adapter command is given
+as its words (`--adapter target/debug/devagotchi mcp`), never as one string to split:
+a Windows path is full of backslashes. The probe adds `--socket <endpoint>` itself.
+A liveness receipt used by tests/e2e.py and the deployment runbooks, not a conformance
+suite (that is tests/mcp_smoke.py and tests/security_boundary.py).
 """
 import argparse
 import os
@@ -19,13 +21,14 @@ import uuid
 
 parser = argparse.ArgumentParser()
 parser.add_argument("socket")
-parser.add_argument("--adapter", required=True)
+parser.add_argument("--adapter", required=True, nargs="+", metavar="WORD",
+                    help="the adapter command, word by word: the executable, then its words (e.g. devagotchi mcp)")
 parser.add_argument("--git", default="/usr/bin/git")
 parser.add_argument("--cwd", default=None)
 args = parser.parse_args()
 
 proc = subprocess.Popen(
-    [args.adapter, "--socket", args.socket],
+    [*args.adapter, "--socket", args.socket],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
 )
 request_id = 0

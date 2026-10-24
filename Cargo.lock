@@ -747,6 +747,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "devagotchi"
+version = "0.1.0"
+dependencies = [
+ "devagotchi-broker",
+ "devagotchi-core",
+ "devagotchi-hub",
+ "devagotchi-link",
+ "devagotchi-mcp",
+ "dunce",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "devagotchi-broker"
 version = "0.1.0"
 dependencies = [

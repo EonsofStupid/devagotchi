@@ -133,6 +133,11 @@ fn parse(args: &[OsString]) -> Result<Parsed, String> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         let arg = arg.to_string_lossy().into_owned();
+        if arg == "--help" || arg == "-h" {
+            // Help wins wherever it appears: `board --help`, `board claim --help`.
+            command = Some("help".into());
+            continue;
+        }
         if let Some(stripped) = arg.strip_prefix("--") {
             let name = format!("--{}", stripped.split('=').next().unwrap_or(""));
             if SWITCHES.contains(&name.as_str()) {
