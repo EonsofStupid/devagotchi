@@ -110,7 +110,8 @@ Set up once in Nomen (a Gold change, through gold-policy):
 5. For sign-in from a terminal (`devagotchi login`, D22), add a **Native** application to the
    same project with **Device Authorization** and **Refresh Token** grants, client id
    `devagotchi-cli@shippin` (or pass `--client-id`), and list it in `auth.clients`: the token
-   `login` lands is then one this hub accepts, so an agent's call carries the account.
+   `login` lands is then one this hub accepts, and `devagotchi mcp --hub` relays an agent's
+   stdio MCP session here as that account.
 
 What running Shippin taught, and what the hub does about it:
 

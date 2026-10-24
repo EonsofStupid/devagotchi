@@ -25,6 +25,7 @@ Usage: devagotchi <command> [options]
 
   start        run this user's broker (first run writes its config); Ctrl+C stops it
   mcp          the stdio MCP adapter your agent runs; finds the broker `start` left running
+               (mcp --hub [URL]: the hosted hub instead, as the account you signed in with)
   board        the project's ticket board: prime, claim, beat, note, done, handoff … (board --help)
   broker       the broker with explicit paths: broker run --state-dir DIR --config FILE
   hub          the hub: hub serve | enroll | revoke | devices (hub --help)
@@ -94,7 +95,31 @@ fn account(verb: &str, args: Vec<OsString>) -> ExitCode {
 
 /// `devagotchi mcp [--socket ENDPOINT]`: without the flag, the endpoint `devagotchi start`
 /// wrote to `<state>/endpoint`, so an agent's MCP config is just `devagotchi mcp`.
+/// `devagotchi mcp --hub [URL]`: the hosted hub's MCP instead, as the account on file.
 fn mcp(args: Vec<OsString>) -> ExitCode {
+    if args.first().is_some_and(|a| a == "--hub") {
+        let hub = match args.get(1).map(|a| a.to_string_lossy().into_owned()) {
+            Some(url) if url.starts_with('-') => {
+                eprintln!("devagotchi mcp: --hub takes a URL, got {url}");
+                return ExitCode::from(64);
+            }
+            other => other,
+        };
+        if args.len() > 1 + usize::from(hub.is_some()) {
+            eprintln!("devagotchi mcp: --hub takes nothing but a URL");
+            return ExitCode::from(64);
+        }
+        let Some(config_dir) = paths::config_dir() else {
+            eprintln!(
+                "devagotchi mcp: no home directory in the environment; set DEVAGOTCHI_CONFIG_DIR"
+            );
+            return ExitCode::from(64);
+        };
+        return devagotchi_hub::account::front::cli(
+            hub.as_deref(),
+            config_dir.join(devagotchi_hub::account::FILE_NAME),
+        );
+    }
     if args.is_empty() {
         let Some(state) = paths::state_dir() else {
             eprintln!(

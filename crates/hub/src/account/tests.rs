@@ -292,3 +292,178 @@ async fn current_refreshes_when_due_and_keeps_the_file_otherwise() {
     std::fs::write(&path, "not json").unwrap();
     assert!(read(&path).unwrap_err().contains("logout"));
 }
+
+mod front {
+    //! The stdio front against a fake hub: a session id from initialize carried on every
+    //! later message, JSON and SSE answers relayed line by line, notifications posted
+    //! and not answered, a refused token reported on the request's id.
+
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering::SeqCst},
+    };
+
+    use axum::{
+        Router,
+        extract::State,
+        http::{HeaderMap, StatusCode, header},
+        response::{IntoResponse, Response},
+        routing::post,
+    };
+    use serde_json::{Value, json};
+
+    use super::super::front::Front;
+    use super::super::{Account, DEFAULT_CLIENT_ID, FILE_NAME, Stored, unix_now, write};
+
+    struct Hub {
+        calls: AtomicUsize,
+        sessions: Mutex<Vec<Option<String>>>,
+        tokens: Mutex<Vec<String>>,
+    }
+
+    async fn mcp(State(hub): State<Arc<Hub>>, headers: HeaderMap, body: String) -> Response {
+        hub.calls.fetch_add(1, SeqCst);
+        let bearer = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .trim_start_matches("Bearer ")
+            .to_string();
+        hub.tokens.lock().unwrap().push(bearer.clone());
+        hub.sessions.lock().unwrap().push(
+            headers
+                .get("Mcp-Session-Id")
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_string),
+        );
+        if bearer != "at-1" {
+            return (StatusCode::UNAUTHORIZED, "").into_response();
+        }
+        let message: Value = serde_json::from_str(&body).unwrap();
+        match message["method"].as_str() {
+            Some("initialize") => (
+                [("Mcp-Session-Id", "sess-1"), ("Content-Type", "application/json")],
+                json!({ "jsonrpc": "2.0", "id": message["id"], "result": { "serverInfo": { "name": "fake-hub" } } })
+                    .to_string(),
+            )
+                .into_response(),
+            Some("notifications/initialized") => StatusCode::ACCEPTED.into_response(),
+            Some("tools/call") => (
+                [("Content-Type", "text/event-stream")],
+                format!(
+                    "event: message\ndata: {}\n\n",
+                    json!({ "jsonrpc": "2.0", "id": message["id"], "result": { "structuredContent": { "subject": "395290028818825218" } } })
+                ),
+            )
+                .into_response(),
+            _ => StatusCode::BAD_REQUEST.into_response(),
+        }
+    }
+
+    async fn serve(hub: Arc<Hub>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = Router::new().route("/mcp", post(mcp)).with_state(hub);
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        base
+    }
+
+    fn account_on_file(dir: &std::path::Path, token: &str) -> std::path::PathBuf {
+        let path = dir.join(FILE_NAME);
+        let now = unix_now();
+        write(
+            &path,
+            &Stored::Account(Account {
+                issuer: "https://id.example".into(),
+                client_id: DEFAULT_CLIENT_ID.into(),
+                subject: "395290028818825218".into(),
+                username: Some("hades".into()),
+                email: None,
+                access_token: token.into(),
+                refresh_token: None,
+                expires_at: now + 3600,
+                signed_in_at: now,
+            }),
+        )
+        .unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn relays_a_session_as_the_account_and_reports_refusals_on_the_id() {
+        let hub = Arc::new(Hub {
+            calls: AtomicUsize::new(0),
+            sessions: Mutex::new(Vec::new()),
+            tokens: Mutex::new(Vec::new()),
+        });
+        let base = serve(hub.clone()).await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = account_on_file(dir.path(), "at-1");
+        let mut front = Front::new(&base, &path).unwrap();
+
+        let init = front
+            .relay(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#)
+            .await
+            .unwrap();
+        assert_eq!(init.len(), 1);
+        let reply: Value = serde_json::from_str(&init[0]).unwrap();
+        assert_eq!(reply["result"]["serverInfo"]["name"], "fake-hub");
+        let none = front
+            .relay(r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#)
+            .await
+            .unwrap();
+        assert!(none.is_empty(), "a notification is not answered");
+        let call = front
+            .relay(r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoami","arguments":{}}}"#)
+            .await
+            .unwrap();
+        let reply: Value = serde_json::from_str(&call[0]).unwrap();
+        assert_eq!(reply["id"], 2);
+        assert_eq!(
+            reply["result"]["structuredContent"]["subject"],
+            "395290028818825218"
+        );
+        assert_eq!(
+            *hub.sessions.lock().unwrap(),
+            vec![None, Some("sess-1".to_string()), Some("sess-1".to_string())],
+            "the session id from initialize rides on every later message"
+        );
+        assert!(hub.tokens.lock().unwrap().iter().all(|t| t == "at-1"));
+
+        // The token on file changes underneath: the next message carries the new one.
+        account_on_file(dir.path(), "at-stale");
+        let refused = front
+            .relay(r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"whoami","arguments":{}}}"#)
+            .await
+            .unwrap();
+        let reply: Value = serde_json::from_str(&refused[0]).unwrap();
+        assert_eq!(reply["id"], 3);
+        assert!(
+            reply["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("devagotchi login"),
+            "{reply}"
+        );
+
+        // No account at all: answered on the id, nothing sent to the hub.
+        std::fs::remove_file(&path).unwrap();
+        let calls = hub.calls.load(SeqCst);
+        let none = front
+            .relay(r#"{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{}}"#)
+            .await
+            .unwrap();
+        let reply: Value = serde_json::from_str(&none[0]).unwrap();
+        assert!(
+            reply["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("not signed in")
+        );
+        assert_eq!(hub.calls.load(SeqCst), calls);
+        assert!(
+            Front::new("http://hub.example", &path).is_err(),
+            "https only"
+        );
+    }
+}

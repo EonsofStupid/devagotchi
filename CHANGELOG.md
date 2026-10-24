@@ -28,6 +28,12 @@ heading. Agents draft the fragments below; they never tag.
   accountless choice. `devagotchi start` says which it is until one is on file. The hub
   accepts the token `login` lands when the CLI's client id is in `auth.clients`.
 
+### The account in the agent's session (increment 14c)
+- `devagotchi mcp --hub [URL]`: the stdio MCP server an agent already runs, relaying the
+  session to the hosted hub's `/mcp` (default https://devagotchi.com) as the account on
+  file — the token stays on this machine and rotates underneath the agent; a refused,
+  expired or missing account is answered on the request's id with what to run.
+
 ### Dev tokens are for tests (increment 14b, D21)
 - The hub accepts `auth.mode dev` only when `public_url` is loopback http; at an address
   people reach it refuses to start and names the alternatives (`nomen`, `oidc`).
