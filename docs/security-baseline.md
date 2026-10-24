@@ -43,6 +43,9 @@ verified by a receipt; **planned** = the increment that brings it.
 |---|---|---|---|
 | TLS terminates at the edge; the hub speaks HTTP on loopback or the tenant network only | Caddy with Let's Encrypt at `public_url`; hub `listen` on a private address; `install-devagotchi.sh --role hub --caddy` writes exactly that | Gold edge, hub config, `deploy/linux` | built (edge, installer; CI runs the hub behind Caddy) |
 | DNS-rebinding and cross-origin calls are refused | rmcp `allowed_hosts` = public host + listen; origin allow-list when a browser UI exists | hub `main.rs` | built |
+| A decision or a phone subscription comes only from the hub's own page | session cookie `SameSite=Lax`, plus `Sec-Fetch-Site: same-origin` (or a matching `Origin`) on `POST /approvals/decide` and `/push/subscribe`; a decision names the version shown | hub `web/approvals.rs`, `web/notify.rs` | built (10a, 10b) |
+| Pages run no inline script; the approvals page loads one file from the hub | CSP `default-src 'none'` everywhere; the approvals page adds `script-src 'self'`, `worker-src 'self'`, `connect-src 'self'`, `manifest-src 'self'` for `/assets/push.js` and `/sw.js` | hub `web/pages.rs` | built (10b) |
+| A push carries no command and no secret, and only the hub can send one | payload = title, link, id; RFC 8291 encryption per subscription; RFC 8292 VAPID key generated in the state directory (0600), public half only served | hub `push.rs` | built (10b) |
 | Local IPC is a private socket or a named pipe with an owner-only DACL | Unix socket 0600 in a 0700 directory; `FIRST_PIPE_INSTANCE`, `REJECT_REMOTE_CLIENTS`, owner check | `crates/ipc` | enforced |
 | No network code in `core` or `mcp`, ever | `cargo deny` bans every HTTP client crate except for the hub (`wrappers`) | `deny.toml`, `security.yml` | enforced (PR #8) |
 

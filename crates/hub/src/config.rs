@@ -309,6 +309,21 @@ impl HubConfig {
         self.owner.as_deref() == Some(subject)
     }
 
+    /// The people who decide approvals on `project`: the owner and every grant that is
+    /// marked human and names the board.
+    pub fn people_for_board(&self, project: &str) -> Vec<String> {
+        let mut people: Vec<String> = self.owner.iter().cloned().collect();
+        for grant in &self.grants {
+            if grant.human
+                && grant.boards.iter().any(|b| b == project)
+                && !people.contains(&grant.subject)
+            {
+                people.push(grant.subject.clone());
+            }
+        }
+        people
+    }
+
     /// Whether this subject acts as a person on boards: the owner, or a grant that says so.
     pub fn is_human(&self, subject: &str) -> bool {
         self.is_owner(subject) || self.grants.iter().any(|g| g.subject == subject && g.human)

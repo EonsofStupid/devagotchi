@@ -17,10 +17,26 @@ pub struct Viewer<'a> {
 }
 
 pub fn html(status: StatusCode, title: &str, body: &str) -> Response {
+    render(status, title, body, false)
+}
+
+/// A page that is also the installable app: the manifest, the icon and the hub's one
+/// script (`/assets/push.js`) may load, from this origin only.
+pub fn app(status: StatusCode, title: &str, body: &str) -> Response {
+    render(status, title, body, true)
+}
+
+fn render(status: StatusCode, title: &str, body: &str, app: bool) -> Response {
+    let head = if app {
+        "<link rel=\"manifest\" href=\"/manifest.webmanifest\"><link rel=\"icon\" href=\"/assets/icon.svg\">\
+<meta name=\"theme-color\" content=\"#2f6b4f\"><script src=\"/assets/push.js\" defer></script>"
+    } else {
+        ""
+    };
     let page = format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-<title>{} · Devagotchi</title><link rel=\"stylesheet\" href=\"/assets/hub.css\"></head>\
+<title>{} · Devagotchi</title><link rel=\"stylesheet\" href=\"/assets/hub.css\">{head}</head>\
 <body><main><p class=\"brand\">Devagotchi</p>{body}</main></body></html>\n",
         escape(title)
     );
@@ -33,9 +49,12 @@ pub fn html(status: StatusCode, title: &str, body: &str) -> Response {
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(
-            "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
-        ),
+        HeaderValue::from_static(if app {
+            "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; worker-src 'self'; \
+manifest-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+        } else {
+            "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+        }),
     );
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
