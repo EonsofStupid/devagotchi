@@ -3,10 +3,12 @@
 //! Contract: `docs/agent-board.md`. The hub never owns jobs; a ticket is a unit of
 //! coordination and memory, a broker operation is a unit of execution.
 //!
-//! Increment 7 is the store and its protocol. Increment 8 wires it into the hub's
-//! MCP surface and the `board` CLI, which is why nothing here has a caller yet.
+//! Increment 7 is the store and its protocol; increment 8 adds the `board` command line
+//! (`cli.rs`). The hub's MCP tools come next, which is why a few store entry points
+//! still have no caller.
 #![allow(dead_code)]
 
+pub mod cli;
 mod lease;
 pub mod workflow;
 

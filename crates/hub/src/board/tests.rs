@@ -721,3 +721,154 @@ fn discovered_work_links_back_to_where_it_was_found() {
     assert_eq!(view.deps[0].depends_on, parent);
     assert!(found.blocked_by.is_empty(), "discovered-from never blocks");
 }
+
+mod cli {
+    use std::{ffi::OsString, path::Path};
+
+    use crate::board::cli::{self, EXIT_CONFLICT, EXIT_NOT_FOUND, EXIT_OK, EXIT_UNAVAILABLE, EXIT_USAGE, Invocation};
+
+    fn run(cwd: &Path, actor: Option<&str>, terminal: bool, args: &[&str]) -> (u8, String, String) {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = cli::run(
+            Invocation {
+                args: args.iter().map(OsString::from).collect(),
+                cwd: cwd.to_path_buf(),
+                actor_env: actor.map(str::to_string),
+                os_user: Some("jesse".into()),
+                stdout_is_terminal: terminal,
+            },
+            &mut out,
+            &mut err,
+        );
+        (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+    }
+
+    fn json(text: &str) -> serde_json::Value {
+        serde_json::from_str(text.lines().next().unwrap_or("")).expect("one json line")
+    }
+
+    #[test]
+    fn init_creates_the_board_and_appends_the_agents_block_once() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "# Repo\n").unwrap();
+        let (code, out, _) = run(dir.path(), None, false, &["init", "--project", "demo", "--agents-md"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        assert!(dir.path().join(".devagotchi/board.sqlite3").is_file());
+        assert!(dir.path().join(".devagotchi/config.json").is_file());
+        assert!(dir.path().join(".devagotchi/.gitignore").is_file());
+        let agents = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+        assert!(agents.starts_with("# Repo\n"));
+        assert_eq!(agents.matches(cli::AGENTS_MD_START).count(), 1);
+        let (code, out, _) = run(dir.path(), None, false, &["init", "--agents-md"]);
+        assert_eq!(code, EXIT_OK);
+        assert_eq!(json(&out)["agents_md"], "already present");
+        assert_eq!(json(&out)["project"], "demo", "the project name is kept on re-init");
+        let again = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+        assert_eq!(again.matches(cli::AGENTS_MD_START).count(), 1);
+    }
+
+    #[test]
+    fn the_loop_works_from_a_subdirectory_with_a_cached_fence() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(run(dir.path(), None, false, &["init", "--project", "demo"]).0, EXIT_OK);
+        let sub = dir.path().join("crates").join("x");
+        std::fs::create_dir_all(&sub).unwrap();
+        let (code, out, _) = run(&sub, Some("claude"), false, &["new", "port it", "--label", "Hub"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        let id = json(&out)["id"].as_str().unwrap().to_string();
+        assert!(id.starts_with("demo-"));
+        let (code, out, _) = run(&sub, Some("claude"), false, &["claim"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        assert_eq!(json(&out)["ticket"]["id"], id);
+        assert!(dir.path().join(".devagotchi/claims/claude.json").is_file());
+        // No --fence: the cache supplies it.
+        let (code, _, _) = run(&sub, Some("claude"), false, &["beat", &id]);
+        assert_eq!(code, EXIT_OK);
+        let (code, _, _) = run(&sub, Some("claude"), false, &["note", &id, "learned a thing", "--to", "codex"]);
+        assert_eq!(code, EXIT_OK);
+        let (code, out, _) = run(&sub, Some("claude"), false, &["done", &id, "shipped"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        assert_eq!(json(&out)["state"], "review");
+        assert!(!dir.path().join(".devagotchi/claims/claude.json").exists(), "cache cleared on done");
+        // The author may not review; codex may, and prime tells codex about the note.
+        let (code, out, _) = run(&sub, Some("claude"), false, &["claim", &id]);
+        assert_eq!(code, EXIT_CONFLICT);
+        assert_eq!(json(&out)["error"]["code"], "distinct_required");
+        let (code, out, _) = run(&sub, Some("codex"), false, &["prime"]);
+        assert_eq!(code, EXIT_OK);
+        let prime = json(&out);
+        assert_eq!(prime["notes_to_me"][0]["ticket"], id);
+        assert_eq!(prime["ready"][0]["id"], id);
+        let (code, _, _) = run(&sub, Some("codex"), false, &["claim", &id]);
+        assert_eq!(code, EXIT_OK);
+        let (code, out, _) = run(&sub, Some("codex"), false, &["done", &id, "looks right"]);
+        assert_eq!(code, EXIT_OK);
+        assert_eq!(json(&out)["state"], "done");
+    }
+
+    #[test]
+    fn exit_codes_and_next_hints_by_failure_class() {
+        let dir = tempfile::tempdir().unwrap();
+        let (code, _, err) = run(dir.path(), None, false, &["prime"]);
+        assert_eq!(code, EXIT_UNAVAILABLE, "no board here");
+        assert!(err.is_empty(), "json mode puts the error on stdout");
+        assert_eq!(run(dir.path(), None, false, &["init"]).0, EXIT_OK);
+        let (code, out, _) = run(dir.path(), None, false, &["show", "nope"]);
+        assert_eq!(code, EXIT_NOT_FOUND);
+        assert!(json(&out)["error"]["next"].as_str().unwrap().contains("board ls"));
+        let (code, _, err) = run(dir.path(), None, true, &["bogus"]);
+        assert_eq!(code, EXIT_USAGE);
+        assert!(err.contains("next: board --help"));
+        let (code, _, err) = run(dir.path(), None, true, &["new", "x", "--limit", "many"]);
+        assert_eq!(code, EXIT_USAGE);
+        assert!(err.contains("--limit must be an integer"));
+        let (code, out, _) = run(dir.path(), Some("claude"), false, &["new", "held"]);
+        assert_eq!(code, EXIT_OK);
+        let id = json(&out)["id"].as_str().unwrap().to_string();
+        assert_eq!(run(dir.path(), Some("claude"), false, &["claim", &id]).0, EXIT_OK);
+        let (code, out, _) = run(dir.path(), Some("claude"), false, &["beat", &id, "--fence", "99"]);
+        assert_eq!(code, EXIT_CONFLICT);
+        assert_eq!(json(&out)["error"]["code"], "stale_fence");
+        // An agent may not force-release; the bare OS user (a person) may.
+        let (code, out, _) = run(dir.path(), Some("codex"), false, &["force", &id, "stuck session"]);
+        assert_eq!(code, 3);
+        assert_eq!(json(&out)["error"]["code"], "humans_only");
+        let (code, out, _) = run(dir.path(), None, false, &["force", &id, "stuck session"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        assert_eq!(json(&out)["holder"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn prime_text_stays_short_and_names_the_protocol() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(run(dir.path(), None, false, &["init", "--project", "demo"]).0, EXIT_OK);
+        for n in 0..30 {
+            let title = format!("ticket {n}");
+            assert_eq!(run(dir.path(), None, false, &["new", &title]).0, EXIT_OK);
+        }
+        let (code, out, _) = run(dir.path(), Some("claude"), true, &["prime"]);
+        assert_eq!(code, EXIT_OK);
+        assert!(out.lines().count() <= 50, "{} lines", out.lines().count());
+        assert!(out.contains("protocol: claim → beat → note → done"));
+        assert!(out.starts_with("board demo · you are claude"));
+        let (code, out, _) = run(dir.path(), Some("claude"), true, &["prime", "--quiet"]);
+        assert_eq!(code, EXIT_OK);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn export_writes_one_json_line_per_ticket_and_verify_reads_the_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(run(dir.path(), None, false, &["init", "--project", "demo"]).0, EXIT_OK);
+        assert_eq!(run(dir.path(), None, false, &["new", "a"]).0, EXIT_OK);
+        assert_eq!(run(dir.path(), None, false, &["new", "b"]).0, EXIT_OK);
+        let (code, out, _) = run(dir.path(), None, false, &["export"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        let text = std::fs::read_to_string(dir.path().join(".devagotchi/board.jsonl")).unwrap();
+        assert_eq!(text.lines().count(), 2);
+        let (code, out, _) = run(dir.path(), None, false, &["verify"]);
+        assert_eq!(code, EXIT_OK);
+        assert_eq!(json(&out)["entries"], 2);
+        assert_eq!(json(&out)["ok"], true);
+    }
+}

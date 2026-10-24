@@ -101,19 +101,23 @@ Error codes are stable across CLI, MCP and REST: `not_found`, `invalid`, `held_b
 ```text
 <project>/
   .devagotchi/
-    board.sqlite3        the truth (git-ignored; one writer: the hub)
-    board.jsonl          export, regenerated on every write (committed if the operator wants diffs)
-    config.toml          project id, prefix, hub endpoint, which seats may claim here
-  AGENTS.md              gains one fenced block pointing at `devagotchi-hub board prime`
+    board.sqlite3        the truth (git-ignored; one writer at a time: the CLI as the OS user, or the hub)
+    board.jsonl          `board export`: one JSON line per ticket with its deps and notes (commit it if you want diffs)
+    config.json          project name and id prefix; later the hub endpoint and which seats may claim here
+    claims/<actor>.json  the CLI's claim cache ({id → fence, version, lease expiry}) so agents never copy fences
+    .gitignore           ignores the database, its WAL and the claim caches
+  AGENTS.md              gains one fenced block (markers `devagotchi-board:start/end`) pointing at `board prime`
 ```
 
-`devagotchi-hub board init` (run once per project) creates the directory, registers the project
-with the hub, appends the AGENTS.md block, writes the MCP snippet for every CLI it finds (Claude
-Code `.mcp.json`, Codex `config.toml`, Gemini/Antigravity settings, Cursor `.cursor/mcp.json`) and,
-with `--hooks`, installs the hook pack (§7). `board prime` is what an agent runs, or has run for
-it, at session start: at most fifty lines — the tickets it holds (with fences and lease expiry),
-what is ready for it, unread notes addressed to it, and the one-line protocol. `board onboard`
-prints the AGENTS.md block for pasting elsewhere.
+`devagotchi-hub board init [--project NAME] [--prefix P] [--agents-md]` (increment 8a, in) creates
+the directory and, with `--agents-md`, appends the block once. `board prime` is what an agent
+runs, or has run for it, at session start: under fifty lines — the tickets it holds (fence, lease
+left), what is ready for it, tickets that need a person, notes addressed to it, and the one-line
+protocol. `board onboard` prints the block for pasting elsewhere; `board agent` prints the whole
+workflow. Identity on this surface is the OS user (the board file is theirs, as the broker's trust
+scope is): `--as` or `DEVAGOTCHI_ACTOR` names an agent, which may not force-release; the bare OS
+user is the person. Still to come in 8b: registering the project with the hub, the MCP snippets for
+each CLI, and `--hooks` for the hook pack (§7).
 
 ## 6. Surfaces (increment 8)
 
@@ -194,7 +198,8 @@ policy-unconfirmed until Google answers; the seat's config row carries that flag
 | Increment | Scope | Exit |
 |---|---|---|
 | 7 (this one) | `crates/hub/src/board/`: schema, ids, workflow, store, leases, reaper, chain; this document | `cargo nextest run -p devagotchi-hub` green; §2 acceptance list |
-| 8 | MCP tools on `/mcp`, `devagotchi-hub board` CLI (`init`, `prime`, `onboard`, `ready`, `new`, `claim`, `beat`, `note`, `done`, `handoff`, `export`), AGENTS.md block, hook pack, skill | `tests/e2e.py` claims a ticket over MCP as two subjects; `board prime` ≤ 50 lines; hooks exercised on Claude Code and Codex |
+| 8a (in) | `devagotchi-hub board` CLI: `init` (+ AGENTS.md block), `prime`, `onboard`, `agent`, `ready`, `ls`, `show`, `new`, `claim`, `beat`, `note`, `done`, `handoff`, `release`, `force`, `set`, `dep`, `reap`, `verify`, `export`; JSON off a pipe, `--quiet`, exit codes by class, `next` on every error, claim cache | five CLI tests: init idempotence, the loop from a subdirectory with a cached fence, exit codes and hints, `prime` ≤ 50 lines, export + verify |
+| 8b | MCP tools on `/mcp` (one board per `project`), project registration with the hub, MCP snippets per CLI, `--hooks` hook pack, the skill | `tests/e2e.py` claims a ticket over MCP as two subjects; hooks exercised on Claude Code and Codex |
 | 9 | Broker liveness (B05), attempts link, message tickets, path reservations, per-state WIP, budgets | A lease survives an agent that never heartbeats while its operation runs; two agents cannot edit one reserved path |
 | 10 | Web: `/board`, `/board/<id>`, Approve | Phone-width pages served by the existing axum app |
 | 11 | Freeze the Go `agent-hub` | Parity tests pass here; banner there |
