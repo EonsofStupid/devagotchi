@@ -14,7 +14,7 @@ use super::{
     workflow::{Lane, Workflow},
 };
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Lease {
     pub ticket: Ticket,
     pub fence: i64,
@@ -124,7 +124,11 @@ impl Board {
 
     /// Claim the best ticket the actor may take: assigned to them first, then
     /// priority, then age. `None` when nothing is ready.
-    pub fn claim_next(&self, actor: &Actor<'_>, filter: &NextFilter) -> BridgeResult<Option<Lease>> {
+    pub fn claim_next(
+        &self,
+        actor: &Actor<'_>,
+        filter: &NextFilter,
+    ) -> BridgeResult<Option<Lease>> {
         self.write(actor, |w| {
             let workflow = load_workflow(w.tx)?;
             let settings = load_settings(w.tx)?;
@@ -175,13 +179,12 @@ impl Board {
             let progress_json = progress
                 .as_ref()
                 .map(|value| serde_json::to_string(value).expect("progress json"));
-            w.tx
-                .execute(
-                    "UPDATE tickets SET lease_expires_at = ?2, heartbeat_at = ?3,
+            w.tx.execute(
+                "UPDATE tickets SET lease_expires_at = ?2, heartbeat_at = ?3,
                        progress = COALESCE(?4, progress), updated_at = ?3 WHERE id = ?1",
-                    params![id, w.now + ttl, w.now, progress_json],
-                )
-                .map_err(store_error)?;
+                params![id, w.now + ttl, w.now, progress_json],
+            )
+            .map_err(store_error)?;
             w.event(
                 "ticket.heartbeat",
                 Some(id),
@@ -201,7 +204,13 @@ impl Board {
     }
 
     /// Give the ticket back to its lane's release state.
-    pub fn release(&self, actor: &Actor<'_>, id: &str, fence: i64, reason: &str) -> BridgeResult<Ticket> {
+    pub fn release(
+        &self,
+        actor: &Actor<'_>,
+        id: &str,
+        fence: i64,
+        reason: &str,
+    ) -> BridgeResult<Ticket> {
         self.write(actor, |w| {
             let workflow = load_workflow(w.tx)?;
             let ticket = read_ticket(w.tx, &workflow, id, w.now)?;
@@ -220,7 +229,13 @@ impl Board {
 
     /// Finish the lane: the ticket moves to the lane's `complete_to` and records
     /// the worker, so the next lane can require someone else.
-    pub fn complete(&self, actor: &Actor<'_>, id: &str, fence: i64, summary: &str) -> BridgeResult<Ticket> {
+    pub fn complete(
+        &self,
+        actor: &Actor<'_>,
+        id: &str,
+        fence: i64,
+        summary: &str,
+    ) -> BridgeResult<Ticket> {
         self.write(actor, |w| {
             let workflow = load_workflow(w.tx)?;
             let ticket = read_ticket(w.tx, &workflow, id, w.now)?;
@@ -261,16 +276,21 @@ impl Board {
     ) -> BridgeResult<Ticket> {
         let note = note.trim();
         if note.is_empty() {
-            return Err(fail("invalid", "a handoff needs a note for whoever picks it up"));
+            return Err(fail(
+                "invalid",
+                "a handoff needs a note for whoever picks it up",
+            ));
         }
         self.write(actor, |w| {
             let workflow = load_workflow(w.tx)?;
             let ticket = read_ticket(w.tx, &workflow, id, w.now)?;
             check_held(&ticket, actor.id, Some(fence))?;
             insert_note(w.tx, id, actor.id, "handoff", note, to, Some(fence), w.now)?;
-            w.tx
-                .execute("UPDATE tickets SET assignee = ?2 WHERE id = ?1", params![id, to])
-                .map_err(store_error)?;
+            w.tx.execute(
+                "UPDATE tickets SET assignee = ?2 WHERE id = ?1",
+                params![id, to],
+            )
+            .map_err(store_error)?;
             let release_to = release_state(&workflow, &ticket);
             clear_lease(
                 w,
@@ -289,7 +309,10 @@ impl Board {
             return Err(fail("humans_only", "force-release needs a human principal"));
         }
         if reason.trim().chars().count() < 3 {
-            return Err(fail("invalid", "a reason of at least 3 characters is required"));
+            return Err(fail(
+                "invalid",
+                "a reason of at least 3 characters is required",
+            ));
         }
         self.write(actor, |w| {
             let workflow = load_workflow(w.tx)?;
@@ -362,9 +385,8 @@ fn check_wip(w: &Writer<'_>, actor: &Actor<'_>, settings: &Settings) -> BridgeRe
     if limit <= 0 {
         return Ok(());
     }
-    let held: i64 = w
-        .tx
-        .query_row(
+    let held: i64 =
+        w.tx.query_row(
             "SELECT count(*) FROM tickets WHERE holder = ?1 AND lease_expires_at > ?2",
             params![actor.id, w.now],
             |row| row.get(0),
@@ -393,23 +415,22 @@ fn take_lease(
     getrandom::fill(&mut random).map_err(|error| fail("board_random", error.to_string()))?;
     let lease_id = hex::encode(random);
     let expires_at = w.now + ttl;
-    w.tx
-        .execute(
-            "UPDATE tickets SET holder = ?2, lease_id = ?3, lease_ttl_ms = ?4, lease_expires_at = ?5,
+    w.tx.execute(
+        "UPDATE tickets SET holder = ?2, lease_id = ?3, lease_ttl_ms = ?4, lease_expires_at = ?5,
                heartbeat_at = ?6, fence = ?7, state = ?8, version = version + 1, updated_at = ?6
              WHERE id = ?1",
-            params![
-                ticket.id,
-                w.actor,
-                lease_id,
-                ttl,
-                expires_at,
-                w.now,
-                fence,
-                lane.active
-            ],
-        )
-        .map_err(store_error)?;
+        params![
+            ticket.id,
+            w.actor,
+            lease_id,
+            ttl,
+            expires_at,
+            w.now,
+            fence,
+            lane.active
+        ],
+    )
+    .map_err(store_error)?;
     w.event(
         "ticket.claimed",
         Some(&ticket.id),
@@ -445,12 +466,11 @@ fn expire(
     if settings.max_lease_expiries > 0 && count >= settings.max_lease_expiries {
         to = workflow.attention_state.clone();
     }
-    w.tx
-        .execute(
-            "UPDATE tickets SET expiry_count = ?2 WHERE id = ?1",
-            params![ticket.id, count],
-        )
-        .map_err(store_error)?;
+    w.tx.execute(
+        "UPDATE tickets SET expiry_count = ?2 WHERE id = ?1",
+        params![ticket.id, count],
+    )
+    .map_err(store_error)?;
     let data = serde_json::json!({
         "previous_holder": ticket.holder,
         "expiry_count": count,

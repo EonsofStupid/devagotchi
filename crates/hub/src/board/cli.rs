@@ -19,8 +19,8 @@ use devagotchi_contracts::{BridgeError, BridgeResult};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Actor, BOARD_DIR, BOARD_FILE, Board, DepKind, Filter, NewTicket, NextFilter, Patch, Ticket,
-    default_prefix,
+    Actor, BOARD_DIR, BOARD_FILE, Board, DepKind, Filter, NewTicket, NextFilter, Patch,
+    ProjectConfig, Ticket, default_prefix, open_project, read_project_config,
 };
 
 pub const USAGE: &str = "Usage: devagotchi-hub board <command> [options]
@@ -34,7 +34,8 @@ pub const USAGE: &str = "Usage: devagotchi-hub board <command> [options]
   show      ID
   new       TITLE [--desc D] [--priority N] [--label L]... [--parent ID] [--assign ID] [--found-in ID] [--epic]
   claim     [ID] [--ttl SECONDS] [--label L] [--state S]   no ID: the best ready ticket
-  beat      ID [--progress JSON] [--fence N]
+  beat      [ID] [--progress JSON] [--fence N]   no ID: every ticket you hold (what the hook pack calls)
+  held                             the tickets you hold (empty output when none)
   note      ID TEXT [--kind K] [--to ID] [--fence N]
   done      ID [SUMMARY] [--fence N]
   handoff   ID NOTE [--to ID] [--fence N]
@@ -45,9 +46,10 @@ pub const USAGE: &str = "Usage: devagotchi-hub board <command> [options]
   reap                             expire lapsed leases
   verify                           recompute the event chain
   export    [--out PATH]           board.jsonl (export, never the truth)
+  hooks     [--for claude-code|codex|all]   write .devagotchi/hooks/ (prime at start, beat after tools, no stop while holding) and print the config to add
 
 Global: --dir PATH (project directory; default: walk up from here)  --as ID (act as this agent)
-        --json (also on when stdout is not a terminal)  --quiet
+        --json (also on when stdout is not a terminal)  --text (force the human form)  --quiet
 Exit codes: 0 ok · 2 conflict (fence, version, held, blocked, WIP) · 3 refused · 4 not found · 5 board unavailable · 64 usage";
 
 /// Everything the command line needs from its environment, so tests can supply it.
@@ -67,13 +69,6 @@ pub const EXIT_REFUSED: u8 = 3;
 pub const EXIT_NOT_FOUND: u8 = 4;
 pub const EXIT_UNAVAILABLE: u8 = 5;
 pub const EXIT_USAGE: u8 = 64;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ProjectConfig {
-    project: String,
-    prefix: String,
-    created_at: i64,
-}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct ClaimCache {
@@ -96,11 +91,39 @@ struct Parsed {
 }
 
 const VALUE_FLAGS: &[&str] = &[
-    "--dir", "--as", "--project", "--prefix", "--limit", "--state", "--label", "--text", "--desc",
-    "--priority", "--parent", "--assign", "--found-in", "--ttl", "--progress", "--fence", "--kind",
-    "--to", "--version", "--title", "--on", "--out",
+    "--dir",
+    "--as",
+    "--project",
+    "--prefix",
+    "--limit",
+    "--state",
+    "--label",
+    "--text",
+    "--desc",
+    "--priority",
+    "--parent",
+    "--assign",
+    "--found-in",
+    "--ttl",
+    "--progress",
+    "--fence",
+    "--kind",
+    "--to",
+    "--version",
+    "--title",
+    "--on",
+    "--out",
+    "--for",
 ];
-const SWITCHES: &[&str] = &["--json", "--quiet", "--agents-md", "--epic", "--open", "--remove"];
+const SWITCHES: &[&str] = &[
+    "--json",
+    "--text",
+    "--quiet",
+    "--agents-md",
+    "--epic",
+    "--open",
+    "--remove",
+];
 
 fn parse(args: &[OsString]) -> Result<Parsed, String> {
     let mut command = None;
@@ -142,7 +165,10 @@ fn parse(args: &[OsString]) -> Result<Parsed, String> {
 
 impl Parsed {
     fn flag(&self, name: &str) -> Option<&str> {
-        self.flags.get(name).and_then(|v| v.last()).map(String::as_str)
+        self.flags
+            .get(name)
+            .and_then(|v| v.last())
+            .map(String::as_str)
     }
     fn flag_all(&self, name: &str) -> Vec<String> {
         self.flags.get(name).cloned().unwrap_or_default()
@@ -193,15 +219,25 @@ fn next_for(code: &str, id: Option<&str>) -> String {
         "stale_fence" | "lease_expired" | "not_holder" => {
             format!("board show {id} — see who holds it; board claim {id} to take it if it is free")
         }
-        "held_by_other" => format!("board show {id}; wait, or board claim with no id for another ticket"),
-        "version_conflict" => format!("board show {id} --json and retry set with the current version"),
+        "held_by_other" => {
+            format!("board show {id}; wait, or board claim with no id for another ticket")
+        }
+        "version_conflict" => {
+            format!("board show {id} --json and retry set with the current version")
+        }
         "wip_limit" => "board done / handoff / release one of the tickets you hold first".into(),
         "blocked" => format!("board show {id} — finish or hand off the blockers it lists"),
         "distinct_required" => "someone else must take this lane; leave it for them".into(),
-        "not_claimable" => format!("board show {id} — only a lane queue is claimable; a person moves it with board set"),
-        "use_lease_ops" => "use claim / done / handoff / release; held tickets do not move by set".into(),
+        "not_claimable" => format!(
+            "board show {id} — only a lane queue is claimable; a person moves it with board set"
+        ),
+        "use_lease_ops" => {
+            "use claim / done / handoff / release; held tickets do not move by set".into()
+        }
         "transition_not_allowed" => "board agent lists the transitions the workflow allows".into(),
-        "humans_only" => "ask the person who owns this board; run without --as to act as yourself".into(),
+        "humans_only" => {
+            "ask the person who owns this board; run without --as to act as yourself".into()
+        }
         "not_found" => "board ls --open to see the ids on this board".into(),
         "no_board" => "run board init in the project directory, or pass --dir".into(),
         "usage" => "board --help".into(),
@@ -231,7 +267,11 @@ struct Output<'a> {
 impl Output<'_> {
     fn value(&mut self, value: &impl Serialize, text: impl FnOnce() -> String) {
         if self.json {
-            let _ = writeln!(self.out, "{}", serde_json::to_string(value).unwrap_or_default());
+            let _ = writeln!(
+                self.out,
+                "{}",
+                serde_json::to_string(value).unwrap_or_default()
+            );
         } else if !self.quiet {
             let _ = writeln!(self.out, "{}", text());
         }
@@ -253,9 +293,17 @@ impl Output<'_> {
                     next: next.clone(),
                 },
             };
-            let _ = writeln!(self.out, "{}", serde_json::to_string(&body).unwrap_or_default());
+            let _ = writeln!(
+                self.out,
+                "{}",
+                serde_json::to_string(&body).unwrap_or_default()
+            );
         } else {
-            let _ = writeln!(self.err, "error {}: {}\n  next: {}", error.code, error.message, next);
+            let _ = writeln!(
+                self.err,
+                "error {}: {}\n  next: {}",
+                error.code, error.message, next
+            );
         }
         exit_code_for(&error.code)
     }
@@ -270,7 +318,8 @@ pub fn run(invocation: Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
             return EXIT_USAGE;
         }
     };
-    let json = parsed.switch("--json") || !invocation.stdout_is_terminal;
+    let json =
+        parsed.switch("--json") || (!invocation.stdout_is_terminal && !parsed.switch("--text"));
     let mut output = Output {
         json,
         quiet: parsed.switch("--quiet"),
@@ -281,10 +330,17 @@ pub fn run(invocation: Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
         let _ = writeln!(output.out, "{USAGE}");
         return EXIT_OK;
     }
-    let (actor_id, human) = match parsed.flag("--as").map(str::to_string).or(invocation.actor_env.clone()) {
+    let (actor_id, human) = match parsed
+        .flag("--as")
+        .map(str::to_string)
+        .or(invocation.actor_env.clone())
+    {
         Some(id) => (id, false),
         None => (
-            invocation.os_user.clone().unwrap_or_else(|| "operator".into()),
+            invocation
+                .os_user
+                .clone()
+                .unwrap_or_else(|| "operator".into()),
             true,
         ),
     };
@@ -328,12 +384,8 @@ pub fn run(invocation: Invocation, out: &mut dyn Write, err: &mut dyn Write) -> 
         },
     };
     let board_dir = project_dir.join(BOARD_DIR);
-    let config = match read_config(&board_dir) {
-        Ok(c) => c,
-        Err(error) => return output.error(&error, None),
-    };
-    let board = match Board::open(&board_dir.join(BOARD_FILE), &config.project) {
-        Ok(b) => b,
+    let (_config, board) = match open_project(&project_dir) {
+        Ok(opened) => opened,
         Err(error) => return output.error(&error, None),
     };
     let mut cache = read_cache(&board_dir, &actor_id);
@@ -365,7 +417,7 @@ fn init(parsed: &Parsed, invocation: &Invocation, output: &mut Output<'_>) -> u8
         .map(|d| invocation.cwd.join(d))
         .unwrap_or_else(|| invocation.cwd.clone());
     let board_dir = project_dir.join(BOARD_DIR);
-    let existing = read_config(&board_dir).ok();
+    let existing = read_project_config(&board_dir).ok();
     let project = parsed
         .flag("--project")
         .map(str::to_string)
@@ -391,7 +443,9 @@ fn init(parsed: &Parsed, invocation: &Invocation, output: &mut Output<'_>) -> u8
     let config = ProjectConfig {
         project: project.clone(),
         prefix: board.prefix().to_string(),
-        created_at: existing.map(|c| c.created_at).unwrap_or_else(|| board.now()),
+        created_at: existing
+            .map(|c| c.created_at)
+            .unwrap_or_else(|| board.now()),
     };
     if prefix != config.prefix {
         output.lines(&format!(
@@ -406,7 +460,7 @@ fn init(parsed: &Parsed, invocation: &Invocation, output: &mut Output<'_>) -> u8
     if !gitignore.exists() {
         let _ = std::fs::write(
             &gitignore,
-            "# the board itself is local state; board.jsonl is the export to commit if you want diffs\nboard.sqlite3\nboard.sqlite3-wal\nboard.sqlite3-shm\nclaims/\n",
+            "# the board itself is local state; board.jsonl is the export to commit if you want diffs\nboard.sqlite3\nboard.sqlite3-wal\nboard.sqlite3-shm\nclaims/\nhooks/.last-beat-*\n",
         );
     }
     let mut agents_md = "unchanged";
@@ -464,121 +518,167 @@ fn dispatch(
         .unwrap_or(20)
         .max(1) as usize;
     let arg = |n: usize| parsed.positional.get(n).map(String::as_str);
-    let need = |n: usize, what: &str| arg(n).ok_or_else(|| usage_error(format!("{what} is required")));
+    let need =
+        |n: usize, what: &str| arg(n).ok_or_else(|| usage_error(format!("{what} is required")));
     let fence_for = |id: &str| -> Result<i64, (BridgeError, Option<String>)> {
         match parsed.int("--fence").map_err(usage_error)? {
             Some(f) => Ok(f),
-            None => cache
-                .claims
-                .get(id)
-                .map(|c| c.fence)
-                .ok_or_else(|| {
-                    (
-                        BridgeError::new(
-                            "stale_fence",
-                            format!("no cached claim for {id}; pass --fence or claim it first"),
-                        ),
-                        Some(id.to_string()),
-                    )
-                }),
+            None => cache.claims.get(id).map(|c| c.fence).ok_or_else(|| {
+                (
+                    BridgeError::new(
+                        "stale_fence",
+                        format!("no cached claim for {id}; pass --fence or claim it first"),
+                    ),
+                    Some(id.to_string()),
+                )
+            }),
         }
     };
     match parsed.command.as_str() {
         "prime" => {
-            let held = board
-                .list(&Filter {
-                    holder: Some(actor.id.to_string()),
-                    ..Filter::default()
-                })
-                .map_err(|e| (e, None))?;
-            let ready = no_id(board.ready(actor, limit.min(10)))?;
-            let attention = no_id(board.list(&Filter {
-                state: Some(board.workflow().map_err(|e| (e, None))?.attention_state),
-                limit: Some(5),
-                ..Filter::default()
-            }))?;
-            let mut notes_to_me = Vec::new();
-            for ticket in board
-                .list(&Filter {
-                    open_only: true,
-                    limit: Some(50),
-                    ..Filter::default()
-                })
-                .map_err(|e| (e, None))?
-            {
-                let view = with_id(&ticket.id, board.get(&ticket.id))?;
-                for note in view.notes.iter().rev().take(3) {
-                    if note.to_principal.as_deref() == Some(actor.id) {
-                        notes_to_me.push((ticket.id.clone(), note.author.clone(), note.body.clone()));
+            let prime = no_id(board.prime(actor, limit))?;
+            output.value(&prime, || {
+                let mut lines = vec![format!(
+                    "board {} · you are {}{}",
+                    prime.project,
+                    prime.actor,
+                    if prime.human { " (person)" } else { "" }
+                )];
+                if prime.held.is_empty() {
+                    lines.push("held by you: none".into());
+                } else {
+                    lines.push(format!("held by you ({}): finish or hand off before you stop", prime.held.len()));
+                    for t in prime.held.iter().take(10) {
+                        let left = t.lease_expires_in_ms.max(0) / 60_000;
+                        lines.push(format!("  {}  fence {}  lease {}m left  {}", t.id, t.fence, left, trim(&t.title, 60)));
                     }
                 }
-            }
-            let now = board.now();
-            let settings = no_id(board.settings())?;
-            let held_json: Vec<_> = held
-                .iter()
-                .map(|t| serde_json::json!({ "id": t.id, "title": t.title, "fence": t.fence, "lease_expires_in_ms": t.lease_expires_at.map(|e| e - now), "state": t.state }))
-                .collect();
-            output.value(
-                &serde_json::json!({
-                    "project": board.project(),
-                    "actor": actor.id,
-                    "held": held_json,
-                    "ready": ready.iter().map(|t| serde_json::json!({ "id": t.id, "title": t.title, "priority": t.priority, "state": t.state })).collect::<Vec<_>>(),
-                    "attention": attention.iter().map(|t| serde_json::json!({ "id": t.id, "title": t.title })).collect::<Vec<_>>(),
-                    "notes_to_me": notes_to_me.iter().map(|(id, from, body)| serde_json::json!({ "ticket": id, "from": from, "body": body })).collect::<Vec<_>>(),
-                    "heartbeat_every_ms": settings.lease_ttl_ms / 3,
-                    "protocol": PROTOCOL_LINE,
-                }),
-                || {
-                    let mut lines = vec![format!(
-                        "board {} · you are {}{}",
-                        board.project(),
-                        actor.id,
-                        if actor.human { " (person)" } else { "" }
-                    )];
-                    if held.is_empty() {
-                        lines.push("held by you: none".into());
-                    } else {
-                        lines.push(format!("held by you ({}): finish or hand off before you stop", held.len()));
-                        for t in held.iter().take(10) {
-                            let left = t.lease_expires_at.map(|e| (e - now).max(0) / 60_000).unwrap_or(0);
-                            lines.push(format!("  {}  fence {}  lease {}m left  {}", t.id, t.fence, left, trim(&t.title, 60)));
-                        }
+                if prime.ready.is_empty() {
+                    lines.push("ready for you: nothing".into());
+                } else {
+                    lines.push(format!("ready for you ({}): board claim <id>, or board claim for the first", prime.ready.len()));
+                    for t in &prime.ready {
+                        lines.push(format!("  {}  P{}  {}", t.id, t.priority, trim(&t.title, 60)));
                     }
-                    if ready.is_empty() {
-                        lines.push("ready for you: nothing".into());
-                    } else {
-                        lines.push(format!("ready for you ({}): board claim <id>, or board claim for the first", ready.len()));
-                        for t in &ready {
-                            lines.push(format!("  {}  P{}  {}", t.id, t.priority, trim(&t.title, 60)));
-                        }
+                }
+                if !prime.attention.is_empty() {
+                    lines.push(format!("needs a person ({}):", prime.attention.len()));
+                    for t in &prime.attention {
+                        lines.push(format!("  {}  {}", t.id, trim(&t.title, 60)));
                     }
-                    if !attention.is_empty() {
-                        lines.push(format!("needs a person ({}):", attention.len()));
-                        for t in &attention {
-                            lines.push(format!("  {}  {}", t.id, trim(&t.title, 60)));
-                        }
+                }
+                if !prime.notes_to_me.is_empty() {
+                    lines.push(format!("notes to you ({}):", prime.notes_to_me.len()));
+                    for note in prime.notes_to_me.iter().take(5) {
+                        lines.push(format!("  {}  from {}: {}", note.ticket, note.from, trim(&note.body, 80)));
                     }
-                    if !notes_to_me.is_empty() {
-                        lines.push(format!("notes to you ({}):", notes_to_me.len()));
-                        for (id, from, body) in notes_to_me.iter().take(5) {
-                            lines.push(format!("  {id}  from {from}: {}", trim(body, 80)));
-                        }
-                    }
-                    lines.push(format!(
-                        "protocol: {} Heartbeat at least every {} min. `board agent` for the whole workflow.",
-                        PROTOCOL_LINE,
-                        settings.lease_ttl_ms / 3 / 60_000
-                    ));
-                    lines.join("\n")
-                },
-            );
+                }
+                lines.push(format!(
+                    "protocol: {} Heartbeat at least every {} min. `board agent` for the whole workflow.",
+                    PROTOCOL_LINE,
+                    prime.heartbeat_every_ms / 60_000
+                ));
+                lines.join("\n")
+            });
             Ok(EXIT_OK)
         }
         "ready" => {
             let ready = no_id(board.ready(actor, limit))?;
             output.value(&ready, || table(&ready));
+            Ok(EXIT_OK)
+        }
+        "held" => {
+            let held = no_id(board.list(&Filter {
+                holder: Some(actor.id.to_string()),
+                ..Filter::default()
+            }))?;
+            let now = board.now();
+            output.value(&held, || {
+                held.iter()
+                    .map(|t| {
+                        let left = t
+                            .lease_expires_at
+                            .map(|e| (e - now).max(0) / 60_000)
+                            .unwrap_or(0);
+                        format!(
+                            "{}  fence {}  {}m left  {}",
+                            t.id,
+                            t.fence,
+                            left,
+                            trim(&t.title, 60)
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            Ok(EXIT_OK)
+        }
+        "hooks" => {
+            let targets = parsed.flag("--for").unwrap_or("all");
+            if !matches!(targets, "claude-code" | "codex" | "all") {
+                return Err(usage_error("--for must be claude-code, codex or all"));
+            }
+            let dir = board_dir.join("hooks");
+            std::fs::create_dir_all(&dir)
+                .map_err(|e| (BridgeError::new("board_io", e.to_string()), None))?;
+            // The scripts are project config and may be committed; the beat markers are not.
+            let gitignore = board_dir.join(".gitignore");
+            let current = std::fs::read_to_string(&gitignore).unwrap_or_default();
+            if !current.lines().any(|l| l == HOOK_MARKER_IGNORE) {
+                let mut next = current;
+                if !next.is_empty() && !next.ends_with('\n') {
+                    next.push('\n');
+                }
+                next.push_str(HOOK_MARKER_IGNORE);
+                next.push('\n');
+                let _ = std::fs::write(&gitignore, next);
+            }
+            for (name, body) in HOOK_SCRIPTS {
+                let path = dir.join(name);
+                std::fs::write(&path, body).map_err(|e| {
+                    (
+                        BridgeError::new("board_io", format!("{}: {e}", path.display())),
+                        None,
+                    )
+                })?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755));
+                }
+            }
+            let snippets: Vec<(&str, String)> = [
+                ("claude-code", claude_code_hooks()),
+                ("codex", codex_hooks()),
+            ]
+            .into_iter()
+            .filter(|(name, _)| targets == "all" || targets == *name)
+            .collect();
+            output.value(
+                &serde_json::json!({
+                    "hooks_dir": dir,
+                    "scripts": HOOK_SCRIPTS.iter().map(|(n, _)| *n).collect::<Vec<_>>(),
+                    "claude_code": snippets.iter().find(|(n, _)| *n == "claude-code").map(|(_, s)| serde_json::from_str::<serde_json::Value>(s).unwrap_or_default()),
+                    "codex": snippets.iter().find(|(n, _)| *n == "codex").map(|(_, s)| serde_json::from_str::<serde_json::Value>(s).unwrap_or_default()),
+                }),
+                || {
+                    let mut lines = vec![format!(
+                        "wrote {}/{{session-start,beat,stop}}.sh (prime at start · beat after tools · no stop while holding)",
+                        dir.display()
+                    )];
+                    for (name, snippet) in &snippets {
+                        lines.push(String::new());
+                        lines.push(match *name {
+                            "claude-code" => "Claude Code — add to .claude/settings.json (project) or ~/.claude/settings.json; the actor name is the last argument:".into(),
+                            _ => "Codex — .codex/hooks.json (needs `[features] codex_hooks = true` in ~/.codex/config.toml); the actor name is the last argument:".into(),
+                        });
+                        lines.push(snippet.clone());
+                    }
+                    lines.push(String::new());
+                    lines.push("Other CLIs: run the same three scripts from their hook events (session start, after a tool, before stop) with the actor name as the argument.".into());
+                    lines.join("\n")
+                },
+            );
             Ok(EXIT_OK)
         }
         "ls" => {
@@ -603,7 +703,11 @@ fn dispatch(
                     format!(
                         "  kind {} · labels {} · holder {} · assignee {} · version {} · fence {}",
                         t.kind,
-                        if t.labels.is_empty() { "-".into() } else { t.labels.join(",") },
+                        if t.labels.is_empty() {
+                            "-".into()
+                        } else {
+                            t.labels.join(",")
+                        },
                         t.holder.as_deref().unwrap_or("-"),
                         t.assignee.as_deref().unwrap_or("-"),
                         t.version,
@@ -628,7 +732,10 @@ fn dispatch(
                         n.seq,
                         n.kind,
                         n.author,
-                        n.to_principal.as_ref().map(|p| format!(" → {p}")).unwrap_or_default(),
+                        n.to_principal
+                            .as_ref()
+                            .map(|p| format!(" → {p}"))
+                            .unwrap_or_default(),
                         trim(&n.body, 200)
                     ));
                 }
@@ -668,7 +775,9 @@ fn dispatch(
                     match no_id(board.claim_next(actor, &filter))? {
                         Some(lease) => lease,
                         None => {
-                            output.value(&serde_json::json!({ "claimed": false }), || "nothing ready for you".into());
+                            output.value(&serde_json::json!({ "claimed": false }), || {
+                                "nothing ready for you".into()
+                            });
                             return Ok(EXIT_OK);
                         }
                     }
@@ -696,11 +805,52 @@ fn dispatch(
             });
             Ok(EXIT_OK)
         }
+        "beat" if arg(0).is_none() => {
+            // Every ticket this actor holds, with the fence the store shows (the holder's
+            // fence is by definition the current one). What the hook pack calls after tools.
+            let held = no_id(board.list(&Filter {
+                holder: Some(actor.id.to_string()),
+                ..Filter::default()
+            }))?;
+            let mut beaten = Vec::new();
+            for ticket in &held {
+                let lease = with_id(
+                    &ticket.id,
+                    board.heartbeat(actor, &ticket.id, ticket.fence, None),
+                )?;
+                cache.claims.insert(
+                    ticket.id.clone(),
+                    CachedClaim {
+                        fence: lease.fence,
+                        version: lease.ticket.version,
+                        lease_expires_at: lease.lease_expires_at,
+                    },
+                );
+                beaten.push(lease);
+            }
+            output.value(&beaten, || {
+                if beaten.is_empty() {
+                    "holding nothing".into()
+                } else {
+                    beaten
+                        .iter()
+                        .map(|l| {
+                            format!("{}  lease extended to {}", l.ticket.id, l.lease_expires_at)
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }
+            });
+            Ok(EXIT_OK)
+        }
         "beat" => {
             let id = need(0, "ID")?;
             let fence = fence_for(id)?;
             let progress = match parsed.flag("--progress") {
-                Some(raw) => Some(serde_json::from_str(raw).map_err(|_| usage_error("--progress must be JSON"))?),
+                Some(raw) => Some(
+                    serde_json::from_str(raw)
+                        .map_err(|_| usage_error("--progress must be JSON"))?,
+                ),
                 None => None,
             };
             let lease = with_id(id, board.heartbeat(actor, id, fence, progress))?;
@@ -712,7 +862,9 @@ fn dispatch(
                     lease_expires_at: lease.lease_expires_at,
                 },
             );
-            output.value(&lease, || format!("{id}  lease extended to {}", lease.lease_expires_at));
+            output.value(&lease, || {
+                format!("{id}  lease extended to {}", lease.lease_expires_at)
+            });
             Ok(EXIT_OK)
         }
         "note" => {
@@ -748,7 +900,10 @@ fn dispatch(
             let id = need(0, "ID")?;
             let note = need(1, "NOTE")?;
             let fence = fence_for(id)?;
-            let ticket = with_id(id, board.handoff(actor, id, fence, note, parsed.flag("--to")))?;
+            let ticket = with_id(
+                id,
+                board.handoff(actor, id, fence, note, parsed.flag("--to")),
+            )?;
             cache.claims.remove(id);
             output.value(&ticket, || {
                 format!(
@@ -771,7 +926,9 @@ fn dispatch(
             let id = need(0, "ID")?;
             let reason = need(1, "REASON")?;
             let ticket = with_id(id, board.force_release(actor, id, reason))?;
-            output.value(&ticket, || format!("{id}  → {} (lease taken away)", ticket.state));
+            output.value(&ticket, || {
+                format!("{id}  → {} (lease taken away)", ticket.state)
+            });
             Ok(EXIT_OK)
         }
         "set" => {
@@ -791,15 +948,20 @@ fn dispatch(
                 state: parsed.flag("--state").map(str::to_string),
             };
             let ticket = with_id(id, board.update(actor, id, version, patch))?;
-            output.value(&ticket, || format!("{id}  version {} [{}]", ticket.version, ticket.state));
+            output.value(&ticket, || {
+                format!("{id}  version {} [{}]", ticket.version, ticket.state)
+            });
             Ok(EXIT_OK)
         }
         "dep" => {
             let id = need(0, "ID")?;
-            let on = parsed.flag("--on").ok_or_else(|| usage_error("--on ID is required"))?;
+            let on = parsed
+                .flag("--on")
+                .ok_or_else(|| usage_error("--on ID is required"))?;
             let kind = match parsed.flag("--kind") {
                 None => DepKind::Blocks,
-                Some(k) => DepKind::parse(k).ok_or_else(|| usage_error(format!("unknown dependency kind {k}")))?,
+                Some(k) => DepKind::parse(k)
+                    .ok_or_else(|| usage_error(format!("unknown dependency kind {k}")))?,
             };
             let deps = if parsed.switch("--remove") {
                 with_id(id, board.remove_dep(actor, id, on, kind))?
@@ -816,7 +978,9 @@ fn dispatch(
         }
         "reap" => {
             let n = no_id(board.reap())?;
-            output.value(&serde_json::json!({ "expired": n }), || format!("{n} lease(s) expired"));
+            output.value(&serde_json::json!({ "expired": n }), || {
+                format!("{n} lease(s) expired")
+            });
             Ok(EXIT_OK)
         }
         "verify" => {
@@ -846,7 +1010,8 @@ fn dispatch(
                 text.push_str(&serde_json::to_string(&view).unwrap_or_default());
                 text.push('\n');
             }
-            std::fs::write(&path, text).map_err(|e| (BridgeError::new("board_io", e.to_string()), None))?;
+            std::fs::write(&path, text)
+                .map_err(|e| (BridgeError::new("board_io", e.to_string()), None))?;
             output.value(
                 &serde_json::json!({ "path": path, "tickets": tickets.len() }),
                 || format!("{} tickets → {}", tickets.len(), path.display()),
@@ -886,21 +1051,23 @@ fn trim(text: &str, max: usize) -> String {
     }
 }
 
-fn read_config(board_dir: &Path) -> BridgeResult<ProjectConfig> {
-    let raw = std::fs::read_to_string(board_dir.join("config.json"))
-        .map_err(|e| BridgeError::new("no_board", format!("{}: {e}", board_dir.join("config.json").display())))?;
-    serde_json::from_str(&raw).map_err(|e| BridgeError::new("board_io", format!("config.json: {e}")))
-}
-
 fn write_json(path: &Path, value: &impl Serialize) -> BridgeResult<()> {
-    let text = serde_json::to_string_pretty(value).map_err(|e| BridgeError::new("board_io", e.to_string()))?;
-    std::fs::write(path, text + "\n").map_err(|e| BridgeError::new("board_io", format!("{}: {e}", path.display())))
+    let text = serde_json::to_string_pretty(value)
+        .map_err(|e| BridgeError::new("board_io", e.to_string()))?;
+    std::fs::write(path, text + "\n")
+        .map_err(|e| BridgeError::new("board_io", format!("{}: {e}", path.display())))
 }
 
 fn cache_path(board_dir: &Path, actor: &str) -> PathBuf {
     let safe: String = actor
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     board_dir.join("claims").join(format!("{safe}.json"))
 }
@@ -922,6 +1089,91 @@ fn write_cache(board_dir: &Path, actor: &str, cache: &ClaimCache) {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = write_json(&path, cache);
+}
+
+/// The hook pack: three POSIX shell scripts under `.devagotchi/hooks/`, called by the
+/// agent CLIs' hook events with the actor name as their argument. Session start primes;
+/// after a tool call every held lease is extended (at most once a minute, so the chain
+/// does not fill with heartbeats); a stop while holding a ticket is refused once (exit 2,
+/// which Claude Code and Codex treat as "do not stop, here is why"), and allowed on the
+/// second attempt so an agent that cannot finish does not loop — the lease then lapses
+/// and the reaper returns the ticket to its queue.
+pub const HOOK_MARKER_IGNORE: &str = "hooks/.last-beat-*";
+
+pub const HOOK_SCRIPTS: &[(&str, &str)] = &[
+    (
+        "session-start.sh",
+        "#!/bin/sh
+# Devagotchi board: what to do now, as context for the session. Argument: the actor name.
+cd \"$(dirname \"$0\")/../..\" || exit 0
+actor=${1:-${DEVAGOTCHI_ACTOR:-}}
+[ -z \"$actor\" ] || export DEVAGOTCHI_ACTOR=\"$actor\"
+\"${DEVAGOTCHI_HUB:-devagotchi-hub}\" board prime --text 2>/dev/null || true
+exit 0
+",
+    ),
+    (
+        "beat.sh",
+        "#!/bin/sh
+# Devagotchi board: extend every lease this actor holds, at most once a minute. Argument: the actor name.
+cd \"$(dirname \"$0\")/../..\" || exit 0
+actor=${1:-${DEVAGOTCHI_ACTOR:-}}
+[ -z \"$actor\" ] || export DEVAGOTCHI_ACTOR=\"$actor\"
+marker=.devagotchi/hooks/.last-beat-${actor:-$(id -un 2>/dev/null || echo operator)}
+if [ -f \"$marker\" ] && [ -n \"$(find \"$marker\" -mmin -1 2>/dev/null)\" ]; then exit 0; fi
+: > \"$marker\"
+\"${DEVAGOTCHI_HUB:-devagotchi-hub}\" board beat --quiet >/dev/null 2>&1 || true
+exit 0
+",
+    ),
+    (
+        "stop.sh",
+        "#!/bin/sh
+# Devagotchi board: never stop while holding a ticket. Argument: the actor name.
+# Exit 2 refuses the stop once and tells the agent why; a second attempt is allowed so an
+# agent that cannot finish does not loop (the lease lapses and the reaper requeues the ticket).
+cd \"$(dirname \"$0\")/../..\" || exit 0
+actor=${1:-${DEVAGOTCHI_ACTOR:-}}
+[ -z \"$actor\" ] || export DEVAGOTCHI_ACTOR=\"$actor\"
+input=$(cat 2>/dev/null)
+case $input in *'\"stop_hook_active\": true'*|*'\"stop_hook_active\":true'*) exit 0 ;; esac
+held=$(\"${DEVAGOTCHI_HUB:-devagotchi-hub}\" board held --text 2>/dev/null) || exit 0
+[ -n \"$held\" ] || exit 0
+printf 'You still hold tickets on the board:\\n%s\\nFinish each (board done <id> \"summary\") or hand it off (board handoff <id> \"note\" --to <who>) before stopping.\\n' \"$held\" >&2
+exit 2
+",
+    ),
+];
+
+fn hook_command(script: &str, project_dir: &str, actor: &str) -> String {
+    format!("{project_dir}/.devagotchi/hooks/{script} {actor}")
+}
+
+/// Claude Code's `hooks` block: SessionStart stdout is added to the context, PostToolUse
+/// runs after every tool, Stop exit 2 blocks the stop with stderr shown to the model.
+pub fn claude_code_hooks() -> String {
+    let dir = "\"$CLAUDE_PROJECT_DIR\"";
+    serde_json::to_string_pretty(&serde_json::json!({
+        "hooks": {
+            "SessionStart": [{ "hooks": [{ "type": "command", "command": hook_command("session-start.sh", dir, "claude") }] }],
+            "PostToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": hook_command("beat.sh", dir, "claude") }] }],
+            "Stop": [{ "hooks": [{ "type": "command", "command": hook_command("stop.sh", dir, "claude") }] }]
+        }
+    }))
+    .expect("hooks json")
+}
+
+/// Codex's `hooks.json` takes the same shape (feature `codex_hooks`); hooks run from the
+/// project directory, so the paths are relative.
+pub fn codex_hooks() -> String {
+    serde_json::to_string_pretty(&serde_json::json!({
+        "hooks": {
+            "SessionStart": [{ "hooks": [{ "type": "command", "command": hook_command("session-start.sh", ".", "codex") }] }],
+            "PostToolUse": [{ "matcher": "", "hooks": [{ "type": "command", "command": hook_command("beat.sh", ".", "codex") }] }],
+            "Stop": [{ "hooks": [{ "type": "command", "command": hook_command("stop.sh", ".", "codex") }] }]
+        }
+    }))
+    .expect("hooks json")
 }
 
 pub const PROTOCOL_LINE: &str =

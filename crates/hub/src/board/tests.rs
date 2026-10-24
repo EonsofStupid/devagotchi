@@ -6,7 +6,9 @@ use std::sync::{
     atomic::{AtomicI64, Ordering},
 };
 
-use super::{Actor, Board, DepKind, Filter, NewTicket, NextFilter, Patch, Settings, StateKind, Workflow};
+use super::{
+    Actor, Board, DepKind, Filter, NewTicket, NextFilter, Patch, Settings, StateKind, Workflow,
+};
 
 struct Fixture {
     board: Board,
@@ -57,7 +59,10 @@ fn open_seeds_meta_settings_and_workflow_once() {
     let board = Board::open(&path, "devagotchi").expect("open");
     assert_eq!(board.prefix(), "deva");
     assert_eq!(board.settings().expect("settings"), Settings::default());
-    assert_eq!(board.workflow().expect("workflow"), Workflow::default_workflow());
+    assert_eq!(
+        board.workflow().expect("workflow"),
+        Workflow::default_workflow()
+    );
     drop(board);
     let again = Board::open(&path, "devagotchi").expect("reopen");
     assert_eq!(again.prefix(), "deva");
@@ -144,10 +149,16 @@ fn claim_heartbeat_complete_moves_through_the_lanes() {
     assert_eq!(lease.ticket.state, "in_progress");
     assert_eq!(lease.ticket.holder.as_deref(), Some("claude"));
     assert_eq!(lease.fence, 1);
-    assert_eq!(lease.heartbeat_every_ms, Settings::default().lease_ttl_ms / 3);
+    assert_eq!(
+        lease.heartbeat_every_ms,
+        Settings::default().lease_ttl_ms / 3
+    );
     assert!(!lease.already_held);
 
-    let again = f.board.claim(&claude, &id, None).expect("re-claim is idempotent");
+    let again = f
+        .board
+        .claim(&claude, &id, None)
+        .expect("re-claim is idempotent");
     assert!(again.already_held);
     assert_eq!(again.fence, 1);
 
@@ -157,15 +168,26 @@ fn claim_heartbeat_complete_moves_through_the_lanes() {
     f.advance(60_000);
     let beat = f
         .board
-        .heartbeat(&claude, &id, lease.fence, Some(serde_json::json!({ "step": "tests" })))
+        .heartbeat(
+            &claude,
+            &id,
+            lease.fence,
+            Some(serde_json::json!({ "step": "tests" })),
+        )
         .expect("heartbeat");
     assert_eq!(
         beat.lease_expires_at,
         f.now.load(Ordering::SeqCst) + Settings::default().lease_ttl_ms
     );
-    assert_eq!(beat.ticket.progress, Some(serde_json::json!({ "step": "tests" })));
+    assert_eq!(
+        beat.ticket.progress,
+        Some(serde_json::json!({ "step": "tests" }))
+    );
 
-    let stale = f.board.heartbeat(&claude, &id, 99, None).expect_err("wrong fence");
+    let stale = f
+        .board
+        .heartbeat(&claude, &id, 99, None)
+        .expect_err("wrong fence");
     assert_eq!(stale.code, "stale_fence");
     let not_holder = f
         .board
@@ -183,7 +205,10 @@ fn claim_heartbeat_complete_moves_through_the_lanes() {
     assert_eq!(reviewed.closed_at, None);
 
     // The author may not review their own work; the lane says so as data.
-    let same = f.board.claim(&claude, &id, None).expect_err("distinct reviewer");
+    let same = f
+        .board
+        .claim(&claude, &id, None)
+        .expect_err("distinct reviewer");
     assert_eq!(same.code, "distinct_required");
     let review = f.board.claim(&codex, &id, None).expect("codex reviews");
     assert_eq!(review.ticket.state, "reviewing");
@@ -200,7 +225,10 @@ fn claim_heartbeat_complete_moves_through_the_lanes() {
     assert_eq!(kinds, vec!["summary", "summary"]);
     let chain = f.board.verify_chain().expect("verify");
     assert!(chain.ok);
-    assert_eq!(chain.entries, 6, "created, claimed, heartbeat, completed, claimed, completed");
+    assert_eq!(
+        chain.entries, 6,
+        "created, claimed, heartbeat, completed, claimed, completed"
+    );
 }
 
 #[test]
@@ -218,7 +246,10 @@ fn expired_lease_goes_back_to_ready_and_the_old_fence_is_rejected() {
     assert!(lapsed.lease_expired, "lapsed but not yet reaped");
 
     // Codex claims it; the expiry happens lazily inside the claim and the fence moves on.
-    let taken = f.board.claim(&codex, &id, None).expect("claim after expiry");
+    let taken = f
+        .board
+        .claim(&codex, &id, None)
+        .expect("claim after expiry");
     assert_eq!(taken.fence, 2);
     assert_eq!(taken.ticket.expiry_count, 1);
     let late = f
@@ -252,7 +283,10 @@ fn reaper_sends_a_ticket_to_attention_after_too_many_expiries() {
         }
     }
     assert_eq!(f.board.reap().expect("nothing left"), 0);
-    let not_claimable = f.board.claim(&agent, &id, None).expect_err("attention is not a queue");
+    let not_claimable = f
+        .board
+        .claim(&agent, &id, None)
+        .expect_err("attention is not a queue");
     assert_eq!(not_claimable.code, "not_claimable");
     // A person puts it back.
     let ticket = f.board.get(&id).expect("get").ticket;
@@ -308,12 +342,29 @@ fn ready_excludes_blocked_tickets_until_the_blocker_is_done() {
         .complete(&claude, &schema, next.fence, "schema landed")
         .expect("complete");
     // Review is not done: still blocking.
-    assert!(f.board.get(&tools).expect("get").ticket.blocked_by.contains(&schema));
-    let review = f.board.claim(&Actor::agent("codex"), &schema, None).expect("review");
+    assert!(
+        f.board
+            .get(&tools)
+            .expect("get")
+            .ticket
+            .blocked_by
+            .contains(&schema)
+    );
+    let review = f
+        .board
+        .claim(&Actor::agent("codex"), &schema, None)
+        .expect("review");
     f.board
         .complete(&Actor::agent("codex"), &schema, review.fence, "ok")
         .expect("done");
-    assert!(f.board.get(&tools).expect("get").ticket.blocked_by.is_empty());
+    assert!(
+        f.board
+            .get(&tools)
+            .expect("get")
+            .ticket
+            .blocked_by
+            .is_empty()
+    );
     let next = f
         .board
         .claim_next(&claude, &NextFilter::default())
@@ -355,7 +406,10 @@ fn assigned_tickets_go_to_their_assignee_first_and_only() {
         .claim_next(&codex, &NextFilter::default())
         .expect("claim_next")
         .expect("ready");
-    assert_eq!(codex_next.ticket.id, mine, "assigned work outranks a better priority");
+    assert_eq!(
+        codex_next.ticket.id, mine,
+        "assigned work outranks a better priority"
+    );
 }
 
 #[test]
@@ -367,8 +421,13 @@ fn wip_limit_stops_a_second_claim() {
     let three = f.new_ticket(&jesse, "three");
     let agent = Actor::agent("claude");
     f.board.claim(&agent, &one, None).expect("first");
-    f.board.claim(&agent, &two, None).expect("second (default limit is 2)");
-    let third = f.board.claim(&agent, &three, None).expect_err("over the limit");
+    f.board
+        .claim(&agent, &two, None)
+        .expect("second (default limit is 2)");
+    let third = f
+        .board
+        .claim(&agent, &three, None)
+        .expect_err("over the limit");
     assert_eq!(third.code, "wip_limit");
     let none = f
         .board
@@ -380,7 +439,9 @@ fn wip_limit_stops_a_second_claim() {
         human: false,
         wip_limit: Some(0),
     };
-    f.board.claim(&generous, &three, None).expect("0 = unlimited");
+    f.board
+        .claim(&generous, &three, None)
+        .expect("0 = unlimited");
 }
 
 #[test]
@@ -397,7 +458,13 @@ fn handoff_notes_releases_and_assigns_in_one_step() {
     assert_eq!(empty.code, "invalid");
     let handed = f
         .board
-        .handoff(&claude, &id, lease.fence, "tests are red on Windows; see note 1", Some("codex"))
+        .handoff(
+            &claude,
+            &id,
+            lease.fence,
+            "tests are red on Windows; see note 1",
+            Some("codex"),
+        )
         .expect("handoff");
     assert_eq!(handed.state, "ready");
     assert_eq!(handed.holder, None);
@@ -421,9 +488,15 @@ fn force_release_is_for_humans_with_a_reason() {
         .force_release(&Actor::agent("codex"), &id, "mine now")
         .expect_err("agents may not");
     assert_eq!(agent.code, "humans_only");
-    let short = f.board.force_release(&jesse, &id, "x").expect_err("reason too short");
+    let short = f
+        .board
+        .force_release(&jesse, &id, "x")
+        .expect_err("reason too short");
     assert_eq!(short.code, "invalid");
-    let freed = f.board.force_release(&jesse, &id, "claude's session died").expect("forced");
+    let freed = f
+        .board
+        .force_release(&jesse, &id, "claude's session died")
+        .expect("forced");
     assert_eq!(freed.holder, None);
     assert_eq!(freed.state, "ready");
     let events = f.board.events(0, 100).expect("events");
@@ -632,7 +705,10 @@ fn list_filters_by_label_text_state_and_open_only() {
             ..Filter::default()
         })
         .expect("list");
-    assert_eq!(cancelled.iter().map(|t| &t.id).collect::<Vec<_>>(), vec![&a]);
+    assert_eq!(
+        cancelled.iter().map(|t| &t.id).collect::<Vec<_>>(),
+        vec![&a]
+    );
 }
 
 #[test]
@@ -672,7 +748,9 @@ fn workflow_replacement_is_validated_against_live_tickets() {
     workflow.initial_state = "backlog".into();
     workflow.lanes[0].queue = "backlog".into();
     workflow.lanes[0].release_to = "backlog".into();
-    workflow.transitions.retain(|t| t.from != "ready" && t.to != "ready");
+    workflow
+        .transitions
+        .retain(|t| t.from != "ready" && t.to != "ready");
     assert!(workflow.validate().is_ok());
     let refused = f
         .board
@@ -692,10 +770,18 @@ fn workflow_replacement_is_validated_against_live_tickets() {
             },
         )
         .expect("move it");
-    f.board.put_workflow(&jesse, &workflow).expect("now it fits");
-    let lease = f.board.claim(&claude, &id, None).expect("backlog is the lane queue now");
+    f.board
+        .put_workflow(&jesse, &workflow)
+        .expect("now it fits");
+    let lease = f
+        .board
+        .claim(&claude, &id, None)
+        .expect("backlog is the lane queue now");
     assert_eq!(lease.ticket.state, "in_progress");
-    assert_eq!(f.board.workflow().expect("workflow").kind("in_progress"), Some(StateKind::Active));
+    assert_eq!(
+        f.board.workflow().expect("workflow").kind("in_progress"),
+        Some(StateKind::Active)
+    );
 }
 
 #[test]
@@ -725,7 +811,9 @@ fn discovered_work_links_back_to_where_it_was_found() {
 mod cli {
     use std::{ffi::OsString, path::Path};
 
-    use crate::board::cli::{self, EXIT_CONFLICT, EXIT_NOT_FOUND, EXIT_OK, EXIT_UNAVAILABLE, EXIT_USAGE, Invocation};
+    use crate::board::cli::{
+        self, EXIT_CONFLICT, EXIT_NOT_FOUND, EXIT_OK, EXIT_UNAVAILABLE, EXIT_USAGE, Invocation,
+    };
 
     fn run(cwd: &Path, actor: Option<&str>, terminal: bool, args: &[&str]) -> (u8, String, String) {
         let (mut out, mut err) = (Vec::new(), Vec::new());
@@ -740,7 +828,11 @@ mod cli {
             &mut out,
             &mut err,
         );
-        (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+        (
+            code,
+            String::from_utf8(out).unwrap(),
+            String::from_utf8(err).unwrap(),
+        )
     }
 
     fn json(text: &str) -> serde_json::Value {
@@ -751,7 +843,12 @@ mod cli {
     fn init_creates_the_board_and_appends_the_agents_block_once() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("AGENTS.md"), "# Repo\n").unwrap();
-        let (code, out, _) = run(dir.path(), None, false, &["init", "--project", "demo", "--agents-md"]);
+        let (code, out, _) = run(
+            dir.path(),
+            None,
+            false,
+            &["init", "--project", "demo", "--agents-md"],
+        );
         assert_eq!(code, EXIT_OK, "{out}");
         assert!(dir.path().join(".devagotchi/board.sqlite3").is_file());
         assert!(dir.path().join(".devagotchi/config.json").is_file());
@@ -762,7 +859,11 @@ mod cli {
         let (code, out, _) = run(dir.path(), None, false, &["init", "--agents-md"]);
         assert_eq!(code, EXIT_OK);
         assert_eq!(json(&out)["agents_md"], "already present");
-        assert_eq!(json(&out)["project"], "demo", "the project name is kept on re-init");
+        assert_eq!(
+            json(&out)["project"],
+            "demo",
+            "the project name is kept on re-init"
+        );
         let again = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
         assert_eq!(again.matches(cli::AGENTS_MD_START).count(), 1);
     }
@@ -770,10 +871,18 @@ mod cli {
     #[test]
     fn the_loop_works_from_a_subdirectory_with_a_cached_fence() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(run(dir.path(), None, false, &["init", "--project", "demo"]).0, EXIT_OK);
+        assert_eq!(
+            run(dir.path(), None, false, &["init", "--project", "demo"]).0,
+            EXIT_OK
+        );
         let sub = dir.path().join("crates").join("x");
         std::fs::create_dir_all(&sub).unwrap();
-        let (code, out, _) = run(&sub, Some("claude"), false, &["new", "port it", "--label", "Hub"]);
+        let (code, out, _) = run(
+            &sub,
+            Some("claude"),
+            false,
+            &["new", "port it", "--label", "Hub"],
+        );
         assert_eq!(code, EXIT_OK, "{out}");
         let id = json(&out)["id"].as_str().unwrap().to_string();
         assert!(id.starts_with("demo-"));
@@ -784,12 +893,20 @@ mod cli {
         // No --fence: the cache supplies it.
         let (code, _, _) = run(&sub, Some("claude"), false, &["beat", &id]);
         assert_eq!(code, EXIT_OK);
-        let (code, _, _) = run(&sub, Some("claude"), false, &["note", &id, "learned a thing", "--to", "codex"]);
+        let (code, _, _) = run(
+            &sub,
+            Some("claude"),
+            false,
+            &["note", &id, "learned a thing", "--to", "codex"],
+        );
         assert_eq!(code, EXIT_OK);
         let (code, out, _) = run(&sub, Some("claude"), false, &["done", &id, "shipped"]);
         assert_eq!(code, EXIT_OK, "{out}");
         assert_eq!(json(&out)["state"], "review");
-        assert!(!dir.path().join(".devagotchi/claims/claude.json").exists(), "cache cleared on done");
+        assert!(
+            !dir.path().join(".devagotchi/claims/claude.json").exists(),
+            "cache cleared on done"
+        );
         // The author may not review; codex may, and prime tells codex about the note.
         let (code, out, _) = run(&sub, Some("claude"), false, &["claim", &id]);
         assert_eq!(code, EXIT_CONFLICT);
@@ -807,6 +924,106 @@ mod cli {
     }
 
     #[test]
+    fn held_beat_all_and_the_hook_pack() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            run(dir.path(), None, false, &["init", "--project", "demo"]).0,
+            EXIT_OK
+        );
+        // Nothing held: `held` is an empty list, and empty text (the stop hook keys on that).
+        let (code, out, _) = run(dir.path(), Some("claude"), false, &["held"]);
+        assert_eq!(code, EXIT_OK);
+        assert_eq!(json(&out), serde_json::json!([]));
+        let (code, out, _) = run(dir.path(), Some("claude"), true, &["held"]);
+        assert_eq!(code, EXIT_OK);
+        assert_eq!(out.trim(), "");
+        let (code, out, _) = run(dir.path(), Some("claude"), false, &["beat"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        assert_eq!(json(&out), serde_json::json!([]));
+
+        for title in ["first", "second"] {
+            assert_eq!(run(dir.path(), None, false, &["new", title]).0, EXIT_OK);
+        }
+        for _ in 0..2 {
+            assert_eq!(
+                run(dir.path(), Some("claude"), false, &["claim"]).0,
+                EXIT_OK
+            );
+        }
+        let (code, out, _) = run(dir.path(), Some("claude"), false, &["held"]);
+        assert_eq!(code, EXIT_OK);
+        let held = json(&out);
+        assert_eq!(held.as_array().unwrap().len(), 2);
+        let before: Vec<i64> = held
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["lease_expires_at"].as_i64().unwrap())
+            .collect();
+        // `beat` with no id extends every held lease, with no cached fence needed.
+        std::fs::remove_dir_all(dir.path().join(".devagotchi/claims")).unwrap();
+        let (code, out, _) = run(dir.path(), Some("claude"), false, &["beat"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        let beaten = json(&out);
+        assert_eq!(beaten.as_array().unwrap().len(), 2);
+        for (lease, earlier) in beaten.as_array().unwrap().iter().zip(before) {
+            assert!(lease["lease_expires_at"].as_i64().unwrap() >= earlier);
+        }
+        let (_, out, _) = run(dir.path(), Some("claude"), true, &["held"]);
+        assert_eq!(out.lines().count(), 2, "{out}");
+        assert!(out.contains("fence"), "{out}");
+
+        // The hook pack: three executable scripts, the ignore line, both snippets.
+        let (code, out, _) = run(dir.path(), None, false, &["hooks"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        let hooks = json(&out);
+        for script in ["session-start.sh", "beat.sh", "stop.sh"] {
+            let path = dir.path().join(".devagotchi/hooks").join(script);
+            assert!(path.is_file(), "{script}");
+            let body = std::fs::read_to_string(&path).unwrap();
+            assert!(body.starts_with("#!/bin/sh\n"), "{script}");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                assert_eq!(
+                    std::fs::metadata(&path).unwrap().permissions().mode() & 0o111,
+                    0o111
+                );
+            }
+        }
+        assert!(
+            std::fs::read_to_string(dir.path().join(".devagotchi/hooks/stop.sh"))
+                .unwrap()
+                .contains("board held --text")
+        );
+        assert!(
+            std::fs::read_to_string(dir.path().join(".devagotchi/.gitignore"))
+                .unwrap()
+                .contains(cli::HOOK_MARKER_IGNORE)
+        );
+        assert!(
+            hooks["claude_code"]["hooks"]["Stop"][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("stop.sh claude")
+        );
+        assert!(
+            hooks["codex"]["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("session-start.sh codex")
+        );
+        let (code, out, _) = run(dir.path(), None, true, &["hooks", "--for", "codex"]);
+        assert_eq!(code, EXIT_OK);
+        assert!(
+            out.contains("Codex") && !out.contains("Claude Code"),
+            "{out}"
+        );
+        let (code, _, err) = run(dir.path(), None, false, &["hooks", "--for", "vim"]);
+        assert_eq!(code, EXIT_USAGE, "{err}");
+    }
+
+    #[test]
     fn exit_codes_and_next_hints_by_failure_class() {
         let dir = tempfile::tempdir().unwrap();
         let (code, _, err) = run(dir.path(), None, false, &["prime"]);
@@ -815,7 +1032,12 @@ mod cli {
         assert_eq!(run(dir.path(), None, false, &["init"]).0, EXIT_OK);
         let (code, out, _) = run(dir.path(), None, false, &["show", "nope"]);
         assert_eq!(code, EXIT_NOT_FOUND);
-        assert!(json(&out)["error"]["next"].as_str().unwrap().contains("board ls"));
+        assert!(
+            json(&out)["error"]["next"]
+                .as_str()
+                .unwrap()
+                .contains("board ls")
+        );
         let (code, _, err) = run(dir.path(), None, true, &["bogus"]);
         assert_eq!(code, EXIT_USAGE);
         assert!(err.contains("next: board --help"));
@@ -825,12 +1047,25 @@ mod cli {
         let (code, out, _) = run(dir.path(), Some("claude"), false, &["new", "held"]);
         assert_eq!(code, EXIT_OK);
         let id = json(&out)["id"].as_str().unwrap().to_string();
-        assert_eq!(run(dir.path(), Some("claude"), false, &["claim", &id]).0, EXIT_OK);
-        let (code, out, _) = run(dir.path(), Some("claude"), false, &["beat", &id, "--fence", "99"]);
+        assert_eq!(
+            run(dir.path(), Some("claude"), false, &["claim", &id]).0,
+            EXIT_OK
+        );
+        let (code, out, _) = run(
+            dir.path(),
+            Some("claude"),
+            false,
+            &["beat", &id, "--fence", "99"],
+        );
         assert_eq!(code, EXIT_CONFLICT);
         assert_eq!(json(&out)["error"]["code"], "stale_fence");
         // An agent may not force-release; the bare OS user (a person) may.
-        let (code, out, _) = run(dir.path(), Some("codex"), false, &["force", &id, "stuck session"]);
+        let (code, out, _) = run(
+            dir.path(),
+            Some("codex"),
+            false,
+            &["force", &id, "stuck session"],
+        );
         assert_eq!(code, 3);
         assert_eq!(json(&out)["error"]["code"], "humans_only");
         let (code, out, _) = run(dir.path(), None, false, &["force", &id, "stuck session"]);
@@ -841,7 +1076,10 @@ mod cli {
     #[test]
     fn prime_text_stays_short_and_names_the_protocol() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(run(dir.path(), None, false, &["init", "--project", "demo"]).0, EXIT_OK);
+        assert_eq!(
+            run(dir.path(), None, false, &["init", "--project", "demo"]).0,
+            EXIT_OK
+        );
         for n in 0..30 {
             let title = format!("ticket {n}");
             assert_eq!(run(dir.path(), None, false, &["new", &title]).0, EXIT_OK);
@@ -859,7 +1097,10 @@ mod cli {
     #[test]
     fn export_writes_one_json_line_per_ticket_and_verify_reads_the_chain() {
         let dir = tempfile::tempdir().unwrap();
-        assert_eq!(run(dir.path(), None, false, &["init", "--project", "demo"]).0, EXIT_OK);
+        assert_eq!(
+            run(dir.path(), None, false, &["init", "--project", "demo"]).0,
+            EXIT_OK
+        );
         assert_eq!(run(dir.path(), None, false, &["new", "a"]).0, EXIT_OK);
         assert_eq!(run(dir.path(), None, false, &["new", "b"]).0, EXIT_OK);
         let (code, out, _) = run(dir.path(), None, false, &["export"]);

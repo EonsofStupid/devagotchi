@@ -116,18 +116,68 @@ left), what is ready for it, tickets that need a person, notes addressed to it, 
 protocol. `board onboard` prints the block for pasting elsewhere; `board agent` prints the whole
 workflow. Identity on this surface is the OS user (the board file is theirs, as the broker's trust
 scope is): `--as` or `DEVAGOTCHI_ACTOR` names an agent, which may not force-release; the bare OS
-user is the person. Still to come in 8b: registering the project with the hub, the MCP snippets for
-each CLI, and `--hooks` for the hook pack (§7).
+user is the person. The same directory, named in the hub's `boards` config, is what the hub's
+`board_*` tools open (§6). Still to come in 8b: registering the project with the hub from here,
+the MCP snippets for each CLI, and `--hooks` for the hook pack (§7).
 
 ## 6. Surfaces (increment 8)
 
-MCP tools on the hub's existing `/mcp`, routed by the authenticated subject, one board per
-`project` argument: `board_whoami`, `board_ready`, `board_list`, `board_get`, `board_create`,
-`board_claim`, `board_claim_next`, `board_heartbeat`, `board_update`, `board_note`,
-`board_handoff`, `board_release`, `board_complete`, `board_deps`, `board_wait` (long-poll on the
-event feed). Every write accepts `request_id` for idempotent retries (kept per principal, replayed
-on the same request, `idempotency_mismatch` on a different one). The `hub` CLI's claim cache
-(`{id, fence, version}` per claim) comes along so agents never copy fences by hand.
+Two faces, one store. The command line (§5) is for agents on the host that holds the project;
+the hub's MCP tools are for agents anywhere. Both open `<project>/.devagotchi/board.sqlite3`
+(WAL, five-second busy timeout), so an agent on the hub's host and one across the world see one
+board, one chain.
+
+**MCP tools on the hub's `/mcp` (8b, built).** The hub config names the boards it serves and who
+may work on them, the way it names brokers:
+
+```json
+"boards": [ { "project": "devagotchi", "dir": "/srv/projects/devagotchi" } ],
+"grants": [
+  { "subject": "300000000000000001", "boards": ["devagotchi"], "human": true },
+  { "subject": "claude-on-gus",      "boards": ["devagotchi"] }
+]
+```
+
+`project` must be the name the board was initialised with (ids embed its prefix; a mismatch is
+refused at first use), `dir` is absolute, and an uninitialised directory is `no_board`, never
+silently created. A hub may serve boards and no broker, or nothing yet (whoami and `/healthz`
+still answer, so an installer can bring it up before its first board or machine). The actor is the authenticated subject;
+it is a person only when its grant says `human` or it is the owner (`whoami` reports `human` and
+`boards`). Agents never are, whatever they claim. No grant, no board: `not_granted`; a project the
+hub does not serve: `unknown_board`.
+
+Seventeen tools, each taking `project`: `board_prime` (start here), `board_ready`, `board_list`,
+`board_get`, `board_create`, `board_claim` (by id, or the best ready ticket when `id` is omitted;
+`claimed: false` when nothing is ready), `board_heartbeat`, `board_update`, `board_note`,
+`board_handoff`, `board_release`, `board_complete`, `board_dep`, `board_force_release` (people
+only), `board_events`, `board_wait` (long-poll on the event feed, at most 25 s), `board_verify`.
+Outputs are the store's records with JSON Schemas; a refusal is `{code, message, ticket?, next}`
+with the store's stable code (§4) and what to call next, as the CLI's `next` does. The fence may
+be omitted on a held ticket: the hub keeps the fence it last handed that subject for that ticket
+(claim or heartbeat), as the CLI's claim cache does, and forgets it on complete, handoff or
+release; the store still checks whatever is passed, so a lost lease is refused either way. Every
+call lands on the hub's audit chain (`tool`, the project under `broker`, the ticket under
+`operation_id`, the outcome), and a lapsed lease is reaped every minute as well as lazily on claim.
+`tests/board_probe.py` works a board as three subscriptions (a person, two agents) and then reads
+it back with the command line; `tests/e2e.py` runs it.
+
+**The hook pack (8b, built).** `devagotchi-hub board hooks [--for claude-code|codex|all]` writes
+three POSIX scripts under `.devagotchi/hooks/` and prints the hook configuration to add:
+`session-start.sh` runs `board prime --text` (its stdout is the session's first context),
+`beat.sh` runs `board beat` (every held lease, at most once a minute so the chain does not fill
+with heartbeats), `stop.sh` refuses a stop while the actor holds a ticket (exit 2, which Claude
+Code and Codex treat as "do not stop, here is why") once, and allows the second attempt so an
+agent that cannot finish does not loop — the lease then lapses and the reaper requeues the
+ticket. The actor name is the scripts' argument, so one pack serves every CLI; Claude Code
+(`.claude/settings.json`) and Codex (`.codex/hooks.json`, feature `codex_hooks`) get printed
+snippets; the others wire the same scripts to their own session-start / after-tool / stop
+events. `board held` and `board beat` with no id exist for the pack. The skill that teaches all
+of this to a seat lives in agent-skills (`hubs/intelligence/devagotchi-board/`), with the MCP
+connection snippet per CLI.
+
+Not built yet from the 8b list: `request_id` idempotent retries on writes (the store's version
+check and `already_held` cover the common retries) and project registration from the CLI
+(`board init --hub`). They stay in packet 8b.
 
 ## 7. What the CLI agents can do now, and what the board does for them
 
@@ -199,7 +249,7 @@ policy-unconfirmed until Google answers; the seat's config row carries that flag
 |---|---|---|
 | 7 (this one) | `crates/hub/src/board/`: schema, ids, workflow, store, leases, reaper, chain; this document | `cargo nextest run -p devagotchi-hub` green; §2 acceptance list |
 | 8a (in) | `devagotchi-hub board` CLI: `init` (+ AGENTS.md block), `prime`, `onboard`, `agent`, `ready`, `ls`, `show`, `new`, `claim`, `beat`, `note`, `done`, `handoff`, `release`, `force`, `set`, `dep`, `reap`, `verify`, `export`; JSON off a pipe, `--quiet`, exit codes by class, `next` on every error, claim cache | five CLI tests: init idempotence, the loop from a subdirectory with a cached fence, exit codes and hints, `prime` ≤ 50 lines, export + verify |
-| 8b | MCP tools on `/mcp` (one board per `project`), project registration with the hub, MCP snippets per CLI, `--hooks` hook pack, the skill | `tests/e2e.py` claims a ticket over MCP as two subjects; hooks exercised on Claude Code and Codex |
+| 8b (in) | MCP tools on `/mcp` (one board per `project`; **built**, §6: `boards` config, grants with `boards`/`human`, 17 tools, fence memory, audit, reaper, `tests/board_probe.py`); the hook pack (`board hooks`, **built**); the skill with the MCP snippet per CLI (**built**, agent-skills); still open: project registration with the hub, `request_id` | `tests/e2e.py` works a board over MCP as a person and two agents (**green**); the hook scripts exercised against the CLI (stop refused once while holding, beat throttled) in the CLI tests and by hand; on Claude Code and Codex themselves: open |
 | 9 | Broker liveness (B05), attempts link, message tickets, path reservations, per-state WIP, budgets | A lease survives an agent that never heartbeats while its operation runs; two agents cannot edit one reserved path |
 | 10 | Web: `/board`, `/board/<id>`, Approve | Phone-width pages served by the existing axum app |
 | 11 | Freeze the Go `agent-hub` | Parity tests pass here; banner there |

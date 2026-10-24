@@ -141,6 +141,7 @@ async fn world() -> World {
     let state = AppState {
         verifier: Arc::new(verifier),
         hub: Hub {
+            boards: Arc::new(crate::board::mcp::Boards::from_config(&config)),
             config,
             audit,
             links,

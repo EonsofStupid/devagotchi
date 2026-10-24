@@ -26,12 +26,28 @@ pub struct HubConfig {
     /// Brokers this hub can route to: local ones by their IPC endpoint, and brokers on
     /// other machines reached through the link their `devagotchi-link` holds open.
     pub brokers: Vec<BrokerEntry>,
-    /// Which authenticated subject may use which brokers. No grant, no route.
+    /// Which authenticated subject may use which brokers and boards. No grant, no route.
     pub grants: Vec<Grant>,
+    /// Project boards this hub serves over `/mcp` (`board_*` tools): each is a project
+    /// directory on this host that `devagotchi-hub board init` prepared, so the same
+    /// store answers the command line here and agents anywhere.
+    #[serde(default)]
+    pub boards: Vec<BoardEntry>,
     /// Browser sign-in for people: `/account` shows who you are signed in as and your
     /// machines. Nomen sign-in only. Absent: no pages, only `/mcp`, `/link` and the APIs.
     #[serde(default)]
     pub web: Option<WebConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BoardEntry {
+    /// The project name callers pass as `project`; `[a-z0-9][a-z0-9-]{0,62}`. It must be
+    /// the name the board was initialised with (`.devagotchi/config.json`), because ticket
+    /// ids embed its prefix.
+    pub project: String,
+    /// Absolute path of the project directory holding `.devagotchi/board.sqlite3`.
+    pub dir: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -104,7 +120,15 @@ pub struct Grant {
     /// The subject as the identity provider names it (`sub`), or the dev token's subject.
     pub subject: String,
     /// Broker names this subject may route to.
+    #[serde(default)]
     pub brokers: Vec<String>,
+    /// Project boards this subject may work on.
+    #[serde(default)]
+    pub boards: Vec<String>,
+    /// The subject is a person, not an agent: on a board they may force-release a ticket
+    /// and move one by hand. The owner is always a person; agents never are.
+    #[serde(default)]
+    pub human: bool,
 }
 
 impl HubConfig {
@@ -197,10 +221,10 @@ impl HubConfig {
                 ));
             }
         }
-        if self.brokers.is_empty() || self.brokers.len() > 256 {
-            return Err(invalid(
-                "brokers must list between 1 and 256 entries".into(),
-            ));
+        // Both lists may be empty: a hub that serves nothing yet still answers whoami and
+        // /healthz, so an installer can bring it up before its first board or machine.
+        if self.brokers.len() > 256 || self.boards.len() > 256 {
+            return Err(invalid("at most 256 brokers and 256 boards".into()));
         }
         let mut names = BTreeSet::new();
         for broker in &self.brokers {
@@ -234,6 +258,27 @@ impl HubConfig {
                 }
             }
         }
+        let mut projects = BTreeSet::new();
+        for board in &self.boards {
+            if !valid_name(&board.project) {
+                return Err(invalid(format!(
+                    "board project {:?} is not [a-z0-9][a-z0-9-]{{0,62}}",
+                    board.project
+                )));
+            }
+            if !projects.insert(board.project.as_str()) {
+                return Err(invalid(format!(
+                    "board project {:?} is listed twice",
+                    board.project
+                )));
+            }
+            if !Path::new(&board.dir).is_absolute() {
+                return Err(invalid(format!(
+                    "board {:?}: dir must be an absolute path",
+                    board.project
+                )));
+            }
+        }
         if self.grants.len() > 4096 {
             return Err(invalid("at most 4096 grants".into()));
         }
@@ -247,6 +292,14 @@ impl HubConfig {
                     )));
                 }
             }
+            for project in &grant.boards {
+                if !projects.contains(project.as_str()) {
+                    return Err(invalid(format!(
+                        "grant for {:?} names unknown board {:?}",
+                        grant.subject, project
+                    )));
+                }
+            }
         }
         Ok(())
     }
@@ -254,6 +307,30 @@ impl HubConfig {
     /// Whether this subject is the hub's configured owner.
     pub fn is_owner(&self, subject: &str) -> bool {
         self.owner.as_deref() == Some(subject)
+    }
+
+    /// Whether this subject acts as a person on boards: the owner, or a grant that says so.
+    pub fn is_human(&self, subject: &str) -> bool {
+        self.is_owner(subject) || self.grants.iter().any(|g| g.subject == subject && g.human)
+    }
+
+    /// Boards the subject may work on, in config order. The owner reaches every board.
+    pub fn boards_for(&self, subject: &str) -> Vec<&BoardEntry> {
+        if self.is_owner(subject) {
+            return self.boards.iter().collect();
+        }
+        let mut allowed = BTreeSet::new();
+        for grant in self.grants.iter().filter(|g| g.subject == subject) {
+            allowed.extend(grant.boards.iter().map(String::as_str));
+        }
+        self.boards
+            .iter()
+            .filter(|b| allowed.contains(b.project.as_str()))
+            .collect()
+    }
+
+    pub fn board(&self, project: &str) -> Option<&BoardEntry> {
+        self.boards.iter().find(|b| b.project == project)
     }
 
     /// Broker names the subject may route to, in config order, without duplicates.
@@ -538,5 +615,68 @@ mod tests {
                 "{issuer}"
             );
         }
+    }
+
+    #[cfg(unix)]
+    const PROJECT_DIR: &str = "/srv/projects/devagotchi";
+    #[cfg(windows)]
+    const PROJECT_DIR: &str = r"D:\projects\devagotchi";
+
+    #[test]
+    fn boards_are_granted_like_brokers_and_people_are_declared() {
+        let mut with_boards = good();
+        with_boards["boards"] =
+            serde_json::json!([{ "project": "devagotchi", "dir": PROJECT_DIR }]);
+        with_boards["grants"] = serde_json::json!([
+            { "subject": "jesse", "brokers": ["gold-ws"], "boards": ["devagotchi"], "human": true },
+            { "subject": "claude-on-gus", "boards": ["devagotchi"] },
+            { "subject": "reader", "brokers": ["gold-ws"] }
+        ]);
+        let config = parse(&with_boards).unwrap();
+        assert_eq!(config.boards_for("jesse").len(), 1);
+        assert_eq!(config.boards_for("claude-on-gus").len(), 1);
+        assert!(config.boards_for("reader").is_empty());
+        assert!(config.boards_for("nobody").is_empty());
+        assert!(config.is_human("jesse"));
+        assert!(
+            !config.is_human("claude-on-gus"),
+            "an agent's grant never makes it a person"
+        );
+        assert!(
+            config.brokers_for("claude-on-gus").is_empty(),
+            "a board grant is not a broker grant"
+        );
+        assert_eq!(config.board("devagotchi").unwrap().dir, PROJECT_DIR);
+
+        // A hub may serve boards alone, with no broker at all, or nothing yet.
+        let mut boards_only = with_boards.clone();
+        boards_only["brokers"] = serde_json::json!([]);
+        boards_only["grants"] =
+            serde_json::json!([{ "subject": "jesse", "boards": ["devagotchi"] }]);
+        assert!(parse(&boards_only).is_ok());
+        let mut nothing = boards_only.clone();
+        nothing["boards"] = serde_json::json!([]);
+        nothing["grants"] = serde_json::json!([]);
+        let empty = parse(&nothing).unwrap();
+        assert!(empty.brokers_for("jesse").is_empty() && empty.boards_for("jesse").is_empty());
+
+        let mut dangling = with_boards.clone();
+        dangling["grants"][1]["boards"] = serde_json::json!(["other"]);
+        assert_eq!(parse(&dangling).unwrap_err().code, "invalid_config");
+
+        let mut relative = with_boards.clone();
+        relative["boards"][0]["dir"] = serde_json::json!("projects/devagotchi");
+        assert_eq!(parse(&relative).unwrap_err().code, "invalid_config");
+
+        let mut bad_name = with_boards.clone();
+        bad_name["boards"][0]["project"] = serde_json::json!("Devagotchi Main");
+        assert_eq!(parse(&bad_name).unwrap_err().code, "invalid_config");
+
+        let mut twice = with_boards;
+        twice["boards"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({ "project": "devagotchi", "dir": PROJECT_DIR }));
+        assert_eq!(parse(&twice).unwrap_err().code, "invalid_config");
     }
 }
