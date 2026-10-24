@@ -1,8 +1,10 @@
 //! `devagotchi hub`: the bastion. Authenticates every caller through the identity
 //! provider, routes typed operations to the broker that owns the target machine,
 //! and audits each call on a hash chain. It never admits a job itself. This library
-//! is its whole behaviour; `devagotchi hub` and `devagotchi board` are its names.
+//! is its whole behaviour; `devagotchi hub` and `devagotchi board` are its names, and
+//! `devagotchi login`, `logout` and `whoami` (`account`) are how a machine signs in to one.
 
+pub mod account;
 mod audit;
 mod auth;
 pub mod board;

@@ -29,6 +29,9 @@ Usage: devagotchi <command> [options]
   broker       the broker with explicit paths: broker run --state-dir DIR --config FILE
   hub          the hub: hub serve | enroll | revoke | devices (hub --help)
   link         this machine's outbound link to a hub: link enroll | run (link --help)
+  login        sign in with your Shippin account (login --local: no account, this machine only)
+  logout       revoke the tokens and forget the account
+  whoami       who this machine is signed in as
   version      print the version
   help [cmd]   this text, or a command's own
 
@@ -52,6 +55,7 @@ fn run(args: Vec<OsString>) -> ExitCode {
         Some("broker") => devagotchi_broker::cli(args),
         Some("hub") => devagotchi_hub::cli(args),
         Some("link") => devagotchi_link::cli(args),
+        Some(verb @ ("login" | "logout" | "whoami")) => account(verb, args),
         Some("version" | "--version" | "-V") => {
             println!("devagotchi {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
@@ -71,6 +75,21 @@ fn run(args: Vec<OsString>) -> ExitCode {
             ExitCode::from(64)
         }
     }
+}
+
+/// `devagotchi login|logout|whoami`: the account file lives beside the broker's config.
+fn account(verb: &str, args: Vec<OsString>) -> ExitCode {
+    let Some(config_dir) = paths::config_dir() else {
+        eprintln!(
+            "devagotchi {verb}: no home directory in the environment; set DEVAGOTCHI_CONFIG_DIR"
+        );
+        return ExitCode::from(64);
+    };
+    devagotchi_hub::account::cli(
+        verb,
+        args,
+        config_dir.join(devagotchi_hub::account::FILE_NAME),
+    )
 }
 
 /// `devagotchi mcp [--socket ENDPOINT]`: without the flag, the endpoint `devagotchi start`
@@ -116,6 +135,9 @@ mod tests {
             ExitCode::SUCCESS
         );
         assert_eq!(run(vec!["mcp".into(), "--help".into()]), ExitCode::SUCCESS);
+        for verb in ["login", "logout", "whoami"] {
+            assert_eq!(run(vec![verb.into(), "--help".into()]), ExitCode::SUCCESS);
+        }
         assert_eq!(
             run(vec!["start".into(), "--help".into()]),
             ExitCode::SUCCESS

@@ -11,7 +11,11 @@ operation (tests/hub_probe.py); a member reaches only its grant; tokens for anot
 project, from another issuer, issued to an application the hub does not accept,
 inactive, naming an email or a padded account ID are refused with 401; a Nomen
 outage answers 503 (never a refusal) while a session Nomen already confirmed keeps
-working, and sign-in recovers when Nomen does. Exit 0 only when every step holds.
+working, and sign-in recovers when Nomen does. Then the terminal sign-in (D22, packet 14):
+`devagotchi login` against the fake, with no browser — the code and URL are shown, the
+tokens land owner-only in account.json, `whoami` names the account, the hub accepts the
+token that landed (an agent's call carries the account), and `logout` revokes it.
+Exit 0 only when every step holds.
 """
 import argparse
 import json
@@ -134,8 +138,8 @@ base = f"http://127.0.0.1:{port}"
 config = {
     "listen": f"127.0.0.1:{port}",
     "public_url": base,
-    "auth": {"mode": "nomen", "issuer": nomen.issuer, "audiences": [HUB_PROJECT], "clients": ["shippin-mcp"],
-             "key_file": str(key_file)},
+    "auth": {"mode": "nomen", "issuer": nomen.issuer, "audiences": [HUB_PROJECT],
+             "clients": ["shippin-mcp", "devagotchi-cli@shippin"], "key_file": str(key_file)},
     "owner": OWNER,
     "brokers": [{"name": "local", "socket": args.endpoint}, {"name": "elsewhere", "link": True}],
     "grants": [{"subject": MEMBER, "brokers": ["local"]}],
@@ -209,6 +213,44 @@ try:
     status_back, _, me = whoami(base, "tok-member-2")
     check("sign-in recovers with Nomen", status_back == 200 and me and me.get("subject") == MEMBER,
           f"HTTP {status_back}")
+
+    print("--- terminal sign-in: devagotchi login against the fake, no browser", flush=True)
+    cli_config = args.work / "cli-config"
+    env = {**os.environ, "DEVAGOTCHI_CONFIG_DIR": str(cli_config)}
+    nomen.userinfo["tok-device"] = {"sub": MEMBER, "preferred_username": "member", "email": "member@example.test"}
+    nomen.answers["tok-device"] = nomen.active(MEMBER, [HUB_PROJECT], client_id="devagotchi-cli@shippin",
+                                               username="member")
+    before = subprocess.run([args.devagotchi, "whoami"], capture_output=True, text=True, timeout=30, env=env)
+    check("whoami before: not signed in", before.returncode == 0 and "not signed in" in before.stdout,
+          before.stdout.strip())
+    login = subprocess.run([args.devagotchi, "login", "--issuer", nomen.issuer, "--client-id", "devagotchi-cli@shippin"],
+                           capture_output=True, text=True, timeout=60, env=env, stdin=subprocess.DEVNULL)
+    check("login shows the code and the URL, then signs in", login.returncode == 0 and "WXYZ-1234" in login.stderr
+          and f"{nomen.issuer}/device" in login.stderr and f"account {MEMBER}" in login.stderr,
+          login.stderr.strip().replace("\n", " | ")[:300])
+    account_file = cli_config / "account.json"
+    stored = json.loads(account_file.read_text()) if account_file.is_file() else {}
+    check("account.json holds the account", stored.get("kind") == "account" and stored.get("subject") == MEMBER
+          and stored.get("access_token") == "tok-device" and stored.get("username") == "member", json.dumps(stored)[:200])
+    if os.name != "nt":
+        check("account.json is owner-only", (account_file.stat().st_mode & 0o777) == 0o600,
+              oct(account_file.stat().st_mode & 0o777))
+    me_cli = subprocess.run([args.devagotchi, "whoami", "--json"], capture_output=True, text=True, timeout=30, env=env)
+    me_json = json.loads(me_cli.stdout or "{}")
+    check("whoami names the account", me_cli.returncode == 0 and me_json.get("signed_in") is True
+          and me_json.get("subject") == MEMBER and me_json.get("standing") == "fresh", me_cli.stdout.strip())
+    # The token that landed is a token the hub accepts: an agent's call carries the account.
+    status, _, me = whoami(base, stored.get("access_token", ""))
+    check("the hub accepts the token login landed", status == 200 and me and me.get("subject") == MEMBER
+          and me.get("via") == "nomen" and me.get("brokers") == ["local"], json.dumps(me))
+    logout = subprocess.run([args.devagotchi, "logout"], capture_output=True, text=True, timeout=30, env=env)
+    check("logout revokes both tokens and removes the file", logout.returncode == 0
+          and nomen.revoked == ["tok-device", "rt-device"] and not account_file.exists(),
+          f"{logout.stderr.strip()} revoked={nomen.revoked}")
+    local = subprocess.run([args.devagotchi, "login", "--local"], capture_output=True, text=True, timeout=30, env=env)
+    after = subprocess.run([args.devagotchi, "whoami"], capture_output=True, text=True, timeout=30, env=env)
+    check("login --local is the accountless choice, on file", local.returncode == 0 and "runs locally" in after.stdout,
+          after.stdout.strip())
 finally:
     hub.terminate()
     try:

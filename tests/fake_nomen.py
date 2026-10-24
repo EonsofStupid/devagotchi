@@ -1,5 +1,7 @@
 """A fake Nomen for tests: token introspection that checks the caller's private-key JWT,
-and the token endpoint of the browser sign-in (authorization code with PKCE).
+the token endpoint of the browser sign-in (authorization code with PKCE), and the device
+authorization grant `devagotchi login` uses from a terminal (RFC 8628: the code is
+"confirmed" on the second poll), with userinfo and revocation.
 
 Standard library only, so it runs on every CI runner. It mints an RSA key for the hub's
 API application (written as the JSON key file Nomen downloads) and verifies the hub's
@@ -95,6 +97,11 @@ class FakeNomen:
         # Authorization codes for the browser sign-in: code -> what it was issued for.
         self.codes = {}
         self.token_calls = 0
+        # Device sign-in (devagotchi login): device_code -> polls so far; what it lands.
+        self.devices = {}
+        self.device_grant = {"access_token": "tok-device", "refresh_token": "rt-device", "expires_in": 3600}
+        self.userinfo = {}      # access token -> the userinfo answer
+        self.revoked = []
         self.calls = 0
         self.status = 200
         self.lock = threading.Lock()
@@ -112,11 +119,27 @@ class FakeNomen:
                 self.end_headers()
                 self.wfile.write(raw)
 
+            def do_GET(self):
+                if self.path != "/oidc/v1/userinfo":
+                    return self.reply(404, {"error": "not_found"})
+                bearer = (self.headers.get("Authorization") or "").removeprefix("Bearer ")
+                with fake.lock:
+                    info = fake.userinfo.get(bearer)
+                if info is None:
+                    return self.reply(401, {"error": "invalid_token"})
+                self.reply(200, info)
+
             def do_POST(self):
                 length = int(self.headers.get("Content-Length") or 0)
                 form = urllib.parse.parse_qs(self.rfile.read(length).decode())
                 if self.path == "/oauth/v2/token":
                     return fake.token(self, form)
+                if self.path == "/oauth/v2/device_authorization":
+                    return fake.device_authorization(self, form)
+                if self.path == "/oauth/v2/revoke":
+                    with fake.lock:
+                        fake.revoked.append((form.get("token") or [""])[0])
+                    return self.reply(200, {})
                 with fake.lock:
                     fake.calls += 1
                     status = fake.status
@@ -158,8 +181,22 @@ class FakeNomen:
             self.codes[code] = (challenge, access_token, client_id, redirect_uri, expires_in)
         return code
 
+    def device_authorization(self, handler, form):
+        """RFC 8628 §3.2: a device code and the short code a person types in anywhere."""
+        field = lambda key: (form.get(key) or [""])[0]  # noqa: E731
+        if field("client_id") != "devagotchi-cli@shippin" or "openid" not in field("scope"):
+            return handler.reply(400, {"error": "invalid_client"})
+        device_code = secrets.token_urlsafe(18)
+        with self.lock:
+            self.devices[device_code] = 0
+        handler.reply(200, {"device_code": device_code, "user_code": "WXYZ-1234",
+                            "verification_uri": f"{self.issuer}/device",
+                            "verification_uri_complete": f"{self.issuer}/device?user_code=WXYZ-1234",
+                            "expires_in": 300, "interval": 1})
+
     def token(self, handler, form):
-        """The token endpoint for a public client: the code, once, with its PKCE verifier."""
+        """The token endpoint for a public client: the code, once, with its PKCE verifier;
+        or the device grant, pending on the first poll and confirmed on the second."""
         field = lambda key: (form.get(key) or [""])[0]  # noqa: E731
         with self.lock:
             self.token_calls += 1
@@ -167,6 +204,16 @@ class FakeNomen:
             issued = self.codes.pop(field("code"), None)
         if status != 200:
             return handler.reply(status, {"error": "unavailable"})
+        if field("grant_type") == "urn:ietf:params:oauth:grant-type:device_code":
+            with self.lock:
+                polls = self.devices.get(field("device_code"))
+                if polls is not None:
+                    self.devices[field("device_code")] = polls + 1
+            if polls is None or field("client_id") != "devagotchi-cli@shippin":
+                return handler.reply(400, {"error": "invalid_grant"})
+            if polls == 0:
+                return handler.reply(400, {"error": "authorization_pending"})
+            return handler.reply(200, {**self.device_grant, "token_type": "Bearer"})
         if issued is None or field("grant_type") != "authorization_code":
             return handler.reply(400, {"error": "invalid_grant"})
         challenge, access_token, client_id, redirect_uri, expires_in = issued

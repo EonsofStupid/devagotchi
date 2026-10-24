@@ -60,6 +60,8 @@ cargo build --locked --bins
 cargo test --locked --lib
 ```
 
+The account (D22): `devagotchi login` signs in with your Shippin account from any terminal — it shows a code and a URL, you confirm on any device, and the tokens land owner-only in `~/.config/devagotchi/account.json` (`whoami` names the account, `logout` revokes). `devagotchi login --local` records the other choice: no account, everything on this machine. `devagotchi start` says which it is until one is on file.
+
 The quick way: `devagotchi start` runs your broker with no paths to remember — the first run writes `broker.json` (workspace: your home directory, or `--workspace`; grants: the toolchains found on PATH, plus `--grant`) under `~/.config/devagotchi`, keeps its state under `~/.local/state/devagotchi`, and tells `devagotchi mcp` where to find it. The explicit way, with your own config (`config/broker.example.json` as a template; absolute, existing paths; only executables you intend to authorize; the state directory's parent must already exist — the broker creates the state directory with mode `0700` or verifies an existing private directory):
 
 ```bash

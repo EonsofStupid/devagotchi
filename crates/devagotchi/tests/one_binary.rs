@@ -14,13 +14,17 @@ fn help_names_every_command_and_each_answers_help() {
     let out = devagotchi().arg("--help").output().unwrap();
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
-    for word in ["start", "mcp", "board", "broker", "hub", "link", "version"] {
+    for word in [
+        "start", "mcp", "board", "broker", "hub", "link", "login", "logout", "whoami", "version",
+    ] {
         assert!(
             text.contains(&format!("\n  {word}")),
             "{word} missing from:\n{text}"
         );
     }
-    for command in ["start", "mcp", "board", "broker", "hub", "link"] {
+    for command in [
+        "start", "mcp", "board", "broker", "hub", "link", "login", "logout", "whoami",
+    ] {
         let out = devagotchi().args([command, "--help"]).output().unwrap();
         assert!(
             out.status.success(),
@@ -195,6 +199,42 @@ fn start_then_mcp_then_board_from_one_binary() {
         .unwrap();
     let prime: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(prime["ready"].as_array().unwrap().len(), 1, "{prime}");
+
+    // The account, from the same config directory: nothing on file, the local choice, forgotten.
+    let whoami = |expect: &str| {
+        let out = devagotchi()
+            .arg("whoami")
+            .envs(env.iter().cloned())
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && text.contains(expect), "{text}");
+    };
+    whoami("not signed in");
+    let out = devagotchi()
+        .args(["login", "--local"])
+        .envs(env.iter().cloned())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(config_dir.join("account.json").is_file());
+    whoami("runs locally");
+    let out = devagotchi()
+        .arg("logout")
+        .envs(env.iter().cloned())
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!config_dir.join("account.json").exists());
+    whoami("not signed in");
 
     // Stop the broker the way a terminal does; it settles and removes the endpoint file.
     Command::new("kill")
