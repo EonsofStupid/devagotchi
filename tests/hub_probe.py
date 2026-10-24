@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Probe a running devagotchi-hub over Streamable HTTP MCP.
+"""Probe a running hub (`devagotchi hub serve`) over Streamable HTTP MCP.
 
     python3 tests/hub_probe.py http://127.0.0.1:8787 --token <bearer> --broker <name> [--git /usr/bin/git] [--cwd DIR]
     python3 tests/hub_probe.py http://127.0.0.1:8787 --token <bearer> --broker <name> --expect-error broker_offline

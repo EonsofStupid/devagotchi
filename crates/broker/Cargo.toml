@@ -1,6 +1,6 @@
 [package]
 name = "devagotchi-broker"
-description = "The independently running per-user Devagotchi broker process"
+description = "The independently running per-user Devagotchi broker (`devagotchi start`, `devagotchi broker run`)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,16 +16,9 @@ workspace = true
 name = "devagotchi_broker"
 path = "src/lib.rs"
 
-[[bin]]
-name = "bridge-broker"
-path = "src/main.rs"
-
 [dependencies]
 devagotchi-contracts = { workspace = true }
 devagotchi-core = { workspace = true }
 devagotchi-ipc = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-
-[package.metadata.dist]
-dist = true

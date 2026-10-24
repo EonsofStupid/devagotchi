@@ -21,7 +21,7 @@ These tools read public product reference only. They do not execute commands, ac
 
 ## Local workstation execution
 
-An installed local MCP host launches bridge-mcp --socket ABS_PATH. The independently launched broker owns execution. Four tools: operation_start, operation_get, operation_read, operation_cancel. See the quickstart topic for exact arguments and limits.
+An installed local MCP host launches `devagotchi mcp` (with --socket ABS_PATH when the broker was started by hand). The independently launched broker owns execution. Four tools: operation_start, operation_get, operation_read, operation_cancel. See the quickstart topic for exact arguments and limits.
 
 The source archive is a Linux developer preview, not an installer. No project license has been selected. No named-host or cross-platform release certification, comparative performance win, or distributed exactly-once guarantee is claimed.
 

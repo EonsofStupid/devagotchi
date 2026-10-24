@@ -44,7 +44,7 @@ if [ -z "$stray" ]; then echo "  ok    nothing stray in \$HOME"; else echo "  no
 echo "services:"
 if [ -d /run/systemd/system ]; then
   check linger sh -c "loginctl show-user '$(id -un)' -p Linger --value | grep -qx yes && echo yes"
-  if [ -x "$DEVSPACE_ROOT/bin/bridge-broker" ]; then
+  if [ -x "$DEVSPACE_ROOT/bin/devagotchi" ]; then
     check devagotchi-broker systemctl --user is-active devagotchi-broker
   else
     echo "  note  broker not built yet (README: Build and start the broker)"

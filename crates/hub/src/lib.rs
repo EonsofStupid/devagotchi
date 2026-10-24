@@ -1,8 +1,7 @@
-//! devagotchi-hub: the bastion. Authenticates every caller through the identity
+//! `devagotchi hub`: the bastion. Authenticates every caller through the identity
 //! provider, routes typed operations to the broker that owns the target machine,
 //! and audits each call on a hash chain. It never admits a job itself. This library
-//! is its whole behaviour; `devagotchi-hub` and `devagotchi hub` / `devagotchi board`
-//! are names for [`cli`].
+//! is its whole behaviour; `devagotchi hub` and `devagotchi board` are its names.
 
 mod audit;
 mod auth;
@@ -44,7 +43,7 @@ use crate::{
     link::Links,
 };
 
-pub const USAGE: &str = "Usage:\n  devagotchi hub serve --state-dir ABS_PATH --config ABS_JSON\n  devagotchi hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi hub devices --state-dir ABS_PATH\n  devagotchi board <command> …            the agents' board in this project (board --help)\n\nserve starts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\noperation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' devagotchi-link connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.";
+pub const USAGE: &str = "Usage:\n  devagotchi hub serve --state-dir ABS_PATH --config ABS_JSON\n  devagotchi hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi hub devices --state-dir ABS_PATH\n  devagotchi board <command> …            the agents' board in this project (board --help)\n\nserve starts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\noperation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' `devagotchi link` connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -172,7 +171,7 @@ fn manage(command: Command) -> BridgeResult<()> {
             // The code is the one secret this prints; it goes to stdout only, once.
             println!("{code}");
             eprintln!(
-                "One-time code for {device}, valid {} minutes; any earlier unused code for {device} no longer works.\nOn that machine, with the code in DEVAGOTCHI_ENROLL_CODE (or on stdin):\n  devagotchi-link enroll --state-dir ... --hub ... --device {device} --broker ...",
+                "One-time code for {device}, valid {} minutes; any earlier unused code for {device} no longer works.\nOn that machine, with the code in DEVAGOTCHI_ENROLL_CODE (or on stdin):\n  devagotchi link enroll --state-dir ... --hub ... --device {device} --broker ...",
                 devices::CODE_TTL_SECS / 60
             );
         }
@@ -222,34 +221,34 @@ pub fn cli(args: Vec<OsString>) -> ExitCode {
             return match manage(command) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
-                    eprintln!("devagotchi-hub: {error}");
+                    eprintln!("devagotchi hub: {error}");
                     ExitCode::FAILURE
                 }
             };
         }
         Err(error) => {
-            eprintln!("devagotchi-hub: {error}\n\n{USAGE}");
+            eprintln!("devagotchi hub: {error}\n\n{USAGE}");
             return ExitCode::from(64);
         }
     };
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("devagotchi-hub: runtime: {error}");
+            eprintln!("devagotchi hub: runtime: {error}");
             return ExitCode::FAILURE;
         }
     };
     match runtime.block_on(run(state_dir, config_path)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("devagotchi-hub: {error}");
+            eprintln!("devagotchi hub: {error}");
             ExitCode::FAILURE
         }
     }
 }
 
 /// The board's command line on this process's stdio, as the OS user, from the current
-/// directory: what `devagotchi board …` and `devagotchi-hub board …` run.
+/// directory: what `devagotchi board …` runs.
 pub fn board_cli(args: Vec<OsString>) -> ExitCode {
     use std::io::IsTerminal;
     let invocation = board::cli::Invocation {
@@ -309,7 +308,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
                 let _ = tokio::task::spawn_blocking(move || {
                     for (project, result) in reaper.reap_all() {
                         if let Err(error) = result {
-                            eprintln!("devagotchi-hub: board {project}: reap failed: {error}");
+                            eprintln!("devagotchi hub: board {project}: reap failed: {error}");
                         }
                     }
                 })
@@ -389,16 +388,16 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         .map_err(|error| BridgeError::new("listen", format!("{listen}: {error}")))?;
     // Everything worth reading at start comes before the ready line callers wait for.
     if let Some(owner) = &config.owner {
-        eprintln!("devagotchi-hub owner: {owner} reaches every broker");
+        eprintln!("devagotchi hub owner: {owner} reaches every broker");
     }
     if state.web.is_some() {
         eprintln!(
-            "devagotchi-hub web sign-in: {}/account",
+            "devagotchi hub web sign-in: {}/account",
             config.public_url.trim_end_matches('/')
         );
     }
     eprintln!(
-        "devagotchi-hub ready: http://{listen}/mcp ({} brokers, auth {})",
+        "devagotchi hub ready: http://{listen}/mcp ({} brokers, auth {})",
         config.brokers.len(),
         match &config.auth {
             config::AuthConfig::Nomen { issuer, .. } => format!("nomen {issuer}"),
@@ -415,7 +414,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     })
     .await
     .map_err(|error| BridgeError::new("serve", error.to_string()))?;
-    eprintln!("devagotchi-hub stopped");
+    eprintln!("devagotchi hub stopped");
     Ok(())
 }
 
@@ -452,7 +451,7 @@ async fn require_bearer(
             challenge(StatusCode::UNAUTHORIZED, &metadata, Some("invalid_token"))
         }
         Err(AuthError::Unavailable(why)) => {
-            eprintln!("devagotchi-hub: issuer unavailable: {why}");
+            eprintln!("devagotchi hub: issuer unavailable: {why}");
             (
                 StatusCode::SERVICE_UNAVAILABLE,
                 "identity provider unavailable",
@@ -484,7 +483,7 @@ fn log_refusal(why: &str) {
         } else {
             String::new()
         };
-        eprintln!("devagotchi-hub: refused a bearer token: {why}{more}");
+        eprintln!("devagotchi hub: refused a bearer token: {why}{more}");
     } else {
         SUPPRESSED.fetch_add(1, Ordering::Relaxed);
     }

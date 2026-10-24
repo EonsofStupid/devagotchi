@@ -53,8 +53,8 @@ new_main_pid() {  # new_main_pid UNIT OLD: running again under another, real pid
     [ "$now" != 0 ] && [ "$now" != "$2" ] && [ "$(prop "$1" ActiveState)" = active ]
 }
 link_down() { [ "$(prop devagotchi-link.service ActiveState)" != active ]; }
-hub_ready() { grep -q 'devagotchi-hub ready:' "$WORK/hub.log"; }
-no_processes_left() { ! pgrep -u "$ACCOUNT" -f 'bridge-broker|devagotchi-link|devagotchi-hub'; }
+hub_ready() { grep -q 'devagotchi hub ready:' "$WORK/hub.log"; }
+no_processes_left() { ! pgrep -u "$ACCOUNT" -f 'devagotchi (broker|link|hub) '; }
 hub_healthy() { curl -fsS -m 2 "http://127.0.0.1:$1/healthz" >/dev/null; }
 hub_config_hash() { sudo sha256sum "$HOME_DIR/.config/devagotchi/hub.json" | cut -d' ' -f1; }
 link_connected() {
@@ -80,15 +80,15 @@ broker_up || fail "broker not up"
 ok "broker active and enabled; lingering on (starts at boot with nobody logged in)"
 pid=$(prop devagotchi-broker.service MainPID)
 [ "$(ps -o user= -p "$pid" | tr -d ' ')" = "$ACCOUNT" ] || fail "broker pid $pid does not run as $ACCOUNT"
-[ "$(stat -c '%U %a' "$PREFIX/current/bridge-broker")" = "root 755" ] || fail "binaries are not root-owned 0755"
-as_account test ! -w "$PREFIX/current/bridge-broker" || fail "$ACCOUNT can write its own binary"
+[ "$(stat -c '%U %a' "$PREFIX/current/devagotchi")" = "root 755" ] || fail "the binary is not root-owned 0755"
+as_account test ! -w "$PREFIX/current/devagotchi" || fail "$ACCOUNT can write its own binary"
 [ "$(sudo stat -c '%U %a' "$HOME_DIR/.config/devagotchi/broker.json")" = "$ACCOUNT 600" ] || fail "config is not private"
 ok "runs as $ACCOUNT from root-owned binaries; config 0600"
 link_down || fail "link runs before enrollment"
 ok "no link before enrollment"
 
 echo "--- a real operation through the broker"
-as_account python3 "$PROBES/adapter_probe.py" "$SOCKET" --adapter "$PREFIX/current/bridge-mcp" \
+as_account python3 "$PROBES/adapter_probe.py" "$SOCKET" --adapter "$PREFIX/current/devagotchi" mcp \
     --git /usr/bin/git --cwd "$WORKSPACE"
 ok "git --version through the installed broker"
 
@@ -109,11 +109,11 @@ cat > "$WORK/hub.json" <<EOF
  "brokers": [{"name": "ci-server", "link": true}],
  "grants": [{"subject": "ci", "brokers": ["ci-server"]}]}
 EOF
-"$BIN/devagotchi-hub" --state-dir "$WORK/hub-state" --config "$WORK/hub.json" 2> "$WORK/hub.log" &
+"$BIN/devagotchi" hub serve --state-dir "$WORK/hub-state" --config "$WORK/hub.json" 2> "$WORK/hub.log" &
 HUB_PID=$!
 wait_for 20 "hub ready" hub_ready
 broker_pid=$(prop devagotchi-broker.service MainPID)
-code=$("$BIN/devagotchi-hub" enroll --state-dir "$WORK/hub-state" --device ci-server 2>/dev/null)
+code=$("$BIN/devagotchi" hub enroll --state-dir "$WORK/hub-state" --device ci-server 2>/dev/null)
 [[ $code == dvg-* ]] || fail "no enrollment code"
 printf '%s\n' "$code" | sudo "$INSTALL" "${COMMON[@]}" --hub "http://127.0.0.1:$PORT" --device ci-server --enroll
 unset code
@@ -131,7 +131,7 @@ old=$(readlink "$PREFIX/current")
 link_pid=$(prop devagotchi-link.service MainPID)
 sudo "$INSTALL" --bin-dir "$BIN" "${COMMON[@]}"
 [ "$(readlink "$PREFIX/current")" != "$old" ] || fail "current did not move to the new version"
-[ -x "$PREFIX/$old/bridge-broker" ] || fail "the previous version is gone; no rollback target"
+[ -x "$PREFIX/$old/devagotchi" ] || fail "the previous version is gone; no rollback target"
 [ "$before" = "$(config_hash)" ] || fail "the upgrade changed the config"
 wait_for 30 "link restarted on the new version" new_main_pid devagotchi-link.service "$link_pid"
 wait_for 30 "link back after the upgrade" link_connected
@@ -145,7 +145,7 @@ wait_for 30 "link reconnected" link_connected
 ok "restarted by systemd and reconnected"
 
 echo "--- a revoked machine stays down"
-"$BIN/devagotchi-hub" revoke --state-dir "$WORK/hub-state" --device ci-server
+"$BIN/devagotchi" hub revoke --state-dir "$WORK/hub-state" --device ci-server
 wait_for 30 "link stopped after the revoke" link_down
 status=$(prop devagotchi-link.service ExecMainStatus)
 [ "$status" = 2 ] || fail "link exited $status, want 2 (refused)"

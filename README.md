@@ -60,10 +60,10 @@ cargo build --locked --bins
 cargo test --locked --lib
 ```
 
-Create a broker configuration using `config/broker.example.json` as a template. Replace the absolute paths with existing paths on your machine. Select only executables you intend to authorize. The state directory's parent must already exist; the broker creates the state directory with mode `0700` or verifies an existing private directory.
+The quick way: `devagotchi start` runs your broker with no paths to remember — the first run writes `broker.json` (workspace: your home directory, or `--workspace`; grants: the toolchains found on PATH, plus `--grant`) under `~/.config/devagotchi`, keeps its state under `~/.local/state/devagotchi`, and tells `devagotchi mcp` where to find it. The explicit way, with your own config (`config/broker.example.json` as a template; absolute, existing paths; only executables you intend to authorize; the state directory's parent must already exist — the broker creates the state directory with mode `0700` or verifies an existing private directory):
 
 ```bash
-./target/debug/bridge-broker \
+./target/debug/devagotchi broker run \
   --state-dir /absolute/private/state/devagotchi \
   --config /absolute/path/broker.json
 ```
@@ -84,10 +84,10 @@ cargo test --locked --lib
 Use `config/broker.windows.example.json` as the template. Grants must name `.exe` or `.com` images. Batch files are interpreted by `cmd.exe`, so grant `cmd.exe` itself when you intend to run scripts. The state directory's parent must exist. The broker creates the state directory owned by your user, with a protected DACL that grants only your user, and refuses an existing directory that inherits other permissions.
 
 ```powershell
-.\target\debug\bridge-broker.exe --state-dir X:\absolute\private\state\devagotchi --config X:\absolute\path\broker.json
+.\target\debug\devagotchi.exe broker run --state-dir X:\absolute\private\state\devagotchi --config X:\absolute\path\broker.json
 ```
 
-The ready line names the endpoint: a local named pipe, `\\.\pipe\devagotchi-broker-<digest>`, derived from your user SID and the state directory. Pass it to `bridge-mcp --socket` and to the desktop app. The pipe's DACL grants only your user and it rejects remote clients. The broker refuses to start if a pipe with its name already exists, and each end checks that the other runs as your user. Ctrl+C, Ctrl+Break, closing the console, or system shutdown request bounded shutdown and cancellation of active owned jobs.
+The ready line names the endpoint: a local named pipe, `\\.\pipe\devagotchi-broker-<digest>`, derived from your user SID and the state directory. Pass it to `devagotchi mcp --socket` and to the desktop app (`devagotchi start` leaves it in `<state>\endpoint` so `devagotchi mcp` needs no flag). The pipe's DACL grants only your user and it rejects remote clients. The broker refuses to start if a pipe with its name already exists, and each end checks that the other runs as your user. Ctrl+C, Ctrl+Break, closing the console, or system shutdown request bounded shutdown and cancellation of active owned jobs.
 
 Each root is created suspended, assigned to a new Job Object, and only then resumed, so neither it nor anything it starts runs outside that job. The job permits no breakaway and terminates its members when the broker's job handle closes, including when the broker exits. Cancellation and deadlines call `TerminateJobObject` and verify that no active process remains. Windows has no general graceful-stop request for arbitrary programs, so there is no grace period. Arguments are encoded with the Microsoft C runtime quoting rules most programs parse; a program with its own command-line parser may read them differently.
 
@@ -99,14 +99,14 @@ For clients using an `mcpServers` configuration object, the entry has this shape
 {
   "mcpServers": {
     "devagotchi": {
-      "command": "/absolute/path/to/devagotchi/target/debug/bridge-mcp",
-      "args": ["--socket", "/absolute/private/state/devagotchi/broker.sock"]
+      "command": "/absolute/path/to/devagotchi/target/debug/devagotchi",
+      "args": ["mcp", "--socket", "/absolute/private/state/devagotchi/broker.sock"]
     }
   }
 }
 ```
 
-On Windows, `command` is the path to `bridge-mcp.exe` and the `--socket` value is the broker's `\\.\pipe\` endpoint, escaped as `"\\\\.\\pipe\\devagotchi-broker-<digest>"` in JSON.
+After `devagotchi start`, `"args": ["mcp"]` is enough. On Windows, `command` is the path to `devagotchi.exe` and the `--socket` value is the broker's `\\.\pipe\` endpoint, escaped as `"\\\\.\\pipe\\devagotchi-broker-<digest>"` in JSON.
 
 The exact configuration location and format depend on the selected host. A named desktop client's integration has not yet been certified. The adapter's raw stdio tests cover both `initialize` with protocol `2025-11-25` and discovery/per-request metadata with `2026-07-28`.
 
@@ -151,9 +151,9 @@ These tests create disposable workspaces and launch only their own fixture proce
 
 ```bash
 python3 -B tests/mcp_smoke.py --output test-results/mcp-smoke.json
-python3 -B tests/security_boundary.py --broker target/debug/bridge-broker
+python3 -B tests/security_boundary.py --devagotchi target/debug/devagotchi
 python3 -B tests/mcp_protocol.py \
-  --adapter "$PWD/target/debug/bridge-mcp" \
+  --devagotchi "$PWD/target/debug/devagotchi" \
   --socket /tmp/devagotchi-protocol-unused.sock \
   --output test-results/mcp-protocol.json
 ```

@@ -14,12 +14,12 @@ this file is how to work here. Read first:
 
 Cargo workspace: `crates/contracts` (wire types, schema exporter), `crates/ipc` (framing, typed
 client, Unix-socket and named-pipe endpoints), `crates/core` (broker, journal, execution),
-`crates/broker` and `crates/mcp` (libraries with their own binaries, still named `bridge-broker`
-and `bridge-mcp`), `crates/hub` (`devagotchi-hub`, the bastion: authenticated HTTP MCP routed to
-brokers by name; the board), `crates/link` (`devagotchi-link`, a machine's outbound link to the
-hub; no inbound port), `crates/devagotchi` (**the one binary**, D20: `devagotchi start | mcp |
-board | broker | hub | link` over those same libraries — new behaviour goes in the library, never
-in the dispatcher),
+`crates/broker` (the broker: `devagotchi start`, `devagotchi broker run`) and `crates/mcp` (the
+stdio adapter: `devagotchi mcp`), `crates/hub` (the bastion: authenticated HTTP MCP routed to
+brokers by name; the board — `devagotchi hub`, `devagotchi board`), `crates/link` (a machine's
+outbound link to the hub, no inbound port — `devagotchi link`): libraries; `crates/devagotchi`
+(**the one binary**, D20: `devagotchi start | mcp | board | broker | hub | link` over them — new
+behaviour goes in the library, never in the dispatcher),
 `deploy/` (`devspace/`, `shippin/`, `windows/` installers), `apps/desktop` (Tauri 2 + React inspector, not a default member), `apps/website`, `tests/`
 (Python harnesses), `verification/` (recorded receipts), `schemas/` (generated).
 
@@ -30,9 +30,9 @@ cargo build --locked --bins
 cargo nextest run --locked                         # every test binary, hub included
 python3 tests/e2e.py --bin-dir target/debug        # broker, stdio adapter, hub and link end to end
 cargo deny --all-features check                    # advisories, licenses, sources, no-network bans
-python3 tests/security_boundary.py --broker "$PWD/target/debug/bridge-broker"
-python3 tests/mcp_protocol.py --adapter "$PWD/target/debug/bridge-mcp" --socket /tmp/unused.sock
-python3 tests/mcp_smoke.py --broker "$PWD/target/debug/bridge-broker" --adapter "$PWD/target/debug/bridge-mcp"
+python3 tests/security_boundary.py --devagotchi "$PWD/target/debug/devagotchi"
+python3 tests/mcp_protocol.py --devagotchi "$PWD/target/debug/devagotchi" --socket /tmp/unused.sock
+python3 tests/mcp_smoke.py --devagotchi "$PWD/target/debug/devagotchi"
 node scripts/generate-contracts.cjs --check      # after `npm ci` in apps/desktop
 ```
 

@@ -11,7 +11,7 @@ needs systemd as init; it is tested on Ubuntu 24.04 in CI, on x86_64 and on 64-b
 |---|---|
 | Account | a dedicated system account (default `devagotchi`, home `/var/lib/devagotchi`), no password, never root |
 | Services | `devagotchi-broker` and `devagotchi-link` as that account's `systemd --user` units; lingering starts them at boot with nobody logged in |
-| Binaries | `/opt/devagotchi/versions/<version>/`, root-owned 0755; `/opt/devagotchi/current` points at one. What runs as the account cannot replace them |
+| Binary | one `devagotchi` under `/opt/devagotchi/versions/<version>/`, root-owned 0755; `/opt/devagotchi/current` points at one. What runs as the account cannot replace it |
 | Config | `~/.config/devagotchi/broker.json` (0600): the workspace and the executables the broker may start, detected once (`git`, `rg`, `python3`, `node`, `cargo`, `rustup`, `go`, `uv`) plus `--grant` paths; kept on every re-run |
 | Network | nothing listens; the link dials out to the hub and reconnects by itself |
 
@@ -19,7 +19,7 @@ needs systemd as init; it is tested on Ubuntu 24.04 in CI, on x86_64 and on 64-b
 
 ```bash
 sudo ./install-devagotchi.sh --version 0.2.0 --grant /usr/bin/journalctl   # release archives, sha256 checked
-# on the hub host: devagotchi-hub enroll --state-dir … --device wi1   (prints a one-time code)
+# on the hub host: devagotchi hub enroll --state-dir … --device wi1   (prints a one-time code)
 sudo ./install-devagotchi.sh --hub https://hub.example.com --device wi1 --enroll   # paste the code
 sudo ./install-devagotchi.sh --version 0.2.1          # upgrade; --version 0.2.0 again rolls back
 sudo ./install-devagotchi.sh --uninstall              # stops and removes the services; files stay
@@ -60,9 +60,9 @@ sudo ./install-devagotchi.sh --role hub --version 0.2.1            # upgrade; co
 | Service | `devagotchi-hub` as the account's `systemd --user` unit; `Restart=always`, lingering |
 | Config | `~/.config/devagotchi/hub.json` (0600): `listen`, `public_url`, dev-token sign-in, `brokers`, `boards`, `grants`. Written once; afterwards yours — a re-run prints the lines to add, and the hub restarts only when something it runs changed |
 | Tokens | `~/.config/devagotchi/hub-tokens.json` (0600): `--person NAME` and `--agent NAME` mint a bearer token each, shown once and never logged; the hub reads the file on every request, so a new token needs no restart. A person may force-release and move tickets by hand; an agent never |
-| Boards | `--board NAME` initialises `~/projects/NAME` (or `--board NAME=/abs/dir`, which the account must be able to write) with `devagotchi-hub board init --agents-md`, lists it in the config, and grants it to every `--person` / `--agent` of the same run |
+| Boards | `--board NAME` initialises `~/projects/NAME` (or `--board NAME=/abs/dir`, which the account must be able to write) with `devagotchi board init --agents-md`, lists it in the config, and grants it to every `--person` / `--agent` of the same run |
 | Edge | `--caddy` installs Caddy from the distribution when missing, writes `/etc/caddy/devagotchi-hub.caddy` (`<host> { reverse_proxy 127.0.0.1:8787 }`), imports it from the Caddyfile, validates and reloads. An `http://host:port` public URL serves plain HTTP (tests, loopback) |
-| Machines | add `{ "name": "<device>", "link": true }` to `brokers` and a grant, restart the hub, `devagotchi-hub enroll --state-dir ~/.local/state/devagotchi-hub --device <device>` as the account, and run the machine role there with `--enroll` |
+| Machines | add `{ "name": "<device>", "link": true }` to `brokers` and a grant, restart the hub, `devagotchi hub enroll --state-dir ~/.local/state/devagotchi-hub --device <device>` as the account, and run the machine role there with `--enroll` |
 
 An agent's MCP config then points at `https://devagotchi.com/mcp` with its token as the bearer
 token; `whoami` shows what it may reach, `board_prime` is where a session starts. Shippin

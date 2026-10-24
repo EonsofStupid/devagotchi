@@ -1,6 +1,5 @@
 //! The broker runs independently from the MCP client process. This library is its
-//! whole behaviour; `bridge-broker` and `devagotchi broker run` are two names for
-//! [`cli`].
+//! whole behaviour; `devagotchi start` and `devagotchi broker run` both end in [`serve`].
 
 use std::{ffi::OsString, path::PathBuf, process::ExitCode};
 
@@ -26,32 +25,32 @@ pub fn cli(args: Vec<OsString>) -> ExitCode {
     }
     let (mut state, mut config) = (None, None);
     if args.len() != 4 {
-        eprintln!("bridge-broker: expected --state-dir ABS_PATH --config ABS_JSON; use --help");
+        eprintln!("devagotchi broker: expected --state-dir ABS_PATH --config ABS_JSON; use --help");
         return ExitCode::from(64);
     }
     for [flag, raw] in args.as_chunks::<2>().0 {
         let value = PathBuf::from(raw);
         if !value.is_absolute() {
-            eprintln!("bridge-broker: all paths must be absolute");
+            eprintln!("devagotchi broker: all paths must be absolute");
             return ExitCode::from(64);
         }
         match flag.as_str() {
             "--state-dir" if state.is_none() => state = Some(value),
             "--config" if config.is_none() => config = Some(value),
             _ => {
-                eprintln!("bridge-broker: unknown or repeated option {flag}; use --help");
+                eprintln!("devagotchi broker: unknown or repeated option {flag}; use --help");
                 return ExitCode::from(64);
             }
         }
     }
     let (Some(state), Some(config)) = (state, config) else {
-        eprintln!("bridge-broker: --state-dir and --config are both required");
+        eprintln!("devagotchi broker: --state-dir and --config are both required");
         return ExitCode::from(64);
     };
     match serve_blocking(state, config) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("bridge-broker: {error}");
+            eprintln!("devagotchi broker: {error}");
             ExitCode::FAILURE
         }
     }
@@ -141,7 +140,7 @@ pub async fn serve(state: PathBuf, config_path: PathBuf) -> Result<(), Box<dyn s
     let mut listener = guard.bind().await?;
     let broker = Broker::open(config, &state)?;
     write_endpoint_file(&state, guard.endpoint());
-    eprintln!("bridge-broker ready: {}", guard.endpoint().display());
+    eprintln!("devagotchi broker ready: {}", guard.endpoint().display());
 
     let permits = Arc::new(tokio::sync::Semaphore::new(32));
     let mut connections = tokio::task::JoinSet::new();
@@ -189,7 +188,7 @@ pub async fn serve(state: PathBuf, config_path: PathBuf) -> Result<(), Box<dyn s
     broker.shutdown().await;
     connections.abort_all();
     while connections.join_next().await.is_some() {}
-    eprintln!("bridge-broker stopped");
+    eprintln!("devagotchi broker stopped");
     let _ = std::fs::remove_file(state.join(ENDPOINT_FILE));
     Ok(())
 }
@@ -209,6 +208,6 @@ fn write_endpoint_file(state: &std::path::Path, endpoint: &std::path::Path) {
         std::fs::rename(&tmp, &path)
     });
     if let Err(error) = written {
-        eprintln!("bridge-broker: could not write {}: {error}", path.display());
+        eprintln!("devagotchi broker: could not write {}: {error}", path.display());
     }
 }

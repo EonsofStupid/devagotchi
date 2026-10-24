@@ -1,6 +1,6 @@
 //! Thin MCP stdio adapter. The broker owns admission, validation, and job lifetime.
-//! This library is its whole behaviour; `bridge-mcp` and `devagotchi mcp` are two names
-//! for [`cli`]. It never links the broker: `devagotchi mcp` runs only this code.
+//! This library is its whole behaviour, `devagotchi mcp` its name. It never links the
+//! broker: `devagotchi mcp` runs only this code.
 
 use std::{ffi::OsString, path::PathBuf, process::ExitCode};
 
@@ -44,14 +44,14 @@ pub fn cli(args: Vec<OsString>) -> ExitCode {
         }
         Ok(Command::Serve { socket }) => socket,
         Err(error) => {
-            eprintln!("bridge-mcp: {error}\n\n{USAGE}");
+            eprintln!("devagotchi mcp: {error}\n\n{USAGE}");
             return ExitCode::from(64);
         }
     };
     match serve_blocking(socket) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("bridge-mcp: {error}");
+            eprintln!("devagotchi mcp: {error}");
             ExitCode::FAILURE
         }
     }

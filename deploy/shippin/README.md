@@ -11,8 +11,8 @@ Gold host or in the `platform` project.
 | Layer | Owner | Devagotchi's part |
 |---|---|---|
 | Tenant → boundary VM → project → workspace | console + hostd (Shippin control plane) | none; it is placed, not placing |
-| Inside a workspace (`w-<uuid>`, user `dev`) | hostd image template (`shippin-ws-init`, bridge CA) | `bridge-broker` as a user service, `bridge-mcp` on `$PATH` |
-| Reaching it from a laptop agent (Claude Code, Codex CLI, Gemini CLI, Cursor) | `shippin-bridge login` → `shippin-bridge mcp` / `ssh` (N4 bridge) | `bridge-mcp --socket <state>/broker.sock` is what the bridge's MCP mode should exec inside the workspace |
+| Inside a workspace (`w-<uuid>`, user `dev`) | hostd image template (`shippin-ws-init`, bridge CA) | `devagotchi broker run` as a user service, `devagotchi` on `$PATH` (`devagotchi mcp` for hosts) |
+| Reaching it from a laptop agent (Claude Code, Codex CLI, Gemini CLI, Cursor) | `shippin-bridge login` → `shippin-bridge mcp` / `ssh` (N4 bridge) | `devagotchi mcp --socket <state>/broker.sock` is what the bridge's MCP mode should exec inside the workspace |
 | Reaching it from a hosted frontier client (claude.ai, ChatGPT) | console `/mcp` lane with Nomen OAuth (DCR now, CIMD later) | the same handle-based tools; the lane proxies to the workspace broker through hostd (A1 contract) |
 
 ## Install inside a workspace
@@ -25,16 +25,16 @@ DEVAGOTCHI_VERSION=0.1.0 bash install-workspace.sh
 DEVAGOTCHI_ARTIFACT_DIR=/srv/devagotchi-release bash install-workspace.sh
 ```
 
-The installer downloads the two release tarballs (`devagotchi-broker-*`, `devagotchi-mcp-*`,
-built and attested by `.github/workflows/release.yml`), checks their sha256 and, when `gh` is
-present, their provenance, installs them under `~/.local/share/devagotchi/<version>/bin` with
-`~/.local/bin` symlinks, writes `~/.config/devagotchi/broker.json` with grants for the toolchains
+The installer downloads the release tarball (`devagotchi-<target>.tar.xz`, the one binary,
+built and attested by `.github/workflows/release.yml`), checks its sha256 and, when `gh` is
+present, its provenance, installs it under `~/.local/share/devagotchi/<version>/bin` with a
+`~/.local/bin/devagotchi` symlink, writes `~/.config/devagotchi/broker.json` with grants for the toolchains
 actually present (git, rg, node, npm, python3, cargo, rustup, go, uv), and enables a
 `devagotchi-broker` user unit (`Restart=always`, `Delegate=yes`). Without `systemd --user` it starts
 the broker unsupervised and says so. Re-running moves the version; the config is kept.
 
-Check: `systemctl --user status devagotchi-broker` shows `bridge-broker ready: ~/.local/state/devagotchi/broker.sock`;
-`python3 tests/adapter_probe.py ~/.local/state/devagotchi/broker.sock --adapter ~/.local/bin/bridge-mcp --cwd ~`
+Check: `systemctl --user status devagotchi-broker` shows `devagotchi broker ready: ~/.local/state/devagotchi/broker.sock`;
+`python3 tests/adapter_probe.py ~/.local/state/devagotchi/broker.sock --adapter ~/.local/bin/devagotchi mcp --cwd ~`
 runs `git --version` under the broker and confirms an ungranted executable is refused.
 
 ## Baking it into the workspace image
@@ -51,7 +51,7 @@ end with the last session, which the installer reports.
 
 | Need | Where it lands |
 |---|---|
-| Health through the execution path (hostd `ai-status`-style probe) | the broker's health probe (plan §3) — `bridge-mcp` `operation_start` of a granted no-op |
+| Health through the execution path (hostd `ai-status`-style probe) | the broker's health probe (plan §3) — `devagotchi mcp` `operation_start` of a granted no-op |
 | Environment profiles so `cargo`, `go`, `uv` run under the broker | G1 environment-profile packet (S10 today clears the job environment) |
 | Per-agent identity in the journal (which frontier client ran what) | task-graph subjects (N10); until then the bridge session id in the audit chain |
 | Remote lane for hosted clients | console `/mcp` (shippin-console) with the A1 contract; Devagotchi's runtime API takes it over at M1 — parked as N12 |
@@ -61,6 +61,6 @@ end with the last session, which the installer reports.
 - Broker per workspace (this document) versus one broker per boundary VM: per workspace keeps
   the per-user ownership model (plan D02) and the journal in the user's home; per VM would need
   multi-user journals and is not planned.
-- Whether `shippin-bridge mcp` execs `bridge-mcp` inside the workspace or speaks the broker's IPC
+- Whether `shippin-bridge mcp` execs `devagotchi mcp` inside the workspace or speaks the broker's IPC
   directly: exec is one line in hostd's session commands and keeps one adapter binary; direct IPC
   waits for the stable mesh contract (M1).

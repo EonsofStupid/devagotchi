@@ -59,7 +59,7 @@ class StdioPeer:
 
     def __init__(self, adapter, socket):
         self.process = subprocess.Popen(
-            [str(adapter), "--socket", str(socket)],
+            [str(adapter), "mcp", "--socket", str(socket)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -266,7 +266,7 @@ def absolute_path(value):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--adapter", type=absolute_path, required=True)
+    parser.add_argument("--devagotchi", "--adapter", dest="adapter", type=absolute_path, required=True, help="the one binary; the adapter is `devagotchi mcp`")
     parser.add_argument("--socket", type=absolute_path, required=True)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()

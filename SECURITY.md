@@ -2,8 +2,8 @@
 
 ## Reporting
 
-Email security@shippin.cloud with the affected component (`bridge-broker`, `bridge-mcp`,
-`devagotchi-hub`, the inspector, the Shippin.Cloud deployment), the version or commit, steps
+Email security@shippin.cloud with the affected component (`devagotchi broker`, `devagotchi mcp`,
+`devagotchi hub`, the inspector, the Shippin.Cloud deployment), the version or commit, steps
 to reproduce, and what an attacker gains. Do not open a public issue for an exploitable
 defect. Expect an acknowledgement within three days and a fix or a workaround with a date.
 

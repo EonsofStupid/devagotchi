@@ -111,7 +111,7 @@ pub async fn connect(config: &LinkConfig, key: &SigningKey, mode: Mode<'_>) -> E
         return Ended::Enrolled;
     }
     eprintln!(
-        "devagotchi-link ready: {} linked to {} (broker {})",
+        "devagotchi link ready: {} linked to {} (broker {})",
         config.device, config.hub, config.broker
     );
 

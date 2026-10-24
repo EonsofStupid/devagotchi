@@ -11,7 +11,7 @@
 #     config/       XDG_CONFIG_HOME: broker.json, host configs
 #     toolchains/   rustup, cargo, go, uv + pythons, fnm + node
 #     receipts/     verification and benchmark run directories
-#     bin/          symlinks to the built bridge-broker / bridge-mcp
+#     bin/          symlink to the built devagotchi binary
 #     env.sh        the exports every shell and systemd user service load
 #
 # Run as root once:  DEVSPACE_USER=hades bash provision.sh
