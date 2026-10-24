@@ -11,6 +11,10 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "devagotchi_link"
+path = "src/lib.rs"
+
 [[bin]]
 name = "devagotchi-link"
 path = "src/main.rs"

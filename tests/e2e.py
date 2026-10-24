@@ -35,10 +35,10 @@ parser.add_argument("--bin-dir", required=True, type=Path)
 parser.add_argument("--keep", action="store_true", help="keep the work directory")
 args = parser.parse_args()
 bins = args.bin_dir.resolve()
-broker_bin, adapter_bin, hub_bin, link_bin = (
-    bins / f"{name}{EXE}" for name in ("bridge-broker", "bridge-mcp", "devagotchi-hub", "devagotchi-link")
+broker_bin, adapter_bin, hub_bin, link_bin, one_binary = (
+    bins / f"{name}{EXE}" for name in ("bridge-broker", "bridge-mcp", "devagotchi-hub", "devagotchi-link", "devagotchi")
 )
-for path in (broker_bin, adapter_bin, hub_bin, link_bin):
+for path in (broker_bin, adapter_bin, hub_bin, link_bin, one_binary):
     if not path.is_file():
         sys.exit(f"missing binary: {path} (cargo build --locked --bins)")
 
@@ -119,6 +119,11 @@ try:
     adapter_ok = run_probe(
         [str(HERE / "adapter_probe.py"), endpoint, "--adapter", str(adapter_bin), "--git", git, "--cwd", str(workspace)],
         "stdio adapter probe",
+    )
+    # The one binary: `devagotchi mcp --socket` is the same adapter, from the same library.
+    adapter_ok = adapter_ok and run_probe(
+        [str(HERE / "adapter_probe.py"), endpoint, "--adapter", f"{one_binary} mcp", "--git", git, "--cwd", str(workspace)],
+        "stdio adapter probe through `devagotchi mcp`",
     )
 
     token = "e2e-dev-token-" + os.urandom(12).hex()

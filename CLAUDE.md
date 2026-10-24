@@ -14,9 +14,12 @@ this file is how to work here. Read first:
 
 Cargo workspace: `crates/contracts` (wire types, schema exporter), `crates/ipc` (framing, typed
 client, Unix-socket and named-pipe endpoints), `crates/core` (broker, journal, execution),
-`crates/broker` and `crates/mcp` (the two binaries, still named `bridge-broker` and `bridge-mcp`),
-`crates/hub` (`devagotchi-hub`, the bastion: authenticated HTTP MCP routed to brokers by name),
-`crates/link` (`devagotchi-link`, a machine's outbound link to the hub; no inbound port),
+`crates/broker` and `crates/mcp` (libraries with their own binaries, still named `bridge-broker`
+and `bridge-mcp`), `crates/hub` (`devagotchi-hub`, the bastion: authenticated HTTP MCP routed to
+brokers by name; the board), `crates/link` (`devagotchi-link`, a machine's outbound link to the
+hub; no inbound port), `crates/devagotchi` (**the one binary**, D20: `devagotchi start | mcp |
+board | broker | hub | link` over those same libraries — new behaviour goes in the library, never
+in the dispatcher),
 `deploy/` (`devspace/`, `shippin/`, `windows/` installers), `apps/desktop` (Tauri 2 + React inspector, not a default member), `apps/website`, `tests/`
 (Python harnesses), `verification/` (recorded receipts), `schemas/` (generated).
 

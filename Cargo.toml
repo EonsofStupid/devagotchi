@@ -8,6 +8,7 @@ members = [
     "crates/mcp",
     "crates/hub",
     "crates/link",
+    "crates/devagotchi",
     "apps/desktop/src-tauri",
 ]
 # `cargo build` / `cargo test` at the root build the broker, adapter and their
@@ -21,6 +22,7 @@ default-members = [
     "crates/mcp",
     "crates/hub",
     "crates/link",
+    "crates/devagotchi",
 ]
 
 [workspace.package]

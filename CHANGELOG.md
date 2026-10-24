@@ -7,6 +7,14 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### One binary (increment 13a)
+- `devagotchi`: one organised command tree over the same libraries — `devagotchi start`
+  (this user's broker; the first run writes `broker.json` with the workspace and the
+  toolchains on PATH), `devagotchi mcp` (the adapter an agent runs; finds that broker through
+  `<state>/endpoint`), `devagotchi board …`, `devagotchi broker run …`, `devagotchi hub
+  serve|enroll|revoke|devices`, `devagotchi link enroll|run`, `devagotchi version`. The four
+  binaries still build from the same code until the clean cut (13b).
+
 ### The agents' board (increments 7–8)
 - `devagotchi-hub board …`: a per-project ticket board in `<project>/.devagotchi/board.sqlite3`
   — hash ids `<prefix>-xxxx` with hierarchical children, workflow lanes (ready → in_progress →

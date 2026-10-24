@@ -12,6 +12,10 @@ repository.workspace = true
 workspace = true
 
 # The binary keeps its historical name until the rename decision lands.
+[lib]
+name = "devagotchi_broker"
+path = "src/lib.rs"
+
 [[bin]]
 name = "bridge-broker"
 path = "src/main.rs"

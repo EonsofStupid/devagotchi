@@ -13,19 +13,20 @@ tests/mcp_smoke.py and tests/security_boundary.py).
 import argparse
 import os
 import json
+import shlex
 import subprocess
 import time
 import uuid
 
 parser = argparse.ArgumentParser()
 parser.add_argument("socket")
-parser.add_argument("--adapter", required=True)
+parser.add_argument("--adapter", required=True, help="the adapter command: a path, or words such as 'devagotchi mcp'")
 parser.add_argument("--git", default="/usr/bin/git")
 parser.add_argument("--cwd", default=None)
 args = parser.parse_args()
 
 proc = subprocess.Popen(
-    [args.adapter, "--socket", args.socket],
+    [*shlex.split(args.adapter), "--socket", args.socket],
     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
 )
 request_id = 0

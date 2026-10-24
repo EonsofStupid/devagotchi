@@ -336,7 +336,7 @@ Packets, one decision each, in order:
 
 | Packet | Scope | Exit |
 |---|---|---|
-| 13a | Library entry points for the four binaries; the `devagotchi` multicall binary (`start`, `mcp`, `link`, `hub`, `board`, `version`); `start` writes `broker.json` when absent; the release ships it beside the four | `devagotchi start` on a clean machine runs the broker and answers `devagotchi board prime`; `tests/e2e.py` drives the adapter through `devagotchi mcp` |
+| 13a (**built**) | Library entry points for the four binaries; the `devagotchi` multicall binary (`start`, `mcp`, `link`, `hub`, `board`, `version`); `start` writes `broker.json` when absent and the broker writes `<state>/endpoint` so `mcp` needs no flag; the release ships it beside the four | `crates/devagotchi/tests/one_binary.rs`: `devagotchi start` with only an environment runs the broker, `devagotchi mcp` finds it and answers MCP, `devagotchi board` works the project, Ctrl+C settles; `tests/e2e.py` drives the adapter through `devagotchi mcp` |
 | 13b | Clean cut: installers, tests, CI, the desktop app and the docs call `devagotchi <verb>`; the four binaries go | every harness green with one artifact per target |
 | 14 | `devagotchi login`: device-link sign-in against Nomen, token at rest 0600, offline grace, `--local`; the hosted hub refuses dev tokens outside tests | a fresh install signs in from a terminal with no browser on the machine; an agent's MCP call carries the account |
 | 15 | Board sync: the local board pushes its chain to the account's hosted hub and pulls what others wrote; the hosted hub keeps one board per account-project; the free-account rule | two machines, one account, one board: a ticket claimed on one is held on the other within a heartbeat |
