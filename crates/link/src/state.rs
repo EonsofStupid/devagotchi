@@ -157,7 +157,7 @@ pub fn load_config(dir: &Path) -> BridgeResult<LinkConfig> {
         BridgeError::new(
             "not_enrolled",
             format!(
-                "{}: {e}; run devagotchi-link enroll first",
+                "{}: {e}; run devagotchi link enroll first",
                 config_path(dir).display()
             ),
         )

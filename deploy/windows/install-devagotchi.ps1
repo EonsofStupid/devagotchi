@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Install Devagotchi on this Windows machine for the current user, start the broker, and
-  optionally register bridge-mcp with Claude Desktop and Claude Code in place of Desktop Commander.
+  optionally register `devagotchi mcp` with Claude Desktop and Claude Code in place of Desktop Commander.
 
 .DESCRIPTION
   Everything lands under -Root (default D:\localdev\devagotchi): versioned binaries, the
@@ -14,8 +14,8 @@
   link and removes the Run entries; files stay for you to delete.
 
   With -Hub, -Device and -EnrollCode the machine also joins a Devagotchi hub over the link:
-  devagotchi-link enrolls this machine's own key with the one-time code (from
-  `devagotchi-hub enroll --device NAME` on the hub host), then holds one outbound connection
+  `devagotchi link` enrolls this machine's own key with the one-time code (from
+  `devagotchi hub enroll --device NAME` on the hub host), then holds one outbound connection
   to the hub. No port opens here. Later runs need only -Hub and -Device, or nothing: the
   link keeps its enrollment in <Root>\link-state.
 
@@ -75,18 +75,21 @@ function Write-Utf8([string]$Path, [string]$Text) {
     [System.IO.File]::WriteAllText($Path, $Text, $Utf8NoBom)
 }
 
-function Stop-Ours([string]$Name, [string]$Note) {
-    $ours = @(Get-Process -Name $Name -ErrorAction SilentlyContinue | Where-Object {
-        $_.Path -and $_.Path.StartsWith($Root, [System.StringComparison]::OrdinalIgnoreCase)
+# One binary plays every role, so a role is told apart by its command line, not its name.
+function Stop-Ours([string]$Role, [string]$Note) {
+    $ours = @(Get-CimInstance Win32_Process -Filter "Name = 'devagotchi.exe'" -ErrorAction SilentlyContinue | Where-Object {
+        $_.ExecutablePath -and $_.ExecutablePath.StartsWith($Root, [System.StringComparison]::OrdinalIgnoreCase) -and
+        $_.CommandLine -and $_.CommandLine -match "\s$Role\s+run\b"
     })
     foreach ($process in $ours) {
-        Write-Host "    stopping $Name pid $($process.Id) ($($process.Path))$Note"
-        Stop-Process -Id $process.Id -Force
-        $process.WaitForExit(10000) | Out-Null
+        Write-Host "    stopping devagotchi $Role pid $($process.ProcessId) ($($process.ExecutablePath))$Note"
+        $handle = Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        if ($handle) { $handle.WaitForExit(10000) | Out-Null }
     }
 }
-function Stop-OurBroker { Stop-Ours 'bridge-broker' '; its jobs end with it' }
-function Stop-OurLink { Stop-Ours 'devagotchi-link' '' }
+function Stop-OurBroker { Stop-Ours 'broker' '; its jobs end with it' }
+function Stop-OurLink { Stop-Ours 'link' '' }
 
 # Runs a native command and echoes its output. Windows PowerShell 5.1 turns a native
 # command's stderr into terminating errors under 'Stop' once it is captured, so capture
@@ -149,7 +152,7 @@ if ($Uninstall) {
 
 # ---------------------------------------------------------------- binaries
 New-Item -ItemType Directory -Force -Path $Root, $ConfigDir, $Logs | Out-Null
-$exes = 'bridge-broker.exe', 'bridge-mcp.exe', 'devagotchi-hub.exe', 'devagotchi-link.exe'
+$exes = @('devagotchi.exe')
 
 if ($BinDir) {
     Step "Binaries from build directory $BinDir"
@@ -179,7 +182,7 @@ if ($BinDir) {
     $dest = Join-Path $Root "versions\$Version"
     $download = Join-Path $Root "downloads\$Version"
     New-Item -ItemType Directory -Force -Path $dest, $download | Out-Null
-    foreach ($app in 'devagotchi-broker', 'devagotchi-mcp', 'devagotchi-hub', 'devagotchi-link') {
+    foreach ($app in @('devagotchi')) {
         $zip = "$app-$Target.zip"
         foreach ($name in $zip, "$zip.sha256") {
             $out = Join-Path $download $name
@@ -199,7 +202,7 @@ if ($BinDir) {
         Get-ChildItem -Recurse -File -Path $unpack -Include $exes | ForEach-Object { Copy-Item -Force $_.FullName $dest }
     }
 }
-foreach ($exe in 'bridge-broker.exe', 'bridge-mcp.exe', 'devagotchi-link.exe') {
+foreach ($exe in $exes) {
     if (-not (Test-Path (Join-Path $dest $exe))) { throw "$exe missing from $dest" }
 }
 
@@ -246,14 +249,14 @@ if (-not (Test-Path $Config)) {
 
 # ---------------------------------------------------------------- start
 Step 'Starting the broker'
-$brokerExe = Join-Path $Bin 'bridge-broker.exe'
-$ready = Start-Ready $brokerExe @('--state-dir', "`"$State`"", '--config', "`"$Config`"") $Workspace $Log 'bridge-broker ready: (.+)$' 'the broker'
-$endpoint = ($ready.Line -replace '^.*bridge-broker ready: ', '').Trim()
+$brokerExe = Join-Path $Bin 'devagotchi.exe'
+$ready = Start-Ready $brokerExe @('broker', 'run', '--state-dir', "`"$State`"", '--config', "`"$Config`"") $Workspace $Log 'devagotchi broker ready: (.+)$' 'the broker'
+$endpoint = ($ready.Line -replace '^.*devagotchi broker ready: ', '').Trim()
 Write-Utf8 $EndpointFile $endpoint
 Write-Host "    ready: $endpoint (pid $($ready.Process.Id)); log $Log"
 
 # ---------------------------------------------------------------- link
-$linkExe = Join-Path $Bin 'devagotchi-link.exe'
+$linkExe = Join-Path $Bin 'devagotchi.exe'
 $linked = $false
 if ($EnrollCode) {
     if (-not $Hub -or -not $Device) { throw '-EnrollCode needs -Hub and -Device' }
@@ -262,15 +265,15 @@ if ($EnrollCode) {
     # one call, never a command line other users can list, a file, a log or the Run entry.
     $env:DEVAGOTCHI_ENROLL_CODE = $EnrollCode
     try {
-        $exit = Invoke-Native $linkExe @('enroll', '--state-dir', $LinkState, '--hub', $Hub, '--device', $Device, '--broker', $endpoint)
+        $exit = Invoke-Native $linkExe @('link', 'enroll', '--state-dir', $LinkState, '--hub', $Hub, '--device', $Device, '--broker', $endpoint)
     } finally {
         Remove-Item Env:DEVAGOTCHI_ENROLL_CODE -ErrorAction SilentlyContinue
     }
-    if ($exit -ne 0) { throw "devagotchi-link enroll failed ($exit); ask the hub operator for a fresh code" }
+    if ($exit -ne 0) { throw "devagotchi link enroll failed ($exit); ask the hub operator for a fresh code" }
 }
 if (Test-Path (Join-Path $LinkState 'link.json')) {
     Step 'Starting the link'
-    $ready = Start-Ready $linkExe @('run', '--state-dir', "`"$LinkState`"") $Root $LinkLog 'devagotchi-link ready:' 'the link'
+    $ready = Start-Ready $linkExe @('link', 'run', '--state-dir', "`"$LinkState`"") $Root $LinkLog 'devagotchi link ready:' 'the link'
     Write-Host "    $($ready.Line.Trim()) (pid $($ready.Process.Id)); log $LinkLog"
     $linked = $true
 } elseif ($Hub -or $Device) {
@@ -280,20 +283,20 @@ if (Test-Path (Join-Path $LinkState 'link.json')) {
 # ---------------------------------------------------------------- autostart
 if ($Autostart) {
     Step 'Autostart at logon (HKCU Run)'
-    $command = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command `"& '$brokerExe' --state-dir '$State' --config '$Config' 2>> '$Log'`""
+    $command = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command `"& '$brokerExe' broker run --state-dir '$State' --config '$Config' 2>> '$Log'`""
     New-Item -Path $RunKey -Force | Out-Null
     Set-ItemProperty -Path $RunKey -Name $RunName -Value $command
     Write-Host "    $RunKey\$RunName set"
     if ($linked) {
         # The link reconnects on its own, so it may start before the broker is listening.
-        $linkCommand = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command `"& '$linkExe' run --state-dir '$LinkState' 2>> '$LinkLog'`""
+        $linkCommand = "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command `"& '$linkExe' link run --state-dir '$LinkState' 2>> '$LinkLog'`""
         Set-ItemProperty -Path $RunKey -Name $LinkRunName -Value $linkCommand
         Write-Host "    $RunKey\$LinkRunName set"
     }
 }
 
 # ---------------------------------------------------------------- MCP hosts
-$mcpExe = Join-Path $Bin 'bridge-mcp.exe'
+$mcpExe = Join-Path $Bin 'devagotchi.exe'
 if ($RegisterClaudeDesktop) {
     Step "Claude Desktop: $ClaudeDesktopConfig"
     $dir = Split-Path -Parent $ClaudeDesktopConfig
@@ -310,7 +313,7 @@ if ($RegisterClaudeDesktop) {
     if (-not ($desktop.PSObject.Properties.Name -contains 'mcpServers')) {
         $desktop | Add-Member -NotePropertyName mcpServers -NotePropertyValue (New-Object PSObject)
     }
-    $entry = [ordered]@{ command = $mcpExe; args = @('--socket', $endpoint) }
+    $entry = [ordered]@{ command = $mcpExe; args = @('mcp', '--socket', $endpoint) }
     if ($desktop.mcpServers.PSObject.Properties.Name -contains 'devagotchi') {
         $desktop.mcpServers.devagotchi = $entry
     } else {
@@ -323,7 +326,7 @@ if ($RegisterClaudeCode) {
     Step 'Claude Code'
     if (Get-Command claude -ErrorAction SilentlyContinue) {
         & claude mcp remove --scope user devagotchi *> $null
-        & claude mcp add --scope user devagotchi -- $mcpExe --socket $endpoint
+        & claude mcp add --scope user devagotchi -- $mcpExe mcp --socket $endpoint
         if ($LASTEXITCODE -ne 0) { throw 'claude mcp add failed' }
     } else {
         Write-Host '    claude is not on PATH; skipped'

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Shippin (Nomen) sign-in end to end against the real hub binary and a fake Nomen.
 
-    python3 tests/nomen_probe.py --hub-bin target/debug/devagotchi-hub --endpoint <broker endpoint> \
+    python3 tests/nomen_probe.py --devagotchi target/debug/devagotchi --endpoint <broker endpoint> \
         --git /usr/bin/git --cwd <workspace> --work <empty dir>
 
 Starts tests/fake_nomen.py (which checks the hub's private-key JWT), then the hub in
@@ -31,7 +31,7 @@ sys.path.insert(0, str(HERE))
 from fake_nomen import FakeNomen  # noqa: E402
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--hub-bin", required=True)
+parser.add_argument("--devagotchi", required=True, help="the one binary; the hub is `devagotchi hub serve`")
 parser.add_argument("--endpoint", required=True, help="the running broker's endpoint")
 parser.add_argument("--git", required=True)
 parser.add_argument("--cwd", required=True)
@@ -104,7 +104,7 @@ def whoami(base, token):
 
 
 def start_hub(config_path, state):
-    process = subprocess.Popen([args.hub_bin, "--state-dir", str(state), "--config", str(config_path)],
+    process = subprocess.Popen([args.devagotchi, "hub", "serve", "--state-dir", str(state), "--config", str(config_path)],
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     lines, ready = [], threading.Event()
 
@@ -144,7 +144,7 @@ config = {
 # An email where the account ID belongs stops the hub before it serves anything.
 bad = args.work / "hub-email-owner.json"
 bad.write_text(json.dumps({**config, "owner": "jessay@example.test"}))
-refused = subprocess.run([args.hub_bin, "--state-dir", str(args.work / "unused"), "--config", str(bad)],
+refused = subprocess.run([args.devagotchi, "hub", "serve", "--state-dir", str(args.work / "unused"), "--config", str(bad)],
                          capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
 check("email as owner refused at start", refused.returncode != 0 and "account ID" in refused.stderr,
       refused.stderr.strip()[:160])

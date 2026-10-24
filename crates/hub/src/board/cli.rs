@@ -1,4 +1,4 @@
-//! `devagotchi-hub board …`: the agent-facing command line over one project's board.
+//! `devagotchi board …`: the agent-facing command line over one project's board.
 //! Agent-first by contract (docs/agent-board.md §7): JSON whenever stdout is not a
 //! terminal, `--quiet`, one exit code per failure class, every error carries `next`,
 //! and `prime` is what a session runs first — the tickets it holds, what is ready for
@@ -23,7 +23,7 @@ use super::{
     ProjectConfig, Ticket, default_prefix, open_project, read_project_config,
 };
 
-pub const USAGE: &str = "Usage: devagotchi-hub board <command> [options]
+pub const USAGE: &str = "Usage: devagotchi board <command> [options]
 
   init      [--project NAME] [--prefix P] [--agents-md]   create .devagotchi/ here; --agents-md appends the AGENTS.md block
   prime     [--limit N]            what to do now: held, ready, notes to you, the protocol (≤ 50 lines)
@@ -498,7 +498,7 @@ fn init(parsed: &Parsed, invocation: &Invocation, output: &mut Output<'_>) -> u8
         }),
         || {
             format!(
-                "board ready: {} (ids {}-…)\n  {}\n  AGENTS.md: {}\n  next: devagotchi-hub board prime — or board onboard to paste the block elsewhere",
+                "board ready: {} (ids {}-…)\n  {}\n  AGENTS.md: {}\n  next: devagotchi board prime — or board onboard to paste the block elsewhere",
                 config.project,
                 config.prefix,
                 board_dir.join(BOARD_FILE).display(),
@@ -1113,7 +1113,7 @@ pub const HOOK_SCRIPTS: &[(&str, &str)] = &[
 cd \"$(dirname \"$0\")/../..\" || exit 0
 actor=${1:-${DEVAGOTCHI_ACTOR:-}}
 [ -z \"$actor\" ] || export DEVAGOTCHI_ACTOR=\"$actor\"
-\"${DEVAGOTCHI_HUB:-devagotchi-hub}\" board prime --text 2>/dev/null || true
+\"${DEVAGOTCHI:-devagotchi}\" board prime --text 2>/dev/null || true
 exit 0
 ",
     ),
@@ -1127,7 +1127,7 @@ actor=${1:-${DEVAGOTCHI_ACTOR:-}}
 marker=.devagotchi/hooks/.last-beat-${actor:-$(id -un 2>/dev/null || echo operator)}
 if [ -f \"$marker\" ] && [ -n \"$(find \"$marker\" -mmin -1 2>/dev/null)\" ]; then exit 0; fi
 : > \"$marker\"
-\"${DEVAGOTCHI_HUB:-devagotchi-hub}\" board beat --quiet >/dev/null 2>&1 || true
+\"${DEVAGOTCHI:-devagotchi}\" board beat --quiet >/dev/null 2>&1 || true
 exit 0
 ",
     ),
@@ -1142,7 +1142,7 @@ actor=${1:-${DEVAGOTCHI_ACTOR:-}}
 [ -z \"$actor\" ] || export DEVAGOTCHI_ACTOR=\"$actor\"
 input=$(cat 2>/dev/null)
 case $input in *'\"stop_hook_active\": true'*|*'\"stop_hook_active\":true'*) exit 0 ;; esac
-held=$(\"${DEVAGOTCHI_HUB:-devagotchi-hub}\" board held --text 2>/dev/null) || exit 0
+held=$(\"${DEVAGOTCHI:-devagotchi}\" board held --text 2>/dev/null) || exit 0
 [ -n \"$held\" ] || exit 0
 printf 'You still hold tickets on the board:\\n%s\\nFinish each (board done <id> \"summary\") or hand it off (board handoff <id> \"note\" --to <who>) before stopping.\\n' \"$held\" >&2
 exit 2
@@ -1195,7 +1195,7 @@ pub fn agents_md_block() -> String {
 This project's tickets live in `.devagotchi/board.sqlite3` (the agents' board; contract in the
 devagotchi repository, `docs/agent-board.md`). Work from the board, not from memory:
 
-- Start every session with `devagotchi-hub board prime` (set `DEVAGOTCHI_ACTOR=<your-name>` first,
+- Start every session with `devagotchi board prime` (set `DEVAGOTCHI_ACTOR=<your-name>` first,
   for example `claude`, `codex`, `gemini`, `cursor`, `grok`): it lists what you hold, what is ready
   for you, and notes addressed to you.
 - Take work with `board claim` (or `board claim <id>`), heartbeat with `board beat <id>` at least as
@@ -1210,7 +1210,7 @@ devagotchi repository, `docs/agent-board.md`). Work from the board, not from mem
 
 pub const AGENT_WORKFLOW: &str = "The board workflow for an agent
 
-1. prime      devagotchi-hub board prime            what you hold, what is ready for you, notes to you
+1. prime      devagotchi board prime                what you hold, what is ready for you, notes to you
 2. claim      board claim [<id>]                   a lease with a fence; re-claiming what you hold is free
 3. work       board beat <id> [--progress '{...}']  before the heartbeat interval runs out, every time
               board note <id> \"what you learned\"  notes are append-only and travel with the ticket

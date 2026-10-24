@@ -4,12 +4,12 @@
 [Unit]
 Description=Devagotchi broker (per-user, independently supervised jobs)
 Documentation=https://github.com/EonsofStupid/devagotchi
-ConditionPathExists=/devspace/bin/bridge-broker
+ConditionPathExists=/devspace/bin/devagotchi
 After=default.target
 
 [Service]
 Type=simple
-ExecStart=/devspace/bin/bridge-broker --state-dir /devspace/state/devagotchi --config /devspace/config/devagotchi/broker.json
+ExecStart=/devspace/bin/devagotchi broker run --state-dir /devspace/state/devagotchi --config /devspace/config/devagotchi/broker.json
 WorkingDirectory=/devspace
 # Restart=always, not on-failure: on-failure skips SIGTERM and clean exits.
 Restart=always

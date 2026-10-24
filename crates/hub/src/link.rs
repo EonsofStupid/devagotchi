@@ -1,5 +1,5 @@
 //! The hub's end of the machine link (plan N20). A broker on another machine is reached
-//! through one WebSocket its `devagotchi-link` dials out to `/link`. The device proves
+//! through one WebSocket its `devagotchi link` dials out to `/link`. The device proves
 //! its enrolled Ed25519 key by signing a fresh challenge; after that the hub sends one
 //! `call` frame per routed request and waits for the matching `result`.
 //!
@@ -90,7 +90,7 @@ fn offline(device: &str) -> BridgeError {
     BridgeError::new(
         "broker_offline",
         format!(
-            "{device} is enrolled but its link is not connected; the machine is off, asleep or its devagotchi-link is not running"
+            "{device} is enrolled but its link is not connected; the machine is off, asleep or its `devagotchi link` is not running"
         ),
     )
 }
@@ -154,7 +154,7 @@ impl Links {
                 return Err(BridgeError::new(
                     "not_enrolled",
                     format!(
-                        "{device} has never enrolled; the hub operator issues a code with devagotchi-hub enroll"
+                        "{device} has never enrolled; the hub operator issues a code with `devagotchi hub enroll`"
                     ),
                 ));
             }
@@ -222,7 +222,7 @@ impl Links {
             operation_id: key,
             outcome,
         }) {
-            eprintln!("devagotchi-hub: link audit failed: {error}");
+            eprintln!("devagotchi hub: link audit failed: {error}");
         }
     }
 
@@ -249,7 +249,7 @@ impl Links {
         let via = format!("link {peer}");
         let outcome = format!("{} ({} more refusals not itemized)", error.code, suppressed);
         eprintln!(
-            "devagotchi-hub: link refused from {peer} claiming {claimed:?}: {}",
+            "devagotchi hub: link refused from {peer} claiming {claimed:?}: {}",
             error
         );
         self.event(&subject, &via, "link.refused", &claimed, "", &outcome);

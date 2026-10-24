@@ -322,7 +322,7 @@ pub fn open_project(project_dir: &Path) -> BridgeResult<(ProjectConfig, Board)> 
         return Err(BridgeError::new(
             "no_board",
             format!(
-                "no board under {}; run `devagotchi-hub board init --dir {}` there",
+                "no board under {}; run `devagotchi board init --dir {}` there",
                 project_dir.display(),
                 project_dir.display()
             ),

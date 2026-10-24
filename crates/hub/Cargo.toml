@@ -15,10 +15,6 @@ workspace = true
 name = "devagotchi_hub"
 path = "src/lib.rs"
 
-[[bin]]
-name = "devagotchi-hub"
-path = "src/main.rs"
-
 [dependencies]
 devagotchi-contracts = { workspace = true }
 devagotchi-ipc = { workspace = true }
@@ -48,6 +44,3 @@ tempfile = { workspace = true }
 # Tests mint a fresh RSA key per run and stand up a fake Nomen.
 aws-lc-rs = "1"
 axum = { version = "0.8", default-features = false, features = ["form"] }
-
-[package.metadata.dist]
-dist = true

@@ -30,7 +30,7 @@ Write-Host 'ok   reinstall kept the endpoint'
 
 & "$PSScriptRoot\install-devagotchi.ps1" -Root $root -Uninstall
 if (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Devagotchi Broker' -ErrorAction SilentlyContinue) { throw 'autostart entry survived uninstall' }
-if (Get-Process -Name 'bridge-broker' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) }) { throw 'broker survived uninstall' }
+if (Get-CimInstance Win32_Process -Filter "Name = 'devagotchi.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine -match '\sbroker\s+run\b' }) { throw 'broker survived uninstall' }
 Write-Host 'ok   uninstall stopped the broker and removed the autostart entry'
 
 # The link: join a hub running on this runner the way gus or dabo joins one, by installer.
@@ -49,18 +49,18 @@ $hubConfig = [ordered]@{
     grants = @([ordered]@{ subject = 'ci'; brokers = @('ci-machine') })
 }
 [System.IO.File]::WriteAllText($hubCfg, ($hubConfig | ConvertTo-Json -Depth 5), $utf8)
-$hubExe = (Resolve-Path 'target\debug\devagotchi-hub.exe').ProviderPath
+$hubExe = (Resolve-Path 'target\debug\devagotchi.exe').ProviderPath
 $hubLog = Join-Path $env:RUNNER_TEMP 'hub.log'
-$hub = Start-Process -FilePath $hubExe -ArgumentList @('--state-dir', "`"$hubState`"", '--config', "`"$hubCfg`"") `
+$hub = Start-Process -FilePath $hubExe -ArgumentList @('hub', 'serve', '--state-dir', "`"$hubState`"", '--config', "`"$hubCfg`"") `
     -WindowStyle Hidden -RedirectStandardError $hubLog -PassThru
 for ($i = 0; $i -lt 100; $i++) {
     Start-Sleep -Milliseconds 100
-    if ((Test-Path $hubLog) -and (Select-String -Path $hubLog -Pattern 'devagotchi-hub ready:' -Quiet)) { break }
+    if ((Test-Path $hubLog) -and (Select-String -Path $hubLog -Pattern 'devagotchi hub ready:' -Quiet)) { break }
 }
-if (-not (Select-String -Path $hubLog -Pattern 'devagotchi-hub ready:' -Quiet)) { Get-Content $hubLog; throw 'hub did not start' }
+if (-not (Select-String -Path $hubLog -Pattern 'devagotchi hub ready:' -Quiet)) { Get-Content $hubLog; throw 'hub did not start' }
 # stdout carries only the code; the note on stderr is dropped under 'Continue' (PowerShell 5.1).
 $ErrorActionPreference = 'Continue'
-$code = "$(& $hubExe enroll --state-dir $hubState --device ci-machine 2>$null)".Trim()
+$code = "$(& $hubExe hub enroll --state-dir $hubState --device ci-machine 2>$null)".Trim()
 $ErrorActionPreference = 'Stop' 
 if (-not $code.StartsWith('dvg-')) { throw "no enrollment code: $code" }
 
@@ -83,7 +83,7 @@ try {
 
     & "$PSScriptRoot\install-devagotchi.ps1" -Root $root -Uninstall
     if (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Devagotchi Link' -ErrorAction SilentlyContinue) { throw 'link autostart entry survived uninstall' }
-    if (Get-Process -Name 'devagotchi-link' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) }) { throw 'link survived uninstall' }
+    if (Get-CimInstance Win32_Process -Filter "Name = 'devagotchi.exe'" -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase) -and $_.CommandLine -match '\slink\s+run\b' }) { throw 'link survived uninstall' }
     python tests/hub_probe.py $hubUrl --token $token --broker ci-machine --expect-error broker_offline
     if ($LASTEXITCODE -ne 0) { throw 'hub did not see the link go away' }
     Write-Host 'ok   uninstall stopped the link and removed its autostart entry'

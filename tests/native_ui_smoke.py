@@ -180,8 +180,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--app', type=Path,
                         default=project / 'apps/desktop/src-tauri/target/debug/devagotchi')
-    parser.add_argument('--broker', type=Path, default=project / 'target/debug/bridge-broker')
-    parser.add_argument('--adapter', type=Path, default=project / 'target/debug/bridge-mcp')
+    parser.add_argument('--devagotchi', type=Path, default=project / 'target/debug/devagotchi', help='the one binary: `devagotchi broker run` and `devagotchi mcp`')
     parser.add_argument('--tauri-driver', default='tauri-driver')
     parser.add_argument('--frontend-dist', type=Path, default=project / 'apps/desktop/dist')
     parser.add_argument('--artifacts-dir', type=Path, required=True)
@@ -214,8 +213,7 @@ def main():
         'python_version': sys.version.split()[0],
         'native_binary': str(args.app),
         'native_binary_sha256': sha256(args.app),
-        'broker_binary_sha256': sha256(args.broker),
-        'adapter_binary_sha256': sha256(args.adapter),
+        'devagotchi_binary_sha256': sha256(args.devagotchi),
         'tauri_driver_sha256': sha256(Path(required['tauri-driver'])),
         'expected_script_assets': expected_scripts,
         'webkit_sandbox_disabled_for_container': args.disable_webkit_sandbox_for_container,
@@ -249,16 +247,16 @@ def main():
         with broker_log_path.open('wb') as broker_log, driver_log_path.open('wb') as driver_log:
             try:
                 broker = subprocess.Popen([
-                    str(args.broker), '--state-dir', str(state), '--config', str(config)],
+                    str(args.devagotchi), 'broker', 'run', '--state-dir', str(state), '--config', str(config)],
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=broker_log)
 
                 def broker_ready():
                     if broker.poll() is not None:
                         raise RuntimeError(broker_log_path.read_text(errors='replace'))
-                    return 'bridge-broker ready:' in broker_log_path.read_text(errors='replace')
+                    return 'devagotchi broker ready:' in broker_log_path.read_text(errors='replace')
 
                 wait_until(broker_ready)
-                client = McpClient(args.adapter, broker_socket)
+                client = McpClient(args.devagotchi, broker_socket)
                 history_marker = 'native-history-' + uuid.uuid4().hex[:12]
                 historic = client.tool('operation_start', {
                     'idempotency_key': str(uuid.uuid4()), 'executable': executable,

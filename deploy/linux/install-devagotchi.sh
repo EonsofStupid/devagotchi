@@ -16,7 +16,7 @@
 #   sudo ./install-devagotchi.sh --uninstall
 #   ./install-devagotchi.sh --print-target                       # the release build this machine takes
 #
-# The one-time enrollment code (from `devagotchi-hub enroll --device NAME`) is read from stdin,
+# The one-time enrollment code (from `devagotchi hub enroll --device NAME`) is read from stdin,
 # never from the command line, and reaches the link on its stdin. Re-running upgrades the
 # binaries and keeps the config and the enrollment. Binaries live in root-owned
 # <prefix>/versions/<version>; <prefix>/current points at one of them, so a rollback is one
@@ -154,7 +154,7 @@ if [ $UNINSTALL = 1 ]; then
         loginctl disable-linger "$ACCOUNT" || true
         echo "    stopped and removed the services of $ACCOUNT; lingering is off"
         echo "    left in place: the account $ACCOUNT, $home (configs, journals, keys, boards), $PREFIX (binaries)"
-        echo "    a machine: revoke it on its hub too (devagotchi-hub revoke --device <name>)"
+        echo "    a machine: revoke it on its hub too (devagotchi hub revoke --device <name>)"
         if [ -f /etc/caddy/devagotchi-hub.caddy ]; then
             echo "    a hub: /etc/caddy/devagotchi-hub.caddy and its import line in /etc/caddy/Caddyfile are left for you to remove"
         fi
@@ -202,9 +202,9 @@ SOCKET=$STATE/broker.sock
 as_user sh -c 'umask 077; mkdir -p "$1"' sh "$HOME_DIR/.local/state"
 
 # ------------------------------------------------------------------ binaries
-# Every version directory holds all four, whichever role this run installs, so a host
-# that runs both roles from one prefix never has `current` point at a half set.
-BINARIES=(bridge-broker bridge-mcp devagotchi-link devagotchi-hub)
+# One binary carries every role (`devagotchi broker run`, `mcp`, `link`, `hub`, `board`), so a
+# host that runs both roles from one prefix always has `current` point at a whole set.
+BINARIES=(devagotchi)
 install -d -o root -g root -m 0755 "$PREFIX" "$PREFIX/versions"
 if [ -n "$BIN_DIR" ]; then
     step "Binaries from build directory $BIN_DIR"
@@ -224,7 +224,7 @@ elif [ -n "$VERSION" ]; then
     step "Devagotchi $VERSION for $TARGET"
     dest=$PREFIX/versions/$VERSION
     work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
-    for app in devagotchi-broker devagotchi-mcp devagotchi-link devagotchi-hub; do
+    for app in "${BINARIES[@]}"; do
         archive=$app-$TARGET.tar.xz
         for name in "$archive" "$archive.sha256"; do
             if [ -n "$ARTIFACT_DIR" ]; then
@@ -304,7 +304,7 @@ if [ "$ROLE" = hub ]; then
             case $dir in "$HOME_DIR"/*) as_user sh -c 'umask 077; mkdir -p "$1"' sh "$dir" ;; esac
             as_user test -d "$dir" -a -w "$dir" -a -x "$dir" \
                 || die "$ACCOUNT cannot write the project directory $dir (chown it, or keep boards under $HOME_DIR/projects)"
-            as_user "$dest/devagotchi-hub" board init --dir "$dir" --project "$name" --agents-md --quiet >/dev/null \
+            as_user "$dest/devagotchi" board init --dir "$dir" --project "$name" --agents-md --quiet >/dev/null \
                 || die "board init failed for $name in $dir"
             board_names+=("$name")
             board_entries+="${board_entries:+, }{ \"project\": $(json_string "$name"), \"dir\": $(json_string "$dir") }"
@@ -346,7 +346,7 @@ if [ "$ROLE" = hub ]; then
         } | write_as_user "$HUB_CONFIG" 0600
         HUB_CHANGED=1
         echo "    wrote $HUB_CONFIG: listen $LISTEN, public_url $PUBLIC_URL, ${#board_names[@]} boards, $(( ${#PEOPLE[@]} + ${#AGENTS[@]} )) grants"
-        echo "    machines join by adding {\"name\": \"<device>\", \"link\": true} to \"brokers\" and a grant, then devagotchi-hub enroll"
+        echo "    machines join by adding {\"name\": \"<device>\", \"link\": true} to \"brokers\" and a grant, then devagotchi hub enroll"
     fi
 
     # ---- tokens: minted here, shown once, never logged
@@ -385,7 +385,7 @@ Documentation=https://github.com/$REPO/tree/main/deploy/linux
 
 [Service]
 Type=simple
-ExecStart=$PREFIX/current/devagotchi-hub --state-dir %h/.local/state/devagotchi-hub --config %h/.config/devagotchi/hub.json
+ExecStart=$PREFIX/current/devagotchi hub serve --state-dir %h/.local/state/devagotchi-hub --config %h/.config/devagotchi/hub.json
 WorkingDirectory=%h
 Restart=always
 RestartSec=2
@@ -497,7 +497,7 @@ Documentation=https://github.com/$REPO/tree/main/deploy/linux
 
 [Service]
 Type=simple
-ExecStart=$PREFIX/current/bridge-broker --state-dir %h/.local/state/devagotchi --config %h/.config/devagotchi/broker.json
+ExecStart=$PREFIX/current/devagotchi broker run --state-dir %h/.local/state/devagotchi --config %h/.config/devagotchi/broker.json
 WorkingDirectory=%h
 # always, not on-failure: on-failure skips SIGTERM and clean exits.
 Restart=always
@@ -524,7 +524,7 @@ ConditionPathExists=%h/.local/state/devagotchi-link/link.json
 
 [Service]
 Type=simple
-ExecStart=$PREFIX/current/devagotchi-link run --state-dir %h/.local/state/devagotchi-link
+ExecStart=$PREFIX/current/devagotchi link run --state-dir %h/.local/state/devagotchi-link
 # The link reconnects on its own with backoff; this only covers a crash.
 Restart=always
 RestartSec=5
@@ -562,7 +562,7 @@ echo "    ready: $SOCKET"
 if [ $ENROLL = 1 ]; then
     step "Enrolling this machine as '$DEVICE' on $HUB"
     # The code goes to the link on its stdin: never an argument, a file or a log line.
-    if ! printf '%s\n' "$CODE" | as_user "$PREFIX/current/devagotchi-link" enroll --state-dir "$LINK_STATE" \
+    if ! printf '%s\n' "$CODE" | as_user "$PREFIX/current/devagotchi" link enroll --state-dir "$LINK_STATE" \
         --hub "$HUB" --device "$DEVICE" --broker "$SOCKET"; then
         unset CODE
         die "enrollment failed; ask the hub operator for a fresh code"
@@ -592,4 +592,4 @@ step "Done"
 echo "    Version:   $VERSION ($PREFIX/current)"
 echo "    Account:   $ACCOUNT, services: systemctl --user status devagotchi-broker devagotchi-link (as $ACCOUNT)"
 echo "    Broker:    $SOCKET"
-echo "    Local MCP: $PREFIX/current/bridge-mcp --socket $SOCKET (as $ACCOUNT)"
+echo "    Local MCP: $PREFIX/current/devagotchi mcp --socket $SOCKET (as $ACCOUNT)"

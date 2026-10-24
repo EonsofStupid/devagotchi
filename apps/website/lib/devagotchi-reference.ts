@@ -21,8 +21,9 @@ export const localTools = [
 export const examples = {
   broker: JSON.stringify({ workspace: "/absolute/path/to/workspace", allowed_executables: ["/usr/bin/printf"], output_limit_bytes: 262144, max_operations: 64, max_concurrent: 4 }, null, 2),
   build: "cargo build --locked --bins",
-  startBroker: "./target/debug/bridge-broker \\\n  --state-dir /absolute/private/state/devagotchi \\\n  --config /absolute/path/broker.json",
-  localMcp: JSON.stringify({ mcpServers: { devagotchi: { command: "/absolute/path/to/devagotchi/target/debug/bridge-mcp", args: ["--socket", "/absolute/private/state/devagotchi/broker.sock"] } } }, null, 2),
+  startBroker: "./target/debug/devagotchi broker run \
+  --state-dir /absolute/private/state/devagotchi \\\n  --config /absolute/path/broker.json",
+  localMcp: JSON.stringify({ mcpServers: { devagotchi: { command: "/absolute/path/to/devagotchi/target/debug/devagotchi", args: ["mcp", "--socket", "/absolute/private/state/devagotchi/broker.sock"] } } }, null, 2),
   start: JSON.stringify({ idempotency_key: "first-hello-001", executable: "/usr/bin/printf", args: ["Hello from Devagotchi\\n"], cwd: "/absolute/path/to/workspace", deadline_ms: 5000 }, null, 2),
   read: JSON.stringify({ operation_id: "<operation ID returned by operation_start>", cursor: 0, max_bytes: 16384 }, null, 2),
 };
@@ -101,7 +102,7 @@ export const documentation = {
   "local-tools": {
     title: "Installed broker tools",
     stage: "implemented-foundation",
-    scope: "These tools are served by bridge-mcp on the user's Linux workstation. The public reference MCP does not execute them.",
+    scope: "These tools are served by `devagotchi mcp` on the user's Linux workstation. The public reference MCP does not execute them.",
     schema_source: "Generated snapshot from the canonical Rust contracts; runtime validation adds the numeric limits described in field documentation.",
     tools: localTools,
     semantics: ["A retry with the same key and exact inputs reconciles the original operation. Changed inputs conflict.", "Cancelling a transport request stops waiting; operation_cancel requests cancellation of admitted work.", "Every output reader supplies its own cursor. Retention may leave an explicit gap.", "Unfinished operations after broker restart become unknown and are not replayed automatically."],

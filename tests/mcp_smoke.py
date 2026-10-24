@@ -16,7 +16,7 @@ import uuid
 
 class McpClient:
     def __init__(self, adapter, socket):
-        self.process = subprocess.Popen([str(adapter), '--socket', str(socket)],
+        self.process = subprocess.Popen([str(adapter), 'mcp', '--socket', str(socket)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         self.buffer = b''
         self.counter = 0
@@ -86,8 +86,7 @@ def wait_until(predicate, timeout=8):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     project = Path(__file__).resolve().parents[1]
-    parser.add_argument('--broker', type=Path, default=project / 'target/debug/bridge-broker')
-    parser.add_argument('--adapter', type=Path, default=project / 'target/debug/bridge-mcp')
+    parser.add_argument('--devagotchi', type=Path, default=project / 'target/debug/devagotchi', help='the one binary: `devagotchi broker run` and `devagotchi mcp`')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     results = []
@@ -115,12 +114,12 @@ def main():
             nonlocal broker, broker_log
             offset = log_path.stat().st_size if log_path.exists() else 0
             broker_log = log_path.open('ab', buffering=0)
-            broker = subprocess.Popen([str(args.broker.resolve()), '--state-dir', str(state), '--config', str(config)],
+            broker = subprocess.Popen([str(args.devagotchi.resolve()), 'broker', 'run', '--state-dir', str(state), '--config', str(config)],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=broker_log)
             def ready():
                 if broker.poll() is not None:
                     raise RuntimeError(log_path.read_text())
-                return 'bridge-broker ready:' in log_path.read_text()[offset:]
+                return 'devagotchi broker ready:' in log_path.read_text()[offset:]
             wait_until(ready)
 
         def stop_broker(force=False):
@@ -134,7 +133,7 @@ def main():
             broker_log = None
 
         def client():
-            result = McpClient(args.adapter.resolve(), socket)
+            result = McpClient(args.devagotchi.resolve(), socket)
             clients.append(result)
             return result
 

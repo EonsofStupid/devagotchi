@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Probe a running devagotchi-hub's board tools over Streamable HTTP MCP.
+"""Probe a running hub's board tools over Streamable HTTP MCP.
 
     python3 tests/board_probe.py http://127.0.0.1:8787 --project e2e-board --dir /path/to/project \
-        --hub-bin target/debug/devagotchi-hub \
+        --devagotchi target/debug/devagotchi \
         --tokens operator=<bearer> claude=<bearer> codex=<bearer> reader=<bearer>
 
 Three subjects work one project's board the way three subscriptions would: a person
@@ -27,7 +27,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("base")
 parser.add_argument("--project", required=True)
 parser.add_argument("--dir", required=True, help="the project directory the hub serves")
-parser.add_argument("--hub-bin", required=True)
+parser.add_argument("--devagotchi", required=True, help="the one binary, for `devagotchi board ls` against the same directory")
 parser.add_argument("--tokens", nargs="+", required=True, help="name=bearer, for operator claude codex reader")
 args = parser.parse_args()
 base = args.base.rstrip("/")
@@ -218,7 +218,7 @@ chain = operator.ok("board_verify", {"project": P})
 check("board chain verified", chain.get("ok") is True and chain.get("entries") == last + 1, json.dumps(chain))
 
 # The command line, on the hub's host, is the other face of the same store.
-result = subprocess.run([args.hub_bin, "board", "ls", "--dir", args.dir, "--json"], capture_output=True, text=True, timeout=30)
+result = subprocess.run([args.devagotchi, "board", "ls", "--dir", args.dir, "--json"], capture_output=True, text=True, timeout=30)
 try:
     rows = json.loads(result.stdout or "[]")
     ids = {row["id"] for row in rows}

@@ -12,8 +12,12 @@ heading. Agents draft the fragments below; they never tag.
   (this user's broker; the first run writes `broker.json` with the workspace and the
   toolchains on PATH), `devagotchi mcp` (the adapter an agent runs; finds that broker through
   `<state>/endpoint`), `devagotchi board …`, `devagotchi broker run …`, `devagotchi hub
-  serve|enroll|revoke|devices`, `devagotchi link enroll|run`, `devagotchi version`. The four
-  binaries still build from the same code until the clean cut (13b).
+  serve|enroll|revoke|devices`, `devagotchi link enroll|run`, `devagotchi version`.
+- The clean cut (13b): `devagotchi` is the only binary the release ships and the installers,
+  harnesses, CI and docs call (`bridge-broker`, `bridge-mcp`, `devagotchi-link` and
+  `devagotchi-hub` are gone; their crates are libraries). The installers' units run
+  `devagotchi broker run`, `devagotchi link run` and `devagotchi hub serve`; Claude Desktop
+  and Claude Code are registered with `devagotchi mcp`.
 
 ### The agents' board (increments 7–8)
 - `devagotchi-hub board …`: a per-project ticket board in `<project>/.devagotchi/board.sqlite3`

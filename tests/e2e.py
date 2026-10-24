@@ -3,13 +3,13 @@
 
     python tests/e2e.py --bin-dir target/debug
 
-Starts `bridge-broker` with a fresh private state directory and a workspace that grants
-only git, drives it through `bridge-mcp` over stdio (tests/adapter_probe.py), then starts
-`devagotchi-hub` in dev-token mode with two routes to that broker: `local` over IPC and
+Starts `devagotchi broker run` with a fresh private state directory and a workspace that grants
+only git, drives it through `devagotchi mcp` over stdio (tests/adapter_probe.py), then starts
+`devagotchi hub serve` in dev-token mode with two routes to that broker: `local` over IPC and
 `remote` over the machine link, and one project board on this host. It drives the local
 route over Streamable HTTP MCP (tests/hub_probe.py), works the board as three
 subscriptions would (tests/board_probe.py), then the link's whole life: not enrolled at first, a one-time
-code that works once, `devagotchi-link run`, the same probe through the link, offline when
+code that works once, `devagotchi link run`, the same probe through the link, offline when
 the link stops, back after it restarts, and a revoke that closes it and makes it exit 2.
 Last, Shippin sign-in: a hub in `nomen` mode against a fake Nomen (tests/nomen_probe.py),
 and people signing in with a browser to see their machines (tests/web_probe.py).
@@ -35,12 +35,14 @@ parser.add_argument("--bin-dir", required=True, type=Path)
 parser.add_argument("--keep", action="store_true", help="keep the work directory")
 args = parser.parse_args()
 bins = args.bin_dir.resolve()
-broker_bin, adapter_bin, hub_bin, link_bin, one_binary = (
-    bins / f"{name}{EXE}" for name in ("bridge-broker", "bridge-mcp", "devagotchi-hub", "devagotchi-link", "devagotchi")
-)
-for path in (broker_bin, adapter_bin, hub_bin, link_bin, one_binary):
-    if not path.is_file():
-        sys.exit(f"missing binary: {path} (cargo build --locked --bins)")
+devagotchi = bins / f"devagotchi{EXE}"
+if not devagotchi.is_file():
+    sys.exit(f"missing binary: {devagotchi} (cargo build --locked --bins)")
+# One binary, nested verbs: each role is the same executable with its command in front.
+broker_cmd = [str(devagotchi), "broker", "run"]
+adapter_cmd = f"{devagotchi} mcp"
+hub_cmd = [str(devagotchi), "hub"]
+link_cmd = [str(devagotchi), "link"]
 
 git = shutil.which("git")
 if not git:
@@ -112,18 +114,13 @@ def run_cmd(argv, label, expect=0, env=None):
 ok = False
 try:
     print(f"work dir {work}; git {git}", flush=True)
-    _, ready = start([str(broker_bin), "--state-dir", str(state), "--config", str(config)], "ready:", "broker")
+    _, ready = start([*broker_cmd, "--state-dir", str(state), "--config", str(config)], "ready:", "broker")
     endpoint = ready.split("ready:", 1)[1].strip()
     print(f"broker endpoint {endpoint}", flush=True)
 
     adapter_ok = run_probe(
-        [str(HERE / "adapter_probe.py"), endpoint, "--adapter", str(adapter_bin), "--git", git, "--cwd", str(workspace)],
+        [str(HERE / "adapter_probe.py"), endpoint, "--adapter", adapter_cmd, "--git", git, "--cwd", str(workspace)],
         "stdio adapter probe",
-    )
-    # The one binary: `devagotchi mcp --socket` is the same adapter, from the same library.
-    adapter_ok = adapter_ok and run_probe(
-        [str(HERE / "adapter_probe.py"), endpoint, "--adapter", f"{one_binary} mcp", "--git", git, "--cwd", str(workspace)],
-        "stdio adapter probe through `devagotchi mcp`",
     )
 
     token = "e2e-dev-token-" + os.urandom(12).hex()
@@ -136,7 +133,7 @@ try:
     # One project's board on the hub's host, initialised the way an operator would.
     project_dir = work / "board-project"
     project_dir.mkdir()
-    board_init, _ = run_cmd([hub_bin, "board", "init", "--dir", project_dir, "--project", "e2e-board", "--agents-md"], "board init")
+    board_init, _ = run_cmd([devagotchi, "board", "init", "--dir", project_dir, "--project", "e2e-board", "--agents-md"], "board init")
     port = free_port()
     hub_config = work / "hub.json"
     hub_config.write_text(json.dumps({
@@ -154,12 +151,12 @@ try:
     }))
     hub_state = work / "hub-state"
     hub_url = f"http://127.0.0.1:{port}"
-    start([str(hub_bin), "--state-dir", str(hub_state), "--config", str(hub_config)], "ready:", "hub")
+    start([*hub_cmd, "serve", "--state-dir", str(hub_state), "--config", str(hub_config)], "ready:", "hub")
     probe = [str(HERE / "hub_probe.py"), hub_url, "--token", token, "--git", git, "--cwd", str(workspace)]
     hub_ok = run_probe(probe + ["--broker", "local"], "hub probe")
     board_ok = board_init and run_probe(
         [str(HERE / "board_probe.py"), hub_url, "--project", "e2e-board", "--dir", str(project_dir),
-         "--hub-bin", str(hub_bin), "--tokens", f"operator={token}",
+         "--devagotchi", str(devagotchi), "--tokens", f"operator={token}",
          *[f"{who}={t}" for who, t in board_tokens.items()]],
         "board probe: three subscriptions, one board",
     )
@@ -168,21 +165,21 @@ try:
     link_state = work / "link-state"
     steps = []
     steps.append(run_probe(probe + ["--broker", "remote", "--expect-error", "not_enrolled"], "linked broker before enrollment"))
-    enrolled, code = run_cmd([hub_bin, "enroll", "--state-dir", hub_state, "--device", "remote"], "hub enroll")
+    enrolled, code = run_cmd([*hub_cmd, "enroll", "--state-dir", hub_state, "--device", "remote"], "hub enroll")
     steps.append(enrolled and code.startswith("dvg-"))
     # The code travels in the environment, never on a command line other users can read.
-    enroll = [link_bin, "enroll", "--hub", hub_url, "--device", "remote", "--broker", endpoint]
+    enroll = [*link_cmd, "enroll", "--hub", hub_url, "--device", "remote", "--broker", endpoint]
     code_env = {"DEVAGOTCHI_ENROLL_CODE": code}
     steps.append(run_cmd(enroll + ["--state-dir", link_state], "link enroll", env=code_env)[0])
     steps.append(run_cmd(enroll + ["--state-dir", work / "second-machine"], "link enroll with a spent code", expect=2, env=code_env)[0])
-    link, _ = start([str(link_bin), "run", "--state-dir", str(link_state)], "ready:", "link")
+    link, _ = start([*link_cmd, "run", "--state-dir", str(link_state)], "ready:", "link")
     steps.append(run_probe(probe + ["--broker", "remote"], "hub probe through the link"))
     link.terminate()
     link.wait(10)
     steps.append(run_probe(probe + ["--broker", "remote", "--expect-error", "broker_offline"], "linked broker after the link stops"))
-    link, _ = start([str(link_bin), "run", "--state-dir", str(link_state)], "ready:", "link")
+    link, _ = start([*link_cmd, "run", "--state-dir", str(link_state)], "ready:", "link")
     steps.append(run_probe(probe + ["--broker", "remote"], "hub probe after the link restarts"))
-    steps.append(run_cmd([hub_bin, "revoke", "--state-dir", hub_state, "--device", "remote"], "hub revoke")[0])
+    steps.append(run_cmd([*hub_cmd, "revoke", "--state-dir", hub_state, "--device", "remote"], "hub revoke")[0])
     try:
         exit_code = link.wait(20)
     except subprocess.TimeoutExpired:
@@ -195,12 +192,12 @@ try:
 
     # Shippin sign-in: a second hub that checks Nomen tokens, against a fake Nomen.
     nomen_ok = run_probe(
-        [str(HERE / "nomen_probe.py"), "--hub-bin", str(hub_bin), "--endpoint", endpoint,
+        [str(HERE / "nomen_probe.py"), "--devagotchi", str(devagotchi), "--endpoint", endpoint,
          "--git", git, "--cwd", str(workspace), "--work", str(work / "nomen")],
         "Nomen sign-in",
     )
     web_ok = run_probe(
-        [str(HERE / "web_probe.py"), "--hub-bin", str(hub_bin), "--endpoint", endpoint,
+        [str(HERE / "web_probe.py"), "--devagotchi", str(devagotchi), "--endpoint", endpoint,
          "--work", str(work / "web")],
         "browser sign-in",
     )

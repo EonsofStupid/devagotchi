@@ -1,6 +1,6 @@
 [package]
 name = "devagotchi-mcp"
-description = "Thin stdio MCP adapter (official rmcp SDK) that maps typed tools onto the broker's local IPC; it never links the broker"
+description = "Thin stdio MCP adapter (official rmcp SDK) that maps typed tools onto the broker's local IPC (`devagotchi mcp`); this crate never links the broker"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -16,16 +16,9 @@ workspace = true
 name = "devagotchi_mcp"
 path = "src/lib.rs"
 
-[[bin]]
-name = "bridge-mcp"
-path = "src/main.rs"
-
 [dependencies]
 devagotchi-contracts = { workspace = true }
 devagotchi-ipc = { workspace = true }
 rmcp = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
-
-[package.metadata.dist]
-dist = true

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Browser sign-in end to end: the real hub binary in `nomen` mode, a fake Nomen.
 
-    python3 tests/web_probe.py --hub-bin target/debug/devagotchi-hub --endpoint <broker endpoint> \
+    python3 tests/web_probe.py --devagotchi target/debug/devagotchi --endpoint <broker endpoint> \
         --work <empty dir>
 
 Plays a browser with no redirect following: /account sends a signed-out visitor to
@@ -31,7 +31,7 @@ sys.path.insert(0, str(HERE))
 from fake_nomen import FakeNomen  # noqa: E402
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--hub-bin", required=True)
+parser.add_argument("--devagotchi", required=True, help="the one binary; the hub is `devagotchi hub serve`")
 parser.add_argument("--endpoint", required=True, help="the running broker's endpoint")
 parser.add_argument("--work", required=True, type=Path)
 args = parser.parse_args()
@@ -90,7 +90,7 @@ class Browser:
 
 
 def start_hub(config_path, state):
-    process = subprocess.Popen([args.hub_bin, "--state-dir", str(state), "--config", str(config_path)],
+    process = subprocess.Popen([args.devagotchi, "hub", "serve", "--state-dir", str(state), "--config", str(config_path)],
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     lines, ready = [], threading.Event()
 

@@ -1,9 +1,8 @@
-//! devagotchi-link: lets a Devagotchi hub reach the broker on this machine without
+//! `devagotchi link`: lets a Devagotchi hub reach the broker on this machine without
 //! opening any port here. It dials out to the hub, proves this machine's key, and hands
 //! each routed request to the local broker over private IPC. Jobs stay with the broker.
 
-//! This library is the link's whole behaviour; `devagotchi-link` and `devagotchi link`
-//! are two names for [`cli`].
+//! This library is the link's whole behaviour; `devagotchi link` is its name.
 
 mod session;
 mod state;
@@ -87,7 +86,7 @@ pub fn cli(args: Vec<OsString>) -> ExitCode {
         }
         Ok(command) => command,
         Err(error) => {
-            eprintln!("devagotchi-link: {error}\n\n{USAGE}");
+            eprintln!("devagotchi link: {error}\n\n{USAGE}");
             return ExitCode::from(64);
         }
     };
@@ -97,7 +96,7 @@ pub fn cli(args: Vec<OsString>) -> ExitCode {
     {
         Ok(runtime) => runtime,
         Err(error) => {
-            eprintln!("devagotchi-link: runtime: {error}");
+            eprintln!("devagotchi link: runtime: {error}");
             return ExitCode::FAILURE;
         }
     };
@@ -116,7 +115,7 @@ async fn dispatch(command: Command) -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("devagotchi-link: {error}");
+            eprintln!("devagotchi link: {error}");
             // 2 = the hub refused this device; a supervisor should not hammer it.
             ExitCode::from(2)
         }
@@ -152,7 +151,7 @@ async fn enroll(state_dir: PathBuf, config: LinkConfig, code: String) -> BridgeR
         Ended::Enrolled => {
             state::save_config(&state_dir, &config)?;
             eprintln!(
-                "devagotchi-link enrolled: {} on {}. Start it with: devagotchi-link run --state-dir {}",
+                "devagotchi link enrolled: {} on {}. Start it with: devagotchi link run --state-dir {}",
                 config.device,
                 config.hub,
                 state_dir.display()
@@ -177,7 +176,7 @@ async fn run(state_dir: PathBuf) -> BridgeResult<()> {
         let ended = tokio::select! {
             ended = session::connect(&config, &key, Mode::Serve) => ended,
             _ = tokio::signal::ctrl_c() => {
-                eprintln!("devagotchi-link stopped");
+                eprintln!("devagotchi link stopped");
                 return Ok(());
             }
         };
@@ -191,13 +190,13 @@ async fn run(state_dir: PathBuf) -> BridgeResult<()> {
                 }
                 let pause = jitter(delay);
                 eprintln!(
-                    "devagotchi-link: {why}; reconnecting in {:.1}s",
+                    "devagotchi link: {why}; reconnecting in {:.1}s",
                     pause.as_secs_f32()
                 );
                 tokio::select! {
                     _ = tokio::time::sleep(pause) => {}
                     _ = tokio::signal::ctrl_c() => {
-                        eprintln!("devagotchi-link stopped");
+                        eprintln!("devagotchi link stopped");
                         return Ok(());
                     }
                 }

@@ -15,10 +15,6 @@ workspace = true
 name = "devagotchi_link"
 path = "src/lib.rs"
 
-[[bin]]
-name = "devagotchi-link"
-path = "src/main.rs"
-
 [dependencies]
 devagotchi-contracts = { workspace = true }
 devagotchi-ipc = { workspace = true }
@@ -43,6 +39,3 @@ libc = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
-
-[package.metadata.dist]
-dist = true

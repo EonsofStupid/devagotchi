@@ -109,7 +109,7 @@ Error codes are stable across CLI, MCP and REST: `not_found`, `invalid`, `held_b
   AGENTS.md              gains one fenced block (markers `devagotchi-board:start/end`) pointing at `board prime`
 ```
 
-`devagotchi-hub board init [--project NAME] [--prefix P] [--agents-md]` (increment 8a, in) creates
+`devagotchi board init [--project NAME] [--prefix P] [--agents-md]` (increment 8a, built; `devagotchi board` since 13b) creates
 the directory and, with `--agents-md`, appends the block once. `board prime` is what an agent
 runs, or has run for it, at session start: under fifty lines — the tickets it holds (fence, lease
 left), what is ready for it, tickets that need a person, notes addressed to it, and the one-line
@@ -161,7 +161,7 @@ call lands on the hub's audit chain (`tool`, the project under `broker`, the tic
 `tests/board_probe.py` works a board as three subscriptions (a person, two agents) and then reads
 it back with the command line; `tests/e2e.py` runs it.
 
-**The hook pack (8b, built).** `devagotchi-hub board hooks [--for claude-code|codex|all]` writes
+**The hook pack (8b, built).** `devagotchi board hooks [--for claude-code|codex|all]` writes
 three POSIX scripts under `.devagotchi/hooks/` and prints the hook configuration to add:
 `session-start.sh` runs `board prime --text` (its stdout is the session's first context),
 `beat.sh` runs `board beat` (every held lease, at most once a minute so the chain does not fill
@@ -249,7 +249,7 @@ policy-unconfirmed until Google answers; the seat's config row carries that flag
 | Increment | Scope | Exit |
 |---|---|---|
 | 7 (this one) | `crates/hub/src/board/`: schema, ids, workflow, store, leases, reaper, chain; this document | `cargo nextest run -p devagotchi-hub` green; §2 acceptance list |
-| 8a (in) | `devagotchi-hub board` CLI: `init` (+ AGENTS.md block), `prime`, `onboard`, `agent`, `ready`, `ls`, `show`, `new`, `claim`, `beat`, `note`, `done`, `handoff`, `release`, `force`, `set`, `dep`, `reap`, `verify`, `export`; JSON off a pipe, `--quiet`, exit codes by class, `next` on every error, claim cache | five CLI tests: init idempotence, the loop from a subdirectory with a cached fence, exit codes and hints, `prime` ≤ 50 lines, export + verify |
+| 8a (built) | `devagotchi board` CLI (`devagotchi-hub board` until 13b): `init` (+ AGENTS.md block), `prime`, `onboard`, `agent`, `ready`, `ls`, `show`, `new`, `claim`, `beat`, `note`, `done`, `handoff`, `release`, `force`, `set`, `dep`, `reap`, `verify`, `export`; JSON off a pipe, `--quiet`, exit codes by class, `next` on every error, claim cache | five CLI tests: init idempotence, the loop from a subdirectory with a cached fence, exit codes and hints, `prime` ≤ 50 lines, export + verify |
 | 8b (in) | MCP tools on `/mcp` (one board per `project`; **built**, §6: `boards` config, grants with `boards`/`human`, 17 tools, fence memory, audit, reaper, `tests/board_probe.py`); the hook pack (`board hooks`, **built**); the skill with the MCP snippet per CLI (**built**, agent-skills); still open: project registration with the hub, `request_id` | `tests/e2e.py` works a board over MCP as a person and two agents (**green**); the hook scripts exercised against the CLI (stop refused once while holding, beat throttled) in the CLI tests and by hand; on Claude Code and Codex themselves: open |
 | 9 | Broker liveness (B05), attempts link, message tickets, path reservations, per-state WIP, budgets | A lease survives an agent that never heartbeats while its operation runs; two agents cannot edit one reserved path |
 | 10 | Web: `/board`, `/board/<id>`, Approve; approval events; phone push (installable web app, iPhone and Android) and email (B10) | Phone-width pages served by the existing axum app; a request an agent raises reaches a phone and an inbox, one tap approves, and the agent continues on the event |

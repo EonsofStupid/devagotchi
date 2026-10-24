@@ -5,7 +5,7 @@
 
 Asserts: endpoint.txt names a named pipe; broker.json is valid with the workspace and a
 git grant; the Claude Desktop config kept every server it had and gained `devagotchi`
-pointing at <root>\\current\\bridge-mcp.exe with --socket <endpoint>; a backup was made.
+pointing at <root>\\current\\devagotchi.exe with mcp --socket <endpoint>; a backup was made.
 Then runs tests/adapter_probe.py with exactly the registered command, so the entry Claude
 Desktop would launch is the entry that is proven to work.
 """
@@ -45,15 +45,15 @@ desktop = json.loads(raw.decode("utf-8"))
 servers = desktop.get("mcpServers", {})
 check("existing server kept", args.expect_kept in servers, ", ".join(servers))
 entry = servers.get("devagotchi", {})
-expected = str(args.root / "current" / "bridge-mcp.exe")
+expected = str(args.root / "current" / "devagotchi.exe")
 check("devagotchi command", entry.get("command", "").lower() == expected.lower(), entry.get("command", ""))
-check("devagotchi args", entry.get("args") == ["--socket", endpoint], json.dumps(entry.get("args")))
+check("devagotchi args", entry.get("args") == ["mcp", "--socket", endpoint], json.dumps(entry.get("args")))
 backups = list(args.claude_config.parent.glob(args.claude_config.name + ".bak-*"))
 check("backup made", len(backups) >= 1, ", ".join(b.name for b in backups))
 
 if git and entry.get("command"):
     probe = Path(__file__).resolve().parent / "adapter_probe.py"
-    result = subprocess.run([sys.executable, str(probe), entry["args"][1], "--adapter", entry["command"],
+    result = subprocess.run([sys.executable, str(probe), entry["args"][2], "--adapter", f"{entry['command']} mcp",
                              "--git", git, "--cwd", str(args.workspace)], timeout=120)
     check("registered command works (adapter probe)", result.returncode == 0)
 

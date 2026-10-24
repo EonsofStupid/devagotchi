@@ -23,7 +23,7 @@ plan describes: the same broker that runs on a laptop runs here headless, as a
 ├── config/         XDG_CONFIG_HOME: devagotchi/broker.json
 ├── toolchains/     rustup cargo go gopath uv python python-bin uv-cache fnm npm
 ├── receipts/       verification and benchmark run directories (committed back under verification/ when they matter)
-├── bin/            devspace-check; bridge-broker and bridge-mcp symlinks to the current build
+├── bin/            devspace-check; the devagotchi symlink to the current build
 └── env.sh          exports for shells (/etc/profile.d) and systemd user services (environment.d)
 ```
 
@@ -54,14 +54,13 @@ explicit `https_proxy` has to be set system-wide (`/etc/environment`) since `sud
 # inside the tenant, as hades
 cd /devspace/repos && git clone https://github.com/EonsofStupid/devagotchi && cd devagotchi
 cargo build --locked --release --bins
-ln -sf /devspace/repos/devagotchi/target/release/bridge-broker /devspace/bin/bridge-broker
-ln -sf /devspace/repos/devagotchi/target/release/bridge-mcp    /devspace/bin/bridge-mcp
+ln -sf /devspace/repos/devagotchi/target/release/devagotchi /devspace/bin/devagotchi
 systemctl --user start devagotchi-broker && systemctl --user status devagotchi-broker
-journalctl --user -u devagotchi-broker -n 20     # "bridge-broker ready: /devspace/state/devagotchi/broker.sock"
-python3 tests/adapter_probe.py /devspace/state/devagotchi/broker.sock --adapter /devspace/bin/bridge-mcp --cwd /devspace/repos   # git --version under the broker, exit 0
+journalctl --user -u devagotchi-broker -n 20     # "devagotchi broker ready: /devspace/state/devagotchi/broker.sock"
+python3 tests/adapter_probe.py /devspace/state/devagotchi/broker.sock --adapter "/devspace/bin/devagotchi mcp" --cwd /devspace/repos   # git --version under the broker, exit 0
 ```
 
-Point any local MCP host at the adapter the usual way: `/devspace/bin/bridge-mcp --socket <path from the ready line>`.
+Point any local MCP host at the adapter the usual way: `/devspace/bin/devagotchi mcp --socket <path from the ready line>`.
 
 Known limit today: the broker clears the environment for every job (S10 in the plan), so
 `cargo`, `go` and `uv` fail under it until the environment-profile packet lands in G1
@@ -75,7 +74,7 @@ Claude Code session; use the broker for its lifecycle and for dogfooding the ins
 | Laptop or phone shell | SSH over the Wardenclyffe WireGuard mesh, then `tmux attach -t dev` (a detached `tmux` session named `dev` is the working session; start it once) |
 | Claude Code from phone or browser | inside tmux: `claude remote-control --name devspace` (server mode; Pro/Max/Team/Enterprise). Scan the QR code. Sessions resume for about four hours after the server stops: `claude remote-control --continue` |
 | Claude.ai chat and Cowork (this kind of session) | the Desktop Commander remote agent: `npm` installed it; add the tenant as a device at <https://mcp.desktopcommander.app> and run the command the dashboard gives inside tmux. The tenant then appears next to Gus and dabo in the device list. This is the bridge Devagotchi replaces; keep it until the mesh packet (M1) ships |
-| Claude Desktop, Cursor, Codex CLI on a laptop | until M1: SSH port-forward is not needed; run `bridge-mcp` on the laptop against a broker there. The remote path to this tenant's broker arrives with M1 (`bridge-mcp --remote <ticket>`) |
+| Claude Desktop, Cursor, Codex CLI on a laptop | until M1: SSH port-forward is not needed; run `devagotchi mcp` on the laptop against a broker there. The remote path to this tenant's broker arrives with M1 (`devagotchi mcp --remote <ticket>`) |
 
 ## Resume
 

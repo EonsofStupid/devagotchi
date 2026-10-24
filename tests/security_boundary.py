@@ -5,7 +5,7 @@ Uses only Python's standard library, real broker binaries, and disposable fixtur
 These checks validate IPC and broker grant behavior; they do not establish an OS
 sandbox or authentication of individual clients sharing one operating-system UID.
 
-Usage: python3 tests/security_boundary.py [--broker target/debug/bridge-broker]
+Usage: python3 tests/security_boundary.py [--devagotchi target/debug/devagotchi]
 """
 
 import argparse
@@ -174,7 +174,7 @@ class Fixture:
         return self.state / 'broker.sock'
 
     def command(self):
-        return [str(BROKER), '--state-dir', str(self.state), '--config', str(self.config)]
+        return [str(BROKER), 'broker', 'run', '--state-dir', str(self.state), '--config', str(self.config)]
 
     def start(self):
         self.log = (self.base / 'broker.log').open('w+')
@@ -638,12 +638,12 @@ print(json.dumps(result))
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--broker', default=str(Path(__file__).resolve().parents[1] / 'target/debug/bridge-broker'))
+    parser.add_argument('--devagotchi', '--broker', dest='devagotchi', default=str(Path(__file__).resolve().parents[1] / 'target/debug/devagotchi'), help='the one binary; the broker is `devagotchi broker run`')
     parser.add_argument('--report', help='Optional path for machine-readable verification evidence')
     args, remaining = parser.parse_known_args()
-    BROKER = Path(args.broker).resolve()
+    BROKER = Path(args.devagotchi).resolve()
     if not BROKER.is_file():
-        parser.error(f'Build the broker first; binary missing: {BROKER}')
+        parser.error(f'Build first; binary missing: {BROKER}')
     if sys.platform != 'linux':
         parser.error('This proof and its Unix peer-credential checks are Linux-specific')
     before_hash = hashlib.sha256(BROKER.read_bytes()).hexdigest()

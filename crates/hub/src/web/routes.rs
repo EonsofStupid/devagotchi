@@ -101,7 +101,7 @@ async fn who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -> Who {
             Who::SignedOut
         }
         Err(AuthError::Unavailable(why)) => {
-            eprintln!("devagotchi-hub: issuer unavailable: {why}");
+            eprintln!("devagotchi hub: issuer unavailable: {why}");
             Who::Unavailable
         }
     }
@@ -186,7 +186,7 @@ async fn callback(
         Ok(tokens) => tokens,
         Err(Exchange::Refused) => return stale,
         Err(Exchange::Unavailable(why)) => {
-            eprintln!("devagotchi-hub: issuer unavailable: {why}");
+            eprintln!("devagotchi hub: issuer unavailable: {why}");
             return unavailable();
         }
     };
@@ -202,7 +202,7 @@ async fn callback(
             );
         }
         Err(AuthError::Unavailable(why)) => {
-            eprintln!("devagotchi-hub: issuer unavailable: {why}");
+            eprintln!("devagotchi hub: issuer unavailable: {why}");
             return unavailable();
         }
     }

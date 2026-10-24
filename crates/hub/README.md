@@ -1,4 +1,4 @@
-# devagotchi-hub
+# devagotchi hub
 
 The bastion (plan §11a, N13). Every AI reaches a machine through it: the hub proves who is
 calling with the identity provider, checks that subject's grants, and routes the broker's
@@ -7,18 +7,18 @@ admits a job; the broker does, and the job outlives the hub, the connection and 
 
 ```text
 claude.ai / ChatGPT ──mcp.shippin.cloud──┐  (your own Nomen token, passed through)
-Claude Code / Codex ──device code────────┤   ┌──────── devagotchi-hub ────────┐
-your own agents ──service user───────────┴──▶│ bearer → subject → grants → route │──▶ bridge-broker (gold-ws)
-                                          │ audit: hash-chained SQLite        │──▶ bridge-broker (gus)      (M1)
-                                          └───────────────────────────────────┘──▶ bridge-broker (dabo)     (M1)
+Claude Code / Codex ──device code────────┤   ┌──────── devagotchi hub ────────┐
+your own agents ──service user───────────┴──▶│ bearer → subject → grants → route │──▶ broker (gold-ws)
+                                          │ audit: hash-chained SQLite        │──▶ broker (gus)      (M1)
+                                          └───────────────────────────────────┘──▶ broker (dabo)     (M1)
 ```
 
 ## Run
 
 ```bash
 devagotchi-hub --state-dir ~/.local/state/devagotchi-hub --config ~/.config/devagotchi-hub/hub.json
-# devagotchi-hub owner: 300000000000000001 reaches every broker
-# devagotchi-hub ready: http://127.0.0.1:8787/mcp (2 brokers, auth nomen https://id.shippin.cloud)
+# devagotchi hub owner: 300000000000000001 reaches every broker
+# devagotchi hub ready: http://127.0.0.1:8787/mcp (2 brokers, auth nomen https://id.shippin.cloud)
 ```
 
 ```json
@@ -49,14 +49,14 @@ endpoints owned by anyone else) or linked (`"link": true`: a machine that dials 
 ## Machines on the link
 
 A broker on another machine (gus, dabo, a server) is reached through
-[`devagotchi-link`](../link/README.md), which holds one outbound WebSocket to `/link`. No port
+[`devagotchi link`](../link/README.md), which holds one outbound WebSocket to `/link`. No port
 opens on the machine. The device proves its enrolled Ed25519 key over a fresh challenge;
 the hub then sends one call per routed request and waits up to 30 s for the answer.
 
 ```bash
-devagotchi-hub enroll  --state-dir DIR --device gus   # one-time code, 15 minutes, stdout only; supersedes older ones
-devagotchi-hub revoke  --state-dir DIR --device gus   # link closes within 2 s; pending codes cancelled
-devagotchi-hub devices --state-dir DIR                # enrolled machines, JSON
+devagotchi hub enroll  --state-dir DIR --device gus   # one-time code, 15 minutes, stdout only; supersedes older ones
+devagotchi hub revoke  --state-dir DIR --device gus   # link closes within 2 s; pending codes cancelled
+devagotchi hub devices --state-dir DIR                # enrolled machines, JSON
 ```
 
 A linked broker that is not connected answers `broker_offline`; one that never enrolled,

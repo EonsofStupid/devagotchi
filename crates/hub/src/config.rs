@@ -24,12 +24,12 @@ pub struct HubConfig {
     #[serde(default)]
     pub owner: Option<String>,
     /// Brokers this hub can route to: local ones by their IPC endpoint, and brokers on
-    /// other machines reached through the link their `devagotchi-link` holds open.
+    /// other machines reached through the link their `devagotchi link` holds open.
     pub brokers: Vec<BrokerEntry>,
     /// Which authenticated subject may use which brokers and boards. No grant, no route.
     pub grants: Vec<Grant>,
     /// Project boards this hub serves over `/mcp` (`board_*` tools): each is a project
-    /// directory on this host that `devagotchi-hub board init` prepared, so the same
+    /// directory on this host that `devagotchi board init` prepared, so the same
     /// store answers the command line here and agents anywhere.
     #[serde(default)]
     pub boards: Vec<BoardEntry>,
