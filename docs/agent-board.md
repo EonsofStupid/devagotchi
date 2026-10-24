@@ -228,6 +228,7 @@ policy-unconfirmed until Google answers; the seat's config row carries that flag
 | B07 | PROPOSED | Hook pack (prime / beat / GUPP stop guard / idle → claim_next) installed by `board init --hooks`. |
 | B08 | DEFERRED | Per-state WIP caps, per-principal budgets, message tickets with threads, path reservations with a pre-commit guard (increment 9). |
 | B09 | DEFERRED | Board pages in the hub's web and the one-tap Approve from the agent-board plan (increment 10). |
+| B10 | RULED 2026-10-24 (chat; ADR pending through the component) | Approvals reach the user by phone push and email first, on both iPhone and Android; Slack and Discord follow as one-click connects. Which channels, in what order and for which kinds of request are per-user settings whose defaults need no setup. Every approval step (requested, seen, approved or denied, running, verified, done or rolled back) is an event the requesting agent continues from; nothing polls. |
 
 ## 9. Packets
 
@@ -237,5 +238,5 @@ policy-unconfirmed until Google answers; the seat's config row carries that flag
 | 8a (in) | `devagotchi-hub board` CLI: `init` (+ AGENTS.md block), `prime`, `onboard`, `agent`, `ready`, `ls`, `show`, `new`, `claim`, `beat`, `note`, `done`, `handoff`, `release`, `force`, `set`, `dep`, `reap`, `verify`, `export`; JSON off a pipe, `--quiet`, exit codes by class, `next` on every error, claim cache | five CLI tests: init idempotence, the loop from a subdirectory with a cached fence, exit codes and hints, `prime` ≤ 50 lines, export + verify |
 | 8b (in) | MCP tools on `/mcp` (one board per `project`; **built**, §6: `boards` config, grants with `boards`/`human`, 17 tools, fence memory, audit, reaper, `tests/board_probe.py`); still open: project registration with the hub, MCP snippets per CLI, `--hooks` hook pack, the skill | `tests/e2e.py` works a board over MCP as a person and two agents (**green**); hooks exercised on Claude Code and Codex (open) |
 | 9 | Broker liveness (B05), attempts link, message tickets, path reservations, per-state WIP, budgets | A lease survives an agent that never heartbeats while its operation runs; two agents cannot edit one reserved path |
-| 10 | Web: `/board`, `/board/<id>`, Approve | Phone-width pages served by the existing axum app |
+| 10 | Web: `/board`, `/board/<id>`, Approve; approval events; phone push (installable web app, iPhone and Android) and email (B10) | Phone-width pages served by the existing axum app; a request an agent raises reaches a phone and an inbox, one tap approves, and the agent continues on the event |
 | 11 | Freeze the Go `agent-hub` | Parity tests pass here; banner there |
