@@ -319,8 +319,14 @@ if [ "$ROLE" = hub ]; then
     grant_line() {  # grant_line NAME HUMAN
         printf '{ "subject": %s, "boards": [%s], "human": %s }' "$(json_string "$1")" "$board_list" "$2"
     }
+    config_field() {  # config_field KEY: from the existing hub.json, or empty
+        as_user python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$HUB_CONFIG" "$1" 2>/dev/null || true
+    }
     if as_user test -e "$HUB_CONFIG"; then
         echo "    kept existing $HUB_CONFIG"
+        # The running hub's addresses are the config's, whatever this run was given.
+        LISTEN=$(config_field listen); [ -n "$LISTEN" ] || die "cannot read listen from $HUB_CONFIG (python3 missing or the file is not JSON)"
+        PUBLIC_URL=$(config_field public_url)
         if [ ${#board_names[@]} -gt 0 ]; then
             echo "    add to \"boards\" there (then restart the hub): $board_entries"
         fi
@@ -414,7 +420,7 @@ EOF
 
     # ---- Caddy: TLS at the edge, the hub stays on loopback
     if [ $CADDY = 1 ]; then
-        public=$(as_user python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["public_url"])' "$HUB_CONFIG" 2>/dev/null || echo "$PUBLIC_URL")
+        public=$PUBLIC_URL
         [ -n "$public" ] || die "--caddy needs the hub's public_url (from the config, or --public-url)"
         step "Caddy at $public"
         if ! command -v caddy >/dev/null; then
@@ -442,7 +448,7 @@ EOF
     step "Done"
     echo "    Version:   $VERSION ($PREFIX/current)"
     echo "    Account:   $ACCOUNT, service: systemctl --user status devagotchi-hub (as $ACCOUNT)"
-    echo "    Hub:       http://$LISTEN (loopback) behind ${PUBLIC_URL:-the public_url in $HUB_CONFIG}"
+    echo "    Hub:       http://$LISTEN (loopback) behind $PUBLIC_URL"
     echo "    Config:    $HUB_CONFIG (boards, brokers, grants; restart the hub after editing)"
     echo "    Agents:    MCP endpoint <public_url>/mcp with a bearer token; start with whoami, then board_prime"
     exit 0
