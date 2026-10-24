@@ -3,13 +3,13 @@
 //! Contract: `docs/agent-board.md`. The hub never owns jobs; a ticket is a unit of
 //! coordination and memory, a broker operation is a unit of execution.
 //!
-//! Increment 7 is the store and its protocol; increment 8 adds the `board` command line
-//! (`cli.rs`). The hub's MCP tools come next, which is why a few store entry points
-//! still have no caller.
-#![allow(dead_code)]
+//! Increment 7 is the store and its protocol; increment 8 adds its two faces: the
+//! `board` command line (`cli.rs`) for agents on this host and the `board_*` MCP tools
+//! (`mcp.rs`) for agents anywhere, through the hub.
 
 pub mod cli;
 mod lease;
+pub mod mcp;
 pub mod workflow;
 
 #[cfg(test)]
@@ -23,6 +23,7 @@ use std::{
 
 use devagotchi_contracts::{BridgeError, BridgeResult};
 use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehavior, params};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -52,6 +53,7 @@ pub struct Actor<'a> {
 }
 
 impl<'a> Actor<'a> {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn agent(id: &'a str) -> Self {
         Self {
             id,
@@ -60,6 +62,7 @@ impl<'a> Actor<'a> {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn human(id: &'a str) -> Self {
         Self {
             id,
@@ -69,7 +72,7 @@ impl<'a> Actor<'a> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum DepKind {
     /// `depends_on` must be done before the ticket is ready. The only kind readiness uses.
@@ -108,14 +111,14 @@ impl DepKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Dep {
     pub ticket: String,
     pub depends_on: String,
     pub kind: DepKind,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Ticket {
     pub id: String,
     pub kind: String,
@@ -146,7 +149,7 @@ pub struct Ticket {
     pub lease_expired: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Note {
     pub seq: i64,
     pub ticket: String,
@@ -158,7 +161,7 @@ pub struct Note {
     pub created_at: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Event {
     pub seq: i64,
     pub at: i64,
@@ -171,7 +174,7 @@ pub struct Event {
     pub hash: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TicketView {
     pub ticket: Ticket,
     pub deps: Vec<Dep>,
@@ -180,7 +183,7 @@ pub struct TicketView {
     pub notes: Vec<Note>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ChainStatus {
     pub entries: u64,
     pub ok: bool,
@@ -229,7 +232,7 @@ pub struct Filter {
     pub limit: Option<usize>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Settings {
     pub lease_ttl_ms: i64,
     pub lease_min_ttl_ms: i64,
@@ -285,7 +288,90 @@ pub fn default_prefix(project: &str) -> String {
         .map(|c| c.to_ascii_lowercase())
         .take(4)
         .collect();
-    if prefix.is_empty() { "tk".into() } else { prefix }
+    if prefix.is_empty() {
+        "tk".into()
+    } else {
+        prefix
+    }
+}
+
+/// What `board init` writes beside the store, so every face of the board (command
+/// line here, the hub's tools) opens it under the name its ids were minted with.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectConfig {
+    pub project: String,
+    pub prefix: String,
+    pub created_at: i64,
+}
+
+pub fn read_project_config(board_dir: &Path) -> BridgeResult<ProjectConfig> {
+    let path = board_dir.join("config.json");
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|e| BridgeError::new("no_board", format!("{}: {e}", path.display())))?;
+    serde_json::from_str(&raw)
+        .map_err(|e| BridgeError::new("board_io", format!("config.json: {e}")))
+}
+
+/// Open an initialised project's board: `<project_dir>/.devagotchi/board.sqlite3` under
+/// the project name recorded there. An uninitialised directory is `no_board`, never
+/// silently created: `board init` is the deliberate act that also writes the ignore
+/// file and the AGENTS.md block.
+pub fn open_project(project_dir: &Path) -> BridgeResult<(ProjectConfig, Board)> {
+    let board_dir = project_dir.join(BOARD_DIR);
+    if !board_dir.join(BOARD_FILE).is_file() {
+        return Err(BridgeError::new(
+            "no_board",
+            format!(
+                "no board under {}; run `devagotchi-hub board init --dir {}` there",
+                project_dir.display(),
+                project_dir.display()
+            ),
+        ));
+    }
+    let config = read_project_config(&board_dir)?;
+    let board = Board::open(&board_dir.join(BOARD_FILE), &config.project)?;
+    Ok((config, board))
+}
+
+/// What an agent needs at the start of a session, in one read: what it holds (with
+/// the fences), what it could claim, what needs a person, and notes addressed to it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Prime {
+    pub project: String,
+    pub actor: String,
+    pub human: bool,
+    pub held: Vec<Held>,
+    pub ready: Vec<Ready>,
+    pub attention: Vec<Ready>,
+    pub notes_to_me: Vec<NoteToMe>,
+    /// Heartbeat a held ticket at least this often.
+    pub heartbeat_every_ms: i64,
+    pub protocol: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Held {
+    pub id: String,
+    pub title: String,
+    pub state: String,
+    pub fence: i64,
+    pub version: i64,
+    pub lease_expires_in_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct Ready {
+    pub id: String,
+    pub title: String,
+    pub state: String,
+    pub priority: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct NoteToMe {
+    pub ticket: String,
+    pub from: String,
+    pub body: String,
 }
 
 impl Board {
@@ -303,7 +389,9 @@ impl Board {
         let connection = Connection::open(path).map_err(store_error)?;
         connection.execute_batch(SCHEMA).map_err(store_error)?;
         let stored: Option<String> = connection
-            .query_row("SELECT value FROM meta WHERE key = 'project'", [], |row| row.get(0))
+            .query_row("SELECT value FROM meta WHERE key = 'project'", [], |row| {
+                row.get(0)
+            })
             .optional()
             .map_err(store_error)?;
         let prefix = match stored {
@@ -314,7 +402,9 @@ impl Board {
                 ));
             }
             Some(_) => connection
-                .query_row("SELECT value FROM meta WHERE key = 'prefix'", [], |row| row.get(0))
+                .query_row("SELECT value FROM meta WHERE key = 'prefix'", [], |row| {
+                    row.get(0)
+                })
                 .map_err(store_error)?,
             None => {
                 let prefix = default_prefix(project);
@@ -370,6 +460,7 @@ impl Board {
         })
     }
 
+    #[allow(dead_code)]
     pub fn project(&self) -> &str {
         &self.project
     }
@@ -393,34 +484,38 @@ impl Board {
     }
 
     /// Replace the settings. Validated before it lands; recorded as an admin event.
+    /// Admin verbs: the operator's `board settings` / `board workflow` commands and the
+    /// web board (increment 10) call these; until then only the tests do.
+    #[allow(dead_code)]
     pub fn put_settings(&self, actor: &Actor<'_>, settings: &Settings) -> BridgeResult<()> {
         if settings.lease_min_ttl_ms <= 0
             || settings.lease_max_ttl_ms < settings.lease_min_ttl_ms
             || settings.lease_ttl_ms < settings.lease_min_ttl_ms
             || settings.lease_ttl_ms > settings.lease_max_ttl_ms
         {
-            return Err(invalid("lease ttl bounds must satisfy min <= default <= max, min > 0"));
+            return Err(invalid(
+                "lease ttl bounds must satisfy min <= default <= max, min > 0",
+            ));
         }
         self.write(actor, |w| {
-            w.tx
-                .execute(
-                    "UPDATE settings SET value = ?1 WHERE key = 'settings'",
-                    params![serde_json::to_string(settings).expect("settings json")],
-                )
-                .map_err(store_error)?;
+            w.tx.execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'settings'",
+                params![serde_json::to_string(settings).expect("settings json")],
+            )
+            .map_err(store_error)?;
             w.event("admin.settings.put", None, None, serde_json::json!({}))?;
             Ok(())
         })
     }
 
     /// Replace the workflow. Every existing ticket's state must still exist in it.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn put_workflow(&self, actor: &Actor<'_>, workflow: &Workflow) -> BridgeResult<()> {
         workflow.validate().map_err(invalid)?;
         self.write(actor, |w| {
-            let mut statement = w
-                .tx
-                .prepare("SELECT DISTINCT state FROM tickets")
-                .map_err(store_error)?;
+            let mut statement =
+                w.tx.prepare("SELECT DISTINCT state FROM tickets")
+                    .map_err(store_error)?;
             let states = statement
                 .query_map([], |row| row.get::<_, String>(0))
                 .map_err(store_error)?
@@ -432,13 +527,17 @@ impl Board {
                     "tickets are in state {unknown:?}, which the new workflow lacks"
                 )));
             }
-            w.tx
-                .execute(
-                    "UPDATE settings SET value = ?1 WHERE key = 'workflow'",
-                    params![serde_json::to_string(workflow).expect("workflow json")],
-                )
-                .map_err(store_error)?;
-            w.event("admin.workflow.put", None, None, serde_json::json!({ "id": workflow.id }))?;
+            w.tx.execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'workflow'",
+                params![serde_json::to_string(workflow).expect("workflow json")],
+            )
+            .map_err(store_error)?;
+            w.event(
+                "admin.workflow.put",
+                None,
+                None,
+                serde_json::json!({ "id": workflow.id }),
+            )?;
             Ok(())
         })
     }
@@ -486,6 +585,66 @@ impl Board {
             ..Filter::default()
         };
         list_tickets(&connection, &workflow, &filter, self.now(), Some(actor.id))
+    }
+
+    /// The session-start read. `limit` caps the ready list; held tickets are never cut.
+    pub fn prime(&self, actor: &Actor<'_>, limit: usize) -> BridgeResult<Prime> {
+        let held = self.list(&Filter {
+            holder: Some(actor.id.to_string()),
+            ..Filter::default()
+        })?;
+        let ready = self.ready(actor, limit.clamp(1, 10))?;
+        let attention = self.list(&Filter {
+            state: Some(self.workflow()?.attention_state),
+            limit: Some(5),
+            ..Filter::default()
+        })?;
+        let mut notes_to_me = Vec::new();
+        for ticket in self.list(&Filter {
+            open_only: true,
+            limit: Some(50),
+            ..Filter::default()
+        })? {
+            let view = self.get(&ticket.id)?;
+            for note in view.notes.iter().rev().take(3) {
+                if note.to_principal.as_deref() == Some(actor.id) {
+                    notes_to_me.push(NoteToMe {
+                        ticket: ticket.id.clone(),
+                        from: note.author.clone(),
+                        body: note.body.clone(),
+                    });
+                }
+            }
+        }
+        let now = self.now();
+        let settings = self.settings()?;
+        let summary = |t: &Ticket| Ready {
+            id: t.id.clone(),
+            title: t.title.clone(),
+            state: t.state.clone(),
+            priority: t.priority,
+        };
+        Ok(Prime {
+            project: self.project.clone(),
+            actor: actor.id.to_string(),
+            human: actor.human,
+            held: held
+                .iter()
+                .map(|t| Held {
+                    id: t.id.clone(),
+                    title: t.title.clone(),
+                    state: t.state.clone(),
+                    fence: t.fence,
+                    version: t.version,
+                    lease_expires_in_ms: t.lease_expires_at.map(|e| e - now).unwrap_or_default(),
+                })
+                .collect(),
+            ready: ready.iter().map(summary).collect(),
+            attention: attention.iter().map(summary).collect(),
+            notes_to_me,
+            heartbeat_every_ms: settings.lease_ttl_ms / 3,
+            protocol: cli::PROTOCOL_LINE.to_string(),
+        })
     }
 
     pub fn events(&self, after_seq: i64, limit: usize) -> BridgeResult<Vec<Event>> {
@@ -625,7 +784,10 @@ impl Board {
             if current.version != version {
                 return Err(fail(
                     "version_conflict",
-                    format!("version {version} is not current ({}); re-read and retry", current.version),
+                    format!(
+                        "version {version} is not current ({}); re-read and retry",
+                        current.version
+                    ),
                 ));
             }
             let mut changed = serde_json::Map::new();
@@ -634,69 +796,65 @@ impl Board {
                 if title.is_empty() || title.chars().count() > 300 {
                     return Err(invalid("title must be 1 to 300 characters"));
                 }
-                w.tx
-                    .execute("UPDATE tickets SET title = ?2 WHERE id = ?1", params![id, title])
-                    .map_err(store_error)?;
+                w.tx.execute(
+                    "UPDATE tickets SET title = ?2 WHERE id = ?1",
+                    params![id, title],
+                )
+                .map_err(store_error)?;
                 changed.insert("title".into(), serde_json::json!(title));
             }
             if let Some(description) = &patch.description {
-                w.tx
-                    .execute(
-                        "UPDATE tickets SET description = ?2 WHERE id = ?1",
-                        params![id, description],
-                    )
-                    .map_err(store_error)?;
+                w.tx.execute(
+                    "UPDATE tickets SET description = ?2 WHERE id = ?1",
+                    params![id, description],
+                )
+                .map_err(store_error)?;
                 changed.insert("description".into(), serde_json::json!(true));
             }
             if let Some(priority) = patch.priority {
-                w.tx
-                    .execute(
-                        "UPDATE tickets SET priority = ?2 WHERE id = ?1",
-                        params![id, priority],
-                    )
-                    .map_err(store_error)?;
+                w.tx.execute(
+                    "UPDATE tickets SET priority = ?2 WHERE id = ?1",
+                    params![id, priority],
+                )
+                .map_err(store_error)?;
                 changed.insert("priority".into(), serde_json::json!(priority));
             }
             if let Some(labels) = &patch.labels {
                 let labels = clean_labels(labels);
-                w.tx
-                    .execute(
-                        "UPDATE tickets SET labels = ?2 WHERE id = ?1",
-                        params![id, serde_json::to_string(&labels).expect("labels json")],
-                    )
-                    .map_err(store_error)?;
+                w.tx.execute(
+                    "UPDATE tickets SET labels = ?2 WHERE id = ?1",
+                    params![id, serde_json::to_string(&labels).expect("labels json")],
+                )
+                .map_err(store_error)?;
                 changed.insert("labels".into(), serde_json::json!(labels));
             }
             if let Some(assignee) = &patch.assignee {
-                w.tx
-                    .execute(
-                        "UPDATE tickets SET assignee = ?2 WHERE id = ?1",
-                        params![id, assignee],
-                    )
-                    .map_err(store_error)?;
+                w.tx.execute(
+                    "UPDATE tickets SET assignee = ?2 WHERE id = ?1",
+                    params![id, assignee],
+                )
+                .map_err(store_error)?;
                 changed.insert("assignee".into(), serde_json::json!(assignee));
             }
             if let Some(to) = patch.state.as_ref().filter(|to| *to != &current.state) {
                 check_transition(&workflow, &current, to, actor.id)?;
                 let closed_at: Option<i64> = workflow.is_done(to).then_some(now);
-                w.tx
-                    .execute(
-                        "UPDATE tickets SET state = ?2, closed_at = ?3 WHERE id = ?1",
-                        params![id, to, closed_at],
-                    )
-                    .map_err(store_error)?;
+                w.tx.execute(
+                    "UPDATE tickets SET state = ?2, closed_at = ?3 WHERE id = ?1",
+                    params![id, to, closed_at],
+                )
+                .map_err(store_error)?;
                 changed.insert("from".into(), serde_json::json!(current.state));
                 changed.insert("to".into(), serde_json::json!(to));
             }
             if changed.is_empty() {
                 return Ok(current);
             }
-            w.tx
-                .execute(
-                    "UPDATE tickets SET version = version + 1, updated_at = ?2 WHERE id = ?1",
-                    params![id, now],
-                )
-                .map_err(store_error)?;
+            w.tx.execute(
+                "UPDATE tickets SET version = version + 1, updated_at = ?2 WHERE id = ?1",
+                params![id, now],
+            )
+            .map_err(store_error)?;
             w.event(
                 "ticket.updated",
                 Some(id),
@@ -747,9 +905,8 @@ impl Board {
         kind: DepKind,
     ) -> BridgeResult<Vec<Dep>> {
         self.write(actor, |w| {
-            let removed = w
-                .tx
-                .execute(
+            let removed =
+                w.tx.execute(
                     "DELETE FROM deps WHERE ticket = ?1 AND depends_on = ?2 AND kind = ?3",
                     params![id, depends_on, kind.as_str()],
                 )
@@ -782,7 +939,11 @@ impl Board {
         if body.is_empty() || body.chars().count() > 20_000 {
             return Err(invalid("note body must be 1 to 20000 characters"));
         }
-        let kind = if kind.trim().is_empty() { "note" } else { kind.trim() };
+        let kind = if kind.trim().is_empty() {
+            "note"
+        } else {
+            kind.trim()
+        };
         self.write(actor, |w| {
             let workflow = load_workflow(w.tx)?;
             let now = w.now;
@@ -853,9 +1014,11 @@ impl Writer<'_> {
     ) -> BridgeResult<i64> {
         let last: Option<(i64, String)> = self
             .tx
-            .query_row("SELECT seq, hash FROM events ORDER BY seq DESC LIMIT 1", [], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })
+            .query_row(
+                "SELECT seq, hash FROM events ORDER BY seq DESC LIMIT 1",
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
             .optional()
             .map_err(store_error)?;
         let (seq, prev) = last
@@ -906,11 +1069,22 @@ impl Writer<'_> {
 
     /// A hash id, `prefix-xxxx`, lengthened on collision so two machines creating
     /// tickets at once never fight over a counter.
-    fn fresh_id(&self, prefix: &str, project: &str, title: &str, actor: &str) -> BridgeResult<String> {
+    fn fresh_id(
+        &self,
+        prefix: &str,
+        project: &str,
+        title: &str,
+        actor: &str,
+    ) -> BridgeResult<String> {
         let mut salt = [0u8; 8];
         getrandom::fill(&mut salt).map_err(|error| fail("board_random", error.to_string()))?;
         let digest = hex::encode(Sha256::digest(
-            format!("{project}\0{title}\0{actor}\0{}\0{}", self.now, hex::encode(salt)).as_bytes(),
+            format!(
+                "{project}\0{title}\0{actor}\0{}\0{}",
+                self.now,
+                hex::encode(salt)
+            )
+            .as_bytes(),
         ));
         for length in 4..=12 {
             let candidate = format!("{prefix}-{}", &digest[..length]);
@@ -943,7 +1117,11 @@ pub(crate) fn event_hash(prev: &str, event: &Event) -> String {
     });
     let mut hasher = Sha256::new();
     hasher.update(prev.as_bytes());
-    hasher.update(serde_json::to_string(&canonical).expect("canonical json").as_bytes());
+    hasher.update(
+        serde_json::to_string(&canonical)
+            .expect("canonical json")
+            .as_bytes(),
+    );
     hex::encode(hasher.finalize())
 }
 
@@ -964,14 +1142,22 @@ fn event_from_row(row: &Row<'_>) -> rusqlite::Result<Event> {
 
 pub(crate) fn load_settings(connection: &Connection) -> BridgeResult<Settings> {
     let raw: String = connection
-        .query_row("SELECT value FROM settings WHERE key = 'settings'", [], |row| row.get(0))
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'settings'",
+            [],
+            |row| row.get(0),
+        )
         .map_err(store_error)?;
     serde_json::from_str(&raw).map_err(|error| fail("board_settings", error.to_string()))
 }
 
 pub(crate) fn load_workflow(connection: &Connection) -> BridgeResult<Workflow> {
     let raw: String = connection
-        .query_row("SELECT value FROM settings WHERE key = 'workflow'", [], |row| row.get(0))
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'workflow'",
+            [],
+            |row| row.get(0),
+        )
         .map_err(store_error)?;
     serde_json::from_str(&raw).map_err(|error| fail("board_workflow", error.to_string()))
 }
@@ -1045,7 +1231,9 @@ pub(crate) fn open_blockers(
         )
         .map_err(store_error)?;
     let rows = statement
-        .query_map(params![id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map(params![id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(store_error)?;
     let mut open = Vec::new();
     for row in rows {
@@ -1093,8 +1281,12 @@ fn insert_dep(
 
 fn read_deps(connection: &Connection, column: &str, id: &str) -> BridgeResult<Vec<Dep>> {
     let sql = match column {
-        "ticket" => "SELECT ticket, depends_on, kind FROM deps WHERE ticket = ?1 ORDER BY kind, depends_on",
-        _ => "SELECT ticket, depends_on, kind FROM deps WHERE depends_on = ?1 ORDER BY kind, ticket",
+        "ticket" => {
+            "SELECT ticket, depends_on, kind FROM deps WHERE ticket = ?1 ORDER BY kind, depends_on"
+        }
+        _ => {
+            "SELECT ticket, depends_on, kind FROM deps WHERE depends_on = ?1 ORDER BY kind, ticket"
+        }
     };
     let mut statement = connection.prepare(sql).map_err(store_error)?;
     let rows = statement
@@ -1202,14 +1394,20 @@ pub(crate) fn list_tickets(
     if let Some(text) = &filter.text {
         let pattern = format!(
             "%{}%",
-            text.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
+            text.replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
         );
         query.and_wrapped("(title LIKE ", Box::new(pattern.clone()), " ESCAPE '\\'");
         // Same pattern, second column: the clause is "... OR description LIKE ?n ESCAPE '\')".
         query.or_wrapped("description LIKE ", Box::new(pattern), " ESCAPE '\\')");
     }
     if filter.ready || ready_for.is_some() {
-        query.and_wrapped("(holder IS NULL OR lease_expires_at <= ", Box::new(now), ")");
+        query.and_wrapped(
+            "(holder IS NULL OR lease_expires_at <= ",
+            Box::new(now),
+            ")",
+        );
     }
     let (mut sql, args) = query.finish();
     sql.push_str(" ORDER BY (assignee IS NOT NULL) DESC, priority, created_at, id");
@@ -1292,7 +1490,12 @@ impl Query {
 }
 
 /// A plain update may only move an unheld ticket along a declared transition.
-fn check_transition(workflow: &Workflow, ticket: &Ticket, to: &str, actor: &str) -> BridgeResult<()> {
+fn check_transition(
+    workflow: &Workflow,
+    ticket: &Ticket,
+    to: &str,
+    actor: &str,
+) -> BridgeResult<()> {
     let Some(target) = workflow.state(to) else {
         return Err(invalid(format!("unknown state {to:?}")));
     };
@@ -1306,7 +1509,10 @@ fn check_transition(workflow: &Workflow, ticket: &Ticket, to: &str, actor: &str)
     if !workflow.allows(&ticket.state, to) {
         return Err(fail(
             "transition_not_allowed",
-            format!("workflow {} has no transition {} -> {}", workflow.id, ticket.state, to),
+            format!(
+                "workflow {} has no transition {} -> {}",
+                workflow.id, ticket.state, to
+            ),
         ));
     }
     if workflow
@@ -1316,7 +1522,10 @@ fn check_transition(workflow: &Workflow, ticket: &Ticket, to: &str, actor: &str)
     {
         return Err(fail(
             "distinct_required",
-            format!("you did the previous step; someone else must move it out of {}", ticket.state),
+            format!(
+                "you did the previous step; someone else must move it out of {}",
+                ticket.state
+            ),
         ));
     }
     Ok(())
