@@ -631,3 +631,37 @@ async fn names_from_nomen_are_escaped_on_the_page() {
     );
     assert!(html.contains("No machines yet"));
 }
+
+#[tokio::test]
+async fn the_public_pages_need_no_sign_in_and_name_the_operator() {
+    let w = world().await;
+    for (path, heading) in [
+        ("/docs", "<h1>Devagotchi</h1>"),
+        ("/privacy", "<h1>Privacy policy</h1>"),
+        ("/terms", "<h1>Terms of service</h1>"),
+        ("/support", "<h1>Support</h1>"),
+    ] {
+        let response = w.get(path, None).await;
+        assert_eq!(response.status(), StatusCode::OK, "{path}");
+        assert!(
+            response
+                .headers()
+                .get(header::CONTENT_SECURITY_POLICY)
+                .is_some_and(|csp| csp.to_str().unwrap().starts_with("default-src 'none'")),
+            "{path} keeps the strict policy"
+        );
+        let body = response.text().await.unwrap();
+        assert!(body.contains(heading), "{path}");
+        assert!(!body.contains("<script"), "{path} has no script");
+        for link in ["/docs", "/privacy", "/terms", "/support"] {
+            assert!(
+                body.contains(&format!("href=\"{link}\"")),
+                "{path} links {link}"
+            );
+        }
+    }
+    let privacy = w.get("/privacy", None).await.text().await.unwrap();
+    assert!(privacy.contains("AngryVibes LLC"));
+    let docs = w.get("/docs", None).await.text().await.unwrap();
+    assert!(docs.contains("https://app.devagotchi.com/mcp"));
+}

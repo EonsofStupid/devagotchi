@@ -1,5 +1,6 @@
-//! The browser routes: sign in, the account page, sign out, and `/api/v1/me` (which also
-//! takes a bearer token, so scripts and AI clients see the same view).
+//! The browser routes: sign in, the account page, sign out, `/api/v1/me` (which also
+//! takes a bearer token, so scripts and AI clients see the same view), and the public
+//! pages the AI directories link to (`/docs`, `/privacy`, `/terms`, `/support`).
 
 use axum::{
     Router,
@@ -13,6 +14,7 @@ use serde::Deserialize;
 use super::{
     Exchange, WebLogin,
     pages::{self, Viewer},
+    public,
 };
 use crate::{
     AppState,
@@ -28,6 +30,10 @@ pub fn router() -> Router<AppState> {
         .route("/auth/callback", get(callback))
         .route("/auth/logout", post(logout))
         .route("/api/v1/me", get(me))
+        .route("/docs", get(public::docs))
+        .route("/privacy", get(public::privacy))
+        .route("/terms", get(public::terms))
+        .route("/support", get(public::support))
         .route("/assets/hub.css", get(css))
 }
 
