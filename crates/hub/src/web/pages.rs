@@ -10,6 +10,35 @@ pub const CSS: &str = include_str!("hub.css");
 
 pub use crate::hub::Machine;
 
+/// What the top bar of a page offers, set per request by `web::bar`.
+#[derive(Clone)]
+pub enum Bar {
+    /// No web sign-in on this hub: the brand only.
+    Plain,
+    /// A live session: Approvals, Machines and a one-tap Sign out.
+    SignedIn,
+    /// No session: one Sign in that comes back to this page.
+    SignedOut { return_to: String },
+}
+
+tokio::task_local! {
+    pub static BAR: Bar;
+}
+
+fn bar_html(bar: &Bar) -> String {
+    let links = match bar {
+        Bar::Plain => String::new(),
+        Bar::SignedIn => "<nav><a href=\"/approvals\">Approvals</a><a href=\"/account\">Machines</a>\
+<form method=\"post\" action=\"/auth/logout\"><button type=\"submit\">Sign out</button></form></nav>"
+            .to_string(),
+        Bar::SignedOut { return_to } => format!(
+            "<nav><a class=\"button primary\" href=\"/auth/login?return_to={}\">Sign in</a></nav>",
+            escape(&super::encode(return_to))
+        ),
+    };
+    format!("<header class=\"bar\"><a class=\"brand\" href=\"/\">Devagotchi</a>{links}</header>")
+}
+
 pub struct Viewer<'a> {
     pub subject: &'a str,
     pub name: Option<&'a str>,
@@ -37,8 +66,11 @@ fn render(status: StatusCode, title: &str, body: &str, app: bool) -> Response {
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
 <title>{} · Devagotchi</title><link rel=\"stylesheet\" href=\"/assets/hub.css\">{head}</head>\
-<body><main><p class=\"brand\">Devagotchi</p>{body}</main></body></html>\n",
-        escape(title)
+<body>{bar}<main>{body}</main></body></html>\n",
+        escape(title),
+        bar = BAR
+            .try_with(bar_html)
+            .unwrap_or_else(|_| bar_html(&Bar::Plain)),
     );
     let mut response = (status, page).into_response();
     let headers = response.headers_mut();
@@ -87,6 +119,19 @@ pub fn message(
         status,
         title,
         &format!("<h1>{}</h1><p>{}</p>{action}", escape(title), escape(text)),
+    )
+}
+
+/// `/` for someone not signed in: what this is, and one way in.
+pub fn home() -> Response {
+    html(
+        StatusCode::OK,
+        "Your AI, on your machines",
+        "<h1>Your AI, on your machines</h1>\
+<p>Devagotchi lets Claude, Codex and your other AIs work on your own servers and PCs, and asks \
+you on your phone before anything that needs your say.</p>\
+<p><a class=\"button primary\" href=\"/auth/login?return_to=/account\">Sign in with Shippin</a></p>\
+<p class=\"meta\">A Shippin account is free. <a href=\"/docs\">How it works</a></p>",
     )
 }
 

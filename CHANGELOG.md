@@ -28,6 +28,11 @@ heading. Agents draft the fragments below; they never tag.
   accountless choice. `devagotchi start` says which it is until one is on file. The hub
   accepts the token `login` lands when the CLI's client id is in `auth.clients`.
 
+### Sign in and out from anywhere (increment 22)
+- Every hub page has a top bar: signed in, Approvals, Machines and a one-tap Sign out;
+  signed out, one Sign in that returns to the same page. `/` explains Devagotchi and offers
+  Sign in with Shippin instead of bouncing a stranger to the identity provider.
+
 ### Org boards (increment 21a, B13)
 - A project's board belongs to the org the identity provider proves the account belongs to
   (Nomen's `urn:zitadel:iam:user:resourceowner:id`): `board_bind` by any member makes or
