@@ -276,6 +276,7 @@ Status describes the decision, not delivery: **LOCKED** is user direction; **COM
 | D16 | LOCKED | Build and publish the existing Site and useful read-only reference API/MCP now. P0 runs independently of G5 runtime/installer release; publication success requires its own receipt. |
 | D17 | PROPOSED | Bounded immutable DAGs, attempt-operation links, local graph aggregation, fixed task owner, durable delivery, target admission contexts, and epoch fencing. Adopt through G1.GA/G1.GB/A1/M1 evidence. |
 | D18 | DEFERRED | Autonomous fleet scheduling, plugin marketplace, agent memory/indexing, WSL-specific integration, and screen/input automation. The mesh instruction does not automatically select these capabilities. |
+| D19 | PROPOSED | `shippinAI/agent-hub` is frozen for reference; its design (`docs/devagotchi/`, imported 2026-10-24) lives here and its capabilities are ported per the [absorption ledger](devagotchi/README.md). Two conflicts need a ruling: GUI control (Go D7 v0.1 vs D18 deferred) and the bridge tool set (28 Go tools as the parity target for the Rust broker). |
 
 Repository access is an observed external blocker, not a product decision. It blocks reconciliation with and publication to that GitHub repository; it does not block the existing Site, reference publication, or useful isolated work. Website publication is already authorized. Nonblocking future implementation details remain proposed rather than becoming artificial permission gates.
 
@@ -306,3 +307,12 @@ Repository access is an observed external blocker, not a product decision. It bl
 The immediate public packet is **P0: rebuild and publish the existing Site and read-only reference API/MCP**. The core's next packet remains **G0: source reconciliation and a reproducible baseline**. They can proceed independently, as detailed in [implementation-guide.md](implementation-guide.md). G0 makes optimization choices concrete; the scoped graph and mesh packets extend the same owners after their actual dependencies are ready.
 
 The current foundation remains a Linux proof. Task graphs, trusted mesh execution, and runtime HTTP are unimplemented. Retain its useful ownership and correctness work while addressing the documented scale and experience limits. Public reference publication is a separate deliverable with a separate receipt; it establishes no new native or performance result.
+
+## 12. Absorbed design: shippinAI/agent-hub
+
+The product design written against the Go hub in October 2026 — data model, bridge, access flow,
+subscriptions, providers, guides, costs, the approvals PWA, the Gold build plan — is imported
+verbatim under [`docs/devagotchi/`](devagotchi/README.md) with a ledger that maps every Go
+capability to its owner here, its status, and the increment that ports it. Where those documents
+and this plan disagree, this plan wins; where this plan is silent, they govern. D19 records the
+freeze and the two conflicts.
