@@ -140,7 +140,8 @@ may work on them, the way it names brokers:
 
 `project` must be the name the board was initialised with (ids embed its prefix; a mismatch is
 refused at first use), `dir` is absolute, and an uninitialised directory is `no_board`, never
-silently created. A hub may serve boards and no broker. The actor is the authenticated subject;
+silently created. A hub may serve boards and no broker, or nothing yet (whoami and `/healthz`
+still answer, so an installer can bring it up before its first board or machine). The actor is the authenticated subject;
 it is a person only when its grant says `human` or it is the owner (`whoami` reports `human` and
 `boards`). Agents never are, whatever they claim. No grant, no board: `not_granted`; a project the
 hub does not serve: `unknown_board`.

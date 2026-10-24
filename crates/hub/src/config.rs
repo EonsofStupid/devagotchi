@@ -221,11 +221,8 @@ impl HubConfig {
                 ));
             }
         }
-        if self.brokers.is_empty() && self.boards.is_empty() {
-            return Err(invalid(
-                "a hub serves at least one broker or one board; both lists are empty".into(),
-            ));
-        }
+        // Both lists may be empty: a hub that serves nothing yet still answers whoami and
+        // /healthz, so an installer can bring it up before its first board or machine.
         if self.brokers.len() > 256 || self.boards.len() > 256 {
             return Err(invalid("at most 256 brokers and 256 boards".into()));
         }
@@ -651,7 +648,7 @@ mod tests {
         );
         assert_eq!(config.board("devagotchi").unwrap().dir, PROJECT_DIR);
 
-        // A hub may serve boards alone, with no broker at all.
+        // A hub may serve boards alone, with no broker at all, or nothing yet.
         let mut boards_only = with_boards.clone();
         boards_only["brokers"] = serde_json::json!([]);
         boards_only["grants"] =
@@ -660,7 +657,8 @@ mod tests {
         let mut nothing = boards_only.clone();
         nothing["boards"] = serde_json::json!([]);
         nothing["grants"] = serde_json::json!([]);
-        assert_eq!(parse(&nothing).unwrap_err().code, "invalid_config");
+        let empty = parse(&nothing).unwrap();
+        assert!(empty.brokers_for("jesse").is_empty() && empty.boards_for("jesse").is_empty());
 
         let mut dangling = with_boards.clone();
         dangling["grants"][1]["boards"] = serde_json::json!(["other"]);
