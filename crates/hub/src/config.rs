@@ -28,6 +28,19 @@ pub struct HubConfig {
     pub brokers: Vec<BrokerEntry>,
     /// Which authenticated subject may use which brokers. No grant, no route.
     pub grants: Vec<Grant>,
+    /// Browser sign-in for people: `/account` shows who you are signed in as and your
+    /// machines. Nomen sign-in only. Absent: no pages, only `/mcp`, `/link` and the APIs.
+    #[serde(default)]
+    pub web: Option<WebConfig>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WebConfig {
+    /// The Nomen application people sign in through on the hub's pages: a User Agent app
+    /// with PKCE and no secret, redirect URI `<public_url>/auth/callback`. It must also be
+    /// in `auth.clients`: the hub checks the tokens it gets like any other token.
+    pub client_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -165,6 +178,24 @@ impl HubConfig {
         }
         if let Some(owner) = &self.owner {
             valid_subject(owner).map_err(|why| invalid(format!("owner {why}")))?;
+        }
+        if let Some(web) = &self.web {
+            let AuthConfig::Nomen { clients, .. } = &self.auth else {
+                return Err(invalid("web sign-in needs auth mode nomen".into()));
+            };
+            if web.client_id.trim().is_empty() || !clients.contains(&web.client_id) {
+                return Err(invalid(
+                    "web.client_id must be one of auth.clients, so the tokens it issues are accepted"
+                        .into(),
+                ));
+            }
+            // Session cookies are Secure: over plain http they would never come back.
+            if !self.public_url.starts_with("https://") && !loopback_http(&self.public_url) {
+                return Err(invalid(
+                    "web sign-in needs an https public_url (plain http only on loopback, for tests)"
+                        .into(),
+                ));
+            }
         }
         if self.brokers.is_empty() || self.brokers.len() > 256 {
             return Err(invalid(
@@ -433,6 +464,36 @@ mod tests {
         let mut any_client = nomen();
         any_client["auth"]["clients"] = serde_json::json!([]);
         assert_eq!(parse(&any_client).unwrap_err().code, "invalid_config");
+    }
+
+    #[test]
+    fn web_sign_in_needs_nomen_an_accepted_client_and_https() {
+        let mut web = nomen();
+        web["auth"]["clients"] = serde_json::json!(["shippin-mcp", "devagotchi-web"]);
+        web["web"] = serde_json::json!({ "client_id": "devagotchi-web" });
+        assert_eq!(
+            parse(&web).unwrap().web.unwrap().client_id,
+            "devagotchi-web"
+        );
+
+        // The web app's tokens are checked like any other: it must be an accepted client.
+        let mut unlisted = web.clone();
+        unlisted["web"]["client_id"] = serde_json::json!("some-other-app");
+        assert_eq!(parse(&unlisted).unwrap_err().code, "invalid_config");
+
+        let mut plain = web.clone();
+        plain["public_url"] = serde_json::json!("http://hub.example");
+        assert_eq!(parse(&plain).unwrap_err().code, "invalid_config");
+        plain["public_url"] = serde_json::json!("http://127.0.0.1:8787");
+        assert!(parse(&plain).is_ok(), "plain http on loopback, for tests");
+
+        let mut dev = good();
+        dev["web"] = serde_json::json!({ "client_id": "devagotchi-web" });
+        assert_eq!(parse(&dev).unwrap_err().code, "invalid_config");
+
+        let mut extra = web;
+        extra["web"]["secret"] = serde_json::json!("x");
+        assert_eq!(parse(&extra).unwrap_err().code, "invalid_config");
     }
 
     #[test]

@@ -11,6 +11,7 @@ mod link;
 mod nomen;
 #[cfg(test)]
 mod test_keys;
+mod web;
 
 use std::{
     env, ffi::OsString, net::SocketAddr, path::PathBuf, process::ExitCode, sync::Arc,
@@ -39,7 +40,7 @@ use crate::{
     link::Links,
 };
 
-const USAGE: &str = "Usage:\n  devagotchi-hub --state-dir ABS_PATH --config ABS_JSON\n  devagotchi-hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi-hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi-hub devices --state-dir ABS_PATH\n\nStarts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\noperation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' devagotchi-link connects out.\nPut it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.";
+const USAGE: &str = "Usage:\n  devagotchi-hub --state-dir ABS_PATH --config ABS_JSON\n  devagotchi-hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi-hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi-hub devices --state-dir ABS_PATH\n\nStarts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\noperation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' devagotchi-link connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -54,6 +55,9 @@ enum Command {
 struct AppState {
     verifier: Arc<Verifier>,
     hub: Hub,
+    devices: Arc<Devices>,
+    /// Browser sign-in, when the config has a `web` section.
+    web: Option<Arc<web::WebLogin>>,
 }
 
 fn parse_args(args: impl IntoIterator<Item = OsString>) -> BridgeResult<Command> {
@@ -233,8 +237,22 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let config = Arc::new(HubConfig::parse(&text)?);
     let devices = Arc::new(devices_at(&state_dir)?);
     let audit = Arc::new(Audit::open(&state_dir.join("audit.sqlite3"))?);
-    let links = Arc::new(Links::new(config.clone(), devices, audit.clone()));
+    let links = Arc::new(Links::new(config.clone(), devices.clone(), audit.clone()));
     let verifier = Arc::new(Verifier::from_config(&config.auth).await?);
+    let web = match (&config.web, &config.auth) {
+        (
+            Some(web),
+            config::AuthConfig::Nomen {
+                issuer, audiences, ..
+            },
+        ) => Some(Arc::new(web::WebLogin::new(
+            issuer,
+            audiences,
+            &web.client_id,
+            &config.public_url,
+        )?)),
+        _ => None,
+    };
     let listen: SocketAddr = config
         .listen
         .parse()
@@ -246,6 +264,8 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             audit,
             links,
         },
+        devices,
+        web,
     };
 
     let public_host = config
@@ -293,7 +313,8 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
                     require_bearer,
                 )),
         )
-        .with_state(state);
+        .merge(web::router())
+        .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(listen)
         .await
@@ -301,6 +322,12 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     // Everything worth reading at start comes before the ready line callers wait for.
     if let Some(owner) = &config.owner {
         eprintln!("devagotchi-hub owner: {owner} reaches every broker");
+    }
+    if state.web.is_some() {
+        eprintln!(
+            "devagotchi-hub web sign-in: {}/account",
+            config.public_url.trim_end_matches('/')
+        );
     }
     eprintln!(
         "devagotchi-hub ready: http://{listen}/mcp ({} brokers, auth {})",

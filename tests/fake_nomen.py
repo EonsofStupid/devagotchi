@@ -1,4 +1,5 @@
-"""A fake Nomen for tests: token introspection that checks the caller's private-key JWT.
+"""A fake Nomen for tests: token introspection that checks the caller's private-key JWT,
+and the token endpoint of the browser sign-in (authorization code with PKCE).
 
 Standard library only, so it runs on every CI runner. It mints an RSA key for the hub's
 API application (written as the JSON key file Nomen downloads) and verifies the hub's
@@ -91,6 +92,9 @@ class FakeNomen:
         self.client_id, self.key_id = client_id, key_id
         self.pem, self.n, self.e = rsa_key()
         self.answers = {}
+        # Authorization codes for the browser sign-in: code -> what it was issued for.
+        self.codes = {}
+        self.token_calls = 0
         self.calls = 0
         self.status = 200
         self.lock = threading.Lock()
@@ -111,6 +115,8 @@ class FakeNomen:
             def do_POST(self):
                 length = int(self.headers.get("Content-Length") or 0)
                 form = urllib.parse.parse_qs(self.rfile.read(length).decode())
+                if self.path == "/oauth/v2/token":
+                    return fake.token(self, form)
                 with fake.lock:
                     fake.calls += 1
                     status = fake.status
@@ -144,6 +150,32 @@ class FakeNomen:
                 and body.get("iss") == self.client_id and body.get("sub") == self.client_id
                 and body.get("aud") == self.issuer and body.get("exp", 0) > now
                 and body.get("iat", now + 120) <= now + 60)
+
+    def issue_code(self, challenge, access_token, client_id, redirect_uri, expires_in=3600):
+        """Play Nomen's authorization step: a single-use code bound to a PKCE challenge."""
+        code = secrets.token_urlsafe(18)
+        with self.lock:
+            self.codes[code] = (challenge, access_token, client_id, redirect_uri, expires_in)
+        return code
+
+    def token(self, handler, form):
+        """The token endpoint for a public client: the code, once, with its PKCE verifier."""
+        field = lambda key: (form.get(key) or [""])[0]  # noqa: E731
+        with self.lock:
+            self.token_calls += 1
+            status = self.status
+            issued = self.codes.pop(field("code"), None)
+        if status != 200:
+            return handler.reply(status, {"error": "unavailable"})
+        if issued is None or field("grant_type") != "authorization_code":
+            return handler.reply(400, {"error": "invalid_grant"})
+        challenge, access_token, client_id, redirect_uri, expires_in = issued
+        verifier = field("code_verifier").encode()
+        computed = base64.urlsafe_b64encode(hashlib.sha256(verifier).digest()).decode().rstrip("=")
+        if field("client_id") != client_id or field("redirect_uri") != redirect_uri or computed != challenge:
+            return handler.reply(400, {"error": "invalid_grant"})
+        handler.reply(200, {"access_token": access_token, "token_type": "Bearer", "expires_in": expires_in,
+                            "id_token": "unused-by-the-hub"})
 
     def key_file(self):
         """The JSON Nomen downloads for an API application's private-key JWT."""
