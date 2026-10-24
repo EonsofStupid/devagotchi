@@ -19,6 +19,15 @@ heading. Agents draft the fragments below; they never tag.
   `devagotchi broker run`, `devagotchi link run` and `devagotchi hub serve`; Claude Desktop
   and Claude Code are registered with `devagotchi mcp`.
 
+### The account (increment 14a, D22)
+- `devagotchi login`: sign in with a Shippin account from a terminal with no browser —
+  OAuth device authorization (RFC 8628) against Nomen; the code and URL are shown, the
+  tokens land in `account.json` under the config directory, owner-only. `devagotchi whoami`
+  (`--json`) names the account and refreshes a token that is due; `devagotchi logout`
+  revokes both tokens and forgets the account; `devagotchi login --local` records the
+  accountless choice. `devagotchi start` says which it is until one is on file. The hub
+  accepts the token `login` lands when the CLI's client id is in `auth.clients`.
+
 ### The agents' board (increments 7–8)
 - `devagotchi-hub board …`: a per-project ticket board in `<project>/.devagotchi/board.sqlite3`
   — hash ids `<prefix>-xxxx` with hierarchical children, workflow lanes (ready → in_progress →

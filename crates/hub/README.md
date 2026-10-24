@@ -103,6 +103,10 @@ Set up once in Nomen (a Gold change, through gold-policy):
    the scope `urn:zitadel:iam:org:project:id:<project id>:aud`; list their client ids in
    `auth.clients`.
 4. Set `owner` to your account ID. Sign in and call `whoami` once if you are not sure which it is.
+5. For sign-in from a terminal (`devagotchi login`, D22), add a **Native** application to the
+   same project with **Device Authorization** and **Refresh Token** grants, client id
+   `devagotchi-cli@shippin` (or pass `--client-id`), and list it in `auth.clients`: the token
+   `login` lands is then one this hub accepts, so an agent's call carries the account.
 
 What running Shippin taught, and what the hub does about it:
 

@@ -154,6 +154,11 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
         eprintln!(
             "devagotchi: your agent's MCP server command is `devagotchi mcp` (it finds this broker on its own)"
         );
+        // D22: the default signs in; the choice not to is recorded, and until one of the
+        // two is on file every run says so. Nothing local waits on it.
+        if let Some(parent) = config.parent() {
+            account_line(&parent.join(devagotchi_hub::account::FILE_NAME));
+        }
     }
     match devagotchi_broker::serve_blocking(state, config) {
         Ok(()) => ExitCode::SUCCESS,
@@ -161,6 +166,25 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
             eprintln!("devagotchi start: {error}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// One line about the account: who this machine is signed in as, that it runs without
+/// one, or — neither on file — the two commands that settle it.
+#[cfg(any(target_os = "linux", windows))]
+fn account_line(path: &Path) {
+    use devagotchi_hub::account::{Stored, read};
+    match read(path) {
+        Ok(Some(Stored::Account(account))) => eprintln!(
+            "devagotchi: signed in as {} (account {})",
+            account.display_name(),
+            account.subject
+        ),
+        Ok(Some(Stored::Local { .. })) => {}
+        Ok(None) => eprintln!(
+            "devagotchi: not signed in — `devagotchi login` syncs your boards to devagotchi.com with a free account; `devagotchi login --local` keeps everything on this machine"
+        ),
+        Err(why) => eprintln!("devagotchi: {why}"),
     }
 }
 
@@ -370,8 +394,7 @@ mod tests {
             Some(dir.path().to_path_buf()),
             std::slice::from_ref(&not_executable),
         )
-        .err()
-        .expect("a plain file is refused as a grant");
+        .expect_err("a plain file is refused as a grant");
         assert!(refused.contains("notes.txt"), "{refused}");
         let tool = fake_tool(dir.path(), "tool");
         let summary = write_config(
