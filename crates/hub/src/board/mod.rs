@@ -7,6 +7,7 @@
 //! `board` command line (`cli.rs`) for agents on this host and the `board_*` MCP tools
 //! (`mcp.rs`) for agents anywhere, through the hub.
 
+pub mod approval;
 pub mod cli;
 mod lease;
 pub mod mcp;
@@ -781,6 +782,12 @@ impl Board {
             let workflow = load_workflow(w.tx)?;
             let now = w.now;
             let current = read_ticket(w.tx, &workflow, id, now)?;
+            if current.kind == approval::KIND {
+                return Err(fail(
+                    "approval_decide_only",
+                    "an approval changes only through a person's decision",
+                ));
+            }
             if current.version != version {
                 return Err(fail(
                     "version_conflict",

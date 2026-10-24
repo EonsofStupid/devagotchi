@@ -17,6 +17,7 @@
 //!   (plain names without `Secure` only when the hub runs on loopback http, for tests).
 //! - Redirects are not followed when talking to Nomen.
 
+mod approvals;
 mod pages;
 mod public;
 mod routes;

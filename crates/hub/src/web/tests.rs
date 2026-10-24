@@ -84,6 +84,8 @@ struct World {
     fake: Arc<FakeNomen>,
     url: String,
     http: reqwest::Client,
+    /// The `estate` board's project directory (an initialised board the owner reaches).
+    board_dir: std::path::PathBuf,
     _dir: tempfile::TempDir,
 }
 
@@ -103,6 +105,16 @@ async fn world() -> World {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     *fake.redirect_uri.lock().unwrap() = format!("{url}/auth/callback");
+    let dir = tempfile::tempdir().unwrap();
+    let board_dir = dir.path().join("estate");
+    let store = board_dir.join(crate::board::BOARD_DIR);
+    std::fs::create_dir_all(&store).unwrap();
+    crate::board::Board::open(&store.join(crate::board::BOARD_FILE), "estate").unwrap();
+    std::fs::write(
+        store.join("config.json"),
+        json!({"project": "estate", "prefix": "esta", "created_at": 0}).to_string(),
+    )
+    .unwrap();
     let config = Arc::new(
         HubConfig::parse(
             &json!({
@@ -114,13 +126,13 @@ async fn world() -> World {
                 "web": {"client_id": WEB_CLIENT},
                 "brokers": [{"name": "gold-ws", "socket": SOCKET}, {"name": "gus", "link": true},
                             {"name": "lab", "link": true}, {"name": "old", "link": true}],
-                "grants": [{"subject": OTHER, "brokers": ["gus"]}]
+                "grants": [{"subject": OTHER, "brokers": ["gus"]}],
+                "boards": [{"project": "estate", "dir": board_dir.to_str().unwrap()}]
             })
             .to_string(),
         )
         .unwrap(),
     );
-    let dir = tempfile::tempdir().unwrap();
     let devices = Arc::new(Devices::open(&dir.path().join("devices.sqlite3")).unwrap());
     for name in ["gus", "old"] {
         let code = devices
@@ -158,6 +170,7 @@ async fn world() -> World {
         fake,
         url,
         http,
+        board_dir,
         _dir: dir,
     }
 }
@@ -664,4 +677,78 @@ async fn the_public_pages_need_no_sign_in_and_name_the_operator() {
     assert!(privacy.contains("AngryVibes LLC"));
     let docs = w.get("/docs", None).await.text().await.unwrap();
     assert!(docs.contains("https://app.devagotchi.com/mcp"));
+}
+
+#[tokio::test]
+async fn a_person_approves_on_the_phone_page_and_the_agent_sees_it() {
+    use crate::board::{Actor, open_project};
+    let w = world().await;
+    let (_, board) = open_project(&w.board_dir).unwrap();
+    let asked = board
+        .request_approval(
+            &Actor::agent("claude"),
+            "Restart the hub on Texas",
+            "systemctl restart devagotchi-hub",
+            "new build",
+            "start the old build",
+        )
+        .unwrap();
+
+    let owner = w.sign_in("tok-owner").await;
+    let page = w.get("/approvals", Some(&owner)).await;
+    assert_eq!(page.status(), StatusCode::OK);
+    let body = page.text().await.unwrap();
+    assert!(body.contains("Restart the hub on Texas"));
+    assert!(body.contains(&format!("value=\"{}\"", asked.id)));
+    assert!(!body.contains("<script"));
+
+    let form = [
+        ("project", "estate".to_string()),
+        ("id", asked.id.clone()),
+        ("version", asked.version.to_string()),
+        ("verdict", "approved".to_string()),
+        ("note", "go".to_string()),
+    ];
+    let post = |site: &'static str| {
+        w.http
+            .post(format!("{}/approvals/decide", w.url))
+            .header(header::COOKIE, &owner)
+            .header("sec-fetch-site", site)
+            .form(&form)
+    };
+    let refused = post("cross-site").send().await.unwrap();
+    assert_eq!(
+        refused.status(),
+        StatusCode::FORBIDDEN,
+        "another site's form is refused"
+    );
+    assert_eq!(board.approval_status(&asked.id).unwrap().status, "pending");
+
+    let decided = post("same-origin").send().await.unwrap();
+    assert_eq!(decided.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&decided), format!("/approvals?done={}", asked.id));
+    let status = board.approval_status(&asked.id).unwrap();
+    assert_eq!(status.status, "approved");
+    assert_eq!(status.decided_by.as_deref(), Some(OWNER));
+    assert_eq!(status.note.as_deref(), Some("go"));
+    let after = w
+        .get("/approvals", Some(&owner))
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert!(after.contains("Nothing is waiting for you."));
+
+    let twice = post("same-origin").send().await.unwrap();
+    assert_eq!(
+        twice.status(),
+        StatusCode::CONFLICT,
+        "a decided approval stays decided"
+    );
+
+    let other = w.sign_in("tok-other").await;
+    let page = w.get("/approvals", Some(&other)).await;
+    assert_eq!(page.status(), StatusCode::FORBIDDEN, "only people approve");
+    let signed_out = w.get("/approvals", None).await;
+    assert_eq!(signed_out.status(), StatusCode::SEE_OTHER);
 }

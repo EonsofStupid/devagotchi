@@ -32,6 +32,19 @@ button, .button { display: inline-block; font: inherit; padding: 8px 16px; borde
   border: 1px solid var(--line); background: var(--surface); color: var(--text);
   text-decoration: none; cursor: pointer; }
 button:hover, .button:hover { border-color: var(--accent); }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  padding: 16px; margin: 16px 0; }
+.card h2 { margin: 0 0 4px; }
+.what { white-space: pre-wrap; overflow-wrap: anywhere; font: .9em ui-monospace, Consolas, monospace;
+  background: var(--bg); padding: 12px; border-radius: 6px; margin: 12px 0; }
+.card form { margin-top: 12px; }
+.card label { display: block; color: var(--muted); font-size: .9rem; }
+.card input[type=text] { display: block; width: 100%; font: inherit; padding: 10px; margin-top: 4px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); }
+.actions { display: flex; gap: 12px; margin: 12px 0 0; }
+.actions button { flex: 1; padding: 14px; font-weight: 600; }
+button.approve { background: var(--online); border-color: var(--online); color: #fff; }
+button.deny { color: var(--revoked); border-color: var(--revoked); }
 @media (max-width: 560px) {
   th:nth-child(4), td:nth-child(4) { display: none; }
 }
