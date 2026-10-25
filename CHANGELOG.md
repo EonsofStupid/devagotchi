@@ -7,6 +7,16 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### Files in one call: `read_file`, `list_directory` (increment 24d)
+- The broker answers `file_read` and `file_list` directly (no operation, nothing
+  journaled), under the same reach as execution: inside the workspace under `granted`,
+  wherever its account can read under `account`. A read returns up to 24 KiB from an
+  offset (negative: from the end), as text when it is UTF-8 text (never splitting a
+  character) and as base64 otherwise, with `next_offset` and `eof`. A listing goes up to 3
+  levels and 1000 entries, directories first, symbolic links listed and never followed.
+- The hub's `read_file` and `list_directory` tools route them by machine name, audited
+  per call with the path.
+
 ### `run`: a command and its output in one call (increment 24c)
 - The hub's `run` tool takes a machine, a command line and optional `cwd`, `wait_seconds`
   (1–50, default 30) and `timeout_seconds` (1–300, default 300). It starts the command as a

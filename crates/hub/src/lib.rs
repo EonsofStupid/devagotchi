@@ -10,6 +10,7 @@ mod auth;
 pub mod board;
 mod config;
 mod devices;
+mod files;
 mod hub;
 mod link;
 mod nomen;

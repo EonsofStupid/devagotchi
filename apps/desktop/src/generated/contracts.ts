@@ -22,6 +22,10 @@ export type OperationState =
  */
 export interface BrokerContracts {
   bridge_error: BridgeError;
+  file_content: FileContent;
+  file_list_input: FileListInput;
+  file_listing: FileListing;
+  file_read_input: FileReadInput;
   get_input: GetInput;
   list_input: ListInput;
   operation_view: OperationView;
@@ -34,6 +38,96 @@ export interface BrokerContracts {
 export interface BridgeError {
   code: string;
   message: string;
+}
+export interface FileContent {
+  /**
+   * The raw bytes, base64, when they are not text.
+   */
+  bytes_base64?: string | null;
+  /**
+   * Whether this page reached the end of the file.
+   */
+  eof: boolean;
+  modified_ms?: number | null;
+  /**
+   * The offset to read on from.
+   */
+  next_offset: number;
+  /**
+   * Where these bytes start.
+   */
+  offset: number;
+  /**
+   * The file's canonical path.
+   */
+  path: string;
+  /**
+   * The file's size in bytes when it was read.
+   */
+  size: number;
+  /**
+   * The bytes as text, when they are UTF-8 text. A character split at the end of the
+   * page is left for the next read.
+   */
+  text?: string | null;
+}
+export interface FileListInput {
+  /**
+   * How many levels below it to include, 0..=3 (default 0: its own entries).
+   */
+  depth?: number;
+  /**
+   * Most entries to return, 1..=1000 (default 200).
+   */
+  max_entries?: number;
+  /**
+   * Absolute path of the directory.
+   */
+  path: string;
+}
+export interface FileListing {
+  /**
+   * Directories first at each level, then by name.
+   */
+  entries: FileEntry[];
+  /**
+   * The directory's canonical path.
+   */
+  path: string;
+  /**
+   * Whether `max_entries` cut the listing short.
+   */
+  truncated: boolean;
+}
+export interface FileEntry {
+  /**
+   * Why a directory's own entries are missing (it could not be read).
+   */
+  error?: string | null;
+  /**
+   * `file`, `dir`, `symlink` or `other`. Symbolic links are listed, never followed.
+   */
+  kind: string;
+  modified_ms?: number | null;
+  /**
+   * Path relative to the listed directory, `/`-separated.
+   */
+  path: string;
+  size?: number | null;
+}
+export interface FileReadInput {
+  /**
+   * Bytes to read, 1..=24576 (default 24576). Read on from `next_offset` for more.
+   */
+  max_bytes?: number;
+  /**
+   * Byte offset to start at; negative counts back from the end (a tail). Default 0.
+   */
+  offset?: number;
+  /**
+   * Absolute path of the file.
+   */
+  path: string;
 }
 export interface GetInput {
   operation_id: string;
