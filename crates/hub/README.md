@@ -200,6 +200,17 @@ for exactly `openid profile offline_access urn:zitadel:iam:user:resourceowner` a
 audience. A caller names its seat on a board with `X-Devagotchi-Seat: <name>`: the account's
 own agent, the actor on the account's board and `<account>/<seat>` on an org's or a shared one.
 
+## First run
+
+Connecting never lands on an empty board. When the hub first opens a board that has never
+had a ticket, it puts a **Getting started** ticket in the attention state: ask your AI which
+machines it can reach, turn on phone notifications and send yourself a test approval, run one
+small thing on a machine, then have the AI close the ticket. An AI's `board_prime` shows it
+under `attention`; agents never claim it. On `/approvals`, **Send me a test approval** puts a
+harmless approval on the person's first board and pushes it to their own phones only, so the
+whole loop is checked with one tap and no AI. Approvals read "Your AI asks" when the person's
+own account asked, and "Devagotchi asks" for the test.
+
 ## Audit and health
 
 Every routed call appends one row to `audit.sqlite3` in the state directory: time, subject,

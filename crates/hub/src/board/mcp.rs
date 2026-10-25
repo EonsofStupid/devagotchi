@@ -52,6 +52,8 @@ pub const SEAT_HEADER: &str = "x-devagotchi-seat";
 pub struct Boards {
     dirs: BTreeMap<String, PathBuf>,
     accounts: Option<Accounts>,
+    /// The hub's address, written into a new board's getting-started steps.
+    public_url: String,
     open: Mutex<BTreeMap<String, Arc<Board>>>,
     fences: Mutex<HashMap<(String, String, String), i64>>,
 }
@@ -111,6 +113,7 @@ impl Boards {
                 .map(|b| (b.project.clone(), PathBuf::from(&b.dir)))
                 .collect(),
             accounts,
+            public_url: config.public_url.clone(),
             open: Mutex::new(BTreeMap::new()),
             fences: Mutex::new(HashMap::new()),
         }
@@ -252,7 +255,16 @@ impl Boards {
                 let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
             }
             let file = Self::account_file(accounts, subject, project);
-            let board = Arc::new(Board::open(&file, project)?);
+            let board = Board::open(&file, project)?;
+            // A new account board starts with the getting-started steps (B12).
+            if let Err(error) = board.welcome_if_new(&Actor::agent("devagotchi"), &self.public_url)
+            {
+                eprintln!(
+                    "devagotchi hub: board {project}: getting-started ticket: {}",
+                    error.message
+                );
+            }
+            let board = Arc::new(board);
             self.open
                 .lock()
                 .expect("boards lock")
@@ -291,6 +303,14 @@ impl Boards {
                     config.project
                 ),
             ));
+        }
+        // A board that has never had a ticket starts with the steps to check that
+        // Devagotchi works, so the first session never finds it empty.
+        if let Err(error) = board.welcome_if_new(&Actor::agent("devagotchi"), &self.public_url) {
+            eprintln!(
+                "devagotchi hub: board {project}: getting-started ticket: {}",
+                error.message
+            );
         }
         let board = Arc::new(board);
         open.insert(project.to_string(), board.clone());
@@ -683,10 +703,20 @@ impl Hub {
     /// Push "approval needed" to the phones of the people who decide on `project`. The
     /// payload names the approval and links to it; it never carries the command text.
     pub fn announce_approval(&self, project: &str, approval: &ApprovalStatus) {
+        self.announce_approval_to(self.config.people_for_board(project), project, approval);
+    }
+
+    /// Push "approval needed" to these people's phones only (a test goes to the person
+    /// who asked for it).
+    pub fn announce_approval_to(
+        &self,
+        people: Vec<String>,
+        project: &str,
+        approval: &ApprovalStatus,
+    ) {
         let Some(push) = self.push.clone() else {
             return;
         };
-        let people = self.config.people_for_board(project);
         let payload = serde_json::json!({
             "title": "Approval needed",
             "body": approval.title,
