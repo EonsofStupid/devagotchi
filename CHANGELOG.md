@@ -28,6 +28,16 @@ heading. Agents draft the fragments below; they never tag.
   accountless choice. `devagotchi start` says which it is until one is on file. The hub
   accepts the token `login` lands when the CLI's client id is in `auth.clients`.
 
+### Org boards (increment 21a, B13)
+- A project's board belongs to the org the identity provider proves the account belongs to
+  (Nomen's `urn:zitadel:iam:user:resourceowner:id`): `board_bind` by any member makes or
+  finds it, every member and their agents work it, another org never sees it. Seats are
+  `<account>/<seat>` on an org's board; the free limit counts the org's projects; `whoami`
+  says the org. Accounts with no org keep boards of their own.
+- Web sign-in, `devagotchi login` and the RFC 9728 metadata (`scopes_supported`, and `scope`
+  in the 401 challenge) ask for exactly `openid profile offline_access
+  urn:zitadel:iam:user:resourceowner` and the hub's audience.
+
 ### The command line bound to the hub (increment 15b, B11)
 - `devagotchi board bind [--hub URL] [--project NAME]`: the hub makes (or finds) the account's
   board and `.devagotchi/config.json` remembers the hub; every `board` command and hook here

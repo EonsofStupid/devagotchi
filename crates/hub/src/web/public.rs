@@ -75,7 +75,9 @@ the tool, the machine, the job's ID and the outcome. It does not record the prog
 or its output.</li>\
 <li><strong>Your machines.</strong> Each enrolled machine's name, the public key it signs in with, \
 and when it was enrolled or revoked.</li>\
-<li><strong>Boards.</strong> The tickets and notes you and your agents write.</li>\
+<li><strong>Boards.</strong> The tickets and notes you and your agents write. A project's board \
+belongs to your organization on Shippin: the other members of that organization, and their agents, \
+see and work it. Nobody outside it does.</li>\
 </ul>\
 <p>The output of a job passes through the hub to your AI app and is not stored by the hub. It is \
 kept by the broker on your own machine, under your control.</p>\

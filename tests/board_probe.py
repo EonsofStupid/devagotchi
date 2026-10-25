@@ -279,6 +279,32 @@ shared_seat = Client("claude", seat="codex")
 sp = shared_seat.ok("board_prime", {"project": P})
 check("a seat on a shared board is <account>/<seat>", sp.get("actor") == f"{claude.ok('whoami', {})['subject']}/codex", json.dumps(sp.get("actor")))
 
+# Org boards (B13): a project belongs to the member's org, and every member works it.
+if all(who in tokens for who in ("alice", "bob", "carol")):
+    alice, bob, carol = Client("alice"), Client("bob"), Client("carol")
+    a_me = alice.ok("whoami", {})
+    check("whoami names the org the identity provider proved", a_me.get("org") == "e2e-acme", json.dumps(a_me)[:200])
+    made = alice.ok("board_bind", {"project": "acme-site"})
+    check("a member binds a project for the org", made.get("created") is True and "acme-site" in made.get("boards", []), json.dumps(made))
+    check("another member of the org has it at once", "acme-site" in bob.ok("whoami", {}).get("boards", []))
+    again = bob.ok("board_bind", {"project": "acme-site"})
+    check("binding it again from another member finds the org's board", again.get("created") is False, json.dumps(again))
+    task = alice.ok("board_create", {"project": "acme-site", "title": "Ship the landing page"})
+    bob_claude = Client("bob", seat="claude")
+    taken = bob_claude.ok("board_claim", {"project": "acme-site", "id": task["id"]})
+    bob_id = bob.ok("whoami", {})["subject"]
+    check("another member's agent claims it, named <account>/<seat>",
+          taken.get("claimed") is True and taken["lease"]["ticket"].get("holder") == f"{bob_id}/claude", json.dumps(taken)[:200])
+    alice_claude = Client("alice", seat="claude")
+    alice_claude.refused("board_heartbeat", {"project": "acme-site", "id": task["id"], "fence": taken["lease"]["fence"]},
+                         "not_holder", "two members' agents of the same name are two actors")
+    carol.refused("board_prime", {"project": "acme-site"}, "unknown_board", "another org never sees it")
+    hers = carol.ok("board_bind", {"project": "acme-site"})
+    check("another org's project of the same name is its own board", hers.get("created") is True, json.dumps(hers))
+    listed = carol.ok("board_list", {"project": "acme-site"})
+    check("and holds none of the first org's tickets", task["id"] not in [t["id"] for t in listed], json.dumps(listed)[:160])
+    bob.refused("board_bind", {"project": "acme-second"}, "plan_limit", "the free limit counts the org's projects")
+
 # The command line, on the hub's host, is the other face of the same store.
 result = subprocess.run([args.devagotchi, "board", "ls", "--dir", args.dir, "--json"], capture_output=True, text=True, timeout=30)
 try:

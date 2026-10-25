@@ -27,6 +27,33 @@ pub struct Subject {
     /// The login name the identity provider reported, shown so a person can tell their
     /// accounts apart. Never used for grants: two accounts can share a name.
     pub name: Option<String>,
+    /// The organization (tenant) the account belongs to, as the identity provider proved
+    /// it (Nomen's `urn:zitadel:iam:user:resourceowner:id`). Project boards belong to it:
+    /// every member works them (B13). `None` when the token carries no org; the account's
+    /// own boards are then its own.
+    pub org: Option<String>,
+}
+
+/// The scopes a client asks Nomen for when it signs in to this hub: who the person is,
+/// a refresh token, the org they belong to (so project boards are the org's), and the
+/// hub's projects in the token's audience. Nothing broader.
+pub fn sign_in_scopes(audiences: &[String]) -> String {
+    let mut scope =
+        String::from("openid profile offline_access urn:zitadel:iam:user:resourceowner");
+    for audience in audiences {
+        scope.push_str(&format!(" urn:zitadel:iam:org:project:id:{audience}:aud"));
+    }
+    scope
+}
+
+/// An org id as an identity provider issues them: 1 to 64 of `[A-Za-z0-9_-]`, so it is
+/// safe as a directory name.
+pub fn valid_org(org: &str) -> bool {
+    !org.is_empty()
+        && org.len() <= 64
+        && org
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
 pub enum Verifier {
@@ -58,12 +85,20 @@ impl Verifier {
             return Err(AuthError::Invalid("empty or oversized token"));
         }
         match self {
+            // A dev token's subject may name its org after an `@` (tests only).
             Verifier::Dev(tokens) => tokens
                 .get(bearer)
-                .map(|subject| Subject {
-                    id: subject.clone(),
-                    via: "dev",
-                    name: None,
+                .map(|subject| {
+                    let (id, org) = match subject.split_once('@') {
+                        Some((id, org)) if valid_org(org) => (id, Some(org.to_string())),
+                        _ => (subject.as_str(), None),
+                    };
+                    Subject {
+                        id: id.to_string(),
+                        via: "dev",
+                        name: None,
+                        org,
+                    }
                 })
                 .ok_or(AuthError::Invalid("unknown token")),
             Verifier::Nomen(nomen) => nomen.verify(bearer).await,
@@ -142,6 +177,8 @@ struct Discovery {
 #[derive(Debug, Deserialize)]
 struct Claims {
     sub: String,
+    #[serde(default, rename = "urn:zitadel:iam:user:resourceowner:id")]
+    org: Option<String>,
 }
 
 pub struct OidcVerifier {
@@ -239,6 +276,7 @@ impl OidcVerifier {
             id: data.claims.sub,
             via: "oidc",
             name: None,
+            org: data.claims.org.filter(|org| valid_org(org)),
         })
     }
 
@@ -301,12 +339,28 @@ mod tests {
                 id: "jesse".into(),
                 via: "dev",
                 name: None,
+                org: None,
             }
         );
         assert!(matches!(
             verifier.verify("0123456789abcdef-tokeN").await,
             Err(AuthError::Invalid(_))
         ));
+        let with_org = Verifier::Dev(HashMap::from([
+            ("org-token-0123456789".to_string(), "alice@acme".to_string()),
+            ("bad-org-token-01234".to_string(), "bob@../etc".to_string()),
+        ]));
+        let alice = with_org.verify("org-token-0123456789").await.unwrap();
+        assert_eq!(
+            (alice.id.as_str(), alice.org.as_deref()),
+            ("alice", Some("acme"))
+        );
+        let bob = with_org.verify("bad-org-token-01234").await.unwrap();
+        assert_eq!(
+            (bob.id.as_str(), bob.org),
+            ("bob@../etc", None),
+            "an org that is not a safe name is no org"
+        );
         assert!(matches!(
             verifier.verify("").await,
             Err(AuthError::Invalid(_))

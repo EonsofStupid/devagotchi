@@ -81,6 +81,10 @@ struct Introspection {
     sub: Option<String>,
     #[serde(default)]
     username: Option<String>,
+    /// The account's org; Nomen includes it when the token was asked for with the
+    /// `urn:zitadel:iam:user:resourceowner` scope.
+    #[serde(default, rename = "urn:zitadel:iam:user:resourceowner:id")]
+    org: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -406,6 +410,12 @@ fn assess(answer: &Introspection, accepts: &Accepts, now: u64) -> Result<Subject
         id: sub.to_string(),
         via: "nomen",
         name,
+        org: answer
+            .org
+            .as_deref()
+            .map(str::trim)
+            .filter(|org| crate::auth::valid_org(org))
+            .map(str::to_string),
     })
 }
 

@@ -47,7 +47,7 @@ application the operator registers in Nomen with device authorization and refres
 pub const DEFAULT_ISSUER: &str = "https://id.shippin.cloud";
 pub const DEFAULT_CLIENT_ID: &str = "devagotchi-cli@shippin";
 pub const FILE_NAME: &str = "account.json";
-const SCOPE: &str = "openid profile email offline_access";
+const SCOPE: &str = "openid profile email offline_access urn:zitadel:iam:user:resourceowner";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 /// Refresh when the access token is this close to expiry.
 const REFRESH_AHEAD: Duration = Duration::from_secs(5 * 60);

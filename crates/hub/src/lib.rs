@@ -429,8 +429,14 @@ async fn require_bearer(
     mut request: Request,
     next: Next,
 ) -> Response {
+    let scope = match &state.hub.config.auth {
+        config::AuthConfig::Nomen { audiences, .. } => {
+            format!(", scope=\"{}\"", crate::auth::sign_in_scopes(audiences))
+        }
+        _ => String::new(),
+    };
     let metadata = format!(
-        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"",
+        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"{scope}",
         state.hub.config.public_url.trim_end_matches('/')
     );
     let token = request
@@ -513,12 +519,20 @@ async fn protected_resource(State(state): State<AppState>) -> Response {
     let Some(issuer) = state.verifier.issuer() else {
         return (StatusCode::NOT_FOUND, "no authorization server in dev mode").into_response();
     };
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "resource": state.hub.config.public_url,
         "authorization_servers": [issuer],
         "bearer_methods_supported": ["header"],
         "resource_name": "Devagotchi hub",
     });
+    // MCP clients ask for exactly these (RFC 9728 `scopes_supported`), so the account's org
+    // reaches the hub with every call.
+    if let config::AuthConfig::Nomen { audiences, .. } = &state.hub.config.auth {
+        body["scopes_supported"] = crate::auth::sign_in_scopes(audiences)
+            .split(' ')
+            .collect::<Vec<_>>()
+            .into();
+    }
     axum::Json(body).into_response()
 }
 
