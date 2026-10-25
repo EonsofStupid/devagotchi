@@ -900,7 +900,12 @@ mod tests {
     }
 
     async fn settle(broker: &Broker, id: &str) -> OperationView {
-        let deadline = Instant::now() + Duration::from_secs(20);
+        settle_within(broker, id, 20).await
+    }
+
+    /// Windows PowerShell's first start on a fresh CI image can take tens of seconds.
+    async fn settle_within(broker: &Broker, id: &str, seconds: u64) -> OperationView {
+        let deadline = Instant::now() + Duration::from_secs(seconds);
         loop {
             let view = broker.get(id).unwrap();
             if view.state.terminal() {
@@ -965,7 +970,7 @@ mod tests {
             args: vec![],
             command: Some(line.into()),
             cwd,
-            deadline_ms: 20_000,
+            deadline_ms: 120_000,
         }
     }
 
@@ -988,7 +993,7 @@ mod tests {
             .unwrap()
             .operation
             .operation_id;
-        let view = settle(&broker, &id).await;
+        let view = settle_within(&broker, &id, 120).await;
         assert_eq!(view.exit_code, Some(3), "{view:?}");
         let output = output_text(&broker, &id);
         assert!(output.contains("42"), "{output}");
