@@ -4,7 +4,7 @@ Devagotchi is a Rust replacement for DesktopCommanderMCP: an independently runni
 broker that owns jobs, a thin stdio MCP adapter, and a Tauri inspector. The plan is canon;
 this file is how to work here. Read first:
 
-- `docs/product-and-platform-plan.md`: decisions D01–D23 (D20–D23: one `devagotchi` binary, the three distribution tiers, the sign-in rule, board sync — §13), gates G0–G5, the boundary test for any new crate, process or service.
+- `docs/product-and-platform-plan.md`: decisions D01–D24 (D20–D23: one `devagotchi` binary, the three distribution tiers, the sign-in rule, board sync — §13; D24: the link moves from HTTPS onto Iroh), gates G0–G5, the boundary test for any new crate, process or service.
 - `docs/performance-and-experience-spec.md` (workloads W01–W15, budgets B01–B14) and `docs/task-graph-and-mesh-contract.md`.
 - `docs/agent-board.md`: the agents' ticket board in `crates/hub/src/board/` — per-project store, claim/lease protocol, how a CLI agent starts (decisions B01–B09).
 - `docs/devagotchi/README.md`: the product design absorbed from shippinAI/agent-hub (index at `docs/devagotchi-spec.md`) and the ledger of what is ported, partial or pending.
