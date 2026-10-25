@@ -941,7 +941,11 @@ async fn notify_this_phone_then_an_approval_buzzes_it_encrypted() {
             "",
         )
         .unwrap();
-    w.hub.announce_approval("estate", &asked);
+    assert_eq!(
+        w.hub.announce_approval("estate", &asked),
+        2,
+        "the owner's two phones are sent the push"
+    );
     for _ in 0..100 {
         if seen.lock().unwrap().len() >= 2 {
             break;

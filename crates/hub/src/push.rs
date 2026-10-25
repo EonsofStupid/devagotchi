@@ -23,6 +23,24 @@ fn push_error(message: impl Into<String>) -> BridgeError {
     BridgeError::new("push", message)
 }
 
+/// Waits before trying a busy or unreachable push service again: a phone that misses a
+/// push only finds the approval by opening the page.
+#[cfg(not(test))]
+const RETRY_DELAYS: [Duration; 2] = [Duration::from_secs(2), Duration::from_secs(10)];
+#[cfg(test)]
+const RETRY_DELAYS: [Duration; 2] = [Duration::from_millis(10), Duration::from_millis(10)];
+
+/// What one try at a push came to.
+#[derive(Debug, PartialEq)]
+enum Sent {
+    Delivered(u16),
+    /// The push service no longer knows the subscription; it was dropped.
+    Gone(u16),
+    /// Busy (429, 5xx) or not reached; worth another try.
+    Retry(String),
+    Failed(String),
+}
+
 struct Len(usize);
 impl KeyType for Len {
     fn len(&self) -> usize {
@@ -146,25 +164,67 @@ impl Push {
         ))
     }
 
-    /// Send `payload` to every subscription of `subjects`. A subscription the push service
-    /// says is gone (404, 410) is dropped. Failures are logged, never raised: push is a
-    /// hint, the approvals page is the record.
+    /// How many phones a push to `subjects` would reach right now.
+    pub fn phones_for(&self, subjects: &[String]) -> usize {
+        subjects
+            .iter()
+            .map(|s| self.devices.push_for(s).map(|p| p.len()).unwrap_or(0))
+            .sum()
+    }
+
+    /// Send `payload` to every subscription of `subjects`. A push service that is busy or
+    /// unreachable is tried again ([`RETRY_DELAYS`]); one that says the subscription is gone
+    /// (404, 410) has it dropped. Every outcome is logged with the push service's host only,
+    /// never raised: push is a hint, the approvals page is the record.
     pub async fn notify(&self, subjects: &[String], payload: &serde_json::Value) {
         let body = payload.to_string();
+        let tag = payload["tag"].as_str().unwrap_or("-").to_string();
         for subscription in subjects
             .iter()
             .flat_map(|s| self.devices.push_for(s).unwrap_or_default())
         {
-            if let Err(error) = self.send(&subscription, body.as_bytes()).await {
-                eprintln!(
-                    "devagotchi-hub: push to {} failed: {}",
-                    subscription.subject, error.message
-                );
+            let host = reqwest::Url::parse(&subscription.endpoint)
+                .ok()
+                .and_then(|u| u.host_str().map(str::to_string))
+                .unwrap_or_else(|| "?".into());
+            let started = std::time::Instant::now();
+            let mut attempt = 0;
+            let outcome = loop {
+                let outcome = self.send(&subscription, body.as_bytes()).await;
+                match (&outcome, RETRY_DELAYS.get(attempt)) {
+                    (Sent::Retry(_), Some(delay)) => {
+                        attempt += 1;
+                        tokio::time::sleep(*delay).await;
+                    }
+                    _ => break outcome,
+                }
+            };
+            let took = started.elapsed().as_millis();
+            let tries = attempt + 1;
+            match outcome {
+                Sent::Delivered(code) => eprintln!(
+                    "devagotchi hub: push {tag} to {host}: delivered ({code}) in {took} ms, {tries} tr{}",
+                    if tries == 1 { "y" } else { "ies" }
+                ),
+                Sent::Gone(code) => eprintln!(
+                    "devagotchi hub: push {tag} to {host}: subscription gone ({code}), dropped; that phone must tap Notify this phone again"
+                ),
+                Sent::Retry(why) | Sent::Failed(why) => eprintln!(
+                    "devagotchi hub: push {tag} to {host} for {} failed after {tries} tries in {took} ms: {why}",
+                    subscription.subject
+                ),
             }
         }
     }
 
-    async fn send(&self, to: &PushSubscription, body: &[u8]) -> BridgeResult<()> {
+    async fn send(&self, to: &PushSubscription, body: &[u8]) -> Sent {
+        match self.try_send(to, body).await {
+            Ok(sent) => sent,
+            Err(error) => Sent::Failed(error.message),
+        }
+    }
+
+    async fn try_send(&self, to: &PushSubscription, body: &[u8]) -> BridgeResult<Sent> {
         let ua_public = URL_SAFE_NO_PAD
             .decode(&to.p256dh)
             .map_err(|_| push_error("bad p256dh"))?;
@@ -177,7 +237,7 @@ impl Push {
             .map_err(|_| push_error("random"))?;
         let ephemeral = PrivateKey::generate(&ECDH_P256).map_err(|_| push_error("key"))?;
         let sealed = encrypt_with(&ephemeral, &ua_public, &auth, &salt, body)?;
-        let response = self
+        let response = match self
             .http
             .post(&to.endpoint)
             .header("TTL", "86400")
@@ -188,18 +248,21 @@ impl Push {
             .body(sealed)
             .send()
             .await
-            .map_err(|e| push_error(e.to_string()))?;
-        match response.status().as_u16() {
-            200..=299 => Ok(()),
+        {
+            Ok(response) => response,
+            // Not reached, timed out, cut off: worth another try.
+            Err(error) => return Ok(Sent::Retry(error.to_string())),
+        };
+        let code = response.status().as_u16();
+        Ok(match code {
+            200..=299 => Sent::Delivered(code),
             404 | 410 => {
                 let _ = self.devices.drop_push(&to.endpoint);
-                Err(push_error(format!(
-                    "subscription gone ({})",
-                    response.status()
-                )))
+                Sent::Gone(code)
             }
-            code => Err(push_error(format!("push service answered {code}"))),
-        }
+            429 | 500..=599 => Sent::Retry(format!("push service answered {code}")),
+            _ => Sent::Failed(format!("push service answered {code}")),
+        })
     }
 }
 
@@ -325,5 +388,82 @@ mod tests {
                 &URL_SAFE_NO_PAD.decode(signature).unwrap(),
             )
             .expect("a push service can verify the token with the served key");
+    }
+
+    /// A busy push service is tried again; one that says the phone is gone has it dropped;
+    /// one that refuses outright is not hammered. Each case keeps or drops exactly the
+    /// subscription it should.
+    #[tokio::test]
+    async fn busy_push_services_are_retried_and_gone_phones_dropped() {
+        use std::sync::{Arc as StdArc, Mutex};
+
+        use axum::{extract::Path as UrlPath, http::StatusCode, routing::post};
+
+        // phone-busy answers 503 once, then 201; phone-gone 410; phone-bad 400.
+        type Hits = StdArc<Mutex<Vec<String>>>;
+        let hits: Hits = StdArc::default();
+        async fn receive(
+            axum::extract::State(hits): axum::extract::State<Hits>,
+            UrlPath(id): UrlPath<String>,
+        ) -> StatusCode {
+            let mut seen = hits.lock().unwrap();
+            seen.push(id.clone());
+            let tries = seen.iter().filter(|h| **h == id).count();
+            match id.as_str() {
+                "phone-busy" if tries == 1 => StatusCode::SERVICE_UNAVAILABLE,
+                "phone-busy" => StatusCode::CREATED,
+                "phone-gone" => StatusCode::GONE,
+                _ => StatusCode::BAD_REQUEST,
+            }
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let app = axum::Router::new()
+            .route("/push/{id}", post(receive))
+            .with_state(hits.clone());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let dir = tempfile::tempdir().unwrap();
+        let devices = Arc::new(Devices::open(&dir.path().join("devices.sqlite3")).unwrap());
+        let push = Push::open(dir.path(), "https://hub.example", devices.clone()).unwrap();
+        let phone = PrivateKey::generate(&ECDH_P256).unwrap();
+        let p256dh = URL_SAFE_NO_PAD.encode(phone.compute_public_key().unwrap().as_ref());
+        let auth = URL_SAFE_NO_PAD.encode([7u8; 16]);
+        for id in ["phone-busy", "phone-gone", "phone-bad"] {
+            devices
+                .add_push("me", &format!("{base}/push/{id}"), &p256dh, &auth)
+                .unwrap();
+        }
+        assert_eq!(
+            push.phones_for(&["me".to_string(), "nobody".to_string()]),
+            3
+        );
+
+        push.notify(
+            &["me".to_string()],
+            &serde_json::json!({"title": "Approval needed", "tag": "t-1"}),
+        )
+        .await;
+        let mut seen = hits.lock().unwrap().clone();
+        seen.sort();
+        assert_eq!(
+            seen,
+            ["phone-bad", "phone-busy", "phone-busy", "phone-gone"],
+            "503 is tried again, 400 and 410 are not"
+        );
+        let left: Vec<String> = devices
+            .push_for("me")
+            .unwrap()
+            .into_iter()
+            .map(|s| s.endpoint.rsplit('/').next().unwrap().to_string())
+            .collect();
+        assert!(
+            left.contains(&"phone-busy".to_string()) && left.contains(&"phone-bad".to_string()),
+            "{left:?}"
+        );
+        assert!(
+            !left.contains(&"phone-gone".to_string()),
+            "a gone phone is dropped"
+        );
     }
 }
