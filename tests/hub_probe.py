@@ -29,6 +29,8 @@ parser.add_argument("--ungranted", default="nobody-has-this")
 parser.add_argument("--git", default="/usr/bin/git")
 parser.add_argument("--cwd", default=None)
 parser.add_argument("--expect-error", default=None)
+# A broker under the `account` policy to exercise `run` on (one call: start, wait, output).
+parser.add_argument("--run-broker", default=None)
 args = parser.parse_args()
 base = args.base.rstrip("/")
 session = {"id": None, "rid": 0}
@@ -116,7 +118,7 @@ unannotated = [t["name"] for t in listed if not t.get("title") or not (
     "readOnlyHint" in t.get("annotations", {}) and "openWorldHint" in t.get("annotations", {})
     and (t["annotations"]["readOnlyHint"] or "destructiveHint" in t["annotations"]))]
 check("every tool has a title and annotations", not unannotated, ", ".join(unannotated))
-broker_tools = ["approval_request", "approval_wait", "machines", "operation_cancel", "operation_get", "operation_read", "operation_start", "whoami"]
+broker_tools = ["approval_request", "approval_wait", "machines", "operation_cancel", "operation_get", "operation_read", "operation_start", "run", "whoami"]
 board_tools = [t for t in tools if t.startswith("board_")]
 check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 18,
       ", ".join(tools))
@@ -145,6 +147,24 @@ if operation:
     _, page = call("operation_read", {"broker": args.broker, "input": {"operation_id": operation, "cursor": 0, "max_bytes": 4096}})
     text = "".join(f.get("text", "") for f in page.get("frames", []))
     check("git --version under the broker", state == "succeeded" and "git version" in text, f"state={state} output={text.strip()[:60]!r}")
+
+if args.run_broker:
+    # One call: the command runs on the machine's shell (bash/sh or PowerShell) and its
+    # output and exit code come back in the same answer.
+    is_error, ran = call("run", {"machine": args.run_broker, "command": "echo devagotchi-run; exit 3"})
+    check("run returns output and exit code in one call",
+          not is_error and ran.get("state") == "failed" and ran.get("exit_code") == 3
+          and "devagotchi-run" in ran.get("output", ""), json.dumps(ran)[:240])
+    # Longer than the wait: still running, with how to follow it; then stopped explicitly.
+    is_error, slow = call("run", {"machine": args.run_broker, "command": "sleep 20", "wait_seconds": 1})
+    check("run hands back a still-running command", not is_error and slow.get("state") in ("accepted", "running")
+          and "operation_read" in (slow.get("next") or ""), json.dumps(slow)[:240])
+    if not is_error:
+        call("operation_cancel", {"broker": args.run_broker, "input": {"operation_id": slow["operation_id"]}})
+    # A broker that runs only granted programs refuses a command line, in words.
+    is_error, refused = call("run", {"machine": args.broker, "command": "echo hi"})
+    check("run on a granted-only broker refused", is_error and refused.get("code") == "command_not_allowed",
+          json.dumps(refused)[:200])
 
 is_error, denied = call("operation_start", {"broker": args.ungranted, "input": {
     "idempotency_key": str(uuid.uuid4()), "executable": args.git, "args": ["--version"], "deadline_ms": 5000}})

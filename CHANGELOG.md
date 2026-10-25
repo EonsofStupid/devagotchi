@@ -7,6 +7,15 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### `run`: a command and its output in one call (increment 24c)
+- The hub's `run` tool takes a machine, a command line and optional `cwd`, `wait_seconds`
+  (1–50, default 30) and `timeout_seconds` (1–300, default 300). It starts the command as a
+  broker operation, waits, and returns its state, exit code and output (stdout and stderr in
+  order, the last 32 KiB). A command still running when the wait ends keeps running and
+  comes back with its `operation_id` and how to follow it. One audit entry per `run`. It
+  needs a machine whose broker runs under the `account` policy; a `granted` one refuses it
+  with `command_not_allowed`. The hub's instructions now send an AI to `run` first.
+
 ### Commands as the account (increment 24b, ruled 25 Oct)
 - A broker's `exec_policy` (in `broker.json`) is `granted`, the default and the old
   behaviour, or `account`: the broker runs anything its OS account can, in any directory,
