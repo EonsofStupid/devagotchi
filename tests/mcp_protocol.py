@@ -29,7 +29,7 @@ UNSUPPORTED_VERSION = "2099-01-01"
 CLIENT_INFO = {"name": "desktop-bridge-raw-protocol-probe", "version": "0.1.0"}
 TOOL_SCHEMAS = {
     "operation_start": (
-        {"idempotency_key", "executable", "args", "cwd", "deadline_ms"},
+        {"idempotency_key", "executable", "args", "command", "cwd", "deadline_ms"},
         {"operation", "replayed"},
     ),
     "operation_get": ({"operation_id"}, {"operation_id", "state", "detail"}),

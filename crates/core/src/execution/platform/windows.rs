@@ -42,6 +42,37 @@ pub(crate) const OBSERVATION_FAILED_DETAIL: &str =
     "Job Object observation failed and requested cancellation. ";
 pub(crate) const TERMINATION_UNVERIFIED_DETAIL: &str = " Job Object termination was not verified";
 pub(crate) const PIPE_TIMEOUT_DETAIL: &str = " Output pipes did not close within one second of root settlement; a process holding them may have received them outside the job. Reading was stopped, output is incomplete, and processes outside the owned Job Object are not tracked or terminated.";
+pub(crate) const RUNNING_DETAIL_ACCOUNT: &str = "Root created suspended as the broker's account with its environment, null stdin, and no console window, then assigned to a broker-owned Job Object before it ran. Executable behavior is not sandboxed.";
+
+/// The shell a `command` line runs in: Windows PowerShell from System32, given the line
+/// as `-EncodedCommand` (UTF-16LE, base64) so no quoting layer can change it.
+pub(crate) fn shell_command(command: &str) -> (std::path::PathBuf, Vec<String>) {
+    use base64::Engine as _;
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+    let shell = std::path::Path::new(&root)
+        .join("System32")
+        .join("WindowsPowerShell")
+        .join("v1.0")
+        .join("powershell.exe");
+    let utf16: Vec<u8> = command.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
+    (
+        shell,
+        [
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .chain(std::iter::once(encoded))
+        .collect(),
+    )
+}
+
 pub(crate) const EXECUTABLE_RULE: &str = " (Windows grants must be .exe or .com images; batch files run through cmd.exe parsing, so grant cmd.exe explicitly)";
 
 /// Exit code given to members the broker terminates.

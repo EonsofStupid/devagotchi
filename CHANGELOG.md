@@ -7,6 +7,16 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### Commands as the account (increment 24b, ruled 25 Oct)
+- A broker's `exec_policy` (in `broker.json`) is `granted`, the default and the old
+  behaviour, or `account`: the broker runs anything its OS account can, in any directory,
+  with that account's environment, and takes a `command` line for the machine's shell
+  (`$SHELL` when it is bash, zsh, sh, dash or ksh, else bash, else `/bin/sh`; Windows
+  PowerShell with `-EncodedCommand`). `operation_start` carries `command` or `executable` with
+  `args`, never both; a `granted` broker refuses `command` with `command_not_allowed`.
+  The account's permissions are the boundary: a broker that takes commands runs as an
+  unprivileged account. Approvals for risky steps and the installers' default follow.
+
 ### One binary (increment 13a)
 - `devagotchi`: one organised command tree over the same libraries — `devagotchi start`
   (this user's broker; the first run writes `broker.json` with the workspace and the

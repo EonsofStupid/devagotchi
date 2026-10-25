@@ -12,12 +12,20 @@ pub const MAX_OUTPUT_PAGE_BYTES: usize = 16 * 1024;
 pub struct StartInput {
     /// A caller-created retry key. The same key and inputs return the same operation.
     pub idempotency_key: String,
-    /// Absolute path of an executable granted by the broker operator.
+    /// Absolute path of the program to run, with `args`. On a broker that runs only
+    /// operator-granted programs it must be granted. Leave empty when `command` is given.
+    #[serde(default)]
     pub executable: String,
     /// Exact argument vector. No shell parsing, interpolation, or added command text.
     #[serde(default)]
     pub args: Vec<String>,
-    /// Absolute working directory within the configured workspace; defaults to its root.
+    /// A command line for the machine's own shell (bash or sh on Linux, Windows PowerShell
+    /// on Windows), accepted by a broker that runs commands as its account. Give either
+    /// this or `executable` with `args`, not both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Absolute working directory; defaults to the workspace. A broker that runs only
+    /// granted programs keeps it within the workspace.
     pub cwd: Option<String>,
     /// Execution deadline, not a client wait timeout. 1..=300000 milliseconds.
     pub deadline_ms: u64,
