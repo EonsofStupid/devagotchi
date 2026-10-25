@@ -159,6 +159,23 @@ All Devagotchi requirements and acceptance cases below are **proposals**, not st
 
 **Measurable acceptance:** in a fresh session on a machine where the installer ran, an AI asked to "check the disk space on <machine>" uses Devagotchi without being told to: one call to `machines`, one to run the command.
 
+## 11. Why the same session still worked around Devagotchi (first-hand, 24 October 2026, evening)
+
+**Source:** the same Claude session, about eight hours after §10, once `machines`, approvals, phone push and the board were live on app.devagotchi.com. Jesse noticed it still called Desktop Commander's `list_devices` and asked why, so the gaps get built rather than worked around. For each thing the session did on his machines that evening, this is what it used and what stopped it using Devagotchi.
+
+| What the session did | What it used | Why not Devagotchi | Gap to build |
+|---|---|---|---|
+| Looked for gus and dabo (Jesse's Windows PCs) to install a tool | Desktop Commander `list_devices` (both offline, last seen 6 and 13 days earlier) | Neither PC has a link to the hub, so `machines` does not know they exist | Windows PCs linked by one command, and the AI clients on them registered (§10 requirement 1) |
+| Deployed the hub, created boards, changed the identity provider, read Gold's change tickets | Root SSH from its own key, through helper scripts | The broker runs as an unprivileged account with a few granted programs. Every one of these steps needed root (`pct`, `incus`, `systemctl`, the Nomen API with a sops secret) | An approved root step: the AI asks, Jesse approves on the phone, and the step runs under that approval, recorded |
+| Moved a 25 MB build and import scripts between machines | The desktop bridge's file staging, plus an SSH pipe | The hub has no way to put or get a file | File put and get, and read, write and edit, as broker-owned operations (§10 requirement 3) |
+| Ran a CLI sign-in that needs a terminal and a browser (`raindrop login`) | SSH with a pseudo-terminal | Operations take no input and have no terminal, and nothing hands the person the URL to open | Interactive operations (PTY and input), and a "open this link" hand-off to the person's phone or browser |
+| Ran short commands and read their output | SSH: one call, output back | `operation_start`, then `operation_read` until it finishes: two or more calls for every command | `run`: start, wait a bounded time, return the output in one call; long jobs stay operations |
+| Imported Jesse's board and tickets | The board command line over SSH | This session's Devagotchi tools were the five from when it first connected (no `machines`, no board, no approvals). claude.ai itself already had all 25 | The hub announces tool changes (`notifications/tools/list_changed`) and keeps tool names stable, so a long session picks up new tools |
+
+**What this means:** presence is no longer the problem, since the connector is in the session. Reach and verbs are: the machines Jesse works on most aren't linked, root work has no approved path, and simple commands cost more calls than a shell. Every gap above is something the existing owners extend: the link and installers, the broker's operations, approvals (B10) and the hub's MCP surface. None needs a new service.
+
+**Measurable acceptance:** the evening's work done again (find the PCs, deploy the hub, create and fill a board, change the identity provider with Jesse's approval, install a CLI that signs in through a browser) through Devagotchi alone, with no SSH helper and no Desktop Commander call.
+
 ## Five themes suitable for a public product page
 
 Use these as **design commitments or roadmap language until their acceptance evidence exists**. Keep the competitor evidence in a dated research note rather than turning resolved incidents into current accusations.
