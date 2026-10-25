@@ -224,7 +224,9 @@ async fn world() -> World {
         web: Some(Arc::new(web)),
     };
     let hub = state.hub.clone();
-    let app = router().with_state(state);
+    let app = router()
+        .layer(axum::middleware::from_fn_with_state(state.clone(), bar))
+        .with_state(state);
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     let http = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -1075,5 +1077,55 @@ async fn the_phone_stays_signed_in_across_a_restart_and_through_refreshes() {
         w.get("/approvals", Some(&due)).await.status(),
         StatusCode::SEE_OTHER,
         "and the session is gone, not retried"
+    );
+}
+
+#[tokio::test]
+async fn every_page_says_whether_you_are_signed_in_with_one_tap_in_or_out() {
+    let w = world().await;
+    // Signed out: `/` explains and offers one way in; every page offers Sign in back to it.
+    let home = w.get("/", None).await;
+    assert_eq!(
+        home.status(),
+        StatusCode::OK,
+        "no bounce to the identity provider"
+    );
+    let html = home.text().await.unwrap();
+    assert!(html.contains("Sign in with Shippin"), "{html}");
+    let docs = w.get("/docs", None).await.text().await.unwrap();
+    assert!(
+        docs.contains("href=\"/auth/login?return_to=%2Fdocs\">Sign in</a>"),
+        "{docs}"
+    );
+    assert!(!docs.contains("Sign out"));
+
+    // Signed in: `/` is your machines, and every page has Approvals, Machines and Sign out.
+    let session = w.sign_in("tok-owner").await;
+    let home = w.get("/", Some(&session)).await;
+    assert_eq!(home.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&home), "/account");
+    for path in ["/docs", "/approvals", "/account"] {
+        let html = w.get(path, Some(&session)).await.text().await.unwrap();
+        assert!(
+            html.contains("<form method=\"post\" action=\"/auth/logout\"><button type=\"submit\">Sign out</button></form>")
+                && html.contains("<a href=\"/approvals\">Approvals</a>")
+                && !html.contains(">Sign in</a>"),
+            "{path}: {html}"
+        );
+    }
+
+    // One tap out, and the bar says so straight away.
+    let out = w
+        .http
+        .post(format!("{}/auth/logout", w.url))
+        .header(header::COOKIE, &session)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(location(&out), "/signed-out");
+    let after = w.get("/docs", Some(&session)).await.text().await.unwrap();
+    assert!(
+        after.contains(">Sign in</a>") && !after.contains("Sign out"),
+        "{after}"
     );
 }

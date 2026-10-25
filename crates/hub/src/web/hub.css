@@ -13,7 +13,14 @@
 body { margin: 0; background: var(--bg); color: var(--text);
   font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
 main { max-width: 760px; margin: 0 auto; padding: 32px 16px 64px; }
-.brand { font-weight: 700; letter-spacing: .02em; color: var(--accent); margin: 0 0 24px; }
+.bar { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  max-width: 760px; margin: 0 auto; padding: 16px 16px 0; flex-wrap: wrap; }
+.brand { font-weight: 700; letter-spacing: .02em; color: var(--accent); text-decoration: none; }
+.bar nav { display: flex; align-items: center; gap: 16px; }
+.bar nav a { color: var(--text); }
+.bar form { margin: 0; }
+.bar button { padding: 6px 12px; }
+.button.primary { background: var(--accent); border-color: var(--accent); color: var(--bg); font-weight: 600; }
 h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 8px; overflow-wrap: anywhere; }
 h2 { font-size: 1.1rem; margin: 32px 0 12px; }
 .meta, .note, .empty { color: var(--muted); margin: 0 0 8px; }

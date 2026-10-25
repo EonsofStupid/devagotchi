@@ -420,7 +420,7 @@ fn app(state: AppState) -> Router {
                     require_bearer,
                 )),
         )
-        .merge(web::router())
+        .merge(web::router().layer(middleware::from_fn_with_state(state.clone(), web::bar)))
         .with_state(state)
 }
 

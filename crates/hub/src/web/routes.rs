@@ -116,8 +116,14 @@ pub(super) async fn who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -
     }
 }
 
-async fn root() -> Response {
-    see_other("/account", &[])
+/// Signed in, `/` is your machines; signed out, it says what Devagotchi is and offers
+/// one Sign in, instead of sending a stranger straight to an identity provider.
+async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    match &state.web {
+        Some(web) if web.signed_in(&headers) => see_other("/account", &[]),
+        Some(_) => pages::home(),
+        None => see_other("/docs", &[]),
+    }
 }
 
 async fn css() -> Response {

@@ -170,6 +170,10 @@ How it holds up:
   app needs the refresh-token grant for the long session.
 - Every page re-checks the access token (Nomen's answer is reused for a minute).
 - The return path after sign-in is kept on the hub and is only ever a path on it.
+- Every page's top bar says where you stand, decided locally from the session store (no
+  call to Nomen): signed in, Approvals, Machines and a one-tap **Sign out**; signed out, one
+  **Sign in** that comes back to the page you were on. Signed out, `/` says what Devagotchi
+  is and offers Sign in with Shippin; signed in, it is your machines.
 - Pages carry no script; values are escaped and the CSP is `default-src 'none'` with the
   hub's own stylesheet. Sign-out ends the hub session and revokes its refresh token at Nomen; the Shippin sign-in stays.
 

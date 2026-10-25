@@ -45,6 +45,30 @@ use sha2::{Digest, Sha256};
 
 pub use routes::router;
 
+/// Every web page's top bar says whether the browser is signed in: the account and a
+/// one-tap Sign out, or Sign in back to this page (`pages::Bar`).
+pub async fn bar(
+    axum::extract::State(state): axum::extract::State<crate::AppState>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let bar = match &state.web {
+        None => pages::Bar::Plain,
+        Some(web) if web.signed_in(request.headers()) => pages::Bar::SignedIn,
+        Some(_) => pages::Bar::SignedOut {
+            return_to: safe_return_to(
+                request
+                    .uri()
+                    .path_and_query()
+                    .map(|p| p.as_str())
+                    .unwrap_or("/account"),
+            )
+            .to_string(),
+        },
+    };
+    pages::BAR.scope(bar, next.run(request)).await
+}
+
 /// The longest a browser session lasts when Nomen gives no refresh token, however long
 /// its access token would.
 pub const NO_REFRESH_MAX: Duration = Duration::from_secs(12 * 3600);
@@ -389,6 +413,18 @@ impl WebLogin {
                 eprintln!("devagotchi-hub: could not revoke a refresh token: {error}");
             }
         });
+    }
+
+    /// Whether this request's session cookie names a live session. Local only: no call to
+    /// Nomen, so every page can say "signed in" or offer Sign in at no cost.
+    pub fn signed_in(&self, headers: &HeaderMap) -> bool {
+        cookie_value(headers, self.session_cookie()).is_some_and(|id| {
+            matches!(
+                self.sessions.get(&digest(&id), sessions::now_millis()),
+                Ok(Some(stored)) if stored.held.refresh.is_some()
+                    || stored.access_until > sessions::now_millis()
+            )
+        })
     }
 
     pub fn login_state(&self, headers: &HeaderMap) -> Option<String> {
