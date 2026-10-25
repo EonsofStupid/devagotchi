@@ -232,6 +232,77 @@ pub struct FileListing {
     pub truncated: bool,
 }
 
+/// Largest content one write or edit carries, so the request fits one wire frame.
+pub const MAX_FILE_WRITE_BYTES: usize = 32 * 1024;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteMode {
+    /// Replace the file's whole content (atomically: a new file renamed into place), or
+    /// create it. The default.
+    #[default]
+    Overwrite,
+    /// Create the file; refuse when it exists.
+    Create,
+    /// Add to the end of the file, creating it when missing.
+    Append,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileWriteInput {
+    /// Absolute path of the file.
+    pub path: String,
+    /// The content as text, written as UTF-8 exactly as given. Give this or `bytes_base64`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The content as base64 bytes. At most 32 KiB of content per call; append for more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_base64: Option<String>,
+    #[serde(default)]
+    pub mode: WriteMode,
+    /// Overwrite only if the file's current SHA-256 is this (from an earlier write or
+    /// edit), so a change made in between is not lost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_sha256: Option<String>,
+    /// Create missing parent directories.
+    #[serde(default)]
+    pub create_dirs: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileEditInput {
+    /// Absolute path of a UTF-8 text file.
+    pub path: String,
+    /// Exact text to find, including whitespace and line endings.
+    pub old_text: String,
+    /// Text to put in its place.
+    pub new_text: String,
+    /// How many times `old_text` must occur (default 1); every occurrence is replaced, and
+    /// a different count changes nothing.
+    #[serde(default = "default_replacements")]
+    pub expected_replacements: u32,
+}
+
+fn default_replacements() -> u32 { 1 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileWritten {
+    /// The file's canonical path.
+    pub path: String,
+    /// Its size after the change.
+    pub size: u64,
+    /// SHA-256 of its whole content after the change: pass it as `expected_sha256` next time.
+    pub sha256: String,
+    /// Whether the file was created.
+    pub created: bool,
+    /// For an edit: how many occurrences were replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacements: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BridgeError {
@@ -263,6 +334,8 @@ pub enum RequestBody {
     OperationList(ListInput),
     FileRead(FileReadInput),
     FileList(FileListInput),
+    FileWrite(FileWriteInput),
+    FileEdit(FileEditInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -281,6 +354,7 @@ pub enum ResponseBody {
     Operations(OperationsPage),
     File(FileContent),
     Listing(FileListing),
+    Written(FileWritten),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

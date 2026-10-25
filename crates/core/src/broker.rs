@@ -253,6 +253,8 @@ impl Broker {
             RequestBody::OperationList(input) => self.list(input).map(ResponseBody::Operations),
             RequestBody::FileRead(input) => self.files().read(input).map(ResponseBody::File),
             RequestBody::FileList(input) => self.files().list(input).map(ResponseBody::Listing),
+            RequestBody::FileWrite(input) => self.files().write(input).map(ResponseBody::Written),
+            RequestBody::FileEdit(input) => self.files().edit(input).map(ResponseBody::Written),
         }
     }
 

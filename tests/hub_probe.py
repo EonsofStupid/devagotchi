@@ -120,8 +120,8 @@ unannotated = [t["name"] for t in listed if not t.get("title") or not (
     "readOnlyHint" in t.get("annotations", {}) and "openWorldHint" in t.get("annotations", {})
     and (t["annotations"]["readOnlyHint"] or "destructiveHint" in t["annotations"]))]
 check("every tool has a title and annotations", not unannotated, ", ".join(unannotated))
-broker_tools = ["approval_request", "approval_wait", "list_directory", "machines", "operation_cancel", "operation_get",
-                "operation_read", "operation_start", "read_file", "run", "whoami"]
+broker_tools = ["approval_request", "approval_wait", "edit_file", "list_directory", "machines", "operation_cancel",
+                "operation_get", "operation_read", "operation_start", "read_file", "run", "whoami", "write_file"]
 board_tools = [t for t in tools if t.startswith("board_")]
 check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 18,
       ", ".join(tools))
@@ -182,6 +182,24 @@ if args.run_broker and args.run_dir:
     is_error, listing = call("list_directory", {"machine": args.run_broker, "path": args.run_dir})
     names = {e.get("path"): e.get("kind") for e in listing.get("entries", [])} if not is_error else {}
     check("list_directory lists the file", names.get("devagotchi-probe.txt") == "file", json.dumps(listing)[:200])
+    # Write, edit, read back; a stale checksum refuses an overwrite.
+    written_file = os.path.join(args.run_dir, "devagotchi-written.txt")
+    is_error, made = call("write_file", {"machine": args.run_broker, "path": written_file,
+                                         "text": "alpha\nbeta\n", "mode": "create"})
+    check("write_file creates", not is_error and made.get("created") is True and len(made.get("sha256", "")) == 64,
+          json.dumps(made)[:200])
+    is_error, edited = call("edit_file", {"machine": args.run_broker, "path": written_file,
+                                          "old_text": "beta", "new_text": "gamma"})
+    check("edit_file replaces exactly once", not is_error and edited.get("replacements") == 1, json.dumps(edited)[:200])
+    is_error, back = call("read_file", {"machine": args.run_broker, "path": written_file})
+    check("the edit reads back", not is_error and back.get("text") == "alpha\ngamma\n", json.dumps(back)[:200])
+    is_error, stale = call("write_file", {"machine": args.run_broker, "path": written_file, "text": "lost",
+                                          "expected_sha256": made.get("sha256", "")})
+    check("a stale checksum refuses the overwrite", is_error and stale.get("code") == "changed_since_read",
+          json.dumps(stale)[:200])
+    is_error, outside_write = call("write_file", {"machine": args.broker, "path": written_file, "text": "x"})
+    check("write_file outside a granted broker's workspace refused",
+          is_error and outside_write.get("code") == "path_outside_workspace", json.dumps(outside_write)[:200])
     # A broker that runs only granted programs reaches files only inside its workspace.
     is_error, outside = call("read_file", {"machine": args.broker, "path": probe_file})
     check("read_file outside a granted broker's workspace refused",

@@ -7,6 +7,16 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### Changing files: `write_file`, `edit_file` (increment 24e)
+- `write_file` overwrites (the default: written beside the file and renamed into place, so
+  a reader never sees half of it; permissions carry over), creates (refused when it exists)
+  or appends, up to 32 KiB per call, from text or base64, optionally creating parent
+  directories (under `granted`, only below an ancestor inside the workspace). With
+  `expected_sha256` it refuses (`changed_since_read`) when the file changed since.
+- `edit_file` replaces exact text in a UTF-8 file (up to 8 MiB) only when it occurs the
+  expected number of times (default once); otherwise nothing changes and the answer says
+  how many times it occurs. Both return the file's new size and SHA-256.
+
 ### Files in one call: `read_file`, `list_directory` (increment 24d)
 - The broker answers `file_read` and `file_list` directly (no operation, nothing
   journaled), under the same reach as execution: inside the workspace under `granted`,

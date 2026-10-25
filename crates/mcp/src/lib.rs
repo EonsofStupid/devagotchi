@@ -207,6 +207,7 @@ mod adapter {
             ResponseBody::Operations(_) => "operations",
             ResponseBody::File(_) => "file",
             ResponseBody::Listing(_) => "listing",
+            ResponseBody::Written(_) => "written",
         };
         Json(BridgeError::new(
             "unexpected_broker_response",

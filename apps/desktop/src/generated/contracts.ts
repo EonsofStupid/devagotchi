@@ -23,9 +23,12 @@ export type OperationState =
 export interface BrokerContracts {
   bridge_error: BridgeError;
   file_content: FileContent;
+  file_edit_input: FileEditInput;
   file_list_input: FileListInput;
   file_listing: FileListing;
   file_read_input: FileReadInput;
+  file_write_input: FileWriteInput;
+  file_written: FileWritten;
   get_input: GetInput;
   list_input: ListInput;
   operation_view: OperationView;
@@ -70,6 +73,25 @@ export interface FileContent {
    * page is left for the next read.
    */
   text?: string | null;
+}
+export interface FileEditInput {
+  /**
+   * How many times `old_text` must occur (default 1); every occurrence is replaced, and
+   * a different count changes nothing.
+   */
+  expected_replacements?: number;
+  /**
+   * Text to put in its place.
+   */
+  new_text: string;
+  /**
+   * Exact text to find, including whitespace and line endings.
+   */
+  old_text: string;
+  /**
+   * Absolute path of a UTF-8 text file.
+   */
+  path: string;
 }
 export interface FileListInput {
   /**
@@ -128,6 +150,52 @@ export interface FileReadInput {
    * Absolute path of the file.
    */
   path: string;
+}
+export interface FileWriteInput {
+  /**
+   * The content as base64 bytes. At most 32 KiB of content per call; append for more.
+   */
+  bytes_base64?: string | null;
+  /**
+   * Create missing parent directories.
+   */
+  create_dirs?: boolean;
+  /**
+   * Overwrite only if the file's current SHA-256 is this (from an earlier write or
+   * edit), so a change made in between is not lost.
+   */
+  expected_sha256?: string | null;
+  mode?: "overwrite" | "create" | "append";
+  /**
+   * Absolute path of the file.
+   */
+  path: string;
+  /**
+   * The content as text, written as UTF-8 exactly as given. Give this or `bytes_base64`.
+   */
+  text?: string | null;
+}
+export interface FileWritten {
+  /**
+   * Whether the file was created.
+   */
+  created: boolean;
+  /**
+   * The file's canonical path.
+   */
+  path: string;
+  /**
+   * For an edit: how many occurrences were replaced.
+   */
+  replacements?: number | null;
+  /**
+   * SHA-256 of its whole content after the change: pass it as `expected_sha256` next time.
+   */
+  sha256: string;
+  /**
+   * Its size after the change.
+   */
+  size: number;
 }
 export interface GetInput {
   operation_id: string;
