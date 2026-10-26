@@ -4,7 +4,7 @@ use std::{
     collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU16, AtomicUsize, Ordering::SeqCst},
+        atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering::SeqCst},
     },
 };
 
@@ -35,6 +35,8 @@ struct Fake {
     answers: HashMap<String, Value>,
     calls: AtomicUsize,
     status: AtomicU16,
+    /// Accept the request and never answer, as a wedged Nomen does.
+    hang: AtomicBool,
     redirect_to: Mutex<Option<String>>,
     assertions: Mutex<HashSet<String>>,
 }
@@ -44,6 +46,9 @@ async fn introspect(
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
     fake.calls.fetch_add(1, SeqCst);
+    if fake.hang.load(SeqCst) {
+        tokio::time::sleep(Duration::from_secs(120)).await;
+    }
     let status = fake.status.load(SeqCst);
     if status != 200 {
         let mut response = StatusCode::from_u16(status).unwrap().into_response();
@@ -100,6 +105,7 @@ async fn fake_nomen(
         e: trusted.e.clone(),
         calls: AtomicUsize::new(0),
         status: AtomicU16::new(200),
+        hang: AtomicBool::new(false),
         redirect_to: Mutex::new(None),
         assertions: Mutex::new(HashSet::new()),
     });
@@ -217,13 +223,85 @@ async fn refusals_are_remembered_and_outages_are_not() {
             "{outage:?}"
         );
     }
+    assert_eq!(
+        fake.calls.load(SeqCst),
+        3,
+        "once Nomen has failed, the next caller is refused at once instead of waiting on it"
+    );
     fake.status.store(200, SeqCst);
+    tokio::time::sleep(RETRY_FIRST + Duration::from_millis(100)).await;
     assert_eq!(
         nomen.verify("tok-owner").await.unwrap().id,
         OWNER,
         "an outage is never remembered"
     );
-    assert_eq!(fake.calls.load(SeqCst), 5);
+    assert_eq!(fake.calls.load(SeqCst), 4);
+    assert!(nomen.health().reachable);
+}
+
+#[tokio::test]
+async fn a_confirmed_sign_in_outlives_an_outage_and_an_unknown_one_waits() {
+    let key = test_keys::rsa();
+    let fake = fake_nomen(&key, |iss| {
+        let owner = active(iss, OWNER, json!(HUB_PROJECT));
+        HashMap::from([
+            ("tok-owner".into(), owner.clone()),
+            ("tok-brief".into(), with(owner, "exp", json!(unix_now() + 2))),
+        ])
+    })
+    .await;
+    let mut nomen = verifier(&fake.issuer, &key);
+    nomen.fresh_for = Duration::from_millis(100);
+    nomen.retry = (Duration::from_millis(200), Duration::from_millis(400));
+    nomen.verify("tok-owner").await.unwrap();
+    nomen.verify("tok-brief").await.unwrap();
+    assert!(nomen.health().reachable);
+
+    fake.status.store(503, SeqCst);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    // Past its minute, Nomen is asked again, fails, and the earlier confirmation stands.
+    assert_eq!(nomen.verify("tok-owner").await.unwrap().id, OWNER);
+    let health = nomen.health();
+    assert!(!health.reachable && health.down_since.is_some(), "{health:?}");
+    assert!(health.last_error.as_deref().is_some_and(|why| why.contains("503")), "{health:?}");
+    // Further requests are answered from it without waiting on Nomen.
+    let calls = fake.calls.load(SeqCst);
+    for _ in 0..5 {
+        assert_eq!(nomen.verify("tok-owner").await.unwrap().id, OWNER);
+    }
+    assert_eq!(fake.calls.load(SeqCst), calls, "no request waits on a Nomen known to be down");
+    assert!(nomen.health().honoured_during_outage >= 6);
+    // A token Nomen never confirmed is refused as an outage, never as a sign-out.
+    assert!(matches!(nomen.verify("tok-never-seen").await, Err(AuthError::Unavailable(_))));
+    // A confirmation is not honoured past its own token's expiry.
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert!(matches!(nomen.verify("tok-brief").await, Err(AuthError::Unavailable(_))));
+
+    fake.status.store(200, SeqCst);
+    tokio::time::sleep(nomen.retry.1).await;
+    assert_eq!(nomen.verify("tok-never-seen").await.ok(), None, "Nomen answers: inactive");
+    assert!(nomen.health().reachable, "the first answer ends the outage");
+}
+
+#[tokio::test]
+async fn a_nomen_that_accepts_and_never_answers_costs_seconds_once() {
+    let key = test_keys::rsa();
+    let fake = fake_nomen(&key, |iss| {
+        HashMap::from([("tok-owner".into(), active(iss, OWNER, json!(HUB_PROJECT)))])
+    })
+    .await;
+    let nomen = verifier(&fake.issuer, &key);
+    fake.hang.store(true, SeqCst);
+    let began = std::time::Instant::now();
+    assert!(matches!(nomen.verify("tok-owner").await, Err(AuthError::Unavailable(_))));
+    let first = began.elapsed();
+    assert!(first >= ANSWER_TIMEOUT && first < ANSWER_TIMEOUT + Duration::from_secs(2), "{first:?}");
+    let began = std::time::Instant::now();
+    for _ in 0..10 {
+        assert!(matches!(nomen.verify("tok-owner").await, Err(AuthError::Unavailable(_))));
+    }
+    assert!(began.elapsed() < Duration::from_millis(500), "{:?}", began.elapsed());
+    assert_eq!(fake.calls.load(SeqCst), 1);
 }
 
 #[tokio::test]
@@ -378,9 +456,9 @@ fn a_full_cache_never_evicts_a_confirmed_sign_in_and_late_answers_never_win() {
     };
     let digest = |i: usize| -> [u8; 32] { Sha256::digest(i.to_le_bytes()).into() };
     let asked = Instant::now();
-    nomen.remember(digest(0), owner(), asked, CACHE_TTL);
+    nomen.remember(digest(0), owner(), asked, CACHE_TTL, None);
     for i in 1..CACHE_MAX * 2 {
-        nomen.remember(digest(i), Err("inactive"), asked, CACHE_TTL);
+        nomen.remember(digest(i), Err("inactive"), asked, CACHE_TTL, None);
     }
     assert!(
         nomen.recall(&digest(0)).unwrap().is_ok(),
@@ -391,8 +469,8 @@ fn a_full_cache_never_evicts_a_confirmed_sign_in_and_late_answers_never_win() {
     // An answer to an earlier question never replaces a newer one.
     let token = digest(usize::MAX);
     let later = Instant::now();
-    nomen.remember(token, Err("signed out"), later, CACHE_TTL);
-    nomen.remember(token, owner(), later - Duration::from_secs(5), CACHE_TTL);
+    nomen.remember(token, Err("signed out"), later, CACHE_TTL, None);
+    nomen.remember(token, owner(), later - Duration::from_secs(5), CACHE_TTL, None);
     assert_eq!(nomen.recall(&token), Some(Err("signed out")));
 }
 

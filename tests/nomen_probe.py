@@ -212,8 +212,21 @@ try:
           f"HTTP {status_cached}")
     status_new, _, _ = whoami(base, "tok-member-2")
     check("new sign-in during the outage is 503, not 401", status_new == 503, f"HTTP {status_new}")
+    # Once Nomen has failed, callers are not each made to wait on it.
+    began = time.monotonic()
+    status_fast, _, _ = whoami(base, "tok-member-3")
+    check("while Nomen is down a new sign-in is refused at once", status_fast == 503 and time.monotonic() - began < 1.0,
+          f"HTTP {status_fast} in {time.monotonic() - began:.2f}s")
+    with urllib.request.urlopen(base + "/healthz", timeout=10) as resp:
+        issuer = json.loads(resp.read()).get("issuer") or {}
+    check("healthz reports the outage", issuer.get("reachable") is False and issuer.get("down_since"), json.dumps(issuer))
     nomen.status = 200
-    status_back, _, me = whoami(base, "tok-member-2")
+    # A client retries as the 503 says (Retry-After); the hub tries Nomen again within seconds.
+    for _ in range(40):
+        status_back, _, me = whoami(base, "tok-member-2")
+        if status_back != 503:
+            break
+        time.sleep(0.5)
     check("sign-in recovers with Nomen", status_back == 200 and me and me.get("subject") == MEMBER,
           f"HTTP {status_back}")
 
