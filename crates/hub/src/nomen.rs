@@ -20,6 +20,8 @@
 //!   cannot be reached, until the token's own expiry (and never more than 12 hours after
 //!   Nomen last confirmed it). Nobody can sign out of an unreachable Nomen either, so this
 //!   honours nothing Nomen could have withdrawn; the first answer after it returns decides.
+//!   Those confirmations are kept on disk as token hashes (`kept.rs`), so restarting the
+//!   hub in the middle of an outage does not sign anyone out either.
 //! - An outage costs a caller seconds, not minutes: Nomen gets 3 s to connect and 5 s to
 //!   answer, and once it has failed, sign-ins it never confirmed are refused at once while
 //!   one request at a time tries again (after 2 s, doubling to 30 s). The outage and the
@@ -31,7 +33,11 @@
 
 use std::{
     collections::HashMap,
-    sync::Mutex,
+    path::Path,
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -185,6 +191,10 @@ pub struct NomenVerifier {
     fresh_for: Duration,
     /// The first and longest pause before trying Nomen again (RETRY_FIRST, RETRY_MAX).
     retry: (Duration, Duration),
+    /// Confirmed sign-ins on disk, for a restart during an outage (`remembering`).
+    kept: Option<kept::SignIns>,
+    /// Whether the last write to `kept` failed, so a failing disk is logged once.
+    kept_failing: AtomicBool,
 }
 
 impl NomenVerifier {
@@ -244,6 +254,8 @@ impl NomenVerifier {
             outage: Mutex::new(Outage::default()),
             fresh_for: CACHE_TTL,
             retry: (RETRY_FIRST, RETRY_MAX),
+            kept: None,
+            kept_failing: AtomicBool::new(false),
         };
         // Sign once now: a key that cannot sign stops the hub at start, not at sign-in.
         verifier
@@ -254,6 +266,81 @@ impl NomenVerifier {
 
     pub fn issuer(&self) -> &str {
         &self.accepts.issuer
+    }
+
+    /// Keep confirmed sign-ins in `path` and take back the ones a previous run kept, to
+    /// be honoured only while Nomen cannot be reached (Nomen is asked first, as for any
+    /// sign-in past its minute). A store that cannot be opened is logged and skipped.
+    pub fn remembering(mut self, path: &Path) -> Self {
+        let store = match kept::SignIns::open(path) {
+            Ok(store) => store,
+            Err(error) => {
+                eprintln!(
+                    "devagotchi hub: confirmed sign-ins will not survive a restart: {}: {error}",
+                    path.display()
+                );
+                return self;
+            }
+        };
+        let now_unix = unix_now();
+        let now = Instant::now();
+        match store.load(now_unix) {
+            Ok(rows) => {
+                let count = rows.len();
+                let mut cache = self.cache.lock().expect("nomen cache lock");
+                for row in rows.into_iter().take(CACHE_MAX) {
+                    let asked = now
+                        .checked_sub(Duration::from_secs(now_unix.saturating_sub(row.confirmed_at)))
+                        .unwrap_or(now);
+                    cache.insert(
+                        row.digest,
+                        Remembered {
+                            outcome: Ok(row.subject),
+                            asked,
+                            until: now,
+                            honour_until: Some(
+                                now + Duration::from_secs(row.honour_until.saturating_sub(now_unix)),
+                            ),
+                        },
+                    );
+                }
+                drop(cache);
+                if count > 0 {
+                    eprintln!(
+                        "devagotchi hub: {count} confirmed sign-ins kept from the last run; honoured only while Nomen cannot be reached"
+                    );
+                }
+            }
+            Err(error) => eprintln!("devagotchi hub: kept sign-ins unreadable, starting without them: {error}"),
+        }
+        self.kept = Some(store);
+        self
+    }
+
+    /// Write a confirmation to disk, or remove a token Nomen no longer vouches for.
+    fn keep_on_disk(&self, digest: &[u8; 32], confirmed: Option<(&Subject, u64)>) {
+        let Some(store) = &self.kept else { return };
+        let written = match confirmed {
+            Some((subject, honour_until)) => store.keep(&kept::Kept {
+                digest: *digest,
+                subject: subject.clone(),
+                confirmed_at: unix_now(),
+                honour_until,
+            }),
+            None => store.forget(digest),
+        };
+        match written {
+            Ok(()) => {
+                if self.kept_failing.swap(false, Ordering::Relaxed) {
+                    eprintln!("devagotchi hub: keeping confirmed sign-ins on disk again");
+                }
+            }
+            Err(error) => {
+                if !self.kept_failing.swap(true, Ordering::Relaxed) {
+                    eprintln!("devagotchi hub: could not keep a confirmed sign-in on disk: {error}");
+                }
+            }
+        }
     }
 
     /// Whether Nomen is answering, for the status page and `whoami`.
@@ -311,9 +398,15 @@ impl NomenVerifier {
         let now = unix_now();
         let outcome = assess(&answer, &self.accepts, now);
         let (ttl, honour) = match (&outcome, answer.exp) {
-            (Ok(_), Some(exp)) => {
+            (Ok(subject), Some(exp)) => {
                 let left = Duration::from_secs(exp.saturating_sub(now));
-                (self.fresh_for.min(left), Some(asked + HONOUR_MAX.min(left)))
+                let honour = HONOUR_MAX.min(left);
+                self.keep_on_disk(&digest, Some((subject, now + honour.as_secs())));
+                (self.fresh_for.min(left), Some(asked + honour))
+            }
+            (Err(_), _) => {
+                self.keep_on_disk(&digest, None);
+                (self.fresh_for, None)
             }
             _ => (self.fresh_for, None),
         };
@@ -581,6 +674,8 @@ fn unix_now() -> u64 {
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0)
 }
+
+mod kept;
 
 #[cfg(test)]
 mod tests;

@@ -36,6 +36,15 @@ heading. Agents draft the fragments below; they never tag.
 - The link admits a machine the config does not name only with an account's code or as an
   account's enrolled machine; an operator's code still joins only a configured broker.
 
+### Sign-ins survive a hub restart during a Nomen outage (increment 27b)
+- The sign-ins Nomen confirmed are kept in `signins.sqlite3` in the hub's state directory:
+  the token's SHA-256 (never the token), the account, and until when it may be honoured
+  (the token's expiry, at most 12 hours after Nomen last confirmed it). A hub restarted
+  while Nomen is down takes them back and honours them exactly as before the restart;
+  while Nomen answers, Nomen decides, and its answer that a token is no longer good
+  deletes the row. A store that cannot be written is logged once and never fails a
+  sign-in.
+
 ### `devagotchi connect`: Claude Code, Codex and Claude Desktop in one command (increment 28a)
 - Each client found on the machine (or named) gets an MCP server `devagotchi` running this
   binary: `mcp --hub` (the hosted hub as the signed-in account; the default once

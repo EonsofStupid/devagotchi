@@ -307,7 +307,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         },
         None => None,
     };
-    let verifier = Arc::new(Verifier::from_config(&config.auth).await?);
+    let verifier = Arc::new(Verifier::from_config(&config.auth, &state_dir).await?);
     let web = match (&config.web, &config.auth) {
         (
             Some(web),

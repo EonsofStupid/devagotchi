@@ -3,6 +3,7 @@
 
 use std::{
     collections::HashMap,
+    path::Path,
     sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
@@ -63,16 +64,19 @@ pub enum Verifier {
 }
 
 impl Verifier {
-    pub async fn from_config(config: &AuthConfig) -> BridgeResult<Self> {
+    /// The verifier the config names. A Nomen verifier keeps the sign-ins Nomen confirmed
+    /// in `state_dir`, so a restart during a Nomen outage signs nobody out.
+    pub async fn from_config(config: &AuthConfig, state_dir: &Path) -> BridgeResult<Self> {
         match config {
             AuthConfig::Nomen {
                 issuer,
                 audiences,
                 clients,
                 key_file,
-            } => Ok(Verifier::Nomen(NomenVerifier::new(
-                issuer, audiences, clients, key_file,
-            )?)),
+            } => Ok(Verifier::Nomen(
+                NomenVerifier::new(issuer, audiences, clients, key_file)?
+                    .remembering(&state_dir.join("signins.sqlite3")),
+            )),
             AuthConfig::Oidc { issuer, audiences } => Ok(Verifier::Oidc(
                 OidcVerifier::discover(issuer, audiences).await?,
             )),
