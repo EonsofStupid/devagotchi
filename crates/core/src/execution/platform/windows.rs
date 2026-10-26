@@ -449,10 +449,6 @@ mod tests {
         format!("{} -n {} 127.0.0.1 >nul", system32("PING.EXE"), seconds + 1)
     }
 
-    fn notices(tree: &OwnedTree) -> u64 {
-        *tree.notices.exits.borrow()
-    }
-
     #[tokio::test]
     async fn the_root_exit_is_the_wait_on_its_handle() {
         let mut child = spawn(&ping(1));
@@ -476,8 +472,12 @@ mod tests {
             .expect("settled")
             .unwrap();
         assert!(!tree.has_executing_members().unwrap());
-        // The settlement was reported through the job's completion port.
-        assert!(notices(&tree) > 0, "no job exit notice arrived");
+        // The member's exit was reported through the job's completion port.
+        let mut exits = tree.notices.exits.clone();
+        timeout(Duration::from_secs(10), exits.wait_for(|count| *count > 0))
+            .await
+            .expect("a job exit notice arrived")
+            .unwrap();
     }
 
     #[tokio::test]
@@ -489,6 +489,12 @@ mod tests {
         tree.terminate().await.unwrap();
         assert!(began.elapsed() < GROUP_SETTLE, "{:?}", began.elapsed());
         assert!(!tree.has_executing_members().unwrap());
-        assert!(notices(&tree) > 0, "no job exit notice arrived");
+        // TerminateJobObject can empty the job before its listener has read the notices
+        // (the first query already finds no member); they still arrive.
+        let mut exits = tree.notices.exits.clone();
+        timeout(Duration::from_secs(10), exits.wait_for(|count| *count > 0))
+            .await
+            .expect("a job exit notice arrived")
+            .unwrap();
     }
 }
