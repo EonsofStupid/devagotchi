@@ -13,7 +13,11 @@
   Re-running moves the version and keeps the config. -Uninstall stops the broker and the
   link and removes the Run entries; files stay for you to delete.
 
-  With -Hub, -Device and -EnrollCode the machine also joins a Devagotchi hub over the link:
+  -ExecPolicy account writes a new broker config whose broker runs commands as this user
+  (the `run` tool and `command` lines); without it the broker runs granted executables only.
+
+  With -Hub, -Device and -EnrollCode (or the code in DEVAGOTCHI_ENROLL_CODE, as the hub's
+  join script passes it) the machine also joins a Devagotchi hub over the link:
   `devagotchi link` enrolls this machine's own key with the one-time code (from
   `devagotchi hub enroll --device NAME` on the hub host), then holds one outbound connection
   to the hub. No port opens here. Later runs need only -Hub and -Device, or nothing: the
@@ -43,12 +47,18 @@ param(
     [string]$Hub = '',
     [string]$Device = '',
     [string]$EnrollCode = '',
+    [ValidateSet('granted', 'account')]
+    [string]$ExecPolicy = '',
     [switch]$Uninstall,
     [switch]$PrintTarget
 )
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
+# The join script hands the code over in the environment, never on a command line.
+if (-not $EnrollCode -and $Hub -and $Device -and $env:DEVAGOTCHI_ENROLL_CODE) {
+    $EnrollCode = $env:DEVAGOTCHI_ENROLL_CODE
+}
 # The release build for this machine, from the OS's own architecture: the machine-level
 # variable, which x64 emulation on an Arm64 PC and 32-bit (WOW64) PowerShell leave alone,
 # unlike the process-level one. Releases exist for x64 and Arm64.
@@ -241,8 +251,9 @@ if (-not (Test-Path $Config)) {
         max_operations      = 64
         max_concurrent      = 4
     }
+    if ($ExecPolicy) { $broker['exec_policy'] = $ExecPolicy }
     Write-Utf8 $Config ($broker | ConvertTo-Json -Depth 4)
-    Write-Host "    wrote $Config with $($grants.Count) grants; workspace $Workspace"
+    Write-Host "    wrote $Config with $($grants.Count) grants; workspace $Workspace$(if ($ExecPolicy) { "; exec_policy $ExecPolicy" })"
 } else {
     Write-Host "    kept existing $Config"
 }

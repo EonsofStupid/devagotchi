@@ -145,27 +145,47 @@ pub fn account(viewer: &Viewer<'_>, machines: &[Machine]) -> Response {
     let rows: String = machines
         .iter()
         .map(|m| {
+            let revoke = if m.owned && m.status != "revoked" {
+                format!(
+                    "<form method=\"post\" action=\"/machines/revoke\"><input type=\"hidden\" name=\"name\" value=\"{}\">\
+<button class=\"deny\" type=\"submit\">Revoke</button></form>",
+                    escape(&m.name)
+                )
+            } else {
+                String::new()
+            };
             format!(
-                "<tr><td>{}</td><td>{}</td><td><span class=\"status {}\">{}</span></td><td>{}</td></tr>",
-                escape(&m.name),
-                if m.kind == "local" { "On the hub's host" } else { "Linked machine" },
+                "<tr id=\"{n}\"><td>{n}</td><td>{}</td><td><span class=\"status {}\">{}</span></td><td>{}</td><td>{revoke}</td></tr>",
+                if m.kind == "local" {
+                    "On the hub's host"
+                } else if m.owned {
+                    "Added by you"
+                } else {
+                    "Linked machine"
+                },
                 m.status,
                 status_label(m.status),
                 m.enrolled_at.map(utc).unwrap_or_else(|| "—".into()),
+                n = escape(&m.name),
             )
         })
         .collect();
     let machines = if machines.is_empty() {
-        "<p class=\"empty\">No machines yet. A machine shows up here once it is enrolled and you are granted it.</p>".to_string()
+        "<p class=\"empty\">No machines yet. Add one below; a machine the hub operator links for you shows up here too.</p>".to_string()
     } else {
         format!(
-            "<table><thead><tr><th>Machine</th><th>Where</th><th>Status</th><th>Enrolled</th></tr></thead><tbody>{rows}</tbody></table>"
+            "<table><thead><tr><th>Machine</th><th>Where</th><th>Status</th><th>Enrolled</th><th></th></tr></thead><tbody>{rows}</tbody></table>"
         )
     };
+    let add = "<h2>Add a machine</h2>\
+<form method=\"post\" action=\"/machines/add\"><label>Name it (lowercase letters, digits, dashes)\
+<input type=\"text\" name=\"name\" required maxlength=\"63\" pattern=\"[a-z0-9][a-z0-9\\-]{0,62}\" \
+autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"platinum\"></label>\
+<p class=\"actions\"><button class=\"approve\" type=\"submit\">Get a one-time code</button></p></form>";
     let body = format!(
         "<h1>Signed in as {}</h1>\
 <p class=\"meta\">Shippin account ID <code>{}</code></p>{owner}\
-<h2>Your machines</h2>{machines}\
+<h2>Your machines</h2>{machines}{add}\
 <form method=\"post\" action=\"/auth/logout\"><button type=\"submit\">Sign out</button></form>",
         escape(shown),
         escape(viewer.subject),

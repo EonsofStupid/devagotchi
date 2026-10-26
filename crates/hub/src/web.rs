@@ -23,6 +23,7 @@
 //! - Redirects are not followed when talking to Nomen.
 
 mod approvals;
+mod machines;
 mod notify;
 mod pages;
 mod public;

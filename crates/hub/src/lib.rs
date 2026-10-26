@@ -10,8 +10,10 @@ mod auth;
 pub mod board;
 mod config;
 mod devices;
+mod downloads;
 mod files;
 mod hub;
+mod join;
 mod link;
 mod nomen;
 mod push;
@@ -275,7 +277,36 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let config = Arc::new(HubConfig::parse(&text)?);
     let devices = Arc::new(devices_at(&state_dir)?);
     let audit = Arc::new(Audit::open(&state_dir.join("audit.sqlite3"))?);
-    let links = Arc::new(Links::new(config.clone(), devices.clone(), audit.clone()));
+    let push = match &config.web {
+        Some(_) => Some(Arc::new(push::Push::open(
+            &state_dir,
+            &config.public_url,
+            devices.clone(),
+        )?)),
+        None => None,
+    };
+    let links = Arc::new(
+        Links::new(config.clone(), devices.clone(), audit.clone()).notifying(push.clone()),
+    );
+    // A downloads directory that does not check out is logged and left out: the hub still
+    // serves everything else, and /healthz says why /join is off.
+    let downloads = match &config.downloads {
+        Some(dir) => match downloads::Downloads::open(std::path::Path::new(dir)) {
+            Ok(downloads) => {
+                eprintln!(
+                    "devagotchi hub: handing out Devagotchi {} to joining machines ({} files checked)",
+                    downloads.version,
+                    downloads.files().count()
+                );
+                Some(Arc::new(downloads))
+            }
+            Err(error) => {
+                eprintln!("devagotchi hub: /join is off: {error}");
+                None
+            }
+        },
+        None => None,
+    };
     let verifier = Arc::new(Verifier::from_config(&config.auth, &state_dir).await?);
     let web = match (&config.web, &config.auth) {
         (
@@ -305,14 +336,8 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let state = AppState {
         verifier,
         hub: Hub {
-            push: match &config.web {
-                Some(_) => Some(Arc::new(push::Push::open(
-                    &state_dir,
-                    &config.public_url,
-                    devices.clone(),
-                )?)),
-                None => None,
-            },
+            push,
+            downloads,
             config: config.clone(),
             audit,
             links,
@@ -389,6 +414,7 @@ fn app(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/link", get(link_upgrade))
+        .merge(join::routes())
         .route(
             "/.well-known/oauth-protected-resource",
             get(protected_resource),
@@ -595,6 +621,11 @@ async fn healthz(State(state): State<AppState>) -> Response {
         "brokers": brokers,
         "audit": audit.ok(),
         "issuer": state.verifier.issuer_health(),
+        "downloads": match (&state.hub.downloads, &state.hub.config.downloads) {
+            (Some(downloads), _) => serde_json::json!({ "version": downloads.version, "files": downloads.files().count() }),
+            (None, Some(_)) => serde_json::json!({ "off": "the downloads directory did not check out; see the hub's log" }),
+            (None, None) => serde_json::Value::Null,
+        },
     });
     let status = if all_up && chain_ok {
         StatusCode::OK

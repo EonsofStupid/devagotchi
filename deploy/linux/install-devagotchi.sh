@@ -10,6 +10,7 @@
 #   sudo ./install-devagotchi.sh --version 0.2.0                  # from a GitHub release (sha256 checked)
 #   sudo ./install-devagotchi.sh --bin-dir ./target/release       # from a local build
 #   sudo ./install-devagotchi.sh --hub https://hub.example.com --device wi1 --enroll < code
+#   sudo ./install-devagotchi.sh --exec-policy account ...       # the broker runs commands as its account
 #   sudo ./install-devagotchi.sh --role hub --version 0.2.0 --public-url https://devagotchi.com \
 #        --auth-config ./auth.json --person 395290028818825218 --board devagotchi --caddy
 #   sudo ./install-devagotchi.sh --role hub --public-url http://127.0.0.1:8787 --person jesse --agent claude   # dev tokens: tests only
@@ -41,13 +42,13 @@ esac
 PREFIX=/opt/devagotchi
 ACCOUNT=devagotchi
 ACCOUNT_HOME=/var/lib/devagotchi
-VERSION='' BIN_DIR='' ARTIFACT_DIR='' WORKSPACE='' HUB='' DEVICE='' ENROLL=0 UNINSTALL=0
+VERSION='' BIN_DIR='' ARTIFACT_DIR='' WORKSPACE='' HUB='' DEVICE='' ENROLL=0 UNINSTALL=0 EXEC_POLICY=''
 ROLE=machine PUBLIC_URL='' LISTEN=127.0.0.1:8787 CADDY=0 AUTH_CONFIG=''
 GRANTS=() BOARDS=() PEOPLE=() AGENTS=()
 
 die() { echo "install-devagotchi: $*" >&2; exit 1; }
 step() { printf '\n==> %s\n' "$*"; }
-usage() { sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; }
 need_target() {
     [ -n "$TARGET" ] || die "no Devagotchi release for this machine ($(uname -m), $(getconf LONG_BIT 2>/dev/null || echo '?')-bit userland); releases cover 64-bit x86_64 and aarch64. Build it here and use --bin-dir"
 }
@@ -65,6 +66,7 @@ while [ $# -gt 0 ]; do
         --hub) HUB=${2:?--hub needs a value}; shift 2 ;;
         --device) DEVICE=${2:?--device needs a value}; shift 2 ;;
         --enroll) ENROLL=1; shift ;;
+        --exec-policy) EXEC_POLICY=${2:?--exec-policy needs granted or account}; shift 2 ;;
         --uninstall) UNINSTALL=1; shift ;;
         --repo) REPO=${2:?--repo needs a value}; shift 2 ;;
         --role) ROLE=${2:?--role needs machine or hub}; shift 2 ;;
@@ -95,6 +97,7 @@ case $PREFIX in /*) ;; *) die "--prefix must be absolute" ;; esac
 [ $ENROLL = 0 ] || { [ -n "$HUB" ] && [ -n "$DEVICE" ]; } || die "--enroll needs --hub and --device"
 [ -z "$VERSION" ] || [[ $VERSION =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || die "--version $VERSION is not a version"
 case $ROLE in machine|hub) ;; *) die "--role must be machine or hub" ;; esac
+case $EXEC_POLICY in ''|granted|account) ;; *) die "--exec-policy must be granted or account" ;; esac
 if [ "$ROLE" = hub ]; then
     { [ -z "$HUB$DEVICE" ] && [ $ENROLL = 0 ]; } || die "--hub, --device and --enroll belong to the machine role"
     [ -z "$PUBLIC_URL" ] || [[ $PUBLIC_URL =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
@@ -524,10 +527,12 @@ else
     done
     list=''
     for real in "${grants[@]}"; do list+="${list:+, }$(json_string "$real")"; done
-    printf '{\n  "workspace": %s,\n  "allowed_executables": [%s],\n  "output_limit_bytes": 262144,\n  "max_operations": 64,\n  "max_concurrent": 4\n}\n' \
-        "$(json_string "$WORKSPACE")" "$list" | write_as_user "$CONFIG" 0600
+    policy=''
+    [ -z "$EXEC_POLICY" ] || policy=",\n  \"exec_policy\": \"$EXEC_POLICY\""
+    printf '{\n  "workspace": %s,\n  "allowed_executables": [%s],\n  "output_limit_bytes": 262144,\n  "max_operations": 64,\n  "max_concurrent": 4%b\n}\n' \
+        "$(json_string "$WORKSPACE")" "$list" "$policy" | write_as_user "$CONFIG" 0600
     BROKER_CHANGED=1
-    echo "    wrote $CONFIG: workspace $WORKSPACE, ${#grants[@]} grants"
+    echo "    wrote $CONFIG: workspace $WORKSPACE, ${#grants[@]} grants${EXEC_POLICY:+, exec_policy $EXEC_POLICY}"
     for real in "${grants[@]}"; do echo "      $real"; done
 fi
 

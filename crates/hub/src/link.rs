@@ -84,6 +84,17 @@ pub struct Links {
     handshakes: Arc<Semaphore>,
     refusals: Mutex<RefusalLog>,
     next: AtomicU64,
+    /// Tells an account's phones when a machine it added joins (increment 29a).
+    push: Option<Arc<crate::push::Push>>,
+}
+
+/// A device the hello proved, and the account it just joined for, if it enrolled now
+/// with an account's code.
+#[derive(Debug)]
+struct Admitted {
+    device: String,
+    key: String,
+    joined_for: Option<String>,
 }
 
 fn offline(device: &str) -> BridgeError {
@@ -130,12 +141,81 @@ impl Links {
             handshakes: Arc::new(Semaphore::new(MAX_HANDSHAKES)),
             refusals: Mutex::new(RefusalLog::default()),
             next: AtomicU64::new(1),
+            push: None,
         }
+    }
+
+    /// Push "your machine joined" to the owner's phones when a machine an account added
+    /// enrolls.
+    pub fn notifying(mut self, push: Option<Arc<crate::push::Push>>) -> Self {
+        self.push = push;
+        self
     }
 
     /// The enrolled record for `device`, if any (revoked ones included).
     pub fn device(&self, device: &str) -> BridgeResult<Option<crate::devices::Device>> {
         self.devices.get(device)
+    }
+
+    /// The machines `owner` added, revoked ones included.
+    pub fn owned_by(&self, owner: &str) -> BridgeResult<Vec<crate::devices::Device>> {
+        self.devices.owned_by(owner)
+    }
+
+    /// A one-time code for `owner` to add a machine named `device` ("Add a machine"). The
+    /// names in the hub config are the operator's. Audited without the code.
+    pub fn issue_owned_code(&self, owner: &str, device: &str) -> BridgeResult<String> {
+        if !crate::config::valid_name(device) {
+            return Err(BridgeError::new(
+                "invalid_name",
+                "a machine name is 1 to 63 lowercase letters, digits and dashes, starting with a letter or digit",
+            ));
+        }
+        if self.config.broker(device).is_some() {
+            return Err(BridgeError::new(
+                "name_taken",
+                format!("{device:?} is already in use on this hub; choose another name"),
+            ));
+        }
+        let limit = if self.config.is_owner(owner) {
+            usize::MAX
+        } else {
+            crate::devices::OWNED_LIMIT
+        };
+        let issued = self
+            .devices
+            .issue_owned_code(owner, device, random::<16>(), limit);
+        let outcome = match &issued {
+            Ok(_) => "ok".to_string(),
+            Err(error) => error.code.clone(),
+        };
+        self.event(owner, "web", "link.code_issued", device, "", &outcome);
+        issued
+    }
+
+    /// The machine a live code is for, so `/join` can write its script; audited with
+    /// the machine's name, never the code. Looking does not spend the code.
+    pub fn join_script(&self, code: &str, shell: crate::join::Shell) -> BridgeResult<Option<String>> {
+        let device = self.devices.live_code(code)?;
+        if let Some(device) = &device {
+            let shell = match shell {
+                crate::join::Shell::Sh => "sh",
+                crate::join::Shell::PowerShell => "powershell",
+            };
+            self.event(&format!("device:{device}"), "join", "link.join_script", device, "", shell);
+        }
+        Ok(device)
+    }
+
+    /// Revoke one of `owner`'s machines; its open link closes within seconds.
+    pub fn revoke_owned(&self, owner: &str, device: &str) -> BridgeResult<(bool, usize)> {
+        let result = self.devices.revoke_owned(owner, device);
+        let outcome = match &result {
+            Ok((revoked, cancelled)) => format!("revoked={revoked} codes_cancelled={cancelled}"),
+            Err(error) => error.code.clone(),
+        };
+        self.event(owner, "web", "link.revoke", device, "", &outcome);
+        result
     }
 
     pub fn connected(&self, device: &str) -> bool {
@@ -283,7 +363,11 @@ impl Links {
             Some(LinkFrame::Hello { device, .. }) => Some(device.clone()),
             _ => None,
         };
-        let (device, key) = match self.admit(hello, &nonce) {
+        let Admitted {
+            device,
+            key,
+            joined_for,
+        } = match self.admit(hello, &nonce) {
             Ok(admitted) => admitted,
             Err(error) => {
                 self.refused(claimed.as_deref(), peer, &error);
@@ -316,6 +400,22 @@ impl Links {
             &fingerprint(&key),
             "ok",
         );
+        if let (Some(owner), Some(push)) = (joined_for, self.push.clone()) {
+            let print = fingerprint(&key);
+            let name = device.clone();
+            tokio::spawn(async move {
+                push.notify(
+                    &[owner],
+                    &serde_json::json!({
+                        "title": format!("{name} joined Devagotchi"),
+                        "body": format!("Key {print}. Not you? Open Machines and revoke it."),
+                        "url": "/account",
+                        "tag": format!("devagotchi-machine-{name}"),
+                    }),
+                )
+                .await;
+            });
+        }
         if send(
             &mut sink,
             &HubFrame::Welcome {
@@ -407,10 +507,11 @@ impl Links {
         pending.lock().expect("pending").clear();
     }
 
-    /// Check the device's hello: a configured link broker, a strong key, a strict
-    /// signature over this connection's challenge, and an enrolled, unrevoked key (or a
-    /// valid one-time code that binds it now). Returns the device name and its key.
-    fn admit(&self, hello: Option<LinkFrame>, nonce: &str) -> BridgeResult<(String, String)> {
+    /// Check the device's hello: a configured link broker or a machine an account added,
+    /// a strong key, a strict signature over this connection's challenge, and an enrolled,
+    /// unrevoked key (or a valid one-time code that binds it now). Returns the device name
+    /// and its key.
+    fn admit(&self, hello: Option<LinkFrame>, nonce: &str) -> BridgeResult<Admitted> {
         let refuse = |code: &str, message: String| Err(BridgeError::new(code, message));
         let Some(LinkFrame::Hello {
             version,
@@ -428,15 +529,24 @@ impl Links {
                 format!("hub speaks link protocol {LINK_PROTOCOL_VERSION}, device sent {version}"),
             );
         }
-        match self.config.broker(&device) {
-            Some(entry) if entry.link => {}
-            _ => {
+        // A configured broker on this host is never a link; a name the config does not
+        // know is a machine an account added (checked against its code or record below).
+        let configured = match self.config.broker(&device) {
+            Some(entry) if entry.link => true,
+            Some(_) => {
                 return refuse(
                     "unknown_broker",
-                    format!("{device:?} is not configured as a linked broker on this hub"),
+                    format!("{device:?} is configured as a broker on this hub's host, not a link"),
                 );
             }
-        }
+            None if crate::config::valid_name(&device) => false,
+            None => {
+                return refuse(
+                    "unknown_broker",
+                    format!("{device:?} is not a valid machine name"),
+                );
+            }
+        };
         let key = decode::<32>(&public_key)
             .and_then(|bytes| VerifyingKey::from_bytes(&bytes).ok())
             .filter(|key| !key.is_weak())
@@ -452,19 +562,33 @@ impl Links {
             );
         }
         if let Some(code) = enroll_code {
-            self.devices.enroll(&device, &code, &public_key)?;
+            let bound = self
+                .devices
+                .enroll(&device, &code, &public_key, configured)?;
             self.event(
                 &format!("device:{device}"),
                 "link",
                 "link.enroll",
                 &device,
                 &fingerprint(&public_key),
-                "ok",
+                &match &bound.owner {
+                    Some(owner) => format!("ok owner={owner}"),
+                    None => "ok".into(),
+                },
             );
-            return Ok((device, public_key));
+            return Ok(Admitted {
+                device,
+                key: public_key,
+                joined_for: bound.owner,
+            });
         }
         match self.devices.get(&device)? {
             None => refuse("not_enrolled", format!("{device} has no enrolled key")),
+            // A machine the config stopped naming, that no account added, is no longer served.
+            Some(record) if !configured && record.owner.is_none() => refuse(
+                "unknown_broker",
+                format!("{device:?} is no longer configured on this hub"),
+            ),
             Some(record) if record.revoked_at.is_some() => refuse(
                 "device_revoked",
                 format!("{device} was revoked on this hub"),
@@ -473,7 +597,11 @@ impl Links {
                 "key_mismatch",
                 format!("{device} is enrolled with a different key"),
             ),
-            Some(_) => Ok((device, public_key)),
+            Some(_) => Ok(Admitted {
+                device,
+                key: public_key,
+                joined_for: None,
+            }),
         }
     }
 }
@@ -568,10 +696,13 @@ mod tests {
         let links = links(dir.path());
         let key = SigningKey::from_bytes(&[9; 32]);
         let code = links.devices.issue_code("gus", [4; 16]).unwrap();
-        let (device, _) = links
+        let admitted = links
             .admit(hello(&key, HUB, "gus", "n1", Some(&code)), "n1")
             .unwrap();
-        assert_eq!(device, "gus");
+        assert_eq!(
+            (admitted.device.as_str(), admitted.joined_for),
+            ("gus", None)
+        );
         assert!(
             links
                 .admit(hello(&key, HUB, "gus", "n2", None), "n2")
@@ -605,15 +736,56 @@ mod tests {
             refused(hello(&other, HUB, "gus", "n4", None), "n4"),
             "key_mismatch"
         );
-        // A name the hub does not route to over a link.
+        // A name nobody configured or added.
         assert_eq!(
             refused(hello(&key, HUB, "dabo", "n5", None), "n5"),
-            "unknown_broker"
+            "not_enrolled"
         );
         links.devices.revoke("gus").unwrap();
         assert_eq!(
             refused(hello(&key, HUB, "gus", "n6", None), "n6"),
             "device_revoked"
+        );
+    }
+
+    #[test]
+    fn a_machine_an_account_added_joins_for_that_account_without_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let links = links(dir.path());
+        let key = SigningKey::from_bytes(&[11; 32]);
+        // An operator's code cannot add a name the config does not have.
+        let operator = links.devices.issue_code("unnamed", [1; 16]).unwrap();
+        assert_eq!(
+            links
+                .admit(hello(&key, HUB, "unnamed", "n1", Some(&operator)), "n1")
+                .unwrap_err()
+                .code,
+            "enroll_refused"
+        );
+        let code = links
+            .devices
+            .issue_owned_code("acct-a", "platinum", [2; 16], crate::devices::OWNED_LIMIT)
+            .unwrap();
+        let joined = links
+            .admit(hello(&key, HUB, "platinum", "n2", Some(&code)), "n2")
+            .unwrap();
+        assert_eq!(joined.joined_for.as_deref(), Some("acct-a"));
+        // Reconnecting later is an ordinary signed hello, and nobody is told it joined again.
+        let again = links
+            .admit(hello(&key, HUB, "platinum", "n3", None), "n3")
+            .unwrap();
+        assert_eq!(
+            (again.device.as_str(), again.joined_for),
+            ("platinum", None)
+        );
+        assert_eq!(links.owned_by("acct-a").unwrap().len(), 1);
+        // A name that could never be a broker stops at the door.
+        assert_eq!(
+            links
+                .admit(hello(&key, HUB, "Bad Name", "n4", None), "n4")
+                .unwrap_err()
+                .code,
+            "unknown_broker"
         );
     }
 
