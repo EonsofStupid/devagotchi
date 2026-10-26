@@ -7,6 +7,17 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### Add a machine from the browser (increment 29a)
+- The Machines page (`/account`) has **Add a machine**: a signed-in person names a machine
+  and gets a one-time code for it, shown once, valid 15 minutes, with the installer line for
+  Linux and Windows. The machine that enrolls with it belongs to that account: only it sees
+  and reaches the machine (`machines`, `whoami`, every routed tool) without anyone editing
+  the hub's config, and only it can **Revoke** it. Names the hub config uses, names another
+  account holds (or holds a live code for), and more than 16 machines per account are
+  refused. The owner's phones are told when the machine joins, with its key's fingerprint.
+- The link admits a machine the config does not name only with an account's code or as an
+  account's enrolled machine; an operator's code still joins only a configured broker.
+
 ### `devagotchi connect`: Claude Code, Codex and Claude Desktop in one command (increment 28a)
 - Each client found on the machine (or named) gets an MCP server `devagotchi` running this
   binary: `mcp --hub` (the hosted hub as the signed-in account; the default once

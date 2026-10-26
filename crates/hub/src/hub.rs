@@ -48,6 +48,10 @@ pub struct Machine {
     /// When the machine enrolled, in seconds since the Unix epoch (linked machines).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enrolled_at: Option<u64>,
+    /// The account added this machine itself ("Add a machine"); only it reaches the
+    /// machine, and it can revoke it.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub owned: bool,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -116,44 +120,69 @@ pub struct WhoAmI {
 impl Hub {
     /// The machines `subject` reaches, each with whether it can be used right now.
     pub async fn machine_status(&self, subject: &str) -> Vec<Machine> {
-        let checks = self
-            .config
-            .brokers_for(subject)
+        let configured = self.config.brokers_for(subject);
+        let owned: Vec<Machine> = self
+            .owned(subject)
             .into_iter()
-            .map(|broker| async move {
-                match &broker.socket {
-                    Some(socket) => Machine {
-                        name: broker.name.clone(),
-                        kind: "local",
-                        status: if crate::reachable(socket).await {
-                            "online"
-                        } else {
-                            "offline"
-                        },
-                        enrolled_at: None,
+            .filter(|device| configured.iter().all(|b| b.name != device.name))
+            .map(|device| Machine {
+                status: if device.revoked_at.is_some() {
+                    "revoked"
+                } else if self.links.connected(&device.name) {
+                    "online"
+                } else {
+                    "offline"
+                },
+                name: device.name,
+                kind: "linked",
+                enrolled_at: Some(device.enrolled_at),
+                owned: true,
+            })
+            .collect();
+        let checks = configured.into_iter().map(|broker| async move {
+            match &broker.socket {
+                Some(socket) => Machine {
+                    name: broker.name.clone(),
+                    kind: "local",
+                    status: if crate::reachable(socket).await {
+                        "online"
+                    } else {
+                        "offline"
                     },
-                    None => {
-                        let (status, enrolled_at) = match self.links.device(&broker.name) {
-                            Ok(Some(device)) if device.revoked_at.is_some() => {
-                                ("revoked", Some(device.enrolled_at))
-                            }
-                            Ok(Some(device)) if self.links.connected(&broker.name) => {
-                                ("online", Some(device.enrolled_at))
-                            }
-                            Ok(Some(device)) => ("offline", Some(device.enrolled_at)),
-                            Ok(None) => ("not_enrolled", None),
-                            Err(_) => ("offline", None),
-                        };
-                        Machine {
-                            name: broker.name.clone(),
-                            kind: "linked",
-                            status,
-                            enrolled_at,
+                    enrolled_at: None,
+                    owned: false,
+                },
+                None => {
+                    let (status, enrolled_at) = match self.links.device(&broker.name) {
+                        Ok(Some(device)) if device.revoked_at.is_some() => {
+                            ("revoked", Some(device.enrolled_at))
                         }
+                        Ok(Some(device)) if self.links.connected(&broker.name) => {
+                            ("online", Some(device.enrolled_at))
+                        }
+                        Ok(Some(device)) => ("offline", Some(device.enrolled_at)),
+                        Ok(None) => ("not_enrolled", None),
+                        Err(_) => ("offline", None),
+                    };
+                    Machine {
+                        name: broker.name.clone(),
+                        kind: "linked",
+                        status,
+                        enrolled_at,
+                        owned: false,
                     }
                 }
-            });
-        futures_util::future::join_all(checks).await
+            }
+        });
+        let mut machines = futures_util::future::join_all(checks).await;
+        machines.extend(owned);
+        machines
+    }
+
+    /// The machines `subject` added with codes of its own (increment 29a). A store that
+    /// cannot be read lists none rather than failing the caller's whole request.
+    pub(crate) fn owned(&self, subject: &str) -> Vec<crate::devices::Device> {
+        self.links.owned_by(subject).unwrap_or_default()
     }
 
     pub(crate) fn subject(
@@ -179,15 +208,25 @@ impl Hub {
         broker: &str,
     ) -> Result<Route, Json<BridgeError>> {
         let allowed = self.config.brokers_for(&subject.id);
+        let unknown = || {
+            Err(Json(BridgeError::new(
+                "unknown_broker",
+                format!("no broker named {broker:?} is enrolled"),
+            )))
+        };
         match allowed.iter().find(|b| b.name == broker) {
             Some(entry) => Ok(match &entry.socket {
                 Some(socket) => Route::Local(PathBuf::from(socket)),
                 None => Route::Link(entry.name.clone()),
             }),
-            None if self.config.broker(broker).is_none() => Err(Json(BridgeError::new(
-                "unknown_broker",
-                format!("no broker named {broker:?} is enrolled"),
-            ))),
+            // A machine the caller added is the caller's alone; anyone else is told it
+            // does not exist, so names of other accounts' machines are not revealed.
+            None if self.config.broker(broker).is_none() => match self.links.device(broker) {
+                Ok(Some(device)) if device.owner.as_deref() == Some(subject.id.as_str()) => {
+                    Ok(Route::Link(device.name))
+                }
+                _ => unknown(),
+            },
             None => Err(Json(BridgeError::new(
                 "not_granted",
                 format!("{} holds no grant for broker {broker:?}", subject.id),
@@ -291,12 +330,20 @@ impl Hub {
     ) -> Result<Json<WhoAmI>, Json<BridgeError>> {
         let subject = self.subject(&context)?;
         Ok(Json(WhoAmI {
-            brokers: self
-                .config
-                .brokers_for(&subject.id)
-                .into_iter()
-                .map(|b| b.name.clone())
-                .collect(),
+            brokers: {
+                let mut brokers: Vec<String> = self
+                    .config
+                    .brokers_for(&subject.id)
+                    .into_iter()
+                    .map(|b| b.name.clone())
+                    .collect();
+                for device in self.owned(&subject.id) {
+                    if !brokers.contains(&device.name) {
+                        brokers.push(device.name);
+                    }
+                }
+                brokers
+            },
             boards: {
                 let mut boards = self
                     .boards

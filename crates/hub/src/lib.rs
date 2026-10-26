@@ -275,7 +275,17 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let config = Arc::new(HubConfig::parse(&text)?);
     let devices = Arc::new(devices_at(&state_dir)?);
     let audit = Arc::new(Audit::open(&state_dir.join("audit.sqlite3"))?);
-    let links = Arc::new(Links::new(config.clone(), devices.clone(), audit.clone()));
+    let push = match &config.web {
+        Some(_) => Some(Arc::new(push::Push::open(
+            &state_dir,
+            &config.public_url,
+            devices.clone(),
+        )?)),
+        None => None,
+    };
+    let links = Arc::new(
+        Links::new(config.clone(), devices.clone(), audit.clone()).notifying(push.clone()),
+    );
     let verifier = Arc::new(Verifier::from_config(&config.auth).await?);
     let web = match (&config.web, &config.auth) {
         (
@@ -305,14 +315,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let state = AppState {
         verifier,
         hub: Hub {
-            push: match &config.web {
-                Some(_) => Some(Arc::new(push::Push::open(
-                    &state_dir,
-                    &config.public_url,
-                    devices.clone(),
-                )?)),
-                None => None,
-            },
+            push,
             config: config.clone(),
             audit,
             links,
