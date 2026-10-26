@@ -41,6 +41,10 @@ permissions:
 on:
   pull_request:
   push:
+    # Every commit on main is built, attested and kept as workflow artifacts, so what
+    # runs on our servers is GitHub's build of a known commit, never a hand-built copy.
+    # Only a version tag publishes a release (the operator's act).
+    branches: [main]
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
 
@@ -50,9 +54,9 @@ jobs:
     runs-on: "ubuntu-22.04"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
-      tag: ${{ !github.event.pull_request && github.ref_name || '' }}
-      tag-flag: ${{ !github.event.pull_request && format('--tag={0}', github.ref_name) || '' }}
-      publishing: ${{ !github.event.pull_request }}
+      tag: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+      tag-flag: ${{ startsWith(github.ref, 'refs/tags/') && format('--tag={0}', github.ref_name) || '' }}
+      publishing: ${{ startsWith(github.ref, 'refs/tags/') }}
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
@@ -77,7 +81,7 @@ jobs:
       # but also really annoying to build CI around when it needs secrets to work right.)
       - id: plan
         run: |
-          dist ${{ (!github.event.pull_request && format('host --steps=create --tag={0}', github.ref_name)) || 'plan' }} --output-format=json > plan-dist-manifest.json
+          dist ${{ (startsWith(github.ref, 'refs/tags/') && format('host --steps=create --tag={0}', github.ref_name)) || 'plan' }} --output-format=json > plan-dist-manifest.json
           echo "dist ran successfully"
           cat plan-dist-manifest.json
           echo "manifest=$(jq -c "." plan-dist-manifest.json)" >> "$GITHUB_OUTPUT"
