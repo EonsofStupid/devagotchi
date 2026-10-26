@@ -3,8 +3,8 @@
 //! only granted programs, anywhere its account can read under the `account` policy.
 
 use devagotchi_contracts::{
-    BridgeError, FileContent, FileListInput, FileListing, FileReadInput, MAX_FILE_READ_BYTES,
-    RequestBody, ResponseBody,
+    BridgeError, FileContent, FileEditInput, FileListInput, FileListing, FileReadInput,
+    FileWriteInput, FileWritten, MAX_FILE_READ_BYTES, RequestBody, ResponseBody, WriteMode,
 };
 use rmcp::{
     Json, RoleServer, handler::server::wrapper::Parameters, service::RequestContext, tool,
@@ -44,6 +44,48 @@ pub struct ListDirectoryInput {
     /// Most entries to return, 1 to 1000 (default 200).
     #[serde(default)]
     pub max_entries: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WriteFileInput {
+    /// The machine, by its name from `machines`.
+    pub machine: String,
+    /// Absolute path of the file on that machine.
+    pub path: String,
+    /// The content as text, written exactly as given (UTF-8). Give this or bytes_base64.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// The content as base64 bytes, for anything that is not text.
+    #[serde(default)]
+    pub bytes_base64: Option<String>,
+    /// overwrite (default: replace the whole file, or create it), create (refuse if it
+    /// exists) or append (add to the end). At most 32 KiB per call: append the rest.
+    #[serde(default)]
+    pub mode: WriteMode,
+    /// Overwrite only if the file's SHA-256 is still this (from your last write or edit).
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+    /// Create missing parent directories.
+    #[serde(default)]
+    pub create_dirs: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditFileInput {
+    /// The machine, by its name from `machines`.
+    pub machine: String,
+    /// Absolute path of a UTF-8 text file on that machine.
+    pub path: String,
+    /// Exact text to find, including whitespace and line endings. Include enough around the
+    /// change that it occurs exactly once.
+    pub old_text: String,
+    /// Text to put in its place.
+    pub new_text: String,
+    /// How many times old_text must occur (default 1). A different count changes nothing.
+    #[serde(default)]
+    pub expected_replacements: Option<u32>,
 }
 
 #[tool_router(router = files_router, vis = "pub(crate)")]
@@ -103,6 +145,71 @@ impl Hub {
         {
             ResponseBody::Listing(listing) => Ok(Json(listing)),
             other => Err(unexpected_response("listing", &other)),
+        }
+    }
+    #[tool(
+        name = "write_file",
+        description = "Write a file on one of the user's machines: overwrite (default; the old content is replaced atomically, never half-written), create, or append. Text is written exactly as given. Up to 32 KiB per call; append the rest. Pass expected_sha256 from your last write to refuse if someone changed it meanwhile. Get machine names from `machines`.",
+        title = "Write a file on a machine",
+        annotations(
+            title = "Write a file on a machine",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn write_file(
+        &self,
+        Parameters(input): Parameters<WriteFileInput>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<FileWritten>, Json<BridgeError>> {
+        let body = RequestBody::FileWrite(FileWriteInput {
+            path: input.path,
+            text: input.text,
+            bytes_base64: input.bytes_base64,
+            mode: input.mode,
+            expected_sha256: input.expected_sha256,
+            create_dirs: input.create_dirs,
+        });
+        match self
+            .call("write_file", &input.machine, body, context)
+            .await?
+        {
+            ResponseBody::Written(written) => Ok(Json(written)),
+            other => Err(unexpected_response("written", &other)),
+        }
+    }
+
+    #[tool(
+        name = "edit_file",
+        description = "Change part of a text file on one of the user's machines: replace old_text, found exactly, with new_text. old_text must occur exactly expected_replacements times (default 1), or nothing changes and you are told how many times it occurs. Read the file first and copy old_text from it, with enough context to be unique. Get machine names from `machines`.",
+        title = "Edit a file on a machine",
+        annotations(
+            title = "Edit a file on a machine",
+            read_only_hint = false,
+            destructive_hint = true,
+            idempotent_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn edit_file(
+        &self,
+        Parameters(input): Parameters<EditFileInput>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<FileWritten>, Json<BridgeError>> {
+        let body = RequestBody::FileEdit(FileEditInput {
+            path: input.path,
+            old_text: input.old_text,
+            new_text: input.new_text,
+            expected_replacements: input.expected_replacements.unwrap_or(1),
+        });
+        match self
+            .call("edit_file", &input.machine, body, context)
+            .await?
+        {
+            ResponseBody::Written(written) => Ok(Json(written)),
+            other => Err(unexpected_response("written", &other)),
         }
     }
 }
