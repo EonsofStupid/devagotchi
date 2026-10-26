@@ -1040,8 +1040,19 @@ mod tests {
     fn pause_between_lines() -> (PathBuf, Vec<String>) {
         #[cfg(unix)]
         return shell(&["echo first;", "sleep 3;", "echo second"]);
+        // By full path: the operation's environment is cleared, so cmd.exe has no PATH.
         #[cfg(windows)]
-        return shell(&["echo", "first&", "ping", "-n", "4", "127.0.0.1", ">nul&", "echo", "second"]);
+        return shell(&[
+            "echo",
+            "first&",
+            &system32("PING.EXE").display().to_string(),
+            "-n",
+            "4",
+            "127.0.0.1",
+            ">nul&",
+            "echo",
+            "second",
+        ]);
     }
 
     #[tokio::test]
