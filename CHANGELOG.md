@@ -7,6 +7,19 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### The hub keeps working while Nomen is down (increment 27a)
+- 26 Oct 14:45 UTC: Gold's edge stopped answering, so Nomen did too, and every call to the
+  hub on Texas waited 10 s on it and then failed; Claude's connector timed out. Now a token
+  Nomen confirmed keeps working through such an outage, until the token's own expiry and
+  never more than 12 hours after Nomen last confirmed it. A token Nomen never confirmed
+  gets 503 with Retry-After at once instead of after a 10 s wait.
+- After one failure the hub stops making every caller wait on Nomen: one request at a time
+  tries again, after 2 s doubling to 30 s. Nomen gets 3 s to connect and 5 s to answer
+  (was 5 and 10).
+- The outage is logged once when it starts and once when it ends, with how long it lasted
+  and how many requests were honoured meanwhile; per request, at most one line every
+  30 s. `/healthz` gains `issuer`: reachable, down since, last answer, last error.
+
 ### Changing files: `write_file`, `edit_file` (increment 24e)
 - `write_file` overwrites (the default: written beside the file and renamed into place, so
   a reader never sees half of it; permissions carry over), creates (refused when it exists)

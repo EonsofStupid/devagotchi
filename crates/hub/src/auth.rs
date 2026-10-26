@@ -106,6 +106,15 @@ impl Verifier {
         }
     }
 
+    /// Whether the identity provider is answering (Nomen only; the others have no outage
+    /// state to report).
+    pub fn issuer_health(&self) -> Option<crate::nomen::IssuerHealth> {
+        match self {
+            Verifier::Nomen(nomen) => Some(nomen.health()),
+            _ => None,
+        }
+    }
+
     pub fn issuer(&self) -> Option<&str> {
         match self {
             Verifier::Nomen(nomen) => Some(nomen.issuer()),
