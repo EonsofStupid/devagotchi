@@ -180,6 +180,8 @@ impl Links {
             pending: session.pending.clone(),
             id,
         };
+        // A wait is answered when the operation changes or its own timeout passes.
+        let within = CALL_TIMEOUT + body.held_for();
         let request = WireRequest {
             api_version: API_VERSION,
             request: body,
@@ -194,7 +196,7 @@ impl Links {
             }
             Err(mpsc::error::TrySendError::Closed(_)) => return Err(offline(device)),
         }
-        let response = match tokio::time::timeout(CALL_TIMEOUT, rx).await {
+        let response = match tokio::time::timeout(within, rx).await {
             Ok(Ok(response)) => response,
             Ok(Err(_)) => return Err(offline(device)),
             Err(_) => {
@@ -202,7 +204,7 @@ impl Links {
                     "link_timeout",
                     format!(
                         "{device} did not answer within {}s; an admitted operation keeps running there",
-                        CALL_TIMEOUT.as_secs()
+                        within.as_secs()
                     ),
                 ));
             }

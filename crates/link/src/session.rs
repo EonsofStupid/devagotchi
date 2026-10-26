@@ -24,6 +24,9 @@ const HEARTBEAT: Duration = Duration::from_secs(20);
 /// Calls handled at once. Beyond this the link answers `link_busy` instead of queueing,
 /// so a hub cannot make this machine open unbounded broker connections.
 const MAX_IN_FLIGHT: usize = 16;
+/// Waits (requests the broker holds until something changes) have their own pool, so a
+/// caller waiting on many operations never crowds out ordinary calls.
+const MAX_WAITS: usize = 8;
 
 /// Why a connection ended.
 #[derive(Debug)]
@@ -121,16 +124,19 @@ pub async fn connect(config: &LinkConfig, key: &SigningKey, mode: Mode<'_>) -> E
     heartbeat.tick().await;
     let broker = std::path::PathBuf::from(&config.broker);
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT));
+    let waits = Arc::new(tokio::sync::Semaphore::new(MAX_WAITS));
     loop {
         tokio::select! {
             incoming = stream.next() => match incoming {
                 Some(Ok(Message::Text(text))) => match serde_json::from_str::<HubFrame>(&text) {
                     Ok(HubFrame::Call { id, request }) => {
                         let answers = answers_tx.clone();
-                        let Ok(slot) = slots.clone().try_acquire_owned() else {
+                        let held = !request.request.held_for().is_zero();
+                        let (pool, limit) = if held { (&waits, MAX_WAITS) } else { (&slots, MAX_IN_FLIGHT) };
+                        let Ok(slot) = pool.clone().try_acquire_owned() else {
                             let busy = WireResponse::Error(BridgeError::new(
                                 "link_busy",
-                                format!("this machine is already handling {MAX_IN_FLIGHT} calls"),
+                                format!("this machine is already handling {limit} {}", if held { "waits" } else { "calls" }),
                             ));
                             let _ = answers.try_send(LinkFrame::Result { id, response: busy });
                             continue;

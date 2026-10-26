@@ -3,7 +3,7 @@
 use devagotchi_contracts::{
     BridgeError, FileContent, FileEditInput, FileListInput, FileListing, FileReadInput,
     FileWriteInput, FileWritten, GetInput, ListInput, OperationView, OperationsPage, OutputPage,
-    ReadInput, StartInput, StartOutput,
+    ReadInput, StartInput, StartOutput, WaitInput,
 };
 use schemars::{JsonSchema, generate::SchemaSettings};
 use serde_json::Value;
@@ -20,6 +20,7 @@ struct BrokerContracts {
     get_input: GetInput,
     read_input: ReadInput,
     list_input: ListInput,
+    wait_input: WaitInput,
     start_output: StartOutput,
     operation_view: OperationView,
     output_page: OutputPage,

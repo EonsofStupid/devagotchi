@@ -22,6 +22,12 @@ pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R, limit: usize) -> BridgeResult<Vec<u8>> {
+    read_frame_within(reader, limit, IO_TIMEOUT).await
+}
+
+/// Read one frame, allowing `within` for it to arrive: a request the broker holds (a wait)
+/// is answered only when something changes or its own timeout passes.
+pub async fn read_frame_within<R: AsyncRead + Unpin>(reader: &mut R, limit: usize, within: Duration) -> BridgeResult<Vec<u8>> {
     let operation = async {
         let length = reader.read_u32().await.map_err(io_error)? as usize;
         if length == 0 || length > limit {
@@ -31,7 +37,7 @@ pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R, limit: usize) -> B
         reader.read_exact(&mut bytes).await.map_err(io_error)?;
         Ok(bytes)
     };
-    tokio::time::timeout(IO_TIMEOUT, operation).await
+    tokio::time::timeout(within, operation).await
         .map_err(|_| BridgeError::new("ipc_timeout", "Timed out reading a local IPC frame"))?
 }
 
@@ -52,10 +58,11 @@ pub fn io_error(error: std::io::Error) -> BridgeError {
 
 /// One framed request and response on an already authenticated connection.
 async fn exchange<S: AsyncRead + AsyncWrite + Unpin>(stream: &mut S, body: RequestBody) -> BridgeResult<ResponseBody> {
+    let within = IO_TIMEOUT + body.held_for();
     let bytes = serde_json::to_vec(&WireRequest { api_version: API_VERSION, request: body })
         .map_err(|e| BridgeError::new("serialize", e.to_string()))?;
     write_frame(stream, &bytes, MAX_FRAME_BYTES).await?;
-    let bytes = read_frame(stream, MAX_RESPONSE_BYTES).await?;
+    let bytes = read_frame_within(stream, MAX_RESPONSE_BYTES, within).await?;
     let response: WireResponse = serde_json::from_slice(&bytes)
         .map_err(|e| BridgeError::new("invalid_response", e.to_string()))?;
     match response {

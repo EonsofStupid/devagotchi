@@ -7,6 +7,19 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### Waiting, not polling: `operation_wait` (increment 26a)
+- The broker answers `operation_wait` the moment an operation settles (or, with
+  `output_after`, has output past that sequence), or after `timeout_ms` (at most 50 s)
+  unchanged. It sleeps on one change signal that every state change, output frame and
+  cancellation advances; nothing is re-read on a timer. At most 16 waits are held at once
+  (`wait_busy` beyond), so ordinary requests always get a connection.
+- Local IPC and the machine link allow a held request its wait on top of their usual
+  timeouts; the link keeps waits in their own pool of 8 so they never crowd out calls.
+- The hub's `run` makes one held request instead of asking every 50–500 ms, and both the
+  hub and the stdio adapter offer `operation_wait`, so an AI waits in one call instead of
+  calling `operation_get` again and again. The broker's own tests and the protocol and
+  end-to-end harnesses settle operations through it.
+
 ### Changing files: `write_file`, `edit_file` (increment 24e)
 - `write_file` overwrites (the default: written beside the file and renamed into place, so
   a reader never sees half of it; permissions carry over), creates (refused when it exists)

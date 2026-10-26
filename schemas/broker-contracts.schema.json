@@ -650,6 +650,34 @@
       ],
       "type": "object"
     },
+    "WaitInput": {
+      "additionalProperties": false,
+      "properties": {
+        "operation_id": {
+          "type": "string"
+        },
+        "output_after": {
+          "description": "Return when output beyond this sequence exists (the cursor you have read up to), as\nwell as when the operation settles. Without it, return only when it settles.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeout_ms": {
+          "description": "Longest to wait, 1..=50000 milliseconds. The answer comes as soon as the operation\nchanges as asked, without polling; at the limit it comes back unchanged.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "operation_id",
+        "timeout_ms"
+      ],
+      "type": "object"
+    },
     "WriteMode": {
       "oneOf": [
         {
@@ -721,6 +749,9 @@
     },
     "start_output": {
       "$ref": "#/$defs/StartOutput"
+    },
+    "wait_input": {
+      "$ref": "#/$defs/WaitInput"
     }
   },
   "required": [
@@ -728,6 +759,7 @@
     "get_input",
     "read_input",
     "list_input",
+    "wait_input",
     "start_output",
     "operation_view",
     "output_page",

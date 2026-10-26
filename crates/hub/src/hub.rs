@@ -6,7 +6,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use devagotchi_contracts::{
     BridgeError, GetInput, OperationView, OutputPage, ReadInput, RequestBody, ResponseBody,
-    StartInput, StartOutput,
+    StartInput, StartOutput, WaitInput,
 };
 use rmcp::{
     Json, RoleServer, ServerHandler, handler::server::wrapper::Parameters, service::RequestContext,
@@ -73,6 +73,12 @@ pub struct StartRouted {
 pub struct GetRouted {
     pub broker: String,
     pub input: GetInput,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct WaitRouted {
+    pub broker: String,
+    pub input: WaitInput,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -238,6 +244,7 @@ impl Hub {
                 input.operation_id.clone()
             }
             RequestBody::OperationRead(input) => input.operation_id.clone(),
+            RequestBody::OperationWait(input) => input.operation_id.clone(),
             RequestBody::FileRead(input) => input.path.clone(),
             RequestBody::FileList(input) => input.path.clone(),
             RequestBody::FileWrite(input) => input.path.clone(),
@@ -382,6 +389,35 @@ impl Hub {
                 "operation_get",
                 &routed.broker,
                 RequestBody::OperationGet(routed.input),
+                context,
+            )
+            .await?
+        {
+            ResponseBody::Operation(output) => Ok(Json(output)),
+            other => Err(unexpected_response("operation", &other)),
+        }
+    }
+
+    #[tool(
+        name = "operation_wait",
+        description = "Wait on the named broker until an operation finishes, or (with output_after, your read cursor) until it has new output, or until timeout_ms (at most 50000) passes. The broker answers the moment it changes; use this instead of calling operation_get or operation_read repeatedly. A wait that times out returns the operation unchanged: wait again.",
+        title = "Wait for an operation",
+        annotations(
+            title = "Wait for an operation",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn operation_wait(
+        &self,
+        Parameters(routed): Parameters<WaitRouted>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<OperationView>, Json<BridgeError>> {
+        match self
+            .call(
+                "operation_wait",
+                &routed.broker,
+                RequestBody::OperationWait(routed.input),
                 context,
             )
             .await?

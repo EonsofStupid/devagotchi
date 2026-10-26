@@ -121,7 +121,8 @@ unannotated = [t["name"] for t in listed if not t.get("title") or not (
     and (t["annotations"]["readOnlyHint"] or "destructiveHint" in t["annotations"]))]
 check("every tool has a title and annotations", not unannotated, ", ".join(unannotated))
 broker_tools = ["approval_request", "approval_wait", "edit_file", "list_directory", "machines", "operation_cancel",
-                "operation_get", "operation_read", "operation_start", "read_file", "run", "whoami", "write_file"]
+                "operation_get", "operation_read", "operation_start", "operation_wait", "read_file", "run", "whoami",
+                "write_file"]
 board_tools = [t for t in tools if t.startswith("board_")]
 check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 18,
       ", ".join(tools))
@@ -140,13 +141,9 @@ check("operation_start routed", not is_error, json.dumps(started)[:200])
 operation = started.get("operation", {}).get("operation_id") if not is_error else None
 state = None
 if operation:
-    for _ in range(300):  # up to 30 s
-        _, view = call("operation_get", {"broker": args.broker, "input": {"operation_id": operation}})
-        state = view.get("state")
-        # Non-terminal states per OperationState::terminal (contracts): accepted, running.
-        if state not in ("accepted", "running"):
-            break
-        time.sleep(0.1)
+    # One held request through the hub: the broker answers when the operation settles.
+    _, view = call("operation_wait", {"broker": args.broker, "input": {"operation_id": operation, "timeout_ms": 30000}})
+    state = view.get("state")
     _, page = call("operation_read", {"broker": args.broker, "input": {"operation_id": operation, "cursor": 0, "max_bytes": 4096}})
     text = "".join(f.get("text", "") for f in page.get("frames", []))
     check("git --version under the broker", state == "succeeded" and "git version" in text, f"state={state} output={text.strip()[:60]!r}")
@@ -163,7 +160,13 @@ if args.run_broker:
     check("run hands back a still-running command", not is_error and slow.get("state") in ("accepted", "running")
           and "operation_read" in (slow.get("next") or ""), json.dumps(slow)[:240])
     if not is_error:
+        # A waiter is woken by the cancellation itself, not by a timer.
+        began = time.monotonic()
         call("operation_cancel", {"broker": args.run_broker, "input": {"operation_id": slow["operation_id"]}})
+        _, stopped = call("operation_wait", {"broker": args.run_broker,
+                                             "input": {"operation_id": slow["operation_id"], "timeout_ms": 30000}})
+        check("operation_wait answers when a cancelled command settles",
+              stopped.get("state") == "cancelled" and time.monotonic() - began < 15, json.dumps(stopped)[:200])
     # A broker that runs only granted programs refuses a command line, in words.
     is_error, refused = call("run", {"machine": args.broker, "command": "echo hi"})
     check("run on a granted-only broker refused", is_error and refused.get("code") == "command_not_allowed",
