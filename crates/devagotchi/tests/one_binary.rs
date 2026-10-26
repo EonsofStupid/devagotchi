@@ -15,7 +15,8 @@ fn help_names_every_command_and_each_answers_help() {
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     for word in [
-        "start", "mcp", "board", "broker", "hub", "link", "login", "logout", "whoami", "version",
+        "start", "mcp", "connect", "board", "broker", "hub", "link", "login", "logout", "whoami",
+        "version",
     ] {
         assert!(
             text.contains(&format!("\n  {word}")),
@@ -23,7 +24,7 @@ fn help_names_every_command_and_each_answers_help() {
         );
     }
     for command in [
-        "start", "mcp", "board", "broker", "hub", "link", "login", "logout", "whoami",
+        "start", "mcp", "connect", "board", "broker", "hub", "link", "login", "logout", "whoami",
     ] {
         let out = devagotchi().args([command, "--help"]).output().unwrap();
         assert!(
@@ -291,4 +292,105 @@ fn start_then_mcp_then_board_from_one_binary() {
     let status = broker.wait().unwrap();
     assert!(status.success(), "broker exit {status}");
     assert!(!endpoint_file.exists(), "endpoint file left behind");
+}
+
+/// `devagotchi connect` against a real broker: every client's config is written, Claude
+/// Code through its own `claude mcp add` (a stand-in records the call; no real client is
+/// touched), and the server is started once and lists its tools.
+#[cfg(target_os = "linux")]
+#[test]
+fn connect_wires_every_client_and_checks_the_server_answers() {
+    use std::{
+        io::{BufRead, BufReader},
+        os::unix::fs::PermissionsExt,
+        process::Stdio,
+        time::{Duration, Instant},
+    };
+
+    let home = tempfile::tempdir().unwrap();
+    let state = home.path().join("state");
+    let codex = home.path().join("codex");
+    let xdg = home.path().join("xdg");
+    let bin = home.path().join("bin");
+    let calls = home.path().join("claude-calls");
+    for dir in [&codex, &xdg.join("Claude"), &bin] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(
+        bin.join("claude"),
+        format!("#!/bin/sh\necho \"$*\" >> {}\n", calls.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    std::fs::write(codex.join("config.toml"), "model = \"gpt-5\"\n").unwrap();
+    let env = [
+        ("DEVAGOTCHI_STATE_DIR", state.as_os_str().to_owned()),
+        ("DEVAGOTCHI_CONFIG_DIR", home.path().join("config").into_os_string()),
+        ("HOME", home.path().as_os_str().to_owned()),
+        ("CODEX_HOME", codex.as_os_str().to_owned()),
+        ("XDG_CONFIG_HOME", xdg.as_os_str().to_owned()),
+        ("PATH", bin.as_os_str().to_owned()),
+    ];
+
+    // Not signed in and no target named: says what to run, changes nothing.
+    let out = devagotchi().arg("connect").envs(env.iter().cloned()).output().unwrap();
+    assert_eq!(out.status.code(), Some(64));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("devagotchi login"));
+    assert_eq!(std::fs::read_to_string(codex.join("config.toml")).unwrap(), "model = \"gpt-5\"\n");
+
+    let mut broker = devagotchi()
+        .args(["start", "--workspace"])
+        .arg(home.path())
+        .envs(env.iter().cloned())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stderr = broker.stderr.take().unwrap();
+    std::thread::spawn(move || for _ in BufReader::new(stderr).lines() {});
+    let started = Instant::now();
+    while !state.join("endpoint").is_file() {
+        assert!(started.elapsed() < Duration::from_secs(30), "broker never wrote its endpoint");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    for round in 0..2 {
+        let out = devagotchi()
+            .args(["connect", "--local"])
+            .envs(env.iter().cloned())
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
+        assert!(text.contains("answered with 4 tools"), "{text}");
+        assert!(text.contains("Claude Code: added") && text.contains("Codex: ") && text.contains("Claude Desktop: "), "{text}");
+        let config = std::fs::read_to_string(codex.join("config.toml")).unwrap();
+        assert!(config.starts_with("model = \"gpt-5\"\n"), "{config}");
+        assert_eq!(config.matches("[mcp_servers.devagotchi]").count(), 1, "round {round}: {config}");
+        assert!(config.contains("args = ['mcp']"), "{config}");
+    }
+    let exe = std::fs::canonicalize(env!("CARGO_BIN_EXE_devagotchi")).unwrap();
+    let desktop: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(xdg.join("Claude").join("claude_desktop_config.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        desktop["mcpServers"]["devagotchi"],
+        serde_json::json!({"command": exe, "args": ["mcp"]})
+    );
+    let recorded = std::fs::read_to_string(&calls).unwrap();
+    assert!(recorded.contains("mcp remove --scope user devagotchi"), "{recorded}");
+    assert!(
+        recorded.contains(&format!("mcp add --scope user devagotchi -- {} mcp", exe.display())),
+        "{recorded}"
+    );
+    assert!(std::fs::read_dir(&codex).unwrap().any(|e| e
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .starts_with("config.toml.bak-")));
+
+    let _ = broker.kill();
+    let _ = broker.wait();
 }

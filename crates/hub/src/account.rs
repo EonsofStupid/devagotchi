@@ -623,6 +623,11 @@ async fn logout(args: &[String], path: &Path) -> Outcome {
     Ok(())
 }
 
+/// Whether an account (not `--local`, not past its offline grace) is on file.
+pub fn signed_in(path: &Path) -> bool {
+    matches!(read(path), Ok(Some(Stored::Account(account))) if account.standing(unix_now()) != Standing::Expired)
+}
+
 /// The account on file, refreshed when due and Nomen answers; otherwise as it stands.
 /// What comes back is written to the file only when the refresh succeeded.
 pub async fn current(path: &Path) -> Result<Option<Stored>, String> {

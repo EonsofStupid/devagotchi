@@ -7,6 +7,19 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### `devagotchi connect`: Claude Code, Codex and Claude Desktop in one command (increment 28a)
+- Each client found on the machine (or named) gets an MCP server `devagotchi` running this
+  binary: `mcp --hub` (the hosted hub as the signed-in account; the default once
+  `devagotchi login` ran) or `mcp` with `--local`. Claude Code through its own
+  `claude mcp add --scope user`; Codex as `[mcp_servers.devagotchi]` in config.toml
+  (`CODEX_HOME` honoured, `tool_timeout_sec = 120` because a wait is held up to 50 s);
+  Claude Desktop as `mcpServers.devagotchi`. Every file is backed up and written whole;
+  running it again replaces Devagotchi's entry and nothing else.
+- Then the server is started once and asked for its tools: the answer is whether it works.
+- The hosted hub's default URL is `https://app.devagotchi.com` (was devagotchi.com, which
+  now redirects there; the relay never follows redirects, so `mcp --hub` and
+  `board bind --hub` without a URL failed).
+
 ### Changing files: `write_file`, `edit_file` (increment 24e)
 - `write_file` overwrites (the default: written beside the file and renamed into place, so
   a reader never sees half of it; permissions carry over), creates (refused when it exists)
