@@ -6,6 +6,7 @@
 //! ```text
 //! devagotchi start                 this user's broker, no paths to remember
 //! devagotchi mcp                   the stdio MCP adapter an agent runs; finds that broker
+//! devagotchi connect               point Claude Code, Codex and Claude Desktop at it
 //! devagotchi board <verb> …        the project's ticket board
 //! devagotchi broker run …          the broker with explicit paths
 //! devagotchi hub serve|enroll|revoke|devices …
@@ -26,6 +27,7 @@ Usage: devagotchi <command> [options]
   start        run this user's broker (first run writes its config); Ctrl+C stops it
   mcp          the stdio MCP adapter your agent runs; finds the broker `start` left running
                (mcp --hub [URL]: the hosted hub instead, as the account you signed in with)
+  connect      point Claude Code, Codex and Claude Desktop at Devagotchi, then check it answers
   board        the project's ticket board: prime, claim, beat, note, done, handoff … (board --help)
   broker       the broker with explicit paths: broker run --state-dir DIR --config FILE
   hub          the hub: hub serve | enroll | revoke | devices (hub --help)
@@ -52,6 +54,7 @@ fn run(args: Vec<OsString>) -> ExitCode {
     match command.to_str() {
         Some("start") => start::run(args),
         Some("mcp") => mcp(args),
+        Some("connect") => connect(args),
         Some("board") => devagotchi_hub::board_cli(
             args,
             paths::config_dir().map(|d| d.join(devagotchi_hub::account::FILE_NAME)),
@@ -94,6 +97,54 @@ fn account(verb: &str, args: Vec<OsString>) -> ExitCode {
         args,
         config_dir.join(devagotchi_hub::account::FILE_NAME),
     )
+}
+
+/// `devagotchi connect`: the machine as the clients' config files and PATH describe it.
+fn connect(args: Vec<OsString>) -> ExitCode {
+    let exe = match std::env::current_exe().and_then(|exe| exe.canonicalize()) {
+        Ok(exe) => dunce_path(exe),
+        Err(error) => {
+            eprintln!("devagotchi connect: cannot find this binary: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let home = paths::home();
+    let env_dir = |name: &str| {
+        std::env::var_os(name)
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_absolute())
+    };
+    let app_config = if cfg!(windows) {
+        env_dir("APPDATA")
+    } else if cfg!(target_os = "macos") {
+        home.as_ref()
+            .map(|h| h.join("Library").join("Application Support"))
+    } else {
+        env_dir("XDG_CONFIG_HOME").or_else(|| home.as_ref().map(|h| h.join(".config")))
+    };
+    let signed_in = paths::config_dir()
+        .map(|d| d.join(devagotchi_hub::account::FILE_NAME))
+        .is_some_and(|f| devagotchi_hub::account::signed_in(&f));
+    devagotchi_mcp::connect::cli(
+        args,
+        devagotchi_mcp::connect::Machine {
+            exe,
+            home,
+            codex_home: env_dir("CODEX_HOME"),
+            app_config,
+            path: std::env::var_os("PATH"),
+            signed_in,
+        },
+    )
+}
+
+/// Windows `canonicalize` answers `\\?\C:\…`, which other programs may not accept.
+fn dunce_path(path: std::path::PathBuf) -> std::path::PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => std::path::PathBuf::from(rest),
+        _ => path,
+    }
 }
 
 /// `devagotchi mcp [--socket ENDPOINT]`: without the flag, the endpoint `devagotchi start`

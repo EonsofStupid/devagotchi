@@ -885,6 +885,7 @@ dependencies = [
  "devagotchi-ipc",
  "rmcp",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
