@@ -15,6 +15,15 @@ heading. Agents draft the fragments below; they never tag.
 - Lapsed leases are expired when they lapse: the reaper sleeps until the first lease on
   any open board ends, or until a board changes, instead of sweeping every 60 s.
 
+### Process exits are events on Windows (increment 26d)
+- The root's exit is the wait on its process handle (registered with the system thread
+  pool by the runtime), not a 20 ms look. Each Job Object gets its own I/O completion
+  port, associated before the root is assigned; a listener thread advances a signal on
+  every member-exit and active-process-zero notice, and the broker queries the job only
+  then. Windows documents job notices as not guaranteed to arrive, so while members
+  outlive the root the job is also queried once a second (never while the root runs).
+- Termination waits for the job's notice instead of looking every 20 ms.
+
 ### Process exits are events on Linux (increment 26c)
 - The broker no longer wakes every 20 ms while a command runs. On Linux it holds a pidfd
   for the unreaped root (readable when it exits, Linux 5.3+) and sleeps until the root
