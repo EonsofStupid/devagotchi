@@ -176,9 +176,27 @@ impl OwnedTree {
         Ok(tree)
     }
 
+    /// Returns when the root has exited. (Increment 26d replaces this look-every-20-ms
+    /// with the process handle's own wait.)
+    pub(crate) async fn root_exit(&self, child: &mut Child) -> BridgeResult<()> {
+        while !self.root_exited(child)? {
+            sleep(Duration::from_millis(20)).await;
+        }
+        Ok(())
+    }
+
+    /// Returns when no process in the job is active. (Increment 26d replaces this with
+    /// the job's completion-port notification.)
+    pub(crate) async fn members_settled(&self) -> BridgeResult<()> {
+        while self.has_executing_members()? {
+            sleep(Duration::from_millis(20)).await;
+        }
+        Ok(())
+    }
+
     /// Observes root exit through the owned process handle, which also keeps
     /// the root's identity from being reused.
-    pub(crate) fn root_exited(&self, child: &Child) -> BridgeResult<bool> {
+    fn root_exited(&self, child: &Child) -> BridgeResult<bool> {
         let Some(process) = child.raw_handle() else {
             return Ok(true);
         };
@@ -195,7 +213,7 @@ impl OwnedTree {
         }
     }
 
-    pub(crate) fn has_executing_members(&self) -> BridgeResult<bool> {
+    fn has_executing_members(&self) -> BridgeResult<bool> {
         let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
         if unsafe {
             QueryInformationJobObject(
