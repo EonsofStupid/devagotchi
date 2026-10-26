@@ -15,6 +15,19 @@ heading. Agents draft the fragments below; they never tag.
 - Lapsed leases are expired when they lapse: the reaper sleeps until the first lease on
   any open board ends, or until a board changes, instead of sweeping every 60 s.
 
+### Process exits are events on Linux (increment 26c)
+- The broker no longer wakes every 20 ms while a command runs. On Linux it holds a pidfd
+  for the unreaped root (readable when it exits, Linux 5.3+) and sleeps until the root
+  ends, a stop is requested or the deadline passes. Members that outlive the root are
+  waited for the same way: /proc is read once, every member found gets a pidfd (checked
+  to still be a member after it is opened; 64 at a time), and /proc is read again only
+  after they have all exited.
+- Cancellation sends SIGTERM and moves to SIGKILL as soon as the group has left, instead
+  of always waiting 200 ms; settlement after SIGKILL is the same event wait, bounded by
+  one second as before.
+- A kernel or sandbox without pidfd_open keeps the previous 20 ms look. Windows keeps it
+  until increment 26d.
+
 ### Waiting, not polling: `operation_wait` (increment 26a)
 - The broker answers `operation_wait` the moment an operation settles (or, with
   `output_after`, has output past that sequence), or after `timeout_ms` (at most 50 s)

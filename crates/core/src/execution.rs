@@ -12,7 +12,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 use tokio::sync::watch;
-use tokio::time::{Instant, sleep, sleep_until, timeout};
+use tokio::time::{Instant, sleep_until, timeout};
 
 const FRAME_BYTES: usize = 1024;
 const GROUP_SETTLE: Duration = Duration::from_millis(1000);
@@ -203,8 +203,13 @@ pub(crate) async fn run_job(
     let mut stderr_task = tokio::spawn(drain_pipe(shared.clone(), id.clone(), "stderr", stderr));
     let mut reason = None;
     let mut observation_error = None;
+    // Sleep until something happens: a stop request, the deadline, the root's exit, then
+    // (the root kept unreaped while its ordinary inherited children still execute; they
+    // stay owned, cancellable and under the same deadline) the last member's exit.
+    let mut root_done = false;
+    let mut control_open = true;
     loop {
-        if let Some(stop) = *control.borrow() {
+        if let Some(stop) = *control.borrow_and_update() {
             reason = Some(stop);
             break;
         }
@@ -212,29 +217,29 @@ pub(crate) async fn run_job(
             reason = Some(StopReason::Deadline);
             break;
         }
-        match tree.root_exited(&child) {
-            Ok(true) => match tree.has_executing_members() {
-                // Keep the root unreaped while its ordinary inherited children
-                // still execute. They remain owned, cancellable, and subject to
-                // the same deadline even after the root program has exited.
-                Ok(false) => break,
-                Ok(true) => {}
-                Err(error) => {
-                    observation_error = Some(error.to_string());
-                    reason = Some(StopReason::ObservationFailure);
-                    break;
-                }
-            },
-            Ok(false) => {}
-            Err(error) => {
+        let observed = tokio::select! {
+            changed = control.changed(), if control_open => {
+                // A closed channel can carry no stop request; stop listening to it.
+                control_open = changed.is_ok();
+                continue;
+            }
+            _ = sleep_until(deadline) => continue,
+            observed = async {
+                if root_done { tree.members_settled().await } else { tree.root_exit(&mut child).await }
+            } => observed,
+        };
+        match (observed, root_done) {
+            (Ok(()), false) => root_done = true,
+            (Ok(()), true) => break,
+            (Err(error), false) => {
                 observation_error = Some(error.to_string());
                 break;
             }
-        }
-        tokio::select! {
-            _ = control.changed() => {},
-            _ = sleep_until(deadline) => {},
-            _ = sleep(Duration::from_millis(20)) => {},
+            (Err(error), true) => {
+                observation_error = Some(error.to_string());
+                reason = Some(StopReason::ObservationFailure);
+                break;
+            }
         }
     }
     let termination_error = if reason.is_some() {
