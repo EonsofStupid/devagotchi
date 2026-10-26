@@ -217,9 +217,17 @@ started = time.monotonic()
 waited = claude.ok("board_wait", {"project": P, "after_seq": last, "timeout_ms": 1200})
 elapsed = time.monotonic() - started
 check("wait returns empty after the timeout", waited == [] and 1.0 <= elapsed < 10, f"{elapsed:.1f}s")
-operator.ok("board_note", {"project": P, "id": second["id"], "body": "wake the waiter"})
-waited = claude.ok("board_wait", {"project": P, "after_seq": last, "timeout_ms": 5000})
-check("wait returns the new event at once", len(waited) == 1 and waited[0]["action"].startswith("note"), json.dumps(waited)[:160])
+# A note written while the wait is held wakes it: the hub sleeps on the board's commit
+# signal, so the answer comes when the note lands, not on a timer.
+import threading
+writer = threading.Timer(0.8, lambda: operator.ok("board_note", {"project": P, "id": second["id"], "body": "wake the waiter"}))
+started = time.monotonic()
+writer.start()
+waited = claude.ok("board_wait", {"project": P, "after_seq": last, "timeout_ms": 20000})
+elapsed = time.monotonic() - started
+writer.join()
+check("a held wait wakes when the note lands", len(waited) == 1 and waited[0]["action"].startswith("note")
+      and 0.7 <= elapsed < 5, f"{elapsed:.2f}s {json.dumps(waited)[:120]}")
 chain = operator.ok("board_verify", {"project": P})
 check("board chain verified", chain.get("ok") is True and chain.get("entries") == last + 1, json.dumps(chain))
 
