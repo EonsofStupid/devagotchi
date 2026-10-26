@@ -12,12 +12,20 @@ pub const MAX_OUTPUT_PAGE_BYTES: usize = 16 * 1024;
 pub struct StartInput {
     /// A caller-created retry key. The same key and inputs return the same operation.
     pub idempotency_key: String,
-    /// Absolute path of an executable granted by the broker operator.
+    /// Absolute path of the program to run, with `args`. On a broker that runs only
+    /// operator-granted programs it must be granted. Leave empty when `command` is given.
+    #[serde(default)]
     pub executable: String,
     /// Exact argument vector. No shell parsing, interpolation, or added command text.
     #[serde(default)]
     pub args: Vec<String>,
-    /// Absolute working directory within the configured workspace; defaults to its root.
+    /// A command line for the machine's own shell (bash or sh on Linux, Windows PowerShell
+    /// on Windows), accepted by a broker that runs commands as its account. Give either
+    /// this or `executable` with `args`, not both.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Absolute working directory; defaults to the workspace. A broker that runs only
+    /// granted programs keeps it within the workspace.
     pub cwd: Option<String>,
     /// Execution deadline, not a client wait timeout. 1..=300000 milliseconds.
     pub deadline_ms: u64,
@@ -141,6 +149,160 @@ pub struct OutputPage {
     pub operation: OperationView,
 }
 
+/// Largest page of file bytes one read returns, so the answer fits one wire frame.
+pub const MAX_FILE_READ_BYTES: usize = 24 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileReadInput {
+    /// Absolute path of the file.
+    pub path: String,
+    /// Byte offset to start at; negative counts back from the end (a tail). Default 0.
+    #[serde(default)]
+    pub offset: i64,
+    /// Bytes to read, 1..=24576 (default 24576). Read on from `next_offset` for more.
+    #[serde(default = "default_file_read_bytes")]
+    pub max_bytes: usize,
+}
+
+fn default_file_read_bytes() -> usize { MAX_FILE_READ_BYTES }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileContent {
+    /// The file's canonical path.
+    pub path: String,
+    /// The file's size in bytes when it was read.
+    pub size: u64,
+    /// Where these bytes start.
+    pub offset: u64,
+    /// The bytes as text, when they are UTF-8 text. A character split at the end of the
+    /// page is left for the next read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The raw bytes, base64, when they are not text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_base64: Option<String>,
+    /// The offset to read on from.
+    pub next_offset: u64,
+    /// Whether this page reached the end of the file.
+    pub eof: bool,
+    pub modified_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileListInput {
+    /// Absolute path of the directory.
+    pub path: String,
+    /// How many levels below it to include, 0..=3 (default 0: its own entries).
+    #[serde(default)]
+    pub depth: u32,
+    /// Most entries to return, 1..=1000 (default 200).
+    #[serde(default = "default_list_entries")]
+    pub max_entries: u32,
+}
+
+fn default_list_entries() -> u32 { 200 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileEntry {
+    /// Path relative to the listed directory, `/`-separated.
+    pub path: String,
+    /// `file`, `dir`, `symlink` or `other`. Symbolic links are listed, never followed.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_ms: Option<u64>,
+    /// Why a directory's own entries are missing (it could not be read).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileListing {
+    /// The directory's canonical path.
+    pub path: String,
+    /// Directories first at each level, then by name.
+    pub entries: Vec<FileEntry>,
+    /// Whether `max_entries` cut the listing short.
+    pub truncated: bool,
+}
+
+/// Largest content one write or edit carries, so the request fits one wire frame.
+pub const MAX_FILE_WRITE_BYTES: usize = 32 * 1024;
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteMode {
+    /// Replace the file's whole content (atomically: a new file renamed into place), or
+    /// create it. The default.
+    #[default]
+    Overwrite,
+    /// Create the file; refuse when it exists.
+    Create,
+    /// Add to the end of the file, creating it when missing.
+    Append,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileWriteInput {
+    /// Absolute path of the file.
+    pub path: String,
+    /// The content as text, written as UTF-8 exactly as given. Give this or `bytes_base64`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The content as base64 bytes. At most 32 KiB of content per call; append for more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_base64: Option<String>,
+    #[serde(default)]
+    pub mode: WriteMode,
+    /// Overwrite only if the file's current SHA-256 is this (from an earlier write or
+    /// edit), so a change made in between is not lost.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_sha256: Option<String>,
+    /// Create missing parent directories.
+    #[serde(default)]
+    pub create_dirs: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileEditInput {
+    /// Absolute path of a UTF-8 text file.
+    pub path: String,
+    /// Exact text to find, including whitespace and line endings.
+    pub old_text: String,
+    /// Text to put in its place.
+    pub new_text: String,
+    /// How many times `old_text` must occur (default 1); every occurrence is replaced, and
+    /// a different count changes nothing.
+    #[serde(default = "default_replacements")]
+    pub expected_replacements: u32,
+}
+
+fn default_replacements() -> u32 { 1 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileWritten {
+    /// The file's canonical path.
+    pub path: String,
+    /// Its size after the change.
+    pub size: u64,
+    /// SHA-256 of its whole content after the change: pass it as `expected_sha256` next time.
+    pub sha256: String,
+    /// Whether the file was created.
+    pub created: bool,
+    /// For an edit: how many occurrences were replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacements: Option<u32>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BridgeError {
@@ -170,6 +332,10 @@ pub enum RequestBody {
     OperationRead(ReadInput),
     OperationCancel(GetInput),
     OperationList(ListInput),
+    FileRead(FileReadInput),
+    FileList(FileListInput),
+    FileWrite(FileWriteInput),
+    FileEdit(FileEditInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,6 +352,9 @@ pub enum ResponseBody {
     Operation(OperationView),
     Output(OutputPage),
     Operations(OperationsPage),
+    File(FileContent),
+    Listing(FileListing),
+    Written(FileWritten),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

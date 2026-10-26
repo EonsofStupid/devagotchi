@@ -16,6 +16,299 @@
       ],
       "type": "object"
     },
+    "FileContent": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes_base64": {
+          "description": "The raw bytes, base64, when they are not text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "eof": {
+          "description": "Whether this page reached the end of the file.",
+          "type": "boolean"
+        },
+        "modified_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "next_offset": {
+          "description": "The offset to read on from.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "description": "Where these bytes start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "The file's canonical path.",
+          "type": "string"
+        },
+        "size": {
+          "description": "The file's size in bytes when it was read.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "description": "The bytes as text, when they are UTF-8 text. A character split at the end of the\npage is left for the next read.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "size",
+        "offset",
+        "next_offset",
+        "eof"
+      ],
+      "type": "object"
+    },
+    "FileEditInput": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_replacements": {
+          "default": 1,
+          "description": "How many times `old_text` must occur (default 1); every occurrence is replaced, and\na different count changes nothing.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "new_text": {
+          "description": "Text to put in its place.",
+          "type": "string"
+        },
+        "old_text": {
+          "description": "Exact text to find, including whitespace and line endings.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path of a UTF-8 text file.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "old_text",
+        "new_text"
+      ],
+      "type": "object"
+    },
+    "FileEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "description": "Why a directory's own entries are missing (it could not be read).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "`file`, `dir`, `symlink` or `other`. Symbolic links are listed, never followed.",
+          "type": "string"
+        },
+        "modified_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Path relative to the listed directory, `/`-separated.",
+          "type": "string"
+        },
+        "size": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "FileListInput": {
+      "additionalProperties": false,
+      "properties": {
+        "depth": {
+          "default": 0,
+          "description": "How many levels below it to include, 0..=3 (default 0: its own entries).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_entries": {
+          "default": 200,
+          "description": "Most entries to return, 1..=1000 (default 200).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Absolute path of the directory.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FileListing": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "description": "Directories first at each level, then by name.",
+          "items": {
+            "$ref": "#/$defs/FileEntry"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": "The directory's canonical path.",
+          "type": "string"
+        },
+        "truncated": {
+          "description": "Whether `max_entries` cut the listing short.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "entries",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "FileReadInput": {
+      "additionalProperties": false,
+      "properties": {
+        "max_bytes": {
+          "default": 24576,
+          "description": "Bytes to read, 1..=24576 (default 24576). Read on from `next_offset` for more.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "description": "Byte offset to start at; negative counts back from the end (a tail). Default 0.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "path": {
+          "description": "Absolute path of the file.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FileWriteInput": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes_base64": {
+          "description": "The content as base64 bytes. At most 32 KiB of content per call; append for more.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "create_dirs": {
+          "default": false,
+          "description": "Create missing parent directories.",
+          "type": "boolean"
+        },
+        "expected_sha256": {
+          "description": "Overwrite only if the file's current SHA-256 is this (from an earlier write or\nedit), so a change made in between is not lost.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/WriteMode",
+          "default": "overwrite"
+        },
+        "path": {
+          "description": "Absolute path of the file.",
+          "type": "string"
+        },
+        "text": {
+          "description": "The content as text, written as UTF-8 exactly as given. Give this or `bytes_base64`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FileWritten": {
+      "additionalProperties": false,
+      "properties": {
+        "created": {
+          "description": "Whether the file was created.",
+          "type": "boolean"
+        },
+        "path": {
+          "description": "The file's canonical path.",
+          "type": "string"
+        },
+        "replacements": {
+          "description": "For an edit: how many occurrences were replaced.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "sha256": {
+          "description": "SHA-256 of its whole content after the change: pass it as `expected_sha256` next time.",
+          "type": "string"
+        },
+        "size": {
+          "description": "Its size after the change.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "size",
+        "sha256",
+        "created"
+      ],
+      "type": "object"
+    },
     "GetInput": {
       "additionalProperties": false,
       "properties": {
@@ -305,8 +598,15 @@
           },
           "type": "array"
         },
+        "command": {
+          "description": "A command line for the machine's own shell (bash or sh on Linux, Windows PowerShell\non Windows), accepted by a broker that runs commands as its account. Give either\nthis or `executable` with `args`, not both.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "cwd": {
-          "description": "Absolute working directory within the configured workspace; defaults to its root.",
+          "description": "Absolute working directory; defaults to the workspace. A broker that runs only\ngranted programs keeps it within the workspace.",
           "type": [
             "string",
             "null"
@@ -319,7 +619,8 @@
           "type": "integer"
         },
         "executable": {
-          "description": "Absolute path of an executable granted by the broker operator.",
+          "default": "",
+          "description": "Absolute path of the program to run, with `args`. On a broker that runs only\noperator-granted programs it must be granted. Leave empty when `command` is given.",
           "type": "string"
         },
         "idempotency_key": {
@@ -329,7 +630,6 @@
       },
       "required": [
         "idempotency_key",
-        "executable",
         "deadline_ms"
       ],
       "type": "object"
@@ -349,6 +649,25 @@
         "replayed"
       ],
       "type": "object"
+    },
+    "WriteMode": {
+      "oneOf": [
+        {
+          "const": "overwrite",
+          "description": "Replace the file's whole content (atomically: a new file renamed into place), or\ncreate it. The default.",
+          "type": "string"
+        },
+        {
+          "const": "create",
+          "description": "Create the file; refuse when it exists.",
+          "type": "string"
+        },
+        {
+          "const": "append",
+          "description": "Add to the end of the file, creating it when missing.",
+          "type": "string"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -357,6 +676,27 @@
   "properties": {
     "bridge_error": {
       "$ref": "#/$defs/BridgeError"
+    },
+    "file_content": {
+      "$ref": "#/$defs/FileContent"
+    },
+    "file_edit_input": {
+      "$ref": "#/$defs/FileEditInput"
+    },
+    "file_list_input": {
+      "$ref": "#/$defs/FileListInput"
+    },
+    "file_listing": {
+      "$ref": "#/$defs/FileListing"
+    },
+    "file_read_input": {
+      "$ref": "#/$defs/FileReadInput"
+    },
+    "file_write_input": {
+      "$ref": "#/$defs/FileWriteInput"
+    },
+    "file_written": {
+      "$ref": "#/$defs/FileWritten"
     },
     "get_input": {
       "$ref": "#/$defs/GetInput"
@@ -392,6 +732,13 @@
     "operation_view",
     "output_page",
     "operations_page",
+    "file_read_input",
+    "file_content",
+    "file_list_input",
+    "file_listing",
+    "file_write_input",
+    "file_edit_input",
+    "file_written",
     "bridge_error"
   ],
   "title": "BrokerContracts",

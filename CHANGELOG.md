@@ -14,6 +14,45 @@ heading. Agents draft the fragments below; they never tag.
   checks every archive's SHA-256 and verifies its GitHub attestation, and hands the
   directory to `install-devagotchi.sh --version main-<short> --artifact-dir`.
 
+### Changing files: `write_file`, `edit_file` (increment 24e)
+- `write_file` overwrites (the default: written beside the file and renamed into place, so
+  a reader never sees half of it; permissions carry over), creates (refused when it exists)
+  or appends, up to 32 KiB per call, from text or base64, optionally creating parent
+  directories (under `granted`, only below an ancestor inside the workspace). With
+  `expected_sha256` it refuses (`changed_since_read`) when the file changed since.
+- `edit_file` replaces exact text in a UTF-8 file (up to 8 MiB) only when it occurs the
+  expected number of times (default once); otherwise nothing changes and the answer says
+  how many times it occurs. Both return the file's new size and SHA-256.
+
+### Files in one call: `read_file`, `list_directory` (increment 24d)
+- The broker answers `file_read` and `file_list` directly (no operation, nothing
+  journaled), under the same reach as execution: inside the workspace under `granted`,
+  wherever its account can read under `account`. A read returns up to 24 KiB from an
+  offset (negative: from the end), as text when it is UTF-8 text (never splitting a
+  character) and as base64 otherwise, with `next_offset` and `eof`. A listing goes up to 3
+  levels and 1000 entries, directories first, symbolic links listed and never followed.
+- The hub's `read_file` and `list_directory` tools route them by machine name, audited
+  per call with the path.
+
+### `run`: a command and its output in one call (increment 24c)
+- The hub's `run` tool takes a machine, a command line and optional `cwd`, `wait_seconds`
+  (1–50, default 30) and `timeout_seconds` (1–300, default 300). It starts the command as a
+  broker operation, waits, and returns its state, exit code and output (stdout and stderr in
+  order, the last 32 KiB). A command still running when the wait ends keeps running and
+  comes back with its `operation_id` and how to follow it. One audit entry per `run`. It
+  needs a machine whose broker runs under the `account` policy; a `granted` one refuses it
+  with `command_not_allowed`. The hub's instructions now send an AI to `run` first.
+
+### Commands as the account (increment 24b, ruled 25 Oct)
+- A broker's `exec_policy` (in `broker.json`) is `granted`, the default and the old
+  behaviour, or `account`: the broker runs anything its OS account can, in any directory,
+  with that account's environment, and takes a `command` line for the machine's shell
+  (`$SHELL` when it is bash, zsh, sh, dash or ksh, else bash, else `/bin/sh`; Windows
+  PowerShell with `-EncodedCommand`). `operation_start` carries `command` or `executable` with
+  `args`, never both; a `granted` broker refuses `command` with `command_not_allowed`.
+  The account's permissions are the boundary: a broker that takes commands runs as an
+  unprivileged account. Approvals for risky steps and the installers' default follow.
+
 ### Bounded history, not a lifetime quota (increment 24a)
 - A broker kept every operation it ever admitted and refused all new work once it held
   `max_operations` (64 by default), so a machine stopped taking commands after its 64th.

@@ -61,6 +61,18 @@ config.write_text(json.dumps({
     "max_operations": 64,
     "max_concurrent": 4,
 }))
+# A second broker under the `account` policy: it takes `command` lines, which `run` needs.
+account_workspace = work / "account-workspace"
+account_workspace.mkdir()
+account_state = work / "account-state"
+account_config = work / "account-broker.json"
+account_config.write_text(json.dumps({
+    "workspace": str(account_workspace),
+    "exec_policy": "account",
+    "output_limit_bytes": 262144,
+    "max_operations": 64,
+    "max_concurrent": 4,
+}))
 processes = []
 
 
@@ -117,6 +129,8 @@ try:
     _, ready = start([*broker_cmd, "--state-dir", str(state), "--config", str(config)], "ready:", "broker")
     endpoint = ready.split("ready:", 1)[1].strip()
     print(f"broker endpoint {endpoint}", flush=True)
+    _, ready = start([*broker_cmd, "--state-dir", str(account_state), "--config", str(account_config)], "ready:", "account broker")
+    account_endpoint = ready.split("ready:", 1)[1].strip()
 
     adapter_ok = run_probe(
         [str(HERE / "adapter_probe.py"), endpoint, "--adapter", *adapter_cmd, "--git", git, "--cwd", str(workspace)],
@@ -146,11 +160,12 @@ try:
         "listen": f"127.0.0.1:{port}",
         "public_url": f"http://127.0.0.1:{port}",
         "auth": {"mode": "dev", "tokens_file": str(tokens)},
-        "brokers": [{"name": "local", "socket": endpoint}, {"name": "remote", "link": True}],
+        "brokers": [{"name": "local", "socket": endpoint}, {"name": "remote", "link": True},
+                    {"name": "account", "socket": account_endpoint}],
         "boards": [{"project": "e2e-board", "dir": str(project_dir)}],
         "account_boards": {"unlimited": ["e2e-operator"]},
         "grants": [
-            {"subject": "e2e-operator", "brokers": ["local", "remote"], "boards": ["e2e-board"], "human": True},
+            {"subject": "e2e-operator", "brokers": ["local", "remote", "account"], "boards": ["e2e-board"], "human": True},
             {"subject": "e2e-claude", "boards": ["e2e-board"]},
             {"subject": "e2e-codex", "boards": ["e2e-board"]},
             {"subject": "e2e-reader", "brokers": ["local"]},
@@ -160,7 +175,8 @@ try:
     hub_url = f"http://127.0.0.1:{port}"
     start([*hub_cmd, "serve", "--state-dir", str(hub_state), "--config", str(hub_config)], "ready:", "hub")
     probe = [str(HERE / "hub_probe.py"), hub_url, "--token", token, "--git", git, "--cwd", str(workspace)]
-    hub_ok = run_probe(probe + ["--broker", "local"], "hub probe")
+    hub_ok = run_probe(probe + ["--broker", "local", "--run-broker", "account", "--run-dir", str(account_workspace.resolve())],
+                       "hub probe")
     board_ok = board_init and run_probe(
         [str(HERE / "board_probe.py"), hub_url, "--project", "e2e-board", "--dir", str(project_dir),
          "--devagotchi", str(devagotchi), "--tokens", f"operator={token}",

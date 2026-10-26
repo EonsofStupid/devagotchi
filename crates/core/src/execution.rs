@@ -28,6 +28,9 @@ pub(crate) struct ExecutionSpec {
     pub(crate) args: Vec<String>,
     pub(crate) cwd: PathBuf,
     pub(crate) deadline_ms: u64,
+    /// Run with the broker account's own environment (the `account` policy) rather than a
+    /// cleared one.
+    pub(crate) account_environment: bool,
 }
 
 /// Why the broker asked an operation's process tree to stop.
@@ -151,10 +154,11 @@ pub(crate) async fn run_job(
         return;
     }
     let mut command = Command::new(&spec.executable);
+    command.args(&spec.args).current_dir(&spec.cwd);
+    if !spec.account_environment {
+        command.env_clear();
+    }
     command
-        .args(&spec.args)
-        .current_dir(&spec.cwd)
-        .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
