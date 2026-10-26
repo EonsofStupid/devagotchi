@@ -192,7 +192,7 @@ async fn world() -> World {
         let code = devices
             .issue_code(name, crate::link::random::<16>())
             .unwrap();
-        devices.enroll(name, &code, "test-key").unwrap();
+        devices.enroll(name, &code, "test-key", true).unwrap();
     }
     devices.revoke("old").unwrap();
     let audit = Arc::new(Audit::open(&dir.path().join("audit.sqlite3")).unwrap());
@@ -1264,6 +1264,121 @@ async fn a_new_board_says_how_to_start_and_one_tap_tests_the_phone() {
     );
     assert!(
         html.contains("<h2>Restart nginx</h2><p class=\"meta\">Your AI asks"),
+        "{html}"
+    );
+}
+
+#[tokio::test]
+async fn a_person_adds_a_machine_of_their_own_and_revokes_it() {
+    let w = world().await;
+    let other = w.sign_in("tok-other").await;
+    let owner = w.sign_in("tok-owner").await;
+    let post = |path: &'static str, cookie: &str, site: &'static str, name: &'static str| {
+        w.http
+            .post(format!("{}{path}", w.url))
+            .header(header::COOKIE, cookie.to_string())
+            .header("sec-fetch-site", site)
+            .form(&[("name", name)])
+    };
+    let refused = post("/machines/add", &other, "cross-site", "platinum")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        refused.status(),
+        StatusCode::FORBIDDEN,
+        "another site cannot mint codes"
+    );
+
+    let page = post("/machines/add", &other, "same-origin", "Platinum")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(page.status(), StatusCode::OK);
+    assert_eq!(page.headers()[header::CACHE_CONTROL], "no-store");
+    let body = page.text().await.unwrap();
+    let code = body
+        .split(|c: char| !(c.is_ascii_alphanumeric() || c == '-'))
+        .find(|word| word.starts_with("dvg-") && word.len() == 36)
+        .expect("the code is on the page")
+        .to_string();
+    assert!(body.contains("Add platinum") && body.contains("--device platinum"));
+    // A configured broker's name and an impossible name get no code.
+    for name in ["gus", "no spaces"] {
+        let taken = post("/machines/add", &other, "same-origin", name)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(taken.status(), StatusCode::CONFLICT, "{name}");
+    }
+
+    // The machine enrolls with the code (the link's own tests cover the handshake).
+    let devices = Devices::open(&w.dir.path().join("devices.sqlite3")).unwrap();
+    devices
+        .enroll("platinum", &code, "platinum-key", false)
+        .unwrap();
+    let mine: Value = w
+        .get("/api/v1/me", Some(&other))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        mine["machines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["name"] == "platinum" && m["owned"] == true && m["status"] == "offline"),
+        "{mine}"
+    );
+    // It is that account's alone: not even the hub's owner sees or reaches it.
+    let theirs: Value = w
+        .get("/api/v1/me", Some(&owner))
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(!theirs.to_string().contains("platinum"), "{theirs}");
+    let subject = |id: &str| crate::auth::Subject {
+        id: id.into(),
+        via: "dev",
+        name: None,
+        org: None,
+    };
+    assert!(matches!(
+        w.hub.route(&subject(OTHER), "platinum"),
+        Ok(crate::hub::Route::Link(name)) if name == "platinum"
+    ));
+    assert_eq!(
+        w.hub
+            .route(&subject(OWNER), "platinum")
+            .err()
+            .unwrap()
+            .0
+            .code,
+        "unknown_broker"
+    );
+
+    // Only its owner revokes it, and only from this hub's page.
+    let not_theirs = post("/machines/revoke", &owner, "same-origin", "platinum")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(not_theirs.status(), StatusCode::CONFLICT);
+    let cross = post("/machines/revoke", &other, "cross-site", "platinum")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cross.status(), StatusCode::FORBIDDEN);
+    let revoked = post("/machines/revoke", &other, "same-origin", "platinum")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), StatusCode::SEE_OTHER);
+    assert!(devices.is_revoked("platinum").unwrap());
+    let html = w.get("/account", Some(&other)).await.text().await.unwrap();
+    assert!(
+        html.contains("<tr id=\"platinum\">") && html.contains("Revoked"),
         "{html}"
     );
 }
