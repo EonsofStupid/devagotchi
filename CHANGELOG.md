@@ -7,6 +7,13 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### Our servers run GitHub's builds (increment 25a)
+- The release workflow also runs on every push to `main`: it builds, attests and keeps the
+  archives for each target as workflow artifacts, without publishing a release (a version
+  tag still does that). `scripts/fetch-main-build.sh COMMIT` downloads a commit's build,
+  checks every archive's SHA-256 and verifies its GitHub attestation, and hands the
+  directory to `install-devagotchi.sh --version main-<short> --artifact-dir`.
+
 ### Changing files: `write_file`, `edit_file` (increment 24e)
 - `write_file` overwrites (the default: written beside the file and renamed into place, so
   a reader never sees half of it; permissions carry over), creates (refused when it exists)
