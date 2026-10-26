@@ -63,8 +63,8 @@ devagotchi hub devices --state-dir DIR                # enrolled machines, JSON
 
 With `"downloads": "/opt/devagotchi/current/dist"` in the config, a directory holding
 `VERSION`, `SHA256SUMS` and the files it lists (the GitHub build the hub runs: the archives
-for each target and both installers), "Add a machine" on `/account` hands a signed-in person
-one line per OS:
+for each target and both installers; `scripts/lay-down-dist.sh COMMIT DIR` lays it down),
+"Add a machine" on `/account` hands a signed-in person one line per OS:
 
 ```bash
 curl -fsSL https://app.devagotchi.com/join/dvg-… | sudo sh      # Linux, x86_64 or aarch64

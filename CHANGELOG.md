@@ -17,6 +17,9 @@ heading. Agents draft the fragments below; they never tag.
   link at boot. Fetching it does not spend the code; enrolling does; a dead code's script only
   says so. The hub hashes the listed files at start and leaves `/join` off, reported in
   `/healthz`, when one does not match.
+- `scripts/lay-down-dist.sh COMMIT DIR` lays down that directory from GitHub's build of a main
+  commit: the four archives through `fetch-main-build.sh` (checksum and attestation), the
+  commit's installers, `VERSION` and `SHA256SUMS`.
 - `install-devagotchi.sh --exec-policy granted|account` and `install-devagotchi.ps1
   -ExecPolicy`; the Windows installer also takes the code from `DEVAGOTCHI_ENROLL_CODE`.
 - CI: the Linux host-install job joins a bare account with the one line from a hub serving the
