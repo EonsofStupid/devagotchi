@@ -22,6 +22,7 @@ export type OperationState =
  */
 export interface BrokerContracts {
   bridge_error: BridgeError;
+  changes_input: ChangesInput;
   file_content: FileContent;
   file_edit_input: FileEditInput;
   file_list_input: FileListInput;
@@ -35,6 +36,7 @@ export interface BrokerContracts {
   operations_page: OperationsPage;
   output_page: OutputPage;
   read_input: ReadInput;
+  revision: Revision;
   start_input: StartInput;
   start_output: StartOutput;
   wait_input: WaitInput;
@@ -42,6 +44,22 @@ export interface BrokerContracts {
 export interface BridgeError {
   code: string;
   message: string;
+}
+/**
+ * Wait until the broker's operations change as a list shows them: one admitted, retired,
+ * or moved to another state (output alone is not a change here). For a view that
+ * re-lists only when something changed, instead of on a timer.
+ */
+export interface ChangesInput {
+  /**
+   * The revision your list reflects (from the last answer). Absent: answer at once with
+   * the current revision. A broker that restarted answers at once, too.
+   */
+  after_revision?: number | null;
+  /**
+   * Longest to wait, 1..=50000 milliseconds; at the limit the same revision comes back.
+   */
+  timeout_ms: number;
 }
 export interface FileContent {
   /**
@@ -272,6 +290,12 @@ export interface ReadInput {
    */
   max_bytes?: number;
   operation_id: string;
+}
+/**
+ * The broker's current operations revision.
+ */
+export interface Revision {
+  revision: number;
 }
 export interface StartInput {
   /**

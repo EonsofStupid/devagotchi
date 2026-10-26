@@ -2,8 +2,8 @@
 
 use std::{ffi::OsString, path::{Path, PathBuf}};
 use devagotchi_contracts::{
-    BridgeError, BridgeResult, GetInput, ListInput, OperationsPage, OperationView,
-    OutputPage, ReadInput, RequestBody, ResponseBody,
+    BridgeError, BridgeResult, ChangesInput, GetInput, ListInput, OperationsPage, OperationView,
+    OutputPage, ReadInput, RequestBody, ResponseBody, Revision, WaitInput,
 };
 use serde::Serialize;
 use tauri::{State, WebviewUrl, WebviewWindowBuilder};
@@ -102,6 +102,22 @@ impl Connection {
             other => Err(unexpected("operation", &other)),
         }
     }
+
+    /// Held by the broker until the operation settles or has output past the cursor.
+    async fn wait(&self, input: WaitInput) -> BridgeResult<OperationView> {
+        match self.request(RequestBody::OperationWait(input)).await? {
+            ResponseBody::Operation(value) => Ok(value),
+            other => Err(unexpected("operation", &other)),
+        }
+    }
+
+    /// Held by the broker until the list of operations changes.
+    async fn changes(&self, input: ChangesInput) -> BridgeResult<Revision> {
+        match self.request(RequestBody::OperationsChanged(input)).await? {
+            ResponseBody::Revision(value) => Ok(value),
+            other => Err(unexpected("revision", &other)),
+        }
+    }
 }
 
 fn unexpected(expected: &str, actual: &ResponseBody) -> BridgeError {
@@ -110,6 +126,10 @@ fn unexpected(expected: &str, actual: &ResponseBody) -> BridgeError {
         ResponseBody::Operation(_) => "operation",
         ResponseBody::Output(_) => "output",
         ResponseBody::Operations(_) => "operations",
+        ResponseBody::File(_) => "file",
+        ResponseBody::Listing(_) => "listing",
+        ResponseBody::Written(_) => "written",
+        ResponseBody::Revision(_) => "revision",
     };
     BridgeError::new("unexpected_broker_response", format!("Expected {expected}, received {actual}"))
 }
@@ -139,6 +159,16 @@ async fn cancel_operation(state: State<'_, Connection>, input: GetInput) -> Brid
     state.cancel(input).await
 }
 
+#[tauri::command]
+async fn wait_operation(state: State<'_, Connection>, input: WaitInput) -> BridgeResult<OperationView> {
+    state.wait(input).await
+}
+
+#[tauri::command]
+async fn operations_changed(state: State<'_, Connection>, input: ChangesInput) -> BridgeResult<Revision> {
+    state.changes(input).await
+}
+
 fn local_navigation(scheme: &str, host: Option<&str>, port: Option<u16>, development: bool) -> bool {
     (scheme == "tauri" && host == Some("localhost") && port.is_none())
         || (scheme == "http" && host == Some("tauri.localhost") && port == Some(80))
@@ -150,6 +180,7 @@ pub fn run(connection: Connection) -> tauri::Result<()> {
         .manage(connection)
         .invoke_handler(tauri::generate_handler![
             connection_info, list_operations, get_operation, read_output, cancel_operation,
+            wait_operation, operations_changed,
         ])
         .setup(|app| {
             WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()))
