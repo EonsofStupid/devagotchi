@@ -96,6 +96,15 @@ fn now_ms() -> u64 {
         .min(u64::MAX as u128) as u64
 }
 
+/// An operation ID the broker does not hold: never admitted here, or finished and retired
+/// to keep history bounded.
+fn not_found() -> BridgeError {
+    BridgeError::new(
+        "not_found",
+        "No operation has this ID here. Finished operations are retired, oldest first, once the broker holds its configured max_operations.",
+    )
+}
+
 fn invalid(message: impl Into<String>) -> BridgeError {
     BridgeError::new("invalid_request", message)
 }
@@ -364,6 +373,12 @@ impl Broker {
                 replayed: true,
             });
         }
+        if state.journal.was_retired(&input.idempotency_key)? {
+            return Err(BridgeError::new(
+                "idempotency_key_retired",
+                "This retry key belonged to an operation that finished and was retired from the broker's history. It is never run again; use a new key for new work.",
+            ));
+        }
         if let Some(error) = &state.persistence_fault {
             return Err(error.clone());
         }
@@ -374,10 +389,9 @@ impl Broker {
             ));
         }
         if state.operations.len() >= self.shared.config.max_operations {
-            return Err(BridgeError::new(
-                "operation_limit_reached",
-                "The durable operation admission limit has been reached",
-            ));
+            // History is bounded, not a lifetime quota: the oldest finished operation makes
+            // room. Only when every retained operation is still running is admission refused.
+            state.retire_oldest_finished()?;
         }
         if state.active_count >= self.shared.config.max_concurrent {
             return Err(BridgeError::new(
@@ -450,7 +464,7 @@ impl Broker {
             .operations
             .get(&id)
             .map(|operation| operation.record.view.clone())
-            .ok_or_else(|| BridgeError::new("not_found", "No operation has this ID"))
+            .ok_or_else(|| not_found())
     }
 
     fn list(&self, input: ListInput) -> BridgeResult<OperationsPage> {
@@ -511,10 +525,7 @@ impl Broker {
     fn cancel(&self, id: &str) -> BridgeResult<OperationView> {
         let id = validate_id(id)?;
         let mut state = self.shared.lock();
-        let operation = state
-            .operations
-            .get_mut(&id)
-            .ok_or_else(|| BridgeError::new("not_found", "No operation has this ID"))?;
+        let operation = state.operations.get_mut(&id).ok_or_else(|| not_found())?;
         if !operation.active {
             return Ok(operation.record.view.clone());
         }
@@ -538,10 +549,7 @@ impl Broker {
             return Err(invalid("max_bytes must be 1024..=16384"));
         }
         let state = self.shared.lock();
-        let operation = state
-            .operations
-            .get(&id)
-            .ok_or_else(|| BridgeError::new("not_found", "No operation has this ID"))?;
+        let operation = state.operations.get(&id).ok_or_else(|| not_found())?;
         let record = &operation.record;
         if input.cursor > record.latest_sequence {
             return Err(invalid(
@@ -657,6 +665,35 @@ fn validate_id(id: &str) -> BridgeResult<String> {
 }
 
 impl State {
+    /// Make room for one admission by retiring the operation that finished longest ago.
+    /// A retired operation's ID is no longer found and its key is never run again.
+    fn retire_oldest_finished(&mut self) -> BridgeResult<()> {
+        let oldest = self
+            .operations
+            .iter()
+            .filter(|(_, operation)| !operation.active && operation.record.view.state.terminal())
+            .min_by_key(|(_, operation)| {
+                (
+                    operation.record.view.updated_at_ms,
+                    operation.record.view.created_at_ms,
+                )
+            })
+            .map(|(id, _)| id.clone());
+        let Some(id) = oldest else {
+            return Err(BridgeError::new(
+                "operation_limit_reached",
+                "Every operation the broker holds is still running; wait for one to finish or cancel one",
+            ));
+        };
+        let record = &self.operations[&id].record;
+        self.journal
+            .retire(&id, &record.key, &record.request_digest, now_ms())?;
+        if let Some(operation) = self.operations.remove(&id) {
+            self.keys.remove(&operation.record.key);
+        }
+        Ok(())
+    }
+
     fn fault(&mut self, error: BridgeError) {
         if self.persistence_fault.is_none() {
             eprintln!("Broker admission blocked: {error}");
@@ -964,6 +1001,28 @@ mod tests {
         }
     }
 
+    fn limited_config(directory: &tempfile::TempDir, grants: &[&Path], max: usize) -> BrokerConfig {
+        BrokerConfig {
+            workspace: directory.path().display().to_string(),
+            allowed_executables: grants.iter().map(|g| g.display().to_string()).collect(),
+            output_limit_bytes: 8192,
+            max_operations: max,
+            max_concurrent: 1,
+            exec_policy: ExecPolicy::Granted,
+        }
+    }
+
+    fn input(key: &str, executable: &Path, args: Vec<String>) -> StartInput {
+        StartInput {
+            idempotency_key: key.into(),
+            executable: executable.display().to_string(),
+            args,
+            command: None,
+            cwd: None,
+            deadline_ms: 5_000,
+        }
+    }
+
     #[tokio::test]
     async fn the_account_policy_runs_a_command_line_in_the_machines_shell() {
         let directory = tempfile::tempdir().unwrap();
@@ -1000,6 +1059,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finished_operations_are_retired_so_admission_never_runs_out() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = test_executable();
+        let config = limited_config(&directory, &[&executable], 2);
+        let state = devagotchi_ipc::private_test_state(directory.path());
+        let broker = Broker::open(config.clone(), &state).unwrap();
+        // More operations than the history holds: every one is admitted.
+        let mut ids = Vec::new();
+        for n in 0..5 {
+            let id = start(&broker, &format!("key-{n}"), &executable, vec![], 5_000);
+            settle(&broker, &id).await;
+            ids.push(id);
+        }
+        // The two newest remain; the older ones are retired and no longer found.
+        assert_eq!(broker.get(&ids[0]).unwrap_err().code, "not_found");
+        assert!(broker.get(&ids[3]).is_ok() && broker.get(&ids[4]).is_ok());
+        // A retired key is refused, never run again; a held key still replays.
+        let retired = broker
+            .start(input("key-0", &executable, vec![]))
+            .unwrap_err();
+        assert_eq!(retired.code, "idempotency_key_retired");
+        let replay = broker.start(input("key-4", &executable, vec![])).unwrap();
+        assert!(replay.replayed);
+        broker.shutdown().await;
+        // Both survive a restart.
+        let broker = Broker::open(config, &state).unwrap();
+        let retired = broker
+            .start(input("key-1", &executable, vec![]))
+            .unwrap_err();
+        assert_eq!(retired.code, "idempotency_key_retired");
+        assert_eq!(broker.get(&ids[1]).unwrap_err().code, "not_found");
+        assert!(broker.get(&ids[4]).is_ok());
+        broker.shutdown().await;
+    }
+
+    #[tokio::test]
     async fn only_the_account_policy_takes_a_command_line_and_never_with_a_program() {
         let directory = tempfile::tempdir().unwrap();
         let granted = open_broker(&directory, &[&test_executable()]);
@@ -1014,6 +1109,32 @@ mod tests {
         let blank = account.start(command_line("blank", "  ", None)).unwrap_err();
         assert_eq!(blank.code, "invalid_request");
         account.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn admission_waits_only_while_every_held_operation_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let (long, args) = shell(&["/bin/sleep 30"]);
+        #[cfg(windows)]
+        let (long, args) = (
+            system32("PING.EXE"),
+            vec!["-n".to_owned(), "30".to_owned(), "127.0.0.1".to_owned()],
+        );
+        let quick = test_executable();
+        let broker = Broker::open(
+            limited_config(&directory, &[&long, &quick], 1),
+            &devagotchi_ipc::private_test_state(directory.path()),
+        )
+        .unwrap();
+        let running = start(&broker, "long", &long, args, 60_000);
+        let refused = broker.start(input("quick", &quick, vec![])).unwrap_err();
+        assert_eq!(refused.code, "operation_limit_reached");
+        broker.cancel(&running).unwrap();
+        settle(&broker, &running).await;
+        let admitted = broker.start(input("quick", &quick, vec![])).unwrap();
+        settle(&broker, &admitted.operation.operation_id).await;
+        broker.shutdown().await;
     }
 
     #[tokio::test]
