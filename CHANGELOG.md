@@ -7,6 +7,14 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### Board waits wake on the change itself (increment 26b)
+- Every board write that records an event advances the board's change signal after it
+  commits. `board_wait` and `approval_wait` sleep on it instead of re-reading the store
+  every 500 ms, so a note, a claim or a person's decision on the phone reaches the waiting
+  agent the moment it lands. A write that records nothing (an empty reap) wakes nobody.
+- Lapsed leases are expired when they lapse: the reaper sleeps until the first lease on
+  any open board ends, or until a board changes, instead of sweeping every 60 s.
+
 ### Waiting, not polling: `operation_wait` (increment 26a)
 - The broker answers `operation_wait` the moment an operation settles (or, with
   `output_after`, has output past that sequence), or after `timeout_ms` (at most 50 s)
