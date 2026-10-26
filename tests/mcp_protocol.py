@@ -38,6 +38,7 @@ TOOL_SCHEMAS = {
         {"operation_id", "frames", "next_cursor", "gap", "has_more", "operation"},
     ),
     "operation_cancel": ({"operation_id"}, {"operation_id", "state", "detail"}),
+    "operation_wait": ({"operation_id", "output_after", "timeout_ms"}, {"operation_id", "state", "detail"}),
 }
 
 
@@ -171,8 +172,8 @@ def validate_catalog(response):
     tools = result.get("tools")
     require(isinstance(tools, list), "tools/list did not return a list")
     names = [tool.get("name") for tool in tools]
-    require(len(names) == 4 and set(names) == set(TOOL_SCHEMAS), f"unexpected tools: {names}")
-    require(not result.get("nextCursor"), "four-tool catalog unexpectedly requires another page")
+    require(len(names) == len(TOOL_SCHEMAS) and set(names) == set(TOOL_SCHEMAS), f"unexpected tools: {names}")
+    require(not result.get("nextCursor"), "tool catalog unexpectedly requires another page")
     for tool in tools:
         name = tool["name"]
         input_schema, output_schema = tool.get("inputSchema"), tool.get("outputSchema")
@@ -182,7 +183,7 @@ def validate_catalog(response):
         require(set(input_schema.get("properties", {})) == expected_input, f"{name}: unexpected input properties")
         require(input_schema.get("additionalProperties") is False, f"{name}: input schema permits unknown fields")
         require(expected_output <= set(output_schema.get("properties", {})), f"{name}: missing output properties")
-    return {"tools": sorted(names), "object_output_schemas": 4, "input_schemas_reject_unknown_fields": True}
+    return {"tools": sorted(names), "object_output_schemas": len(names), "input_schemas_reject_unknown_fields": True}
 
 
 def error_code(response, expected):

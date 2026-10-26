@@ -37,6 +37,7 @@ export interface BrokerContracts {
   read_input: ReadInput;
   start_input: StartInput;
   start_output: StartOutput;
+  wait_input: WaitInput;
 }
 export interface BridgeError {
   code: string;
@@ -305,4 +306,17 @@ export interface StartInput {
 export interface StartOutput {
   operation: OperationView;
   replayed: boolean;
+}
+export interface WaitInput {
+  operation_id: string;
+  /**
+   * Return when output beyond this sequence exists (the cursor you have read up to), as
+   * well as when the operation settles. Without it, return only when it settles.
+   */
+  output_after?: number | null;
+  /**
+   * Longest to wait, 1..=50000 milliseconds. The answer comes as soon as the operation
+   * changes as asked, without polling; at the limit it comes back unchanged.
+   */
+  timeout_ms: number;
 }

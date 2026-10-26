@@ -143,10 +143,11 @@ def main():
             return c.tool('operation_start', body), body
 
         def settled(c, operation_id):
-            def observe():
-                value = c.tool('operation_get', {'operation_id': operation_id})
-                return value if value['state'] not in ['accepted', 'running'] else None
-            return wait_until(observe)
+            # One held request; the broker answers when the operation settles.
+            value = c.tool('operation_wait', {'operation_id': operation_id, 'timeout_ms': 8000})
+            if value['state'] in ['accepted', 'running']:
+                raise TimeoutError(f'operation did not settle within the wait: {value}')
+            return value
 
         def all_output(c, operation_id):
             frames = []
@@ -166,9 +167,9 @@ def main():
             launch_broker()
             c = client()
             catalog = c.rpc('tools/list', {})['tools']
-            assert {t['name'] for t in catalog} == {'operation_start', 'operation_get', 'operation_read', 'operation_cancel'}
+            assert {t['name'] for t in catalog} == {'operation_start', 'operation_get', 'operation_read', 'operation_cancel', 'operation_wait'}
             assert all(t.get('outputSchema') for t in catalog), catalog
-            passed('stdio_initialize_and_typed_tool_catalog', protocol='2025-11-25', tools=4)
+            passed('stdio_initialize_and_typed_tool_catalog', protocol='2025-11-25', tools=len(catalog))
 
             expected = 'Start: € 🍀\n'.encode()
             code = 'import os,time\n' + f'data={expected!r}\n' + 'for b in data:\n os.write(1,bytes([b]));time.sleep(0.01)\nos.write(2,b"stderr-ok\\n")'
