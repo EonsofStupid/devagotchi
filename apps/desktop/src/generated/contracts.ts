@@ -116,7 +116,14 @@ export interface StartInput {
    */
   args?: string[];
   /**
-   * Absolute working directory within the configured workspace; defaults to its root.
+   * A command line for the machine's own shell (bash or sh on Linux, Windows PowerShell
+   * on Windows), accepted by a broker that runs commands as its account. Give either
+   * this or `executable` with `args`, not both.
+   */
+  command?: string | null;
+  /**
+   * Absolute working directory; defaults to the workspace. A broker that runs only
+   * granted programs keeps it within the workspace.
    */
   cwd?: string | null;
   /**
@@ -124,9 +131,10 @@ export interface StartInput {
    */
   deadline_ms: number;
   /**
-   * Absolute path of an executable granted by the broker operator.
+   * Absolute path of the program to run, with `args`. On a broker that runs only
+   * operator-granted programs it must be granted. Leave empty when `command` is given.
    */
-  executable: string;
+  executable?: string;
   /**
    * A caller-created retry key. The same key and inputs return the same operation.
    */

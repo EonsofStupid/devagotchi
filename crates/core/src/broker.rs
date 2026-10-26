@@ -30,11 +30,26 @@ fn default_max_concurrent() -> usize {
     4
 }
 
+/// What a broker will run. `granted` (the default): only the operator's
+/// `allowed_executables`, with exact arguments, in the workspace. `account`: anything its
+/// own OS account can run, including a `command` line for the machine's shell, in any
+/// directory, with the account's environment; the account's permissions are the boundary.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecPolicy {
+    #[default]
+    Granted,
+    Account,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrokerConfig {
     pub workspace: String,
+    #[serde(default)]
     pub allowed_executables: Vec<String>,
+    #[serde(default)]
+    pub exec_policy: ExecPolicy,
     #[serde(default = "default_output_limit")]
     pub output_limit_bytes: usize,
     #[serde(default = "default_max_operations")]
@@ -172,6 +187,7 @@ impl Broker {
             "desktop-bridge-execution-v1",
             path_string(&workspace)?,
             grants,
+            config.exec_policy,
             config.output_limit_bytes,
             config.max_operations,
             config.max_concurrent,
@@ -262,22 +278,49 @@ impl Broker {
         if !(1..=300_000).contains(&input.deadline_ms) {
             return Err(invalid("deadline_ms must be 1..=300000"));
         }
-        let executable = canonical_existing(&input.executable, "executable", "invalid_request")?;
-        if !self.shared.executables.contains(&executable) {
-            return Err(BridgeError::new(
-                "executable_not_allowed",
-                "The canonical executable path has no operator grant",
-            ));
-        }
-        let metadata = executable
-            .metadata()
-            .map_err(|error| invalid(error.to_string()))?;
-        if !platform::is_directly_executable(&executable, &metadata) {
-            return Err(invalid(format!(
-                "Executable is not an executable regular file{}",
-                platform::EXECUTABLE_RULE
-            )));
-        }
+        let account = self.shared.config.exec_policy == ExecPolicy::Account;
+        let (executable, args) = match &input.command {
+            Some(command) => {
+                if !account {
+                    return Err(BridgeError::new(
+                        "command_not_allowed",
+                        "This machine's broker runs only operator-granted programs with exact arguments: pass executable and args instead of command",
+                    ));
+                }
+                if !input.executable.is_empty() || !input.args.is_empty() {
+                    return Err(invalid(
+                        "Give either command, or executable with args, not both",
+                    ));
+                }
+                if command.trim().is_empty() || command.len() > 16 * 1024 || command.contains('\0')
+                {
+                    return Err(invalid(
+                        "command must be 1..=16384 UTF-8 bytes without NUL bytes",
+                    ));
+                }
+                platform::shell_command(command)
+            }
+            None => {
+                let executable =
+                    canonical_existing(&input.executable, "executable", "invalid_request")?;
+                if !account && !self.shared.executables.contains(&executable) {
+                    return Err(BridgeError::new(
+                        "executable_not_allowed",
+                        "The canonical executable path has no operator grant",
+                    ));
+                }
+                let metadata = executable
+                    .metadata()
+                    .map_err(|error| invalid(error.to_string()))?;
+                if !platform::is_directly_executable(&executable, &metadata) {
+                    return Err(invalid(format!(
+                        "Executable is not an executable regular file{}",
+                        platform::EXECUTABLE_RULE
+                    )));
+                }
+                (executable, input.args.clone())
+            }
+        };
         let cwd = match &input.cwd {
             Some(cwd) => canonical_existing(cwd, "cwd", "invalid_request")?,
             None => self.shared.workspace.clone(),
@@ -285,7 +328,7 @@ impl Broker {
         if !cwd.is_dir() {
             return Err(invalid("cwd must be an existing directory"));
         }
-        if !cwd.starts_with(&self.shared.workspace) {
+        if !account && !cwd.starts_with(&self.shared.workspace) {
             return Err(BridgeError::new(
                 "cwd_outside_workspace",
                 "The canonical cwd is outside the configured workspace",
@@ -294,7 +337,7 @@ impl Broker {
         let bytes = serde_json::to_vec(&(
             &self.shared.config_identity,
             path_string(&executable)?,
-            &input.args,
+            &args,
             path_string(&cwd)?,
             input.deadline_ms,
         ))
@@ -302,9 +345,10 @@ impl Broker {
         Ok((
             ExecutionSpec {
                 executable,
-                args: input.args.clone(),
+                args,
                 cwd,
                 deadline_ms: input.deadline_ms,
+                account_environment: account,
             },
             hex::encode(Sha256::digest(bytes)),
         ))
@@ -361,7 +405,11 @@ impl Broker {
             operation_id: id.clone(), executable: path_string(&spec.executable)?, args: spec.args.clone(),
             cwd: path_string(&spec.cwd)?, deadline_ms: spec.deadline_ms, state: OperationState::Accepted,
             created_at_ms: timestamp, updated_at_ms: timestamp, exit_code: None,
-            detail: Some("Admission committed; the independent broker job owns execution. Executable grants and cwd checks do not sandbox the executable.".into()),
+            detail: Some(if spec.account_environment {
+                "Admission committed; the independent broker job owns execution. It runs as the broker's own account with that account's environment; this is not a sandbox.".into()
+            } else {
+                "Admission committed; the independent broker job owns execution. Executable grants and cwd checks do not sandbox the executable.".into()
+            }),
             ownership_scope: SCOPE.into(), cancellation_requested: false, output_complete: false,
         };
         let record = JournalOperation {
@@ -693,7 +741,14 @@ impl Shared {
         }
         operation.record.view.state = OperationState::Running;
         operation.record.view.updated_at_ms = now_ms();
-        operation.record.view.detail = Some(platform::RUNNING_DETAIL.into());
+        operation.record.view.detail = Some(
+            if self.config.exec_policy == ExecPolicy::Account {
+                platform::RUNNING_DETAIL_ACCOUNT
+            } else {
+                platform::RUNNING_DETAIL
+            }
+            .into(),
+        );
         let view = operation.record.view.clone();
         if let Err(error) = state.journal.update(&view) {
             state.fault(error);
@@ -845,6 +900,7 @@ mod tests {
             output_limit_bytes: 65_536,
             max_operations: 8,
             max_concurrent: 4,
+            exec_policy: ExecPolicy::Granted,
         };
         Broker::open(config, &devagotchi_ipc::private_test_state(directory.path())).unwrap()
     }
@@ -861,6 +917,7 @@ mod tests {
                 idempotency_key: key.into(),
                 executable: executable.display().to_string(),
                 args,
+                command: None,
                 cwd: None,
                 deadline_ms,
             })
@@ -870,7 +927,12 @@ mod tests {
     }
 
     async fn settle(broker: &Broker, id: &str) -> OperationView {
-        let deadline = Instant::now() + Duration::from_secs(20);
+        settle_within(broker, id, 20).await
+    }
+
+    /// Windows PowerShell's first start on a fresh CI image can take tens of seconds.
+    async fn settle_within(broker: &Broker, id: &str, seconds: u64) -> OperationView {
+        let deadline = Instant::now() + Duration::from_secs(seconds);
         loop {
             let view = broker.get(id).unwrap();
             if view.state.terminal() {
@@ -916,6 +978,29 @@ mod tests {
         broker.shutdown().await;
     }
 
+    fn account_broker(directory: &tempfile::TempDir) -> Arc<Broker> {
+        let config = BrokerConfig {
+            workspace: directory.path().display().to_string(),
+            allowed_executables: vec![],
+            exec_policy: ExecPolicy::Account,
+            output_limit_bytes: 65_536,
+            max_operations: 8,
+            max_concurrent: 4,
+        };
+        Broker::open(config, &devagotchi_ipc::private_test_state(directory.path())).unwrap()
+    }
+
+    fn command_line(key: &str, line: &str, cwd: Option<String>) -> StartInput {
+        StartInput {
+            idempotency_key: key.into(),
+            executable: String::new(),
+            args: vec![],
+            command: Some(line.into()),
+            cwd,
+            deadline_ms: 120_000,
+        }
+    }
+
     fn limited_config(directory: &tempfile::TempDir, grants: &[&Path], max: usize) -> BrokerConfig {
         BrokerConfig {
             workspace: directory.path().display().to_string(),
@@ -923,6 +1008,7 @@ mod tests {
             output_limit_bytes: 8192,
             max_operations: max,
             max_concurrent: 1,
+            exec_policy: ExecPolicy::Granted,
         }
     }
 
@@ -931,9 +1017,45 @@ mod tests {
             idempotency_key: key.into(),
             executable: executable.display().to_string(),
             args,
+            command: None,
             cwd: None,
             deadline_ms: 5_000,
         }
+    }
+
+    #[tokio::test]
+    async fn the_account_policy_runs_a_command_line_in_the_machines_shell() {
+        let directory = tempfile::tempdir().unwrap();
+        let broker = account_broker(&directory);
+        #[cfg(unix)]
+        let line = "echo $((6*7)); test -n \"$HOME\" && echo home-set; exit 3";
+        #[cfg(windows)]
+        let line = "Write-Output (6*7); if ($env:PATHEXT) { Write-Output 'pathext-set' }; exit 3";
+        // Outside the workspace: the account's own permissions are the boundary.
+        let elsewhere = tempfile::tempdir().unwrap();
+        let id = broker
+            .start(command_line(
+                "line",
+                line,
+                Some(elsewhere.path().display().to_string()),
+            ))
+            .unwrap()
+            .operation
+            .operation_id;
+        let view = settle_within(&broker, &id, 120).await;
+        assert_eq!(view.exit_code, Some(3), "{view:?}");
+        let output = output_text(&broker, &id);
+        assert!(output.contains("42"), "{output}");
+        // The account's environment reaches the command (a cleared one would not).
+        #[cfg(unix)]
+        assert!(output.contains("home-set"), "{output}");
+        #[cfg(windows)]
+        assert!(output.contains("pathext-set"), "{output}");
+        // A program nobody granted runs too.
+        let program = start(&broker, "program", &test_executable(), vec![], 20_000);
+        let view = settle(&broker, &program).await;
+        assert!(matches!(view.state, OperationState::Succeeded), "{view:?}");
+        broker.shutdown().await;
     }
 
     #[tokio::test]
@@ -970,6 +1092,23 @@ mod tests {
         assert_eq!(broker.get(&ids[1]).unwrap_err().code, "not_found");
         assert!(broker.get(&ids[4]).is_ok());
         broker.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn only_the_account_policy_takes_a_command_line_and_never_with_a_program() {
+        let directory = tempfile::tempdir().unwrap();
+        let granted = open_broker(&directory, &[&test_executable()]);
+        let refused = granted.start(command_line("line", "echo hi", None)).unwrap_err();
+        assert_eq!(refused.code, "command_not_allowed");
+        granted.shutdown().await;
+        let other = tempfile::tempdir().unwrap();
+        let account = account_broker(&other);
+        let mut both = command_line("both", "echo hi", None);
+        both.executable = test_executable().display().to_string();
+        assert_eq!(account.start(both).unwrap_err().code, "invalid_request");
+        let blank = account.start(command_line("blank", "  ", None)).unwrap_err();
+        assert_eq!(blank.code, "invalid_request");
+        account.shutdown().await;
     }
 
     #[tokio::test]
@@ -1071,6 +1210,7 @@ mod tests {
             output_limit_bytes: 8192,
             max_operations: 1,
             max_concurrent: 1,
+            exec_policy: ExecPolicy::Granted,
         };
         let error = Broker::open(config, &devagotchi_ipc::private_test_state(directory.path()))
             .err()
@@ -1094,6 +1234,7 @@ mod tests {
             output_limit_bytes: 8192,
             max_operations: 1,
             max_concurrent: 2,
+            exec_policy: ExecPolicy::Granted,
         };
         assert!(Broker::open(config, directory.path()).is_err());
     }
@@ -1108,6 +1249,7 @@ mod tests {
             output_limit_bytes: 8192,
             max_operations: 4,
             max_concurrent: 2,
+            exec_policy: ExecPolicy::Granted,
         };
         let state = devagotchi_ipc::private_test_state(directory.path());
         let broker = Broker::open(config, &state).unwrap();
@@ -1117,6 +1259,7 @@ mod tests {
             idempotency_key: "before-fault".into(),
             executable: executable.display().to_string(),
             args: vec![],
+            command: None,
             cwd: None,
             deadline_ms: 3000,
         };
@@ -1153,11 +1296,13 @@ mod tests {
             output_limit_bytes: 8192,
             max_operations: 4,
             max_concurrent: 2,
+            exec_policy: ExecPolicy::Granted,
         };
         let input = StartInput {
             idempotency_key: "survives-restart".into(),
             executable: executable.display().to_string(),
             args: vec![],
+            command: None,
             cwd: None,
             deadline_ms: 1000,
         };

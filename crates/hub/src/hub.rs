@@ -306,7 +306,7 @@ impl Hub {
 
     #[tool(
         name = "operation_start",
-        description = "Start a broker-owned operation on the named broker using an explicitly granted executable and exact arguments. The broker validates the workspace, deadline and idempotency key; reuse the same key and inputs to reconcile a lost response.",
+        description = "Start a broker-owned operation on the named broker: a `command` line for the machine's shell (bash or sh on Linux, PowerShell on Windows) on a machine whose broker runs commands as its account, or an `executable` with exact `args` (on other machines it must be operator-granted). The broker validates the deadline and idempotency key; reuse the same key and inputs to reconcile a lost response.",
         title = "Run a program on a machine",
         annotations(
             title = "Run a program on a machine",

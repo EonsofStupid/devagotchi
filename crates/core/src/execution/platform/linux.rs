@@ -25,7 +25,26 @@ pub(crate) const OBSERVATION_FAILED_DETAIL: &str =
     "Process-group observation failed and requested cancellation. ";
 pub(crate) const TERMINATION_UNVERIFIED_DETAIL: &str = " Group termination was not verified";
 pub(crate) const PIPE_TIMEOUT_DETAIL: &str = " Output pipes did not close within one second of root settlement; a descendant may still hold them open. Reading was stopped, output is incomplete, and processes outside the owned group are not tracked or terminated.";
+pub(crate) const RUNNING_DETAIL_ACCOUNT: &str = "Root spawned as the broker's account with its environment, null stdin, and a new Linux process group. Executable behavior is not sandboxed.";
 pub(crate) const EXECUTABLE_RULE: &str = "";
+
+/// The shell a `command` line runs in: the account's `$SHELL` when it is one of the
+/// Bourne family, else bash, else `/bin/sh`. A login shell of `nologin` or `false` (a
+/// service account) is never used.
+pub(crate) fn shell_command(command: &str) -> (std::path::PathBuf, Vec<String>) {
+    let bourne = |path: &Path| {
+        matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("bash" | "zsh" | "sh" | "dash" | "ksh")
+        ) && std::fs::metadata(path).is_ok_and(|metadata| is_directly_executable(path, &metadata))
+    };
+    let shell = std::env::var_os("SHELL")
+        .map(std::path::PathBuf::from)
+        .filter(|path| path.is_absolute() && bourne(path))
+        .or_else(|| Some(std::path::PathBuf::from("/bin/bash")).filter(|path| bourne(path)))
+        .unwrap_or_else(|| std::path::PathBuf::from("/bin/sh"));
+    (shell, vec!["-c".to_owned(), command.to_owned()])
+}
 
 /// A Linux grant or request target must be a regular file with an execute bit.
 pub(crate) fn is_directly_executable(_path: &Path, metadata: &Metadata) -> bool {
