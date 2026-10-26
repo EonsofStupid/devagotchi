@@ -29,6 +29,9 @@ pub(crate) struct JournalOperation {
     pub frames: VecDeque<JournalFrame>,
 }
 
+/// How many retired idempotency keys the journal remembers (refused, never rerun).
+pub(crate) const RETIRED_KEYS: i64 = 4096;
+
 pub(crate) struct Journal {
     connection: Connection,
 }
@@ -140,6 +143,11 @@ impl Journal {
                  raw_bytes BLOB NOT NULL,
                  decoded_text TEXT NOT NULL,
                  PRIMARY KEY(operation_id, sequence)
+             );
+             CREATE TABLE IF NOT EXISTS retired_keys (
+                 idempotency_key TEXT PRIMARY KEY NOT NULL,
+                 request_digest TEXT NOT NULL,
+                 retired_at_ms INTEGER NOT NULL
              );",
             )
             .map_err(persistence)?;
@@ -290,6 +298,60 @@ impl Journal {
             ));
         }
         transaction.commit().map_err(persistence)
+    }
+
+    /// Retire a finished operation: its record and output go, and its idempotency key is
+    /// kept in `retired_keys` so a retry with that key is refused rather than run again.
+    /// The newest `RETIRED_KEYS` retirements are kept; history is bounded either way.
+    pub(crate) fn retire(
+        &mut self,
+        operation_id: &str,
+        key: &str,
+        request_digest: &str,
+        at_ms: u64,
+    ) -> BridgeResult<()> {
+        let transaction = self.connection.transaction().map_err(persistence)?;
+        transaction
+            .execute(
+                "DELETE FROM output_frames WHERE operation_id=?1",
+                [operation_id],
+            )
+            .map_err(persistence)?;
+        let changed = transaction
+            .execute(
+                "DELETE FROM operations WHERE operation_id=?1",
+                [operation_id],
+            )
+            .map_err(persistence)?;
+        if changed != 1 {
+            return Err(persistence(
+                "retirement did not identify exactly one operation",
+            ));
+        }
+        transaction
+            .execute(
+                "INSERT OR REPLACE INTO retired_keys(idempotency_key,request_digest,retired_at_ms) VALUES(?1,?2,?3)",
+                params![key, request_digest, at_ms],
+            )
+            .map_err(persistence)?;
+        transaction
+            .execute(
+                "DELETE FROM retired_keys WHERE rowid NOT IN (SELECT rowid FROM retired_keys ORDER BY retired_at_ms DESC, rowid DESC LIMIT ?1)",
+                [RETIRED_KEYS],
+            )
+            .map_err(persistence)?;
+        transaction.commit().map_err(persistence)
+    }
+
+    /// Whether `key` belonged to an operation this broker has retired.
+    pub(crate) fn was_retired(&self, key: &str) -> BridgeResult<bool> {
+        self.connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM retired_keys WHERE idempotency_key=?1)",
+                [key],
+                |row| row.get(0),
+            )
+            .map_err(persistence)
     }
 
     pub(crate) fn prune(&mut self, operation_id: &str, earliest: u64) -> BridgeResult<()> {
