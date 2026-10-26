@@ -90,3 +90,58 @@ try {
 } finally {
     Stop-Process -Id $hub.Id -Force -ErrorAction SilentlyContinue
 }
+
+# One line joins a bare PC (29b): a hub on this runner hands out this runner's own build at
+# /dist and a script at /join/<code>.ps1; `irm … | iex` installs it, enrolls and starts it.
+$dist = Join-Path $env:RUNNER_TEMP 'dist'
+New-Item -ItemType Directory -Force -Path $dist | Out-Null
+$zip = "devagotchi-$want.zip"
+Compress-Archive -Force -CompressionLevel Fastest -Path (Resolve-Path 'target\debug\devagotchi.exe').ProviderPath -DestinationPath (Join-Path $dist $zip)
+Copy-Item "$PSScriptRoot\install-devagotchi.ps1" (Join-Path $dist 'install-devagotchi.ps1')
+$sums = foreach ($name in $zip, 'install-devagotchi.ps1') {
+    "$((Get-FileHash -Algorithm SHA256 (Join-Path $dist $name)).Hash.ToLowerInvariant())  $name"
+}
+[System.IO.File]::WriteAllText((Join-Path $dist 'SHA256SUMS'), (($sums -join "`n") + "`n"), $utf8)
+[System.IO.File]::WriteAllText((Join-Path $dist 'VERSION'), "ci-join`n", $utf8)
+$jport = Get-Random -Minimum 40001 -Maximum 60000
+$joinUrl = "http://127.0.0.1:$jport"
+$joinState = Join-Path $env:RUNNER_TEMP 'join-state'
+$joinCfg = Join-Path $env:RUNNER_TEMP 'join-hub.json'
+$joinConfig = [ordered]@{
+    listen = "127.0.0.1:$jport"; public_url = $joinUrl
+    auth = [ordered]@{ mode = 'dev'; tokens_file = $tokens }
+    brokers = @([ordered]@{ name = 'ci-joined'; link = $true })
+    grants = @([ordered]@{ subject = 'ci'; brokers = @('ci-joined') })
+    downloads = $dist
+}
+[System.IO.File]::WriteAllText($joinCfg, ($joinConfig | ConvertTo-Json -Depth 5), $utf8)
+$joinLog = Join-Path $env:RUNNER_TEMP 'join-hub.log'
+$joinHub = Start-Process -FilePath $hubExe -ArgumentList @('hub', 'serve', '--state-dir', "`"$joinState`"", '--config', "`"$joinCfg`"") `
+    -WindowStyle Hidden -RedirectStandardError $joinLog -PassThru
+for ($i = 0; $i -lt 300; $i++) {
+    Start-Sleep -Milliseconds 100
+    if ((Test-Path $joinLog) -and (Select-String -Path $joinLog -Pattern 'devagotchi hub ready:' -Quiet)) { break }
+}
+if (-not (Select-String -Path $joinLog -Pattern 'handing out Devagotchi ci-join' -Quiet)) { Get-Content $joinLog; throw 'the join hub did not take the downloads directory' }
+$ErrorActionPreference = 'Continue'
+$code = "$(& $hubExe hub enroll --state-dir $joinState --device ci-joined 2>$null)".Trim()
+$ErrorActionPreference = 'Stop'
+if (-not $code.StartsWith('dvg-')) { throw "no enrollment code: $code" }
+$joinedRoot = Join-Path $env:LOCALAPPDATA 'Devagotchi'
+try {
+    Invoke-RestMethod -UseBasicParsing "$joinUrl/join/$code.ps1" | Invoke-Expression
+    $broker = Get-Content -Raw (Join-Path $joinedRoot 'config\broker.json')
+    if ($broker -notmatch '"exec_policy":\s*"account"') { throw 'the joined broker does not run commands as its account' }
+    $linkRun = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Devagotchi Link' -ErrorAction SilentlyContinue
+    if (-not $linkRun) { throw 'joined link autostart entry missing' }
+    if ($linkRun.'Devagotchi Link' -match [regex]::Escape($code)) { throw 'the join code leaked into the Run entry' }
+    $git = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+    python tests/hub_probe.py $joinUrl --token $token --broker ci-joined --git $git --cwd (Join-Path $joinedRoot 'workspace')
+    if ($LASTEXITCODE -ne 0) { throw 'hub probe through the joined machine failed' }
+    $spent = Invoke-RestMethod -UseBasicParsing "$joinUrl/join/$code.ps1"
+    if ($spent -notmatch 'already used') { throw 'a spent code still gets a join script' }
+    Write-Host 'ok   one line installed the hub''s build, enrolled ci-joined (account policy) and a real operation ran through it; the spent line only says so'
+    & "$PSScriptRoot\install-devagotchi.ps1" -Root $joinedRoot -Uninstall
+} finally {
+    Stop-Process -Id $joinHub.Id -Force -ErrorAction SilentlyContinue
+}

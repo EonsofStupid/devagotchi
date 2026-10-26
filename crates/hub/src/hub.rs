@@ -32,6 +32,8 @@ pub struct Hub {
     pub boards: Arc<Boards>,
     /// Web Push to people's phones when an approval waits; present with browser sign-in.
     pub push: Option<Arc<crate::push::Push>>,
+    /// The build this hub hands to machines that join it (`/join`, `/dist`), when configured.
+    pub downloads: Option<Arc<crate::downloads::Downloads>>,
 }
 
 /// One machine as a person sees it on their page and in `/api/v1/me`, and as an AI sees it

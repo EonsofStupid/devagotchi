@@ -353,6 +353,21 @@ impl Devices {
         })
     }
 
+    /// The device a live code (unused, unexpired) is for, without spending it: the join
+    /// script is written for that name.
+    pub fn live_code(&self, code: &str) -> BridgeResult<Option<String>> {
+        self.connection
+            .lock()
+            .expect("device lock")
+            .query_row(
+                "SELECT device FROM enroll_codes WHERE code_hash = ?1 AND used_at IS NULL AND expires_at >= ?2",
+                params![code_hash(code), now_secs()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(store_error)
+    }
+
     /// The machines `owner` added, by name, revoked ones included.
     pub fn owned_by(&self, owner: &str) -> BridgeResult<Vec<Device>> {
         let connection = self.connection.lock().expect("device lock");
@@ -676,6 +691,21 @@ mod tests {
         devices
             .issue_owned_code("acct-a", "three", [55; 16], 2)
             .unwrap();
+    }
+
+    #[test]
+    fn a_live_code_names_its_machine_until_it_is_spent_or_expires() {
+        let (_dir, devices) = store();
+        let code = devices.issue_owned_code("acct-a", "platinum", [60; 16], OWNED_LIMIT).unwrap();
+        assert_eq!(devices.live_code(&code).unwrap().as_deref(), Some("platinum"));
+        // Looking does not spend it.
+        assert_eq!(devices.live_code(&code).unwrap().as_deref(), Some("platinum"));
+        devices.enroll("platinum", &code, "aa", false).unwrap();
+        assert_eq!(devices.live_code(&code).unwrap(), None);
+        let other = devices.issue_owned_code("acct-a", "spare", [61; 16], OWNED_LIMIT).unwrap();
+        devices.expire_codes();
+        assert_eq!(devices.live_code(&other).unwrap(), None);
+        assert_eq!(devices.live_code("dvg-0000").unwrap(), None);
     }
 
     #[test]

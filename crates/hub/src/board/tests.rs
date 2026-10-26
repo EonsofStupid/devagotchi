@@ -1274,6 +1274,7 @@ mod bound {
                 MEMBER.to_string(),
             )]))),
             hub: Hub {
+                downloads: None,
                 push: None,
                 boards: Arc::new(crate::board::mcp::Boards::from_config(&config, dir)),
                 config,

@@ -22,7 +22,7 @@ rmcp = { workspace = true, features = ["transport-streamable-http-server"] }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util"] }
 rusqlite = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
