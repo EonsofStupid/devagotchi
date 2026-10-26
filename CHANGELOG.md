@@ -7,6 +7,14 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### Bounded history, not a lifetime quota (increment 24a)
+- A broker kept every operation it ever admitted and refused all new work once it held
+  `max_operations` (64 by default), so a machine stopped taking commands after its 64th.
+  Now the operation that finished longest ago is retired to make room; admission is refused
+  only while every held operation is still running. A retired operation's ID answers
+  `not_found`, and its idempotency key is remembered (the newest 4096) and refused with
+  `idempotency_key_retired`, so a late retry never runs the work twice.
+
 ### One binary (increment 13a)
 - `devagotchi`: one organised command tree over the same libraries — `devagotchi start`
   (this user's broker; the first run writes `broker.json` with the workspace and the
