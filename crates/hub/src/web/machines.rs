@@ -54,7 +54,12 @@ pub async fn add(
     };
     let name = form.name.trim().to_ascii_lowercase();
     match state.hub.links.issue_owned_code(&owner, &name) {
-        Ok(code) => code_page(&state.hub.config.public_url, &name, &code),
+        Ok(code) => code_page(
+            &state.hub.config.public_url,
+            &name,
+            &code,
+            state.hub.downloads.is_some(),
+        ),
         Err(error) => pages::message(
             match error.code.as_str() {
                 "device_store" => StatusCode::SERVICE_UNAVAILABLE,
@@ -87,21 +92,36 @@ pub async fn revoke(
     }
 }
 
-/// The code, once, with what to run on the machine. The page is never cached.
-fn code_page(hub: &str, name: &str, code: &str) -> Response {
+/// The code, once, with what to run on the machine. The page is never cached. With a
+/// downloads directory the hub hands out its own build: one line per OS (`/join`).
+fn code_page(hub: &str, name: &str, code: &str, joinable: bool) -> Response {
     let until = pages::utc(devices::now_secs() + devices::CODE_TTL_SECS);
+    let hub = hub.trim_end_matches('/');
     let (hub, name, code) = (escape(hub), escape(name), escape(code));
+    let how = if joinable {
+        format!(
+            "<p>Paste one line on that machine. It installs Devagotchi, gives the machine its own \
+key, joins it as <strong>{name}</strong> and starts it, now and after every restart. The line \
+works once, until {until}; this page is the only place it is shown.</p>\
+<h2>Linux</h2><pre class=\"what\">curl -fsSL {hub}/join/{code} | sudo sh</pre>\
+<h2>Windows</h2><p class=\"meta\">In PowerShell (no administrator needed):</p>\
+<pre class=\"what\">irm {hub}/join/{code}.ps1 | iex</pre>"
+        )
+    } else {
+        format!(
+            "<p>This code adds one machine as <strong>{name}</strong>. It works once, until {until}, and \
+this page is the only place it is shown.</p><pre class=\"what\">{code}</pre>\
+<h2>Linux</h2><p class=\"meta\">With the Devagotchi installer on that machine:</p>\
+<pre class=\"what\">echo {code} | sudo ./install-devagotchi.sh --hub {hub} --device {name} --enroll --exec-policy account</pre>\
+<h2>Windows</h2><p class=\"meta\">In PowerShell, next to the installer:</p>\
+<pre class=\"what\">.\\install-devagotchi.ps1 -Autostart -ExecPolicy account -Hub {hub} -Device {name} -EnrollCode {code}</pre>"
+        )
+    };
     pages::html(
         StatusCode::OK,
         "Add a machine",
         &format!(
-            "<h1>Add {name}</h1>\
-<p>This code adds one machine as <strong>{name}</strong>. It works once, until {until}, and \
-this page is the only place it is shown.</p><pre class=\"what\">{code}</pre>\
-<h2>Linux</h2><p class=\"meta\">With the Devagotchi installer on that machine:</p>\
-<pre class=\"what\">echo {code} | sudo ./install-devagotchi.sh --hub {hub} --device {name} --enroll</pre>\
-<h2>Windows</h2><p class=\"meta\">In PowerShell as administrator, next to the installer:</p>\
-<pre class=\"what\">.\\install-devagotchi.ps1 -Hub {hub} -Device {name} -EnrollCode {code}</pre>\
+            "<h1>Add {name}</h1>{how}\
 <p class=\"note\">When it joins you get a notification on the phones you turned on, and it \
 shows up under your machines. Only your account reaches it.</p>\
 <p><a class=\"button\" href=\"/account\">Your machines</a></p>"

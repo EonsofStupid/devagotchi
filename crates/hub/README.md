@@ -59,6 +59,27 @@ devagotchi hub revoke  --state-dir DIR --device gus   # link closes within 2 s; 
 devagotchi hub devices --state-dir DIR                # enrolled machines, JSON
 ```
 
+### Add a machine with one line
+
+With `"downloads": "/opt/devagotchi/current/dist"` in the config, a directory holding
+`VERSION`, `SHA256SUMS` and the files it lists (the GitHub build the hub runs: the archives
+for each target and both installers), "Add a machine" on `/account` hands a signed-in person
+one line per OS:
+
+```bash
+curl -fsSL https://app.devagotchi.com/join/dvg-… | sudo sh      # Linux, x86_64 or aarch64
+irm https://app.devagotchi.com/join/dvg-….ps1 | iex             # Windows PowerShell, no admin
+```
+
+`/join/<code>` answers with a script for that code: the machine's name, the build version and
+the SHA-256 of each file it then downloads from `/dist/<file>`. It installs that build, makes
+the machine's own key, enrolls it (the code goes to the installer on stdin, or in the
+environment on Windows), runs commands as the installed account (`exec_policy: account`) and
+starts the broker and the link at boot. Fetching the script does not spend the code; enrolling
+does. A spent, expired or unknown code gets a script that only says so. The hub hashes every
+listed file at start and leaves `/join` off (reported in `/healthz` `downloads`) when one does
+not match. Operator codes from `devagotchi hub enroll` work with `/join` too.
+
 A linked broker that is not connected answers `broker_offline`; one that never enrolled,
 `not_enrolled`; a revoked one, `device_revoked`; one with 64 calls already waiting,
 `link_busy`. A refused device is told only `refused`; why is in the audit. `/healthz` reports each linked broker as

@@ -13,7 +13,8 @@
 # token and leaves the hub running); a hub at a public address on dev tokens is refused before
 # anything is written (D21), and one with an identity provider (--auth-config, nomen) comes up
 # as a second account with the key installed 0600 and sign-in metadata naming the issuer;
-# uninstall stops everything. Exit 0 only when every step holds.
+# one line from a hub's /join installs the hub's build on a bare account, enrolls it with the
+# account exec policy and a real operation runs through it (29b); uninstall stops everything. Exit 0 only when every step holds.
 set -euo pipefail
 
 BIN=$(readlink -f target/debug)
@@ -26,12 +27,13 @@ WORKSPACE=$HOME_DIR/workspace
 COMMON=(--user "$ACCOUNT" --home "$HOME_DIR" --prefix "$PREFIX")
 WORK=$(mktemp -d)
 PROBES=/tmp/dvg-ci-probes
-HUB_PID='' PORT=''
+HUB_PID='' PORT='' JOIN_HUB_PID=''
 
 ok() { echo "ok   $*"; }
 fail() { echo "FAIL $*"; exit 1; }
 cleanup() {
     [ -z "$HUB_PID" ] || kill "$HUB_PID" 2>/dev/null || true
+    [ -z "$JOIN_HUB_PID" ] || kill "$JOIN_HUB_PID" 2>/dev/null || true
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -156,6 +158,55 @@ sleep 8
 link_down || fail "systemd restarted a refused link"
 [ "$(prop devagotchi-link.service NRestarts)" = "$restarts" ] || fail "systemd kept restarting a refused link"
 ok "exit 2 and not restarted"
+
+echo "--- one line joins a bare machine (/join): install, key, enroll, start"
+JOIN_ACCOUNT=dvg-join
+JOIN_HOME=/var/lib/dvg-join
+JOIN_PREFIX=/opt/dvg-join
+DIST=$WORK/dist
+mkdir -p "$DIST"
+target=$("$INSTALL" --print-target)
+tar -C "$BIN" -I 'xz -0 -T0' -cf "$DIST/devagotchi-$target.tar.xz" devagotchi
+cp "$INSTALL" "$DIST/install-devagotchi.sh"
+(cd "$DIST" && sha256sum "devagotchi-$target.tar.xz" install-devagotchi.sh > SHA256SUMS)
+echo ci-join > "$DIST/VERSION"
+JPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')
+cat > "$WORK/join-hub.json" <<EOF
+{"listen": "127.0.0.1:$JPORT", "public_url": "http://127.0.0.1:$JPORT",
+ "auth": {"mode": "dev", "tokens_file": "$WORK/tokens.json"},
+ "brokers": [{"name": "ci-joined", "link": true}],
+ "grants": [{"subject": "ci", "brokers": ["ci-joined"]}],
+ "downloads": "$DIST"}
+EOF
+"$BIN/devagotchi" hub serve --state-dir "$WORK/join-state" --config "$WORK/join-hub.json" 2> "$WORK/join-hub.log" &
+JOIN_HUB_PID=$!
+join_hub_ready() { grep -q 'devagotchi hub ready:' "$WORK/join-hub.log"; }
+joined_connected() {
+    curl -s "http://127.0.0.1:$JPORT/healthz" | python3 -c \
+        'import json,sys; b=[x for x in json.load(sys.stdin)["brokers"] if x["name"]=="ci-joined"]; sys.exit(0 if b and b[0].get("connected") else 1)'
+}
+wait_for 20 "join hub ready" join_hub_ready
+grep -q 'handing out Devagotchi ci-join' "$WORK/join-hub.log" || fail "the hub did not take the downloads directory"
+code=$("$BIN/devagotchi" hub enroll --state-dir "$WORK/join-state" --device ci-joined 2>/dev/null)
+[[ $code == dvg-* ]] || fail "no enrollment code"
+# Fetching the script twice (a link preview, a second look) does not spend the code.
+curl -fsS "http://127.0.0.1:$JPORT/join/$code" > /dev/null
+curl -fsSL "http://127.0.0.1:$JPORT/join/$code" \
+    | sudo sh -s -- --user "$JOIN_ACCOUNT" --home "$JOIN_HOME" --prefix "$JOIN_PREFIX"
+wait_for 30 "the hub sees the joined machine" joined_connected
+join_as() { (cd / && sudo -u "$JOIN_ACCOUNT" env XDG_RUNTIME_DIR="/run/user/$(id -u "$JOIN_ACCOUNT")" "$@"); }
+[ "$(join_as systemctl --user is-enabled devagotchi-link.service)" = enabled ] || fail "joined link not enabled"
+[ "$(readlink "$JOIN_PREFIX/current")" = versions/ci-join ] || fail "the joined machine does not run the hub's build"
+sudo grep -q '"exec_policy": "account"' "$JOIN_HOME/.config/devagotchi/broker.json" \
+    || fail "the joined broker does not run commands as its account"
+python3 tests/hub_probe.py "http://127.0.0.1:$JPORT" --token "$TOKEN" --broker ci-joined \
+    --git /usr/bin/git --cwd "$JOIN_HOME/workspace"
+spent=$(curl -fsS "http://127.0.0.1:$JPORT/join/$code")
+unset code
+case $spent in *"already used"*) ;; *) fail "a spent code still gets a join script" ;; esac
+ok "one line installed the hub's build as $JOIN_ACCOUNT, enrolled ci-joined (account policy), and a real operation ran through it; the spent line only says so"
+sudo "$INSTALL" --user "$JOIN_ACCOUNT" --home "$JOIN_HOME" --prefix "$JOIN_PREFIX" --uninstall
+kill "$JOIN_HUB_PID" 2>/dev/null || true
 
 echo "--- the hub role on the same host, behind Caddy"
 HPORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')

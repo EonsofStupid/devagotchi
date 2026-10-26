@@ -193,6 +193,20 @@ impl Links {
         issued
     }
 
+    /// The machine a live code is for, so `/join` can write its script; audited with
+    /// the machine's name, never the code. Looking does not spend the code.
+    pub fn join_script(&self, code: &str, shell: crate::join::Shell) -> BridgeResult<Option<String>> {
+        let device = self.devices.live_code(code)?;
+        if let Some(device) = &device {
+            let shell = match shell {
+                crate::join::Shell::Sh => "sh",
+                crate::join::Shell::PowerShell => "powershell",
+            };
+            self.event(&format!("device:{device}"), "join", "link.join_script", device, "", shell);
+        }
+        Ok(device)
+    }
+
     /// Revoke one of `owner`'s machines; its open link closes within seconds.
     pub fn revoke_owned(&self, owner: &str, device: &str) -> BridgeResult<(bool, usize)> {
         let result = self.devices.revoke_owned(owner, device);

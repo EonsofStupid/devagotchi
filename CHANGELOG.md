@@ -7,6 +7,21 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### One line joins a machine (increment 29b)
+- With `downloads` in the hub config (a directory of `VERSION`, `SHA256SUMS` and the build the
+  hub runs), "Add a machine" shows one line per OS: `curl -fsSL <hub>/join/<code> | sudo sh` on
+  Linux and `irm <hub>/join/<code>.ps1 | iex` on Windows. The script `/join/<code>` serves
+  downloads that build from the hub's `/dist`, checks every file against the SHA-256 written
+  into it, installs, makes the machine's key, enrolls (the code on stdin or in the
+  environment, never an argument), sets `exec_policy: account` and starts the broker and the
+  link at boot. Fetching it does not spend the code; enrolling does; a dead code's script only
+  says so. The hub hashes the listed files at start and leaves `/join` off, reported in
+  `/healthz`, when one does not match.
+- `install-devagotchi.sh --exec-policy granted|account` and `install-devagotchi.ps1
+  -ExecPolicy`; the Windows installer also takes the code from `DEVAGOTCHI_ENROLL_CODE`.
+- CI: the Linux host-install job joins a bare account with the one line from a hub serving the
+  runner's own build and runs a real operation through it.
+
 ### Add a machine from the browser (increment 29a)
 - The Machines page (`/account`) has **Add a machine**: a signed-in person names a machine
   and gets a one-time code for it, shown once, valid 15 minutes, with the installer line for

@@ -21,13 +21,17 @@ needs systemd as init; it is tested on Ubuntu 24.04 in CI, on x86_64 and on 64-b
 sudo ./install-devagotchi.sh --version 0.2.0 --grant /usr/bin/journalctl   # release archives, sha256 checked
 # on the hub host: devagotchi hub enroll --state-dir … --device wi1   (prints a one-time code)
 sudo ./install-devagotchi.sh --hub https://hub.example.com --device wi1 --enroll   # paste the code
+# or, from "Add a machine" on the hub's /account page, one line that does all of the above:
+#   curl -fsSL https://hub.example.com/join/dvg-… | sudo sh   (extra installer flags: | sudo sh -s -- --workspace /srv)
 sudo ./install-devagotchi.sh --version 0.2.1          # upgrade; --version 0.2.0 again rolls back
 sudo ./install-devagotchi.sh --uninstall              # stops and removes the services; files stay
 ```
 
 The code is read from stdin (a hidden prompt on a terminal) before anything else runs, and
 reaches the link on its stdin: never an argument other users could list, a file or a log line.
-`--bin-dir target/release` installs a local build instead of a release.
+`--bin-dir target/release` installs a local build instead of a release. `--exec-policy account`
+writes a new broker config whose broker runs any command its account can (the `run` tool);
+the hub's join line passes it.
 
 A re-run restarts a service only when what it runs changed (a new version, its unit, the config,
 a new enrollment): on the subtree and process-group supervision rungs a broker restart ends its

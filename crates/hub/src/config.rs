@@ -41,6 +41,12 @@ pub struct HubConfig {
     /// machines. Nomen sign-in only. Absent: no pages, only `/mcp`, `/link` and the APIs.
     #[serde(default)]
     pub web: Option<WebConfig>,
+    /// A directory of Devagotchi builds this hub hands to machines that join it
+    /// (`/dist/<file>`, `/join/<code>`): `SHA256SUMS`, `VERSION` and the files they list,
+    /// laid down at deploy from the GitHub build the hub itself runs. Absent: no `/join`,
+    /// and "Add a machine" shows the installer lines instead.
+    #[serde(default)]
+    pub downloads: Option<String>,
 }
 
 /// The hosted tier's boards: an account binds a project and gets a board of its own on this
@@ -236,6 +242,11 @@ impl HubConfig {
         }
         if let Some(owner) = &self.owner {
             valid_subject(owner).map_err(|why| invalid(format!("owner {why}")))?;
+        }
+        if let Some(dir) = &self.downloads
+            && !std::path::Path::new(dir).is_absolute()
+        {
+            return Err(invalid(format!("downloads {dir:?} must be an absolute path")));
         }
         if let Some(web) = &self.web {
             let AuthConfig::Nomen { clients, .. } = &self.auth else {
