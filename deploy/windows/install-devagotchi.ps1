@@ -47,7 +47,7 @@ param(
     [string]$Hub = '',
     [string]$Device = '',
     [string]$EnrollCode = '',
-    [ValidateSet('', 'granted', 'account')]
+    [ValidateSet('granted', 'account')]
     [string]$ExecPolicy = '',
     [switch]$Uninstall,
     [switch]$PrintTarget
