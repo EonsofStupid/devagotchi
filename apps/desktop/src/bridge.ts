@@ -1,12 +1,15 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import type {
   BridgeError,
+  ChangesInput,
   GetInput,
   ListInput,
   OperationView,
   OperationsPage,
   OutputPage,
   ReadInput,
+  Revision,
+  WaitInput,
 } from "./generated/contracts";
 
 /** Desktop configuration only. Broker wire types are generated from Rust. */
@@ -24,6 +27,10 @@ export interface BridgeClient {
   getOperation(input: GetInput): Promise<OperationView>;
   readOutput(input: ReadInput): Promise<OutputPage>;
   cancelOperation(input: GetInput): Promise<OperationView>;
+  /** Held by the broker until the command settles or has output past `output_after`. */
+  waitOperation(input: WaitInput): Promise<OperationView>;
+  /** Held by the broker until its list of commands changes. */
+  operationsChanged(input: ChangesInput): Promise<Revision>;
 }
 
 async function call<T>(command: string, input?: unknown): Promise<T> {
@@ -42,6 +49,8 @@ export const nativeBridge: BridgeClient = {
   getOperation: (input) => call("get_operation", input),
   readOutput: (input) => call("read_output", input),
   cancelOperation: (input) => call("cancel_operation", input),
+  waitOperation: (input) => call("wait_operation", input),
+  operationsChanged: (input) => call("operations_changed", input),
 };
 
 export function describeError(error: unknown): BridgeError {

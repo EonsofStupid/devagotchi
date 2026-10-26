@@ -1535,3 +1535,22 @@ fn a_new_board_starts_with_the_getting_started_steps_once() {
     assert_eq!(used.board.list(&Filter::default()).expect("list").len(), 1);
     assert!(f.board.verify_chain().expect("chain").ok);
 }
+
+#[test]
+fn a_committed_change_advances_the_signal_and_an_empty_reap_does_not() {
+    let f = fixture();
+    let mut changes = f.board.changes();
+    assert!(!changes.has_changed().unwrap());
+    let id = f.new_ticket(&Actor::human("jesse"), "wake the waiters");
+    assert!(changes.has_changed().unwrap(), "a committed event wakes waiters");
+    changes.borrow_and_update();
+    assert_eq!(f.board.reap().unwrap(), 0);
+    assert!(!changes.has_changed().unwrap(), "a write that records nothing wakes nobody");
+    assert_eq!(f.board.next_lease_expiry().unwrap(), None);
+    f.board
+        .claim(&Actor::agent("claude"), &id, Some(30_000))
+        .unwrap();
+    let now = f.now.load(Ordering::SeqCst);
+    assert_eq!(f.board.next_lease_expiry().unwrap(), Some(now + 30_000));
+    assert!(changes.has_changed().unwrap());
+}

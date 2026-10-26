@@ -20,6 +20,7 @@ pub mod workflow;
 mod tests;
 
 use std::{
+    cell::Cell,
     path::Path,
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
@@ -30,6 +31,7 @@ use rusqlite::{Connection, OptionalExtension, Row, Transaction, TransactionBehav
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::sync::{Notify, watch};
 
 #[allow(unused_imports)]
 pub use lease::{Lease, NextFilter};
@@ -266,6 +268,12 @@ pub struct Board {
     project: String,
     prefix: String,
     clock: Clock,
+    /// Advances each time a write commits an event, so a wait (board_wait, approval_wait)
+    /// sleeps until the board changes instead of reading it again and again.
+    changes: watch::Sender<u64>,
+    /// Also told of every committed change: the hub's lease reaper, which sleeps until the
+    /// next lease lapses or the leases change.
+    activity: Option<Arc<Notify>>,
 }
 
 pub const SCHEMA_VERSION: i64 = 1;
@@ -465,7 +473,33 @@ impl Board {
             project: project.to_string(),
             prefix,
             clock,
+            changes: watch::channel(0).0,
+            activity: None,
         })
+    }
+
+    /// Tell `activity` of every change this board commits from now on.
+    pub fn reporting_to(mut self, activity: Arc<Notify>) -> Self {
+        self.activity = Some(activity);
+        self
+    }
+
+    /// A receiver that sees a new value after each committed change. Subscribe before
+    /// reading, then await `changed()`: a change in between is never missed.
+    pub fn changes(&self) -> watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+
+    /// When the first lease held on this board lapses, if any is held.
+    pub fn next_lease_expiry(&self) -> BridgeResult<Option<i64>> {
+        let connection = self.connection.lock().expect("board lock");
+        connection
+            .query_row(
+                "SELECT MIN(lease_expires_at) FROM tickets WHERE holder IS NOT NULL",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(store_error)
     }
 
     #[allow(dead_code)]
@@ -987,17 +1021,27 @@ impl Board {
         let tx = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(store_error)?;
+        let appended = Cell::new(false);
         let result = {
             let mut writer = Writer {
                 tx: &tx,
                 actor: actor.id,
                 now,
+                appended: &appended,
             };
             body(&mut writer)
         };
         match result {
             Ok(value) => {
                 tx.commit().map_err(store_error)?;
+                drop(connection);
+                // Only a write that recorded something wakes anyone: an empty reap does not.
+                if appended.get() {
+                    self.changes.send_modify(|revision| *revision = revision.wrapping_add(1));
+                    if let Some(activity) = &self.activity {
+                        activity.notify_one();
+                    }
+                }
                 Ok(value)
             }
             Err(error) => {
@@ -1013,6 +1057,8 @@ pub(crate) struct Writer<'a> {
     pub tx: &'a Transaction<'a>,
     pub actor: &'a str,
     pub now: i64,
+    /// Set when this transaction appends an event.
+    appended: &'a Cell<bool>,
 }
 
 pub(crate) const GENESIS: &str = "0000000000000000000000000000000000000000000000000000000000000000";
@@ -1067,6 +1113,7 @@ impl Writer<'_> {
                 ],
             )
             .map_err(store_error)?;
+        self.appended.set(true);
         Ok(seq)
     }
 

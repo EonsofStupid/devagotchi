@@ -36,6 +36,21 @@ export function createFixtureClient(scenario: string): BridgeClient {
     operations[0].output_complete = true;
     operations[0].exit_code = 0;
   }
+  // Waits resolve on a change (a cancellation here) or at their timeout, as the broker's.
+  let revision = 1;
+  const waiters = new Set<() => void>();
+  function changed() {
+    revision++;
+    for (const wake of waiters) wake();
+    waiters.clear();
+  }
+  function until(timeoutMs: number) {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(() => { waiters.delete(wake); resolve(); }, timeoutMs);
+      const wake = () => { clearTimeout(timer); resolve(); };
+      waiters.add(wake);
+    });
+  }
   function get(id: string) {
     const operation = operations.find((item) => item.operation_id === id);
     if (!operation) throw { code: "operation_not_found", message: "No such fixture command." };
@@ -59,7 +74,20 @@ export function createFixtureClient(scenario: string): BridgeClient {
       if (scenario === "cancel") await new Promise((resolve) => setTimeout(resolve, 1500));
       const operation = get(operation_id);
       Object.assign(operation, { state: "cancelled", cancellation_requested: true, output_complete: true, updated_at_ms: Date.now(), detail: "Fixture cancellation confirmed." });
+      changed();
       return { ...operation };
+    },
+    async waitOperation({ operation_id, output_after, timeout_ms }) {
+      const operation = get(operation_id);
+      const active = operation.state === "accepted" || operation.state === "running";
+      const more = scenario !== "unknown" && output.some((frame) => frame.sequence > (output_after ?? Number.MAX_SAFE_INTEGER));
+      if (active && !more) await until(timeout_ms);
+      return { ...get(operation_id) };
+    },
+    async operationsChanged({ after_revision, timeout_ms }) {
+      if (scenario === "offline") throw { code: "ipc_io", message: "Fixture: no broker is listening at the configured path." };
+      if (after_revision === revision) await until(timeout_ms);
+      return { revision };
     },
   };
 }

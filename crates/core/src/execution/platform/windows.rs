@@ -4,6 +4,12 @@
 //! resumed, so it cannot run or create a child outside the job. The job permits
 //! no breakaway and terminates its members when the broker's job handle
 //! closes. Observation and termination use that job handle, never a PID.
+//!
+//! Exits are events, not polls: the root's exit is the wait on its process handle, and
+//! the job reports to its own I/O completion port as members start and exit, so the
+//! broker queries the job only when a member's exit was reported. Windows documents job
+//! notifications as not guaranteed to arrive, so while members outlive the root the job
+//! is also queried once a second.
 // Native OS calls live here and nowhere else in this crate's dependents.
 #![allow(unsafe_code)]
 
@@ -14,25 +20,35 @@ use std::fs::Metadata;
 use std::io;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
-use std::ptr::null;
+use std::ptr::{null, null_mut};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::{Child, Command};
-use tokio::time::{Instant, sleep, timeout};
+use tokio::sync::watch;
+use tokio::time::timeout;
 use windows_sys::Win32::Foundation::{
-    ERROR_NO_MORE_FILES, FALSE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT,
+    ERROR_NO_MORE_FILES, FALSE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
 };
+use windows_sys::Win32::System::IO::{
+    CreateIoCompletionPort, GetQueuedCompletionStatus, OVERLAPPED, PostQueuedCompletionStatus,
+};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-    JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOBOBJECT_ASSOCIATE_COMPLETION_PORT, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectAssociateCompletionPortInformation,
     JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
     QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
 };
+use windows_sys::Win32::System::SystemServices::{
+    JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS, JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO,
+    JOB_OBJECT_MSG_EXIT_PROCESS,
+};
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CREATE_SUSPENDED, OpenThread, ResumeThread, THREAD_SUSPEND_RESUME,
-    WaitForSingleObject,
+    CREATE_NO_WINDOW, CREATE_SUSPENDED, INFINITE, OpenThread, ResumeThread,
+    THREAD_SUSPEND_RESUME,
 };
 
 pub(crate) const SCOPE: &str = "Windows root process and every process in the broker-owned Job Object it was assigned to before it ran. Breakaway is not permitted, and closing the broker's job handle terminates remaining members. Work a member hands to a service or another process outside the job is not owned. This is not OS containment.";
@@ -77,6 +93,13 @@ pub(crate) const EXECUTABLE_RULE: &str = " (Windows grants must be .exe or .com 
 
 /// Exit code given to members the broker terminates.
 const TERMINATED_EXIT_CODE: u32 = 1;
+/// The completion key the job's notifications carry.
+const JOB_KEY: usize = 1;
+/// The completion key that tells a job's listener thread to end.
+const STOP_KEY: usize = 2;
+/// Windows does not guarantee job notifications arrive: while members outlive the root,
+/// the job is also queried this often.
+const MISSED_NOTICE_BACKSTOP: Duration = Duration::from_secs(1);
 
 /// A Windows grant or request target must be a regular file that
 /// `CreateProcessW` runs directly as an image.
@@ -109,9 +132,10 @@ pub(crate) struct AdoptFailure {
 }
 
 /// The broker's handle to the Job Object that owns one root and every
-/// process created inside it.
+/// process created inside it, and the job's completion-port listener.
 pub(crate) struct OwnedTree {
     job: OwnedHandle,
+    notices: JobNotices,
 }
 
 impl OwnedTree {
@@ -125,7 +149,7 @@ impl OwnedTree {
             });
         };
         let job = match owned_job(process) {
-            Ok(job) => job,
+            Ok(owned) => owned,
             Err(error) => {
                 // The root is still suspended: it has executed no program code.
                 let _ = child.start_kill();
@@ -152,7 +176,8 @@ impl OwnedTree {
                 });
             }
         };
-        let tree = Self { job };
+        let (job, notices) = job;
+        let tree = Self { job, notices };
         if let Err(error) = resume_threads(pid) {
             let termination = tree.terminate().await;
             let _ = timeout(crate::execution::ROOT_WAIT, child.wait()).await;
@@ -176,26 +201,36 @@ impl OwnedTree {
         Ok(tree)
     }
 
-    /// Observes root exit through the owned process handle, which also keeps
-    /// the root's identity from being reused.
-    pub(crate) fn root_exited(&self, child: &Child) -> BridgeResult<bool> {
-        let Some(process) = child.raw_handle() else {
-            return Ok(true);
-        };
-        match unsafe { WaitForSingleObject(process, 0) } {
-            WAIT_OBJECT_0 => Ok(true),
-            WAIT_TIMEOUT => Ok(false),
-            WAIT_FAILED => Err(observation(format!(
-                "Cannot observe the owned root: {}",
-                io::Error::last_os_error()
-            ))),
-            other => Err(observation(format!(
-                "Unexpected wait result {other} for the owned root"
-            ))),
+    /// Returns when the root has exited: the wait on its process handle, which the
+    /// runtime registers with the system thread pool. The job, not this handle, owns the
+    /// tree, so nothing after this needs the root's handle.
+    pub(crate) async fn root_exit(&self, child: &mut Child) -> BridgeResult<()> {
+        child
+            .wait()
+            .await
+            .map(|_| ())
+            .map_err(|error| observation(format!("Cannot observe the owned root: {error}")))
+    }
+
+    /// Returns when no process in the job is active. The job is queried now and again
+    /// each time it reports a member's exit (or, as a backstop for a lost notice, after a
+    /// second without one).
+    pub(crate) async fn members_settled(&self) -> BridgeResult<()> {
+        let mut exits = self.notices.exits.clone();
+        loop {
+            exits.borrow_and_update();
+            if !self.has_executing_members()? {
+                return Ok(());
+            }
+            match timeout(MISSED_NOTICE_BACKSTOP, exits.changed()).await {
+                Ok(Ok(())) | Err(_) => {}
+                // The listener ended: no more notices, so the backstop alone remains.
+                Ok(Err(_)) => tokio::time::sleep(MISSED_NOTICE_BACKSTOP).await,
+            }
         }
     }
 
-    pub(crate) fn has_executing_members(&self) -> BridgeResult<bool> {
+    fn has_executing_members(&self) -> BridgeResult<bool> {
         let mut accounting = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
         if unsafe {
             QueryInformationJobObject(
@@ -228,18 +263,83 @@ impl OwnedTree {
                 ),
             ));
         }
-        let deadline = Instant::now() + GROUP_SETTLE;
-        loop {
-            if !self.has_executing_members()? {
-                return Ok(());
-            }
-            if Instant::now() >= deadline {
-                return Err(BridgeError::new(
-                    "termination_unverified",
-                    "Active processes remained in the owned Job Object after TerminateJobObject",
-                ));
-            }
-            sleep(Duration::from_millis(20)).await;
+        match timeout(GROUP_SETTLE, self.members_settled()).await {
+            Ok(settled) => settled,
+            Err(_) => Err(BridgeError::new(
+                "termination_unverified",
+                "Active processes remained in the owned Job Object after TerminateJobObject",
+            )),
+        }
+    }
+}
+
+/// A job's I/O completion port and the thread that waits on it. Each exit notice (and the
+/// job's active-process-zero notice) advances `exits`.
+struct JobNotices {
+    port: Arc<OwnedHandle>,
+    exits: watch::Receiver<u64>,
+}
+
+impl JobNotices {
+    /// Create the port, associate `job` with it, and start its listener.
+    fn listen(job: &OwnedHandle) -> io::Result<Self> {
+        let port = unsafe { CreateIoCompletionPort(INVALID_HANDLE_VALUE, null_mut(), 0, 1) };
+        if port.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        let port = Arc::new(unsafe { OwnedHandle::from_raw_handle(port) });
+        let association = JOBOBJECT_ASSOCIATE_COMPLETION_PORT {
+            CompletionKey: JOB_KEY as *mut core::ffi::c_void,
+            CompletionPort: port.as_raw_handle(),
+        };
+        if unsafe {
+            SetInformationJobObject(
+                job.as_raw_handle(),
+                JobObjectAssociateCompletionPortInformation,
+                (&association as *const JOBOBJECT_ASSOCIATE_COMPLETION_PORT).cast(),
+                size_of::<JOBOBJECT_ASSOCIATE_COMPLETION_PORT>() as u32,
+            )
+        } == FALSE
+        {
+            return Err(io::Error::last_os_error());
+        }
+        let (sender, exits) = watch::channel(0_u64);
+        let listening = Arc::clone(&port);
+        std::thread::Builder::new()
+            .name("devagotchi-job".into())
+            .spawn(move || listen(&listening, &sender))?;
+        Ok(Self { port, exits })
+    }
+}
+
+impl Drop for JobNotices {
+    fn drop(&mut self) {
+        // Ends the listener; the port closes when both it and this handle are gone.
+        unsafe { PostQueuedCompletionStatus(self.port.as_raw_handle(), 0, STOP_KEY, null()) };
+    }
+}
+
+/// Wait on the job's port until told to stop, advancing `exits` on each member exit.
+fn listen(port: &OwnedHandle, exits: &watch::Sender<u64>) {
+    loop {
+        let mut message = 0_u32;
+        let mut key = 0_usize;
+        let mut overlapped: *mut OVERLAPPED = null_mut();
+        let ok = unsafe {
+            GetQueuedCompletionStatus(port.as_raw_handle(), &mut message, &mut key, &mut overlapped, INFINITE)
+        };
+        if ok == FALSE || key == STOP_KEY {
+            return;
+        }
+        if key == JOB_KEY
+            && matches!(
+                message,
+                JOB_OBJECT_MSG_EXIT_PROCESS
+                    | JOB_OBJECT_MSG_ABNORMAL_EXIT_PROCESS
+                    | JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO
+            )
+        {
+            exits.send_modify(|count| *count = count.wrapping_add(1));
         }
     }
 }
@@ -249,8 +349,9 @@ fn observation(message: String) -> BridgeError {
 }
 
 /// Creates an unnamed, non-inheritable Job Object that kills its members when
-/// its last handle closes and permits no breakaway, then assigns `process`.
-fn owned_job(process: RawHandle) -> io::Result<OwnedHandle> {
+/// its last handle closes and permits no breakaway, starts listening to its
+/// notices, then assigns `process`.
+fn owned_job(process: RawHandle) -> io::Result<(OwnedHandle, JobNotices)> {
     let job = unsafe { CreateJobObjectW(null(), null()) };
     if job.is_null() {
         return Err(io::Error::last_os_error());
@@ -269,10 +370,11 @@ fn owned_job(process: RawHandle) -> io::Result<OwnedHandle> {
     {
         return Err(io::Error::last_os_error());
     }
+    let notices = JobNotices::listen(&job)?;
     if unsafe { AssignProcessToJobObject(job.as_raw_handle(), process) } == FALSE {
         return Err(io::Error::last_os_error());
     }
-    Ok(job)
+    Ok((job, notices))
 }
 
 /// Resumes the threads of a root created with `CREATE_SUSPENDED`. The broker
@@ -317,4 +419,82 @@ fn resume_threads(pid: u32) -> io::Result<()> {
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Stdio;
+    use tokio::time::Instant;
+
+    fn system32(name: &str) -> String {
+        let root = std::env::var_os("SystemRoot").expect("SystemRoot is set on Windows");
+        Path::new(&root).join("System32").join(name).display().to_string()
+    }
+
+    /// `cmd /d /c <line>`, created suspended as the broker creates every root.
+    fn spawn(line: &str) -> Child {
+        let mut command = Command::new(system32("cmd.exe"));
+        command
+            .args(["/d", "/c"])
+            .raw_arg(line)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure(&mut command);
+        command.spawn().unwrap()
+    }
+
+    fn ping(seconds: u32) -> String {
+        format!("{} -n {} 127.0.0.1 >nul", system32("PING.EXE"), seconds + 1)
+    }
+
+    #[tokio::test]
+    async fn the_root_exit_is_the_wait_on_its_handle() {
+        let mut child = spawn(&ping(1));
+        let tree = OwnedTree::adopt(&mut child).await.ok().unwrap();
+        let began = Instant::now();
+        tree.root_exit(&mut child).await.unwrap();
+        assert!(began.elapsed() >= Duration::from_millis(500), "{:?}", began.elapsed());
+        tree.members_settled().await.unwrap();
+        assert!(!tree.has_executing_members().unwrap());
+    }
+
+    #[tokio::test]
+    async fn the_job_reports_members_that_outlive_the_root() {
+        // `start /b` runs ping inside the job, after the root has already exited.
+        let mut child = spawn(&format!("start \"\" /b {} & exit 0", ping(2)));
+        let tree = OwnedTree::adopt(&mut child).await.ok().unwrap();
+        tree.root_exit(&mut child).await.unwrap();
+        assert!(tree.has_executing_members().unwrap(), "a member outlives the root");
+        timeout(Duration::from_secs(30), tree.members_settled())
+            .await
+            .expect("settled")
+            .unwrap();
+        assert!(!tree.has_executing_members().unwrap());
+        // The member's exit was reported through the job's completion port.
+        let mut exits = tree.notices.exits.clone();
+        timeout(Duration::from_secs(10), exits.wait_for(|count| *count > 0))
+            .await
+            .expect("a job exit notice arrived")
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn termination_ends_every_member_and_verifies_it() {
+        let mut child = spawn(&format!("start \"\" /b {} & {}", ping(30), ping(30)));
+        let tree = OwnedTree::adopt(&mut child).await.ok().unwrap();
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let began = Instant::now();
+        tree.terminate().await.unwrap();
+        assert!(began.elapsed() < GROUP_SETTLE, "{:?}", began.elapsed());
+        assert!(!tree.has_executing_members().unwrap());
+        // TerminateJobObject can empty the job before its listener has read the notices
+        // (the first query already finds no member); they still arrive.
+        let mut exits = tree.notices.exits.clone();
+        timeout(Duration::from_secs(10), exits.wait_for(|count| *count > 0))
+            .await
+            .expect("a job exit notice arrived")
+            .unwrap();
+    }
 }

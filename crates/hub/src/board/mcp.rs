@@ -56,6 +56,8 @@ pub struct Boards {
     public_url: String,
     open: Mutex<BTreeMap<String, Arc<Board>>>,
     fences: Mutex<HashMap<(String, String, String), i64>>,
+    /// Told of every change any open board commits; the lease reaper waits on it.
+    activity: Arc<tokio::sync::Notify>,
 }
 
 /// Where account boards live and who may have how many.
@@ -116,6 +118,7 @@ impl Boards {
             public_url: config.public_url.clone(),
             open: Mutex::new(BTreeMap::new()),
             fences: Mutex::new(HashMap::new()),
+            activity: Arc::new(tokio::sync::Notify::new()),
         }
     }
 
@@ -182,7 +185,7 @@ impl Boards {
         if !file.is_file() {
             return Ok(None);
         }
-        let board = Arc::new(Board::open(&file, project)?);
+        let board = Arc::new(Board::open(&file, project)?.reporting_to(self.activity.clone()));
         open.insert(key, board.clone());
         Ok(Some(board))
     }
@@ -255,7 +258,7 @@ impl Boards {
                 let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
             }
             let file = Self::account_file(accounts, subject, project);
-            let board = Board::open(&file, project)?;
+            let board = Board::open(&file, project)?.reporting_to(self.activity.clone());
             // A new account board starts with the getting-started steps (B12).
             if let Err(error) = board.welcome_if_new(&Actor::agent("devagotchi"), &self.public_url)
             {
@@ -294,6 +297,7 @@ impl Boards {
             )
         })?;
         let (config, board) = open_project(dir)?;
+        let board = board.reporting_to(self.activity.clone());
         if config.project != project {
             return Err(BridgeError::new(
                 "board_mismatch",
@@ -317,7 +321,63 @@ impl Boards {
         Ok(board)
     }
 
-    /// Expire lapsed leases on every open board. Run on an interval from `main`.
+    /// Keep leases honest without a sweep timer: sleep until the first lease on any open
+    /// board lapses, or until a board changes (a claim, heartbeat or release moves that
+    /// moment), then expire what has lapsed. Runs for the life of the hub.
+    pub async fn reap_on_time(self: Arc<Self>) {
+        loop {
+            let boards = self.clone();
+            let next = tokio::task::spawn_blocking(move || boards.next_lease_expiry())
+                .await
+                .unwrap_or(None);
+            let now = crate::board::system_clock()();
+            match next {
+                Some(at) if at <= now => {
+                    let boards = self.clone();
+                    let failed = tokio::task::spawn_blocking(move || {
+                        let mut failed = false;
+                        for (project, result) in boards.reap_all() {
+                            if let Err(error) = result {
+                                eprintln!("devagotchi hub: board {project}: reap failed: {error}");
+                                failed = true;
+                            }
+                        }
+                        failed
+                    })
+                    .await
+                    .unwrap_or(true);
+                    if failed {
+                        // A store that cannot be written now is not retried in a tight loop.
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                }
+                Some(at) => {
+                    let lapse = Duration::from_millis((at - now) as u64);
+                    tokio::select! {
+                        _ = self.activity.notified() => {}
+                        _ = tokio::time::sleep(lapse) => {}
+                    }
+                }
+                None => self.activity.notified().await,
+            }
+        }
+    }
+
+    /// The first moment a lease on any open board lapses.
+    fn next_lease_expiry(&self) -> Option<i64> {
+        let open: Vec<_> = self.open.lock().expect("boards lock").values().cloned().collect();
+        open.iter()
+            .filter_map(|board| match board.next_lease_expiry() {
+                Ok(at) => at,
+                Err(error) => {
+                    eprintln!("devagotchi hub: lease check failed: {error}");
+                    None
+                }
+            })
+            .min()
+    }
+
+    /// Expire lapsed leases on every open board.
     pub fn reap_all(&self) -> Vec<(String, BridgeResult<usize>)> {
         let open: Vec<_> = self
             .open
@@ -1449,7 +1509,7 @@ impl Hub {
 
     #[tool(
         name = "board_wait",
-        description = "Long-poll: return the events newer than after_seq as soon as there is one, or an empty list when timeout_ms passes. Use it instead of polling board_events in a loop.",
+        description = "Wait for board events: returns the events newer than after_seq the moment the board records one, or an empty list when timeout_ms passes (call again). Use it instead of calling board_events in a loop.",
         title = "Wait for board events",
         annotations(
             title = "Wait for board events",
@@ -1469,7 +1529,10 @@ impl Hub {
         let deadline = tokio::time::Instant::now()
             + Duration::from_millis(input.timeout_ms.unwrap_or(20_000).min(25_000));
         let after = input.after_seq;
+        // Subscribed before the first read: a change between the read and the sleep is kept.
+        let mut changes = board.changes();
         let events = loop {
+            changes.borrow_and_update();
             let board = board.clone();
             let found = tokio::task::spawn_blocking(move || board.events(after, 100))
                 .await
@@ -1480,13 +1543,18 @@ impl Hub {
                     ))
                 })
                 .map_err(|e| refuse(e, None))?;
-            if !found.is_empty() || tokio::time::Instant::now() >= deadline {
+            if !found.is_empty() {
                 break found;
             }
+            // Sleep until the board commits a change; nothing reads it in between.
             tokio::select! {
                 biased;
                 _ = context.ct.cancelled() => break Vec::new(),
-                _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                changed = tokio::time::timeout_at(deadline, changes.changed()) => {
+                    if !matches!(changed, Ok(Ok(()))) {
+                        break Vec::new();
+                    }
+                }
             }
         };
         // One audit line per wait, however long it blocked.
@@ -1565,7 +1633,9 @@ impl Hub {
             .map_err(|e| refuse(e, Some(&input.id)))?;
         let deadline = tokio::time::Instant::now()
             + Duration::from_millis(input.timeout_ms.unwrap_or(25_000).min(50_000));
+        let mut changes = board.changes();
         let approval = loop {
+            changes.borrow_and_update();
             let (board, id) = (board.clone(), input.id.clone());
             let status = tokio::task::spawn_blocking(move || board.approval_status(&id))
                 .await
@@ -1579,10 +1649,15 @@ impl Hub {
             if status.status != "pending" || tokio::time::Instant::now() >= deadline {
                 break status;
             }
+            // The decision is a board write: sleep until the board commits a change.
             tokio::select! {
                 biased;
                 _ = context.ct.cancelled() => break status,
-                _ = tokio::time::sleep(Duration::from_millis(500)) => {}
+                changed = tokio::time::timeout_at(deadline, changes.changed()) => {
+                    if !matches!(changed, Ok(Ok(()))) {
+                        break status;
+                    }
+                }
             }
         };
         if let Err(error) = self.audit.record(&AuditEntry {
@@ -1718,6 +1793,43 @@ mod tests {
             serde_json::to_string(&config).unwrap(),
         )
         .unwrap();
+    }
+
+    /// The reaper sleeps until a lease lapses, then expires it: the ticket is back in its
+    /// queue within moments of the lapse, with no sweep timer.
+    #[tokio::test]
+    async fn a_lapsed_lease_is_reaped_when_it_lapses() {
+        let dir = tempfile::tempdir().unwrap();
+        init(dir.path(), "site");
+        let boards = Arc::new(Boards::from_config(&hub_config("site", dir.path()), dir.path()));
+        let board = boards.open("site").unwrap();
+        let operator = Actor::human("jesse");
+        let mut settings = board.settings().unwrap();
+        settings.lease_min_ttl_ms = 100;
+        board.put_settings(&operator, &settings).unwrap();
+        let id = board
+            .create(&operator, crate::board::NewTicket { title: "lapses".into(), ..Default::default() })
+            .unwrap()
+            .id;
+        tokio::spawn(boards.clone().reap_on_time());
+        let began = tokio::time::Instant::now();
+        board.claim(&Actor::agent("claude"), &id, Some(400)).unwrap();
+        let mut changes = board.changes();
+        changes.borrow_and_update();
+        let reaped = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                changes.changed().await.unwrap();
+                if board.get(&id).unwrap().ticket.holder.is_none() {
+                    return board.get(&id).unwrap().ticket;
+                }
+            }
+        })
+        .await
+        .expect("the lease was reaped when it lapsed");
+        assert_eq!(reaped.state, "ready");
+        let elapsed = began.elapsed();
+        assert!(elapsed >= Duration::from_millis(350), "{elapsed:?}");
+        assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
     }
 
     fn hosted_config(dir: &std::path::Path, unlimited: &[&str]) -> HubConfig {

@@ -37,6 +37,44 @@ pub struct GetInput {
     pub operation_id: String,
 }
 
+/// Longest a broker holds one wait open. MCP clients give up on a call after about a
+/// minute, so a wait ends well before that and the caller waits again.
+pub const MAX_WAIT_MS: u64 = 50_000;
+
+/// Wait until the broker's operations change as a list shows them: one admitted, retired,
+/// or moved to another state (output alone is not a change here). For a view that
+/// re-lists only when something changed, instead of on a timer.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChangesInput {
+    /// The revision your list reflects (from the last answer). Absent: answer at once with
+    /// the current revision. A broker that restarted answers at once, too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_revision: Option<u64>,
+    /// Longest to wait, 1..=50000 milliseconds; at the limit the same revision comes back.
+    pub timeout_ms: u64,
+}
+
+/// The broker's current operations revision.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Revision {
+    pub revision: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WaitInput {
+    pub operation_id: String,
+    /// Return when output beyond this sequence exists (the cursor you have read up to), as
+    /// well as when the operation settles. Without it, return only when it settles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_after: Option<u64>,
+    /// Longest to wait, 1..=50000 milliseconds. The answer comes as soon as the operation
+    /// changes as asked, without polling; at the limit it comes back unchanged.
+    pub timeout_ms: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ListInput {
@@ -332,10 +370,26 @@ pub enum RequestBody {
     OperationRead(ReadInput),
     OperationCancel(GetInput),
     OperationList(ListInput),
+    OperationWait(WaitInput),
+    OperationsChanged(ChangesInput),
     FileRead(FileReadInput),
     FileList(FileListInput),
     FileWrite(FileWriteInput),
     FileEdit(FileEditInput),
+}
+
+impl RequestBody {
+    /// How long the broker may hold this request before answering, beyond ordinary work:
+    /// transports (local IPC, the machine link) wait this much longer for the response.
+    pub fn held_for(&self) -> std::time::Duration {
+        match self {
+            Self::OperationWait(WaitInput { timeout_ms, .. })
+            | Self::OperationsChanged(ChangesInput { timeout_ms, .. }) => {
+                std::time::Duration::from_millis((*timeout_ms).min(MAX_WAIT_MS))
+            }
+            _ => std::time::Duration::ZERO,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -355,6 +409,7 @@ pub enum ResponseBody {
     File(FileContent),
     Listing(FileListing),
     Written(FileWritten),
+    Revision(Revision),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

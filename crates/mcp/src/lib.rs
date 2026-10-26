@@ -85,7 +85,7 @@ mod adapter {
 
     use devagotchi_contracts::{
         BridgeError, GetInput, OperationView, OutputPage, ReadInput, RequestBody, ResponseBody,
-        StartInput, StartOutput,
+        StartInput, StartOutput, WaitInput,
     };
     use rmcp::{
         Json, RoleServer, ServerHandler, handler::server::wrapper::Parameters,
@@ -163,6 +163,24 @@ mod adapter {
         }
 
         #[tool(
+            name = "operation_wait",
+            description = "Wait until an operation finishes, or (with output_after, your read cursor) until it has new output, or until timeout_ms (at most 50000) passes. The broker answers the moment it changes; use this instead of calling operation_get or operation_read repeatedly. A wait that times out returns the operation unchanged: wait again."
+        )]
+        async fn operation_wait(
+            &self,
+            Parameters(input): Parameters<WaitInput>,
+            context: RequestContext<RoleServer>,
+        ) -> Result<Json<OperationView>, Json<BridgeError>> {
+            match self
+                .request(RequestBody::OperationWait(input), context)
+                .await?
+            {
+                ResponseBody::Operation(output) => Ok(Json(output)),
+                other => Err(unexpected_response("operation", &other)),
+            }
+        }
+
+        #[tool(
             name = "operation_read",
             description = "Read bounded retained output after a caller-owned sequence cursor. Returns lossless base64 bytes, a text view, retention-gap information and the operation state. Reading does not advance another reader's cursor."
         )]
@@ -208,6 +226,7 @@ mod adapter {
             ResponseBody::File(_) => "file",
             ResponseBody::Listing(_) => "listing",
             ResponseBody::Written(_) => "written",
+            ResponseBody::Revision(_) => "revision",
         };
         Json(BridgeError::new(
             "unexpected_broker_response",

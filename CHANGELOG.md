@@ -20,6 +20,68 @@ heading. Agents draft the fragments below; they never tag.
   and how many requests were honoured meanwhile; per request, at most one line every
   30 s. `/healthz` gains `issuer`: reachable, down since, last answer, last error.
 
+### Board waits wake on the change itself (increment 26b)
+- Every board write that records an event advances the board's change signal after it
+  commits. `board_wait` and `approval_wait` sleep on it instead of re-reading the store
+  every 500 ms, so a note, a claim or a person's decision on the phone reaches the waiting
+  agent the moment it lands. A write that records nothing (an empty reap) wakes nobody.
+- Lapsed leases are expired when they lapse: the reaper sleeps until the first lease on
+  any open board ends, or until a board changes, instead of sweeping every 60 s.
+
+### The inspector waits instead of polling (increment 26e)
+- New broker request `operations_changed {after_revision?, timeout_ms}`: answered when an
+  operation is admitted or retired or changes state (output alone does not count), or at
+  the timeout with the same revision; a revision the broker does not have (it restarted)
+  answers at once.
+- The desktop inspector re-lists only when that answer changes, instead of every 3 s,
+  and follows the selected command's output with `operation_wait` (output past its
+  cursor, or settlement) instead of reading every second; draining pages no longer
+  pauses 100 ms between them. After an error it retries in 3 s.
+- The desktop crate builds against the current contracts again: its response-kind match
+  lacked the file responses added in 24d and 24e.
+
+### Process exits are events on Windows (increment 26d)
+- The root's exit is the wait on its process handle (registered with the system thread
+  pool by the runtime), not a 20 ms look. Each Job Object gets its own I/O completion
+  port, associated before the root is assigned; a listener thread advances a signal on
+  every member-exit and active-process-zero notice, and the broker queries the job only
+  then. Windows documents job notices as not guaranteed to arrive, so while members
+  outlive the root the job is also queried once a second (never while the root runs).
+- Termination waits for the job's notice instead of looking every 20 ms.
+
+### Process exits are events on Linux (increment 26c)
+- The broker no longer wakes every 20 ms while a command runs. On Linux it holds a pidfd
+  for the unreaped root (readable when it exits, Linux 5.3+) and sleeps until the root
+  ends, a stop is requested or the deadline passes. Members that outlive the root are
+  waited for the same way: /proc is read once, every member found gets a pidfd (checked
+  to still be a member after it is opened; 64 at a time), and /proc is read again only
+  after they have all exited.
+- Cancellation sends SIGTERM and moves to SIGKILL as soon as the group has left, instead
+  of always waiting 200 ms; settlement after SIGKILL is the same event wait, bounded by
+  one second as before.
+- A kernel or sandbox without pidfd_open keeps the previous 20 ms look. Windows keeps it
+  until increment 26d.
+
+### Waiting, not polling: `operation_wait` (increment 26a)
+- The broker answers `operation_wait` the moment an operation settles (or, with
+  `output_after`, has output past that sequence), or after `timeout_ms` (at most 50 s)
+  unchanged. It sleeps on one change signal that every state change, output frame and
+  cancellation advances; nothing is re-read on a timer. At most 16 waits are held at once
+  (`wait_busy` beyond), so ordinary requests always get a connection.
+- Local IPC and the machine link allow a held request its wait on top of their usual
+  timeouts; the link keeps waits in their own pool of 8 so they never crowd out calls.
+- The hub's `run` makes one held request instead of asking every 50–500 ms, and both the
+  hub and the stdio adapter offer `operation_wait`, so an AI waits in one call instead of
+  calling `operation_get` again and again. The broker's own tests and the protocol and
+  end-to-end harnesses settle operations through it.
+
+### Our servers run GitHub's builds (increment 25a)
+- The release workflow also runs on every push to `main`: it builds, attests and keeps the
+  archives for each target as workflow artifacts, without publishing a release (a version
+  tag still does that). `scripts/fetch-main-build.sh COMMIT` downloads a commit's build,
+  checks every archive's SHA-256 and verifies its GitHub attestation, and hands the
+  directory to `install-devagotchi.sh --version main-<short> --artifact-dir`.
+
 ### Changing files: `write_file`, `edit_file` (increment 24e)
 - `write_file` overwrites (the default: written beside the file and renamed into place, so
   a reader never sees half of it; permissions carry over), creates (refused when it exists)

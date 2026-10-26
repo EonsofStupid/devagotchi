@@ -1,0 +1,1 @@
+{"inspector":{"identifier":"inspector","description":"The bundled main window may inspect broker commands and explicitly request cancellation.","local":true,"windows":["main"],"permissions":["allow-connection-info","allow-list-operations","allow-get-operation","allow-read-output","allow-cancel-operation"]}}

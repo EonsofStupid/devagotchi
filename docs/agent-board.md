@@ -78,7 +78,8 @@ rows in the board, validated before they land; state *kinds* (`queue`, `active`,
    the lease's ttl. Recommended interval: `heartbeat_every_ms` = ttl/3.
 3. Every mutation of a held ticket carries the current fence. Wrong fence → `stale_fence`; not the
    holder → `not_holder`; lapsed → `lease_expired`.
-4. Expiry (reaper, or lazily inside a claim): back to the lane's `release_to`, `expiry_count + 1`,
+4. Expiry (the hub's reaper, which sleeps until the next lease lapses or a board changes, then
+   expires what lapsed; or lazily inside a claim): back to the lane's `release_to`, `expiry_count + 1`,
    event `lease.expired`; at `max_lease_expiries` the ticket goes to the workflow's attention
    state. The fence is burned, so a worker that wakes up late is rejected, not merged.
 5. `release(id, fence, reason)` → `release_to`. `complete(id, fence, summary)` → `complete_to`,
@@ -150,7 +151,10 @@ Seventeen tools, each taking `project`: `board_prime` (start here), `board_ready
 `board_get`, `board_create`, `board_claim` (by id, or the best ready ticket when `id` is omitted;
 `claimed: false` when nothing is ready), `board_heartbeat`, `board_update`, `board_note`,
 `board_handoff`, `board_release`, `board_complete`, `board_dep`, `board_force_release` (people
-only), `board_events`, `board_wait` (long-poll on the event feed, at most 25 s), `board_verify`.
+only), `board_events`, `board_wait` (held until the board commits an event, at most 25 s), `board_verify`.
+`board_wait` and `approval_wait` sleep on the board's commit signal: every write that records an
+event wakes them, nothing re-reads the store on a timer. A write by another process (the board
+command line on a project not bound to this hub) is seen at the next change or when the wait ends.
 Outputs are the store's records with JSON Schemas; a refusal is `{code, message, ticket?, next}`
 with the store's stable code (§4) and what to call next, as the CLI's `next` does. The fence may
 be omitted on a held ticket: the hub keeps the fence it last handed that subject for that ticket

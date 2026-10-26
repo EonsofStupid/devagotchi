@@ -14,10 +14,13 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::{Notify, watch};
+use tokio::sync::{Notify, Semaphore, watch};
 use tokio::time::{Instant, timeout};
 
 const MAX_FRAMES: usize = 1024;
+/// Waits held at once. A wait keeps its connection open until something changes, so they
+/// are capped well under the broker's 32 connections; ordinary requests always get through.
+const MAX_WAITERS: usize = 16;
 const MAX_PAGE_FRAMES: usize = 64;
 
 fn default_output_limit() -> usize {
@@ -82,6 +85,13 @@ pub(crate) struct Shared {
     config_identity: String,
     state: Mutex<State>,
     settlement: Notify,
+    /// Advances on every change to any operation (state, output, cancellation), so a wait
+    /// sleeps until something happens instead of asking again and again.
+    changes: watch::Sender<u64>,
+    /// Advances when an operation is admitted or retired or changes state; output alone
+    /// does not. A list (the inspector's) waits on it to re-read only when it changed.
+    roster: watch::Sender<u64>,
+    waiters: Semaphore,
 }
 
 pub struct Broker {
@@ -245,6 +255,9 @@ impl Broker {
                     persistence_fault: None,
                 }),
                 settlement: Notify::new(),
+                changes: watch::channel(0).0,
+                roster: watch::channel(0).0,
+                waiters: Semaphore::new(MAX_WAITERS),
             }),
         }))
     }
@@ -260,6 +273,10 @@ impl Broker {
                 .cancel(&input.operation_id)
                 .map(ResponseBody::Operation),
             RequestBody::OperationList(input) => self.list(input).map(ResponseBody::Operations),
+            RequestBody::OperationWait(input) => self.wait(input).await.map(ResponseBody::Operation),
+            RequestBody::OperationsChanged(input) => {
+                self.operations_changed(input).await.map(ResponseBody::Revision)
+            }
             RequestBody::FileRead(input) => self.files().read(input).map(ResponseBody::File),
             RequestBody::FileList(input) => self.files().list(input).map(ResponseBody::Listing),
             RequestBody::FileWrite(input) => self.files().write(input).map(ResponseBody::Written),
@@ -449,6 +466,9 @@ impl Broker {
             },
         );
         state.active_count += 1;
+        drop(state);
+        // Admitted (and perhaps another retired to make room): the list changed.
+        self.shared.changed();
         let shared = self.shared.clone();
         let deadline = Instant::now() + Duration::from_millis(spec.deadline_ms);
         let job_id = id.clone();
@@ -466,6 +486,67 @@ impl Broker {
         Ok(StartOutput {
             operation: view,
             replayed: false,
+        })
+    }
+
+    /// Answer when the operation settles (or, with `output_after`, when output past that
+    /// sequence exists), or at `timeout_ms` unchanged. It sleeps on the broker's change
+    /// signal: nothing is re-read until something changed.
+    async fn wait(&self, input: WaitInput) -> BridgeResult<OperationView> {
+        let id = validate_id(&input.operation_id)?;
+        if !(1..=MAX_WAIT_MS).contains(&input.timeout_ms) {
+            return Err(invalid(format!("timeout_ms must be 1..={MAX_WAIT_MS}")));
+        }
+        let Ok(_waiting) = self.shared.waiters.try_acquire() else {
+            return Err(BridgeError::new(
+                "wait_busy",
+                format!("this broker is already holding {MAX_WAITERS} waits; use operation_get, or wait again shortly"),
+            ));
+        };
+        let mut changes = self.shared.changes.subscribe();
+        let until = Instant::now() + Duration::from_millis(input.timeout_ms);
+        loop {
+            changes.borrow_and_update();
+            {
+                let state = self.shared.lock();
+                let operation = state.operations.get(&id).ok_or_else(not_found)?;
+                let record = &operation.record;
+                let settled = record.view.state.terminal() && !operation.active;
+                let output = input
+                    .output_after
+                    .is_some_and(|after| record.latest_sequence > after);
+                if settled || output {
+                    return Ok(record.view.clone());
+                }
+            }
+            match tokio::time::timeout_at(until, changes.changed()).await {
+                Ok(Ok(())) => {}
+                // The deadline, or a broker going away: answer with what is there now.
+                _ => return self.get(&id),
+            }
+        }
+    }
+
+    /// Answer when the operations revision differs from `after_revision`, or at
+    /// `timeout_ms` with it unchanged.
+    async fn operations_changed(&self, input: ChangesInput) -> BridgeResult<Revision> {
+        if !(1..=MAX_WAIT_MS).contains(&input.timeout_ms) {
+            return Err(invalid(format!("timeout_ms must be 1..={MAX_WAIT_MS}")));
+        }
+        let mut roster = self.shared.roster.subscribe();
+        let current = *roster.borrow_and_update();
+        if input.after_revision != Some(current) {
+            return Ok(Revision { revision: current });
+        }
+        let Ok(_waiting) = self.shared.waiters.try_acquire() else {
+            return Err(BridgeError::new(
+                "wait_busy",
+                format!("this broker is already holding {MAX_WAITERS} waits; wait again shortly"),
+            ));
+        };
+        let _ = timeout(Duration::from_millis(input.timeout_ms), roster.changed()).await;
+        Ok(Revision {
+            revision: *roster.borrow(),
         })
     }
 
@@ -549,6 +630,8 @@ impl Broker {
             state.fault(error.clone());
             return Err(error);
         }
+        drop(state);
+        self.shared.changed();
         if let Some(control) = control {
             let _ = control.send(Some(StopReason::Cancelled));
         }
@@ -632,6 +715,7 @@ impl Broker {
                 }
             }
         }
+        self.shared.changed();
         let settled = async {
             loop {
                 let notified = self.shared.settlement.notified();
@@ -663,6 +747,8 @@ impl Broker {
                     state.fault(error);
                 }
             }
+            drop(state);
+            self.shared.changed();
             eprintln!(
                 "Broker shutdown: one or more owned jobs did not settle within eight seconds; state is unknown."
             );
@@ -743,6 +829,18 @@ impl Shared {
         }
     }
 
+    /// Wake every wait: something about an operation changed.
+    /// An operation was admitted or retired or changed state.
+    pub(crate) fn changed(&self) {
+        self.changes.send_modify(|revision| *revision = revision.wrapping_add(1));
+        self.roster.send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
+    /// An operation has new output.
+    fn output_changed(&self) {
+        self.changes.send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
     pub(crate) fn running(&self, id: &str) {
         let mut state = self.lock();
         let Some(operation) = state.operations.get_mut(id) else {
@@ -765,6 +863,8 @@ impl Shared {
         if let Err(error) = state.journal.update(&view) {
             state.fault(error);
         }
+        drop(state);
+        self.changed();
     }
 
     pub(crate) fn mark_stop(&self, id: &str) {
@@ -781,6 +881,8 @@ impl Shared {
         if let Err(error) = state.journal.update(&view) {
             state.fault(error);
         }
+        drop(state);
+        self.changed();
     }
 
     pub(crate) fn output(&self, id: &str, stream: &str, bytes: Vec<u8>, text: String) {
@@ -818,6 +920,8 @@ impl Shared {
                 state.fault(error);
             }
         }
+        drop(state);
+        self.output_changed();
     }
 
     pub(crate) fn finish(
@@ -863,6 +967,7 @@ impl Shared {
         state.active_count = state.active_count.saturating_sub(1);
         drop(state);
         self.settlement.notify_waiters();
+        self.changed();
     }
 }
 
@@ -943,19 +1048,163 @@ mod tests {
     }
 
     /// Windows PowerShell's first start on a fresh CI image can take tens of seconds.
+    /// Every test that settles an operation does it with the broker's own wait.
     async fn settle_within(broker: &Broker, id: &str, seconds: u64) -> OperationView {
         let deadline = Instant::now() + Duration::from_secs(seconds);
         loop {
-            let view = broker.get(id).unwrap();
+            let left = deadline.saturating_duration_since(Instant::now()).as_millis() as u64;
+            let view = broker
+                .wait(WaitInput {
+                    operation_id: id.into(),
+                    output_after: None,
+                    timeout_ms: left.clamp(1, MAX_WAIT_MS),
+                })
+                .await
+                .unwrap();
             if view.state.terminal() {
                 return view;
             }
-            assert!(
-                Instant::now() < deadline,
-                "operation did not settle: {view:?}"
-            );
-            sleep(Duration::from_millis(20)).await;
+            assert!(Instant::now() < deadline, "operation did not settle: {view:?}");
         }
+    }
+
+    fn wait_for(id: &str, output_after: Option<u64>, timeout_ms: u64) -> WaitInput {
+        WaitInput {
+            operation_id: id.into(),
+            output_after,
+            timeout_ms,
+        }
+    }
+
+    /// A shell line that prints `first`, pauses about three seconds, then prints `second`.
+    fn pause_between_lines() -> (PathBuf, Vec<String>) {
+        #[cfg(unix)]
+        return shell(&["echo first;", "sleep 3;", "echo second"]);
+        // By full path: the operation's environment is cleared, so cmd.exe has no PATH.
+        #[cfg(windows)]
+        return shell(&[
+            "echo",
+            "first&",
+            &system32("PING.EXE").display().to_string(),
+            "-n",
+            "4",
+            "127.0.0.1",
+            ">nul&",
+            "echo",
+            "second",
+        ]);
+    }
+
+    #[tokio::test]
+    async fn a_wait_answers_when_the_operation_settles() {
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, args) = pause_between_lines();
+        let broker = open_broker(&directory, &[&shell]);
+        let id = start(&broker, "settles", &shell, args, 20_000);
+        let began = Instant::now();
+        let view = broker.wait(wait_for(&id, None, MAX_WAIT_MS)).await.unwrap();
+        assert!(matches!(view.state, OperationState::Succeeded), "{view:?}");
+        // Answered when the work ended, not at the end of the 50 s wait.
+        assert!(began.elapsed() < Duration::from_secs(30), "{:?}", began.elapsed());
+        assert!(output_text(&broker, &id).contains("second"));
+        broker.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_wait_with_output_after_wakes_on_new_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, args) = pause_between_lines();
+        let broker = open_broker(&directory, &[&shell]);
+        let id = start(&broker, "output", &shell, args, 20_000);
+        let first = broker.wait(wait_for(&id, Some(0), MAX_WAIT_MS)).await.unwrap();
+        // Woken by `first`, while the command still pauses before `second`.
+        assert!(!first.state.terminal(), "{first:?}");
+        assert!(output_text(&broker, &id).contains("first"));
+        let view = settle(&broker, &id).await;
+        assert!(matches!(view.state, OperationState::Succeeded), "{view:?}");
+        broker.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_wait_that_times_out_returns_the_operation_unchanged() {
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, args) = pause_between_lines();
+        let broker = open_broker(&directory, &[&shell]);
+        let id = start(&broker, "times-out", &shell, args, 20_000);
+        let began = Instant::now();
+        let view = broker.wait(wait_for(&id, None, 300)).await.unwrap();
+        assert!(!view.state.terminal(), "{view:?}");
+        assert!(began.elapsed() >= Duration::from_millis(300));
+        for bad in [0, MAX_WAIT_MS + 1] {
+            let error = broker.wait(wait_for(&id, None, bad)).await.unwrap_err();
+            assert_eq!(error.code, "invalid_request", "{error:?}");
+        }
+        let unknown = uuid::Uuid::new_v4().to_string();
+        let missing = broker.wait(wait_for(&unknown, None, 300)).await.unwrap_err();
+        assert_eq!(missing.code, "not_found", "{missing:?}");
+        settle(&broker, &id).await;
+        broker.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_operations_revision_moves_on_admission_and_state_not_on_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, args) = pause_between_lines();
+        let broker = open_broker(&directory, &[&shell]);
+        let changes = |after: Option<u64>, timeout_ms: u64| {
+            let broker = Arc::clone(&broker);
+            async move {
+                broker
+                    .operations_changed(ChangesInput { after_revision: after, timeout_ms })
+                    .await
+                    .unwrap()
+                    .revision
+            }
+        };
+        let quiet = changes(None, 1).await;
+        let began = Instant::now();
+        assert_eq!(changes(Some(quiet), 300).await, quiet, "nothing happened");
+        assert!(began.elapsed() >= Duration::from_millis(300));
+        let id = start(&broker, "roster", &shell, args, 20_000);
+        let admitted = changes(Some(quiet), MAX_WAIT_MS).await;
+        assert_ne!(admitted, quiet, "an admission changes the list");
+        // Woken by `first`; the command then pauses without changing state.
+        broker.wait(wait_for(&id, Some(0), MAX_WAIT_MS)).await.unwrap();
+        let printing = changes(None, 1).await;
+        assert_eq!(changes(Some(printing), 1_000).await, printing, "output alone is not a change");
+        settle(&broker, &id).await;
+        assert_ne!(changes(Some(printing), MAX_WAIT_MS).await, printing, "settling is a change");
+        // A restarted broker counts from zero again: a stale revision answers at once.
+        let began = Instant::now();
+        changes(Some(u64::MAX), MAX_WAIT_MS).await;
+        assert!(began.elapsed() < Duration::from_secs(5));
+        broker.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn waits_are_capped_and_a_cancellation_wakes_every_waiter() {
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, args) = pause_between_lines();
+        let broker = open_broker(&directory, &[&shell]);
+        let id = start(&broker, "many-waiters", &shell, args, 20_000);
+        let mut waiters = tokio::task::JoinSet::new();
+        for _ in 0..MAX_WAITERS {
+            let (broker, id) = (Arc::clone(&broker), id.clone());
+            waiters.spawn(async move { broker.wait(wait_for(&id, None, MAX_WAIT_MS)).await });
+        }
+        while broker.shared.waiters.available_permits() > 0 {
+            sleep(Duration::from_millis(10)).await;
+        }
+        let busy = broker.wait(wait_for(&id, None, 1_000)).await.unwrap_err();
+        assert_eq!(busy.code, "wait_busy");
+        let began = Instant::now();
+        broker.cancel(&id).unwrap();
+        while let Some(answer) = waiters.join_next().await {
+            let view = answer.unwrap().unwrap();
+            assert!(matches!(view.state, OperationState::Cancelled), "{view:?}");
+        }
+        assert!(began.elapsed() < Duration::from_secs(20), "{:?}", began.elapsed());
+        broker.shutdown().await;
     }
 
     fn output_text(broker: &Broker, id: &str) -> String {
