@@ -276,7 +276,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let devices = Arc::new(devices_at(&state_dir)?);
     let audit = Arc::new(Audit::open(&state_dir.join("audit.sqlite3"))?);
     let links = Arc::new(Links::new(config.clone(), devices.clone(), audit.clone()));
-    let verifier = Arc::new(Verifier::from_config(&config.auth).await?);
+    let verifier = Arc::new(Verifier::from_config(&config.auth, &state_dir).await?);
     let web = match (&config.web, &config.auth) {
         (
             Some(web),
