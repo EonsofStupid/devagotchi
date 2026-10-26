@@ -3,11 +3,9 @@
 //! underneath, so a command that outlasts the wait keeps running and stays observable with
 //! the operation tools; nothing here owns a job.
 
-use std::time::Duration;
-
 use devagotchi_contracts::{
-    BridgeError, GetInput, MAX_OUTPUT_PAGE_BYTES, OperationState, ReadInput, RequestBody,
-    ResponseBody, StartInput,
+    BridgeError, MAX_OUTPUT_PAGE_BYTES, OperationState, ReadInput, RequestBody, ResponseBody,
+    StartInput, WaitInput,
 };
 use rmcp::{
     Json, RoleServer, handler::server::wrapper::Parameters, service::RequestContext, tool,
@@ -77,6 +75,17 @@ pub(crate) fn tail(text: String, limit: usize) -> (String, bool) {
     (text[start..].to_owned(), true)
 }
 
+/// A broker from before waits existed rejects the request it cannot parse; say what to do.
+fn outdated(error: BridgeError, machine: &str) -> BridgeError {
+    if error.code == "invalid_request" && error.message.contains("operation_wait") {
+        return BridgeError::new(
+            "broker_outdated",
+            format!("{machine} runs a Devagotchi broker older than this hub; update it to use run. The command was started; follow it with operation_get and operation_read."),
+        );
+    }
+    error
+}
+
 fn bounded(value: Option<u64>, default: u64, max: u64, name: &str) -> Result<u64, BridgeError> {
     match value.unwrap_or(default) {
         n if (1..=max).contains(&n) => Ok(n),
@@ -142,10 +151,15 @@ impl Hub {
         let id = operation.operation_id.clone();
         let mut state = operation.state;
         let mut exit_code = operation.exit_code;
-        let until = tokio::time::Instant::now() + Duration::from_secs(wait);
-        let mut pause = Duration::from_millis(50);
-        while !state.terminal() && tokio::time::Instant::now() < until {
-            tokio::select! {
+        if !state.terminal() {
+            // One held request: the broker answers the moment the command finishes, or at
+            // the wait's end with it still running. Nothing asks again in between.
+            let wait = RequestBody::OperationWait(WaitInput {
+                operation_id: id.clone(),
+                output_after: None,
+                timeout_ms: wait * 1000,
+            });
+            let view = tokio::select! {
                 biased;
                 _ = context.ct.cancelled() => {
                     self.record(&subject, "run", &input.machine, &id, "request_cancelled")?;
@@ -154,17 +168,8 @@ impl Hub {
                         format!("stopped waiting; operation {id} keeps running on {}", input.machine),
                     )));
                 }
-                _ = tokio::time::sleep(pause.min(until - tokio::time::Instant::now())) => {}
-            }
-            pause = (pause * 2).min(Duration::from_millis(500));
-            let view = self
-                .send(
-                    &route,
-                    RequestBody::OperationGet(GetInput {
-                        operation_id: id.clone(),
-                    }),
-                )
-                .await;
+                view = self.send(&route, wait) => view,
+            };
             match view {
                 Ok(ResponseBody::Operation(view)) => {
                     state = view.state;
@@ -173,7 +178,7 @@ impl Hub {
                 Ok(other) => return Err(crate::hub::unexpected_response("operation", &other)),
                 Err(error) => {
                     self.record(&subject, "run", &input.machine, &id, &error.code)?;
-                    return Err(Json(error));
+                    return Err(Json(outdated(error, &input.machine)));
                 }
             }
         }

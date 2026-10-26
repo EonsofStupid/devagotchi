@@ -16,6 +16,14 @@
 //! - Nomen's answer about a token ("inactive", "another project's token") is reused for
 //!   a minute; failing to reach Nomen never is, and it surfaces as `issuer_unavailable`,
 //!   never as a refusal, so an outage cannot look like lost access.
+//! - An outage does not sign anyone out: a token Nomen confirmed keeps working while Nomen
+//!   cannot be reached, until the token's own expiry (and never more than 12 hours after
+//!   Nomen last confirmed it). Nobody can sign out of an unreachable Nomen either, so this
+//!   honours nothing Nomen could have withdrawn; the first answer after it returns decides.
+//! - An outage costs a caller seconds, not minutes: Nomen gets 3 s to connect and 5 s to
+//!   answer, and once it has failed, sign-ins it never confirmed are refused at once while
+//!   one request at a time tries again (after 2 s, doubling to 30 s). The outage and the
+//!   recovery are each logged once, with how long it lasted; `health()` reports it.
 //! - A flood of unknown tokens can delay new sign-ins, but never evicts a confirmed one.
 //! - The hub starts without contacting Nomen, so its local commands and machine links
 //!   keep working while Nomen is down.
@@ -46,6 +54,15 @@ const CACHE_MAX: usize = 4096;
 const MAX_IN_FLIGHT: usize = 16;
 const QUEUE_WAIT: Duration = Duration::from_secs(5);
 const MAX_ANSWER_BYTES: usize = 64 * 1024;
+/// Nomen's time to accept a connection, and to answer once connected.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const ANSWER_TIMEOUT: Duration = Duration::from_secs(5);
+/// A confirmed token keeps working through an outage until its own expiry, but never
+/// longer than this after Nomen last confirmed it.
+const HONOUR_MAX: Duration = Duration::from_secs(12 * 3600);
+/// After a failed call to Nomen, the next try waits this long, doubling up to RETRY_MAX.
+const RETRY_FIRST: Duration = Duration::from_secs(2);
+const RETRY_MAX: Duration = Duration::from_secs(30);
 const ASSERTION_LIFETIME_SECS: u64 = 300;
 /// One signed assertion serves every introspection for this long.
 const ASSERTION_REUSE_SECS: u64 = 60;
@@ -124,6 +141,33 @@ struct Remembered {
     /// When the hub asked Nomen; a later answer never yields to an earlier one.
     asked: Instant,
     until: Instant,
+    /// For a confirmed sign-in: how long it is honoured while Nomen cannot be reached.
+    honour_until: Option<Instant>,
+}
+
+/// Whether Nomen is answering, as the hub last found it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct IssuerHealth {
+    pub reachable: bool,
+    /// Unix seconds when Nomen stopped answering, while it is down.
+    pub down_since: Option<u64>,
+    /// Unix seconds of Nomen's last answer.
+    pub last_answer: Option<u64>,
+    /// Why the last call failed, while it is down.
+    pub last_error: Option<String>,
+    /// Requests answered from an earlier confirmation during the current or last outage.
+    pub honoured_during_outage: u64,
+}
+
+#[derive(Default)]
+struct Outage {
+    /// When (monotonic, and Unix seconds) Nomen stopped answering.
+    since: Option<(Instant, u64)>,
+    retry_at: Option<Instant>,
+    backoff: Duration,
+    last_error: Option<String>,
+    last_answer: Option<u64>,
+    honoured: u64,
 }
 
 pub struct NomenVerifier {
@@ -136,6 +180,11 @@ pub struct NomenVerifier {
     assertion: Mutex<Option<(String, u64)>>,
     cache: Mutex<HashMap<[u8; 32], Remembered>>,
     in_flight: Semaphore,
+    outage: Mutex<Outage>,
+    /// How long Nomen's answer is reused while it is reachable (CACHE_TTL; shorter in tests).
+    fresh_for: Duration,
+    /// The first and longest pause before trying Nomen again (RETRY_FIRST, RETRY_MAX).
+    retry: (Duration, Duration),
 }
 
 impl NomenVerifier {
@@ -172,8 +221,8 @@ impl NomenVerifier {
         let encoding = EncodingKey::from_rsa_pem(key.key.as_bytes())
             .map_err(|_| invalid("key is not an RSA private key in PEM form"))?;
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5))
+            .timeout(ANSWER_TIMEOUT)
+            .connect_timeout(CONNECT_TIMEOUT)
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| BridgeError::new("auth_setup", error.to_string()))?;
@@ -192,6 +241,9 @@ impl NomenVerifier {
             assertion: Mutex::new(None),
             cache: Mutex::new(HashMap::new()),
             in_flight: Semaphore::new(MAX_IN_FLIGHT),
+            outage: Mutex::new(Outage::default()),
+            fresh_for: CACHE_TTL,
+            retry: (RETRY_FIRST, RETRY_MAX),
         };
         // Sign once now: a key that cannot sign stops the hub at start, not at sign-in.
         verifier
@@ -204,6 +256,18 @@ impl NomenVerifier {
         &self.accepts.issuer
     }
 
+    /// Whether Nomen is answering, for the status page and `whoami`.
+    pub fn health(&self) -> IssuerHealth {
+        let outage = self.outage.lock().expect("nomen outage lock");
+        IssuerHealth {
+            reachable: outage.since.is_none(),
+            down_since: outage.since.map(|(_, unix)| unix),
+            last_answer: outage.last_answer,
+            last_error: outage.since.and(outage.last_error.clone()),
+            honoured_during_outage: outage.honoured,
+        }
+    }
+
     pub async fn verify(&self, token: &str) -> Result<Subject, AuthError> {
         if !token.bytes().all(|b| b.is_ascii_graphic()) {
             return Err(AuthError::Invalid(
@@ -214,24 +278,108 @@ impl NomenVerifier {
         if let Some(outcome) = self.recall(&digest) {
             return outcome.map_err(AuthError::Invalid);
         }
-        let _permit = tokio::time::timeout(QUEUE_WAIT, self.in_flight.acquire())
-            .await
-            .map_err(|_| AuthError::Unavailable("too many sign-in checks waiting on Nomen".into()))?
-            .map_err(|_| AuthError::Unavailable("sign-in checks are shutting down".into()))?;
+        // While Nomen is known to be down, do not make this caller wait on it too.
+        if let Some(why) = self.waiting_out_outage() {
+            return self.honour(&digest).ok_or(AuthError::Unavailable(why));
+        }
+        let permit = tokio::time::timeout(QUEUE_WAIT, self.in_flight.acquire()).await;
+        let _permit = match permit {
+            Ok(Ok(permit)) => permit,
+            Ok(Err(_)) => return Err(AuthError::Unavailable("sign-in checks are shutting down".into())),
+            Err(_) => {
+                return self.honour(&digest).ok_or_else(|| {
+                    AuthError::Unavailable("too many sign-in checks waiting on Nomen".into())
+                });
+            }
+        };
         // Another request may have asked about the same token while this one waited.
         if let Some(outcome) = self.recall(&digest) {
             return outcome.map_err(AuthError::Invalid);
         }
         let asked = Instant::now();
-        let answer = self.introspect(token).await?;
+        let answer = match self.introspect(token).await {
+            Ok(answer) => {
+                self.answered();
+                answer
+            }
+            Err(AuthError::Unavailable(why)) => {
+                self.failed(&why);
+                return self.honour(&digest).ok_or(AuthError::Unavailable(why));
+            }
+            Err(refused) => return Err(refused),
+        };
         let now = unix_now();
         let outcome = assess(&answer, &self.accepts, now);
-        let ttl = match (&outcome, answer.exp) {
-            (Ok(_), Some(exp)) => CACHE_TTL.min(Duration::from_secs(exp.saturating_sub(now))),
-            _ => CACHE_TTL,
+        let (ttl, honour) = match (&outcome, answer.exp) {
+            (Ok(_), Some(exp)) => {
+                let left = Duration::from_secs(exp.saturating_sub(now));
+                (self.fresh_for.min(left), Some(asked + HONOUR_MAX.min(left)))
+            }
+            _ => (self.fresh_for, None),
         };
-        self.remember(digest, outcome.clone(), asked, ttl);
+        self.remember(digest, outcome.clone(), asked, ttl, honour);
         outcome.map_err(AuthError::Invalid)
+    }
+
+    /// A sign-in Nomen confirmed earlier, still honoured while Nomen cannot be reached.
+    fn honour(&self, digest: &[u8; 32]) -> Option<Subject> {
+        let subject = {
+            let cache = self.cache.lock().expect("nomen cache lock");
+            let entry = cache.get(digest)?;
+            let subject = entry.outcome.as_ref().ok()?;
+            (entry.honour_until? > Instant::now()).then(|| subject.clone())?
+        };
+        self.outage.lock().expect("nomen outage lock").honoured += 1;
+        Some(subject)
+    }
+
+    /// While Nomen is down and its next try is not due, why callers should not wait on it.
+    /// When the try is due, this caller makes it and the next is scheduled at once, so
+    /// only one request at a time waits on an unreachable Nomen.
+    fn waiting_out_outage(&self) -> Option<String> {
+        let mut outage = self.outage.lock().expect("nomen outage lock");
+        let (since, _) = outage.since?;
+        let now = Instant::now();
+        let due = outage.retry_at.is_none_or(|at| at <= now);
+        if due {
+            outage.backoff = (outage.backoff * 2).clamp(self.retry.0, self.retry.1);
+            outage.retry_at = Some(now + outage.backoff);
+            return None;
+        }
+        let wait = outage.retry_at.map_or(0, |at| at.saturating_duration_since(now).as_secs() + 1);
+        Some(format!(
+            "Nomen has not answered for {} s (last: {}); trying again in {wait} s",
+            since.elapsed().as_secs(),
+            outage.last_error.as_deref().unwrap_or("no answer"),
+        ))
+    }
+
+    fn failed(&self, why: &str) {
+        let mut outage = self.outage.lock().expect("nomen outage lock");
+        if outage.since.is_none() {
+            outage.since = Some((Instant::now(), unix_now()));
+            outage.backoff = self.retry.0;
+            outage.retry_at = Some(Instant::now() + self.retry.0);
+            outage.honoured = 0;
+            eprintln!(
+                "devagotchi hub: Nomen unreachable ({why}). Sign-ins it confirmed keep working until their tokens expire; new ones wait for Nomen."
+            );
+        }
+        outage.last_error = Some(why.to_string());
+    }
+
+    fn answered(&self) {
+        let mut outage = self.outage.lock().expect("nomen outage lock");
+        if let Some((since, _)) = outage.since.take() {
+            eprintln!(
+                "devagotchi hub: Nomen answering again after {} s; {} requests were honoured from earlier sign-ins meanwhile.",
+                since.elapsed().as_secs(),
+                outage.honoured
+            );
+        }
+        outage.retry_at = None;
+        outage.backoff = Duration::ZERO;
+        outage.last_answer = Some(unix_now());
     }
 
     async fn introspect(&self, token: &str) -> Result<Introspection, AuthError> {
@@ -315,8 +463,11 @@ impl NomenVerifier {
 
     fn recall(&self, digest: &[u8; 32]) -> Option<Result<Subject, &'static str>> {
         let mut cache = self.cache.lock().expect("nomen cache lock");
+        let now = Instant::now();
         match cache.get(digest) {
-            Some(entry) if entry.until > Instant::now() => Some(entry.outcome.clone()),
+            Some(entry) if entry.until > now => Some(entry.outcome.clone()),
+            // Past its minute but still honoured through an outage: kept, not answered.
+            Some(entry) if entry.honour_until.is_some_and(|until| until > now) => None,
             Some(_) => {
                 cache.remove(digest);
                 None
@@ -325,14 +476,16 @@ impl NomenVerifier {
         }
     }
 
-    /// Keep Nomen's answer until `asked + ttl`. A full cache drops expired answers, then
-    /// refusals; a confirmed sign-in is never evicted to make room for anything.
+    /// Keep Nomen's answer until `asked + ttl` (a confirmed sign-in, through an outage,
+    /// until `honour_until`). A full cache drops expired answers, then refusals; a
+    /// confirmed sign-in is never evicted to make room for anything.
     fn remember(
         &self,
         digest: [u8; 32],
         outcome: Result<Subject, &'static str>,
         asked: Instant,
         ttl: Duration,
+        honour_until: Option<Instant>,
     ) {
         let now = Instant::now();
         let until = asked + ttl;
@@ -344,7 +497,9 @@ impl NomenVerifier {
             return;
         }
         if !cache.contains_key(&digest) && cache.len() >= CACHE_MAX {
-            cache.retain(|_, entry| entry.until > now);
+            cache.retain(|_, entry| {
+                entry.until > now || entry.honour_until.is_some_and(|until| until > now)
+            });
             if cache.len() >= CACHE_MAX {
                 cache.retain(|_, entry| entry.outcome.is_ok());
             }
@@ -358,6 +513,7 @@ impl NomenVerifier {
                 outcome,
                 asked,
                 until,
+                honour_until,
             },
         );
     }

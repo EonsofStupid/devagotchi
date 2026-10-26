@@ -19,6 +19,7 @@ verified by a receipt; **planned** = the increment that brings it.
 | Tokens are short-lived and audience-bound; refresh tokens rotate for public clients | Nomen token settings; hub rejects any `aud` not in its list | Nomen, hub config `audiences` | built (hub) / planned (Nomen policy) |
 | A browser session outlasts a restart, never its person's account | session id only in a `__Host-` cookie, its SHA-256 on the hub; Nomen's tokens sealed (AES-256-GCM, key 0600, bound to the row) in a 0600 store; renewed with the rotated refresh token, one refresh at a time; ends on sign-out (refresh token revoked), 30 days unused, 90 days at most, or when Nomen refuses a refresh | hub `web.rs`, `web/sessions.rs` | built (18) |
 | Opaque tokens are introspected, never trusted | RFC 7662 introspection with the hub's own credentials | hub | planned (H2) |
+| An identity-provider outage neither signs anyone out nor lets anyone new in | A token Nomen confirmed keeps working while Nomen cannot be reached, until its own `exp` and at most 12 h after the confirmation (nobody can sign out of an unreachable Nomen either); a token Nomen never confirmed gets 503 with Retry-After, never 401; after a failure one request at a time tries Nomen again (2 s doubling to 30 s), 3 s connect / 5 s answer; start and end logged once; `/healthz` reports `issuer` | hub `nomen.rs`, `lib.rs` | built (27a) |
 
 ## 2. Authorization
 

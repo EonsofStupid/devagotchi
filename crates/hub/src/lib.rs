@@ -298,25 +298,9 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         .map_err(|_| BridgeError::new("invalid_config", "listen"))?;
     let boards = Arc::new(board::mcp::Boards::from_config(&config, &state_dir));
     if !boards.is_empty() {
-        // Lapsed leases go back to their queue on an interval, as the Go hub's reaper
-        // did; claims also expire them lazily, so this is the backstop, not the path.
-        let reaper = boards.clone();
-        tokio::spawn(async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
-            tick.tick().await;
-            loop {
-                tick.tick().await;
-                let reaper = reaper.clone();
-                let _ = tokio::task::spawn_blocking(move || {
-                    for (project, result) in reaper.reap_all() {
-                        if let Err(error) = result {
-                            eprintln!("devagotchi hub: board {project}: reap failed: {error}");
-                        }
-                    }
-                })
-                .await;
-            }
-        });
+        // Lapsed leases go back to their queue when they lapse: the reaper sleeps until
+        // the next lease ends or a board changes. Claims also expire them lazily.
+        tokio::spawn(boards.clone().reap_on_time());
     }
     let state = AppState {
         verifier,
@@ -465,13 +449,42 @@ async fn require_bearer(
             challenge(StatusCode::UNAUTHORIZED, &metadata, Some("invalid_token"))
         }
         Err(AuthError::Unavailable(why)) => {
-            eprintln!("devagotchi hub: issuer unavailable: {why}");
+            log_unavailable(&why);
+            // Clients retry on their own; say when, and why, so an outage reads as one.
             (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "identity provider unavailable",
+                [(header::RETRY_AFTER, "5")],
+                format!("identity provider unavailable: {why}"),
             )
                 .into_response()
         }
+    }
+}
+
+/// An identity-provider outage, for the operator: the verifier logs when it starts and
+/// ends; per request, at most one line every 30 s with how many were left out.
+pub(crate) fn log_unavailable(why: &str) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    static SUPPRESSED: AtomicU64 = AtomicU64::new(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0);
+    let last = LAST.load(Ordering::Relaxed);
+    if now >= last + 30
+        && LAST
+            .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    {
+        let suppressed = SUPPRESSED.swap(0, Ordering::Relaxed);
+        if suppressed > 0 {
+            eprintln!("devagotchi hub: issuer unavailable: {why} ({suppressed} more since the last line)");
+        } else {
+            eprintln!("devagotchi hub: issuer unavailable: {why}");
+        }
+    } else {
+        SUPPRESSED.fetch_add(1, Ordering::Relaxed);
     }
 }
 
@@ -575,10 +588,13 @@ async fn healthz(State(state): State<AppState>) -> Response {
     }
     let audit = state.hub.audit.verify();
     let chain_ok = audit.as_ref().map(|status| status.ok).unwrap_or(false);
+    // The identity provider is reported, not counted: an outage there leaves the hub, its
+    // links and confirmed sign-ins working (see nomen.rs).
     let body = serde_json::json!({
         "ok": all_up && chain_ok,
         "brokers": brokers,
         "audit": audit.ok(),
+        "issuer": state.verifier.issuer_health(),
     });
     let status = if all_up && chain_ok {
         StatusCode::OK

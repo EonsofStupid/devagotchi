@@ -363,7 +363,8 @@ fn connect_wires_every_client_and_checks_the_server_answers() {
             .unwrap();
         let text = String::from_utf8_lossy(&out.stdout);
         assert!(out.status.success(), "{text}{}", String::from_utf8_lossy(&out.stderr));
-        assert!(text.contains("answered with 4 tools"), "{text}");
+        // The check names what the server offered; the count follows the adapter's tool list.
+        assert!(text.contains("Devagotchi answered with ") && text.contains("operation_start") && text.contains("operation_wait"), "{text}");
         assert!(text.contains("Claude Code: added") && text.contains("Codex: ") && text.contains("Claude Desktop: "), "{text}");
         let config = std::fs::read_to_string(codex.join("config.toml")).unwrap();
         assert!(config.starts_with("model = \"gpt-5\"\n"), "{config}");
