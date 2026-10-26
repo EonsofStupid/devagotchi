@@ -5,6 +5,8 @@ import type {
 } from "./generated/contracts";
 
 const PAGE_SIZE = 32;
+/** How long one wait is held by the broker before it answers unchanged and is renewed. */
+const WAIT_MS = 25000;
 const MAX_DISPLAY_FRAMES = 1200;
 const MAX_DISPLAY_CHARACTERS = 512 * 1024;
 type DisplayFrame = Pick<OutputFrame, "sequence" | "stream" | "text">;
@@ -50,32 +52,49 @@ export function useInspector(client: BridgeClient) {
   }, []);
 
   useEffect(() => {
+    // Re-list only when the broker says its list changed: each wait is one request the
+    // broker holds until a command is admitted, retired or changes state (or WAIT_MS
+    // passes). Nothing is fetched on a timer; after an error the next try is 3 s later.
     let disposed = false;
     let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      if (disposed) return;
-      setRefreshing(true);
-      try {
-        const info = await client.connectionInfo();
-        if (disposed) return;
-        setConnection(info);
-        const next = await client.listOperations({ offset, limit: PAGE_SIZE });
-        if (disposed) return;
-        setPage(next);
-        setListError(null);
-        setLastSynced(Date.now());
-        setSelectedId((current) => current ?? next.operations[0]?.operation_id ?? null);
-      } catch (error) {
-        if (!disposed) setListError(describeError(error));
-      } finally {
-        if (!disposed) {
-          setRefreshing(false);
-          setListLoading(false);
-          timer = setTimeout(poll, 3000);
+    let revision: number | undefined;
+    async function follow() {
+      while (!disposed) {
+        try {
+          const answer = await client.operationsChanged({
+            after_revision: revision,
+            timeout_ms: revision === undefined ? 1 : WAIT_MS,
+          });
+          if (disposed) return;
+          if (answer.revision === revision) {
+            setLastSynced(Date.now());
+            continue;
+          }
+          revision = answer.revision;
+          setRefreshing(true);
+          const info = await client.connectionInfo();
+          if (disposed) return;
+          setConnection(info);
+          const next = await client.listOperations({ offset, limit: PAGE_SIZE });
+          if (disposed) return;
+          setPage(next);
+          setListError(null);
+          setLastSynced(Date.now());
+          setSelectedId((current) => current ?? next.operations[0]?.operation_id ?? null);
+        } catch (error) {
+          if (disposed) return;
+          setListError(describeError(error));
+          revision = undefined;
+          await new Promise((resolve) => { timer = setTimeout(resolve, 3000); });
+        } finally {
+          if (!disposed) {
+            setRefreshing(false);
+            setListLoading(false);
+          }
         }
       }
     }
-    void poll();
+    void follow();
     return () => { disposed = true; clearTimeout(timer); };
   }, [client, offset, refreshKey]);
 
@@ -97,7 +116,7 @@ export function useInspector(client: BridgeClient) {
     const operationId = selectedId;
 
     async function poll() {
-      let delay = 1000;
+      let delay = 0;
       try {
         if (first) {
           const value = await client.getOperation({ operation_id: operationId });
@@ -135,12 +154,16 @@ export function useInspector(client: BridgeClient) {
           setDetailError(null);
           setDetailLoading(false);
           if (!value.has_more) {
-            // Completed output is stable. Manual refresh can read it again.
-            if (!isActive(value.operation.state) && value.operation.output_complete) return;
-            if (!isActive(value.operation.state)) delay = 3000;
+            // A finished command's output is final (a settled operation's pipes are
+            // already drained). Manual refresh can read it again.
+            if (!isActive(value.operation.state)) return;
+            // Sleep in the broker until there is output past the cursor or it settles.
+            const waited = await client.waitOperation({ operation_id: operationId, output_after: cursor, timeout_ms: WAIT_MS });
+            if (disposed) return;
+            if (waited.operation_id !== operationId) throw { code: "response_mismatch", message: "The broker returned a different command." };
+            setOperation((current) => newer(current, waited));
             break;
           }
-          delay = 100;
         }
       } catch (error) {
         if (disposed) return;

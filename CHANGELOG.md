@@ -15,6 +15,18 @@ heading. Agents draft the fragments below; they never tag.
 - Lapsed leases are expired when they lapse: the reaper sleeps until the first lease on
   any open board ends, or until a board changes, instead of sweeping every 60 s.
 
+### The inspector waits instead of polling (increment 26e)
+- New broker request `operations_changed {after_revision?, timeout_ms}`: answered when an
+  operation is admitted or retired or changes state (output alone does not count), or at
+  the timeout with the same revision; a revision the broker does not have (it restarted)
+  answers at once.
+- The desktop inspector re-lists only when that answer changes, instead of every 3 s,
+  and follows the selected command's output with `operation_wait` (output past its
+  cursor, or settlement) instead of reading every second; draining pages no longer
+  pauses 100 ms between them. After an error it retries in 3 s.
+- The desktop crate builds against the current contracts again: its response-kind match
+  lacked the file responses added in 24d and 24e.
+
 ### Process exits are events on Windows (increment 26d)
 - The root's exit is the wait on its process handle (registered with the system thread
   pool by the runtime), not a 20 ms look. Each Job Object gets its own I/O completion

@@ -41,6 +41,27 @@ pub struct GetInput {
 /// minute, so a wait ends well before that and the caller waits again.
 pub const MAX_WAIT_MS: u64 = 50_000;
 
+/// Wait until the broker's operations change as a list shows them: one admitted, retired,
+/// or moved to another state (output alone is not a change here). For a view that
+/// re-lists only when something changed, instead of on a timer.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChangesInput {
+    /// The revision your list reflects (from the last answer). Absent: answer at once with
+    /// the current revision. A broker that restarted answers at once, too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after_revision: Option<u64>,
+    /// Longest to wait, 1..=50000 milliseconds; at the limit the same revision comes back.
+    pub timeout_ms: u64,
+}
+
+/// The broker's current operations revision.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Revision {
+    pub revision: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct WaitInput {
@@ -350,6 +371,7 @@ pub enum RequestBody {
     OperationCancel(GetInput),
     OperationList(ListInput),
     OperationWait(WaitInput),
+    OperationsChanged(ChangesInput),
     FileRead(FileReadInput),
     FileList(FileListInput),
     FileWrite(FileWriteInput),
@@ -361,8 +383,9 @@ impl RequestBody {
     /// transports (local IPC, the machine link) wait this much longer for the response.
     pub fn held_for(&self) -> std::time::Duration {
         match self {
-            Self::OperationWait(input) => {
-                std::time::Duration::from_millis(input.timeout_ms.min(MAX_WAIT_MS))
+            Self::OperationWait(WaitInput { timeout_ms, .. })
+            | Self::OperationsChanged(ChangesInput { timeout_ms, .. }) => {
+                std::time::Duration::from_millis((*timeout_ms).min(MAX_WAIT_MS))
             }
             _ => std::time::Duration::ZERO,
         }
@@ -386,6 +409,7 @@ pub enum ResponseBody {
     File(FileContent),
     Listing(FileListing),
     Written(FileWritten),
+    Revision(Revision),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -88,6 +88,9 @@ pub(crate) struct Shared {
     /// Advances on every change to any operation (state, output, cancellation), so a wait
     /// sleeps until something happens instead of asking again and again.
     changes: watch::Sender<u64>,
+    /// Advances when an operation is admitted or retired or changes state; output alone
+    /// does not. A list (the inspector's) waits on it to re-read only when it changed.
+    roster: watch::Sender<u64>,
     waiters: Semaphore,
 }
 
@@ -253,6 +256,7 @@ impl Broker {
                 }),
                 settlement: Notify::new(),
                 changes: watch::channel(0).0,
+                roster: watch::channel(0).0,
                 waiters: Semaphore::new(MAX_WAITERS),
             }),
         }))
@@ -270,6 +274,9 @@ impl Broker {
                 .map(ResponseBody::Operation),
             RequestBody::OperationList(input) => self.list(input).map(ResponseBody::Operations),
             RequestBody::OperationWait(input) => self.wait(input).await.map(ResponseBody::Operation),
+            RequestBody::OperationsChanged(input) => {
+                self.operations_changed(input).await.map(ResponseBody::Revision)
+            }
             RequestBody::FileRead(input) => self.files().read(input).map(ResponseBody::File),
             RequestBody::FileList(input) => self.files().list(input).map(ResponseBody::Listing),
             RequestBody::FileWrite(input) => self.files().write(input).map(ResponseBody::Written),
@@ -459,6 +466,9 @@ impl Broker {
             },
         );
         state.active_count += 1;
+        drop(state);
+        // Admitted (and perhaps another retired to make room): the list changed.
+        self.shared.changed();
         let shared = self.shared.clone();
         let deadline = Instant::now() + Duration::from_millis(spec.deadline_ms);
         let job_id = id.clone();
@@ -515,6 +525,29 @@ impl Broker {
                 _ => return self.get(&id),
             }
         }
+    }
+
+    /// Answer when the operations revision differs from `after_revision`, or at
+    /// `timeout_ms` with it unchanged.
+    async fn operations_changed(&self, input: ChangesInput) -> BridgeResult<Revision> {
+        if !(1..=MAX_WAIT_MS).contains(&input.timeout_ms) {
+            return Err(invalid(format!("timeout_ms must be 1..={MAX_WAIT_MS}")));
+        }
+        let mut roster = self.shared.roster.subscribe();
+        let current = *roster.borrow_and_update();
+        if input.after_revision != Some(current) {
+            return Ok(Revision { revision: current });
+        }
+        let Ok(_waiting) = self.shared.waiters.try_acquire() else {
+            return Err(BridgeError::new(
+                "wait_busy",
+                format!("this broker is already holding {MAX_WAITERS} waits; wait again shortly"),
+            ));
+        };
+        let _ = timeout(Duration::from_millis(input.timeout_ms), roster.changed()).await;
+        Ok(Revision {
+            revision: *roster.borrow(),
+        })
     }
 
     fn get(&self, id: &str) -> BridgeResult<OperationView> {
@@ -797,7 +830,14 @@ impl Shared {
     }
 
     /// Wake every wait: something about an operation changed.
+    /// An operation was admitted or retired or changed state.
     pub(crate) fn changed(&self) {
+        self.changes.send_modify(|revision| *revision = revision.wrapping_add(1));
+        self.roster.send_modify(|revision| *revision = revision.wrapping_add(1));
+    }
+
+    /// An operation has new output.
+    fn output_changed(&self) {
         self.changes.send_modify(|revision| *revision = revision.wrapping_add(1));
     }
 
@@ -881,7 +921,7 @@ impl Shared {
             }
         }
         drop(state);
-        self.changed();
+        self.output_changed();
     }
 
     pub(crate) fn finish(
@@ -1103,6 +1143,41 @@ mod tests {
         let missing = broker.wait(wait_for(&unknown, None, 300)).await.unwrap_err();
         assert_eq!(missing.code, "not_found", "{missing:?}");
         settle(&broker, &id).await;
+        broker.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn the_operations_revision_moves_on_admission_and_state_not_on_output() {
+        let directory = tempfile::tempdir().unwrap();
+        let (shell, args) = pause_between_lines();
+        let broker = open_broker(&directory, &[&shell]);
+        let changes = |after: Option<u64>, timeout_ms: u64| {
+            let broker = Arc::clone(&broker);
+            async move {
+                broker
+                    .operations_changed(ChangesInput { after_revision: after, timeout_ms })
+                    .await
+                    .unwrap()
+                    .revision
+            }
+        };
+        let quiet = changes(None, 1).await;
+        let began = Instant::now();
+        assert_eq!(changes(Some(quiet), 300).await, quiet, "nothing happened");
+        assert!(began.elapsed() >= Duration::from_millis(300));
+        let id = start(&broker, "roster", &shell, args, 20_000);
+        let admitted = changes(Some(quiet), MAX_WAIT_MS).await;
+        assert_ne!(admitted, quiet, "an admission changes the list");
+        // Woken by `first`; the command then pauses without changing state.
+        broker.wait(wait_for(&id, Some(0), MAX_WAIT_MS)).await.unwrap();
+        let printing = changes(None, 1).await;
+        assert_eq!(changes(Some(printing), 1_000).await, printing, "output alone is not a change");
+        settle(&broker, &id).await;
+        assert_ne!(changes(Some(printing), MAX_WAIT_MS).await, printing, "settling is a change");
+        // A restarted broker counts from zero again: a stale revision answers at once.
+        let began = Instant::now();
+        changes(Some(u64::MAX), MAX_WAIT_MS).await;
+        assert!(began.elapsed() < Duration::from_secs(5));
         broker.shutdown().await;
     }
 

@@ -1,0 +1,44 @@
+{
+  "scope": "Browser rendering with explicit synthetic-response harness; product no-native state also checked. Not native IPC or named-client certification.",
+  "passed": true,
+  "checks": [
+    {
+      "name": "product browser reports missing native host without invented activity",
+      "passed": true
+    },
+    {
+      "name": "fixture command details and process output remain literal text",
+      "passed": true
+    },
+    {
+      "name": "workspace and connection navigation show data-backed context",
+      "passed": true
+    },
+    {
+      "name": "connected empty history is represented as empty",
+      "passed": true
+    },
+    {
+      "name": "permission failure surfaces the exact broker error",
+      "passed": true
+    },
+    {
+      "name": "unknown outcome with incomplete output does not promise future output",
+      "passed": true
+    },
+    {
+      "name": "pending cancellation stays correlated with its selected command",
+      "passed": true
+    },
+    {
+      "name": "frontend retention remains bounded while draining long output",
+      "passed": true
+    }
+  ],
+  "failures": [],
+  "page_errors": [],
+  "screenshots": [
+    "fixture-activity.png",
+    "browser-offline.png"
+  ]
+}

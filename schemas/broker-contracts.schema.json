@@ -16,6 +16,31 @@
       ],
       "type": "object"
     },
+    "ChangesInput": {
+      "additionalProperties": false,
+      "description": "Wait until the broker's operations change as a list shows them: one admitted, retired,\nor moved to another state (output alone is not a change here). For a view that\nre-lists only when something changed, instead of on a timer.",
+      "properties": {
+        "after_revision": {
+          "description": "The revision your list reflects (from the last answer). Absent: answer at once with\nthe current revision. A broker that restarted answers at once, too.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "timeout_ms": {
+          "description": "Longest to wait, 1..=50000 milliseconds; at the limit the same revision comes back.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "timeout_ms"
+      ],
+      "type": "object"
+    },
     "FileContent": {
       "additionalProperties": false,
       "properties": {
@@ -587,6 +612,21 @@
       ],
       "type": "object"
     },
+    "Revision": {
+      "additionalProperties": false,
+      "description": "The broker's current operations revision.",
+      "properties": {
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "revision"
+      ],
+      "type": "object"
+    },
     "StartInput": {
       "additionalProperties": false,
       "properties": {
@@ -705,6 +745,9 @@
     "bridge_error": {
       "$ref": "#/$defs/BridgeError"
     },
+    "changes_input": {
+      "$ref": "#/$defs/ChangesInput"
+    },
     "file_content": {
       "$ref": "#/$defs/FileContent"
     },
@@ -744,6 +787,9 @@
     "read_input": {
       "$ref": "#/$defs/ReadInput"
     },
+    "revision": {
+      "$ref": "#/$defs/Revision"
+    },
     "start_input": {
       "$ref": "#/$defs/StartInput"
     },
@@ -760,6 +806,8 @@
     "read_input",
     "list_input",
     "wait_input",
+    "changes_input",
+    "revision",
     "start_output",
     "operation_view",
     "output_page",
