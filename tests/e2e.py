@@ -175,7 +175,8 @@ try:
     hub_url = f"http://127.0.0.1:{port}"
     start([*hub_cmd, "serve", "--state-dir", str(hub_state), "--config", str(hub_config)], "ready:", "hub")
     probe = [str(HERE / "hub_probe.py"), hub_url, "--token", token, "--git", git, "--cwd", str(workspace)]
-    hub_ok = run_probe(probe + ["--broker", "local", "--run-broker", "account"], "hub probe")
+    hub_ok = run_probe(probe + ["--broker", "local", "--run-broker", "account", "--run-dir", str(account_workspace.resolve())],
+                       "hub probe")
     board_ok = board_init and run_probe(
         [str(HERE / "board_probe.py"), hub_url, "--project", "e2e-board", "--dir", str(project_dir),
          "--devagotchi", str(devagotchi), "--tokens", f"operator={token}",

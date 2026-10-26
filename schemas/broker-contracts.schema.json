@@ -16,6 +16,187 @@
       ],
       "type": "object"
     },
+    "FileContent": {
+      "additionalProperties": false,
+      "properties": {
+        "bytes_base64": {
+          "description": "The raw bytes, base64, when they are not text.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "eof": {
+          "description": "Whether this page reached the end of the file.",
+          "type": "boolean"
+        },
+        "modified_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "next_offset": {
+          "description": "The offset to read on from.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "description": "Where these bytes start.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "The file's canonical path.",
+          "type": "string"
+        },
+        "size": {
+          "description": "The file's size in bytes when it was read.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "description": "The bytes as text, when they are UTF-8 text. A character split at the end of the\npage is left for the next read.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "size",
+        "offset",
+        "next_offset",
+        "eof"
+      ],
+      "type": "object"
+    },
+    "FileEntry": {
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "description": "Why a directory's own entries are missing (it could not be read).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "`file`, `dir`, `symlink` or `other`. Symbolic links are listed, never followed.",
+          "type": "string"
+        },
+        "modified_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "Path relative to the listed directory, `/`-separated.",
+          "type": "string"
+        },
+        "size": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "FileListInput": {
+      "additionalProperties": false,
+      "properties": {
+        "depth": {
+          "default": 0,
+          "description": "How many levels below it to include, 0..=3 (default 0: its own entries).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "max_entries": {
+          "default": 200,
+          "description": "Most entries to return, 1..=1000 (default 200).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Absolute path of the directory.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
+    "FileListing": {
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "description": "Directories first at each level, then by name.",
+          "items": {
+            "$ref": "#/$defs/FileEntry"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": "The directory's canonical path.",
+          "type": "string"
+        },
+        "truncated": {
+          "description": "Whether `max_entries` cut the listing short.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "entries",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "FileReadInput": {
+      "additionalProperties": false,
+      "properties": {
+        "max_bytes": {
+          "default": 24576,
+          "description": "Bytes to read, 1..=24576 (default 24576). Read on from `next_offset` for more.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "offset": {
+          "default": 0,
+          "description": "Byte offset to start at; negative counts back from the end (a tail). Default 0.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "path": {
+          "description": "Absolute path of the file.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
     "GetInput": {
       "additionalProperties": false,
       "properties": {
@@ -365,6 +546,18 @@
     "bridge_error": {
       "$ref": "#/$defs/BridgeError"
     },
+    "file_content": {
+      "$ref": "#/$defs/FileContent"
+    },
+    "file_list_input": {
+      "$ref": "#/$defs/FileListInput"
+    },
+    "file_listing": {
+      "$ref": "#/$defs/FileListing"
+    },
+    "file_read_input": {
+      "$ref": "#/$defs/FileReadInput"
+    },
     "get_input": {
       "$ref": "#/$defs/GetInput"
     },
@@ -399,6 +592,10 @@
     "operation_view",
     "output_page",
     "operations_page",
+    "file_read_input",
+    "file_content",
+    "file_list_input",
+    "file_listing",
     "bridge_error"
   ],
   "title": "BrokerContracts",

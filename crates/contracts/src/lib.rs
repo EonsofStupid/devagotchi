@@ -149,6 +149,89 @@ pub struct OutputPage {
     pub operation: OperationView,
 }
 
+/// Largest page of file bytes one read returns, so the answer fits one wire frame.
+pub const MAX_FILE_READ_BYTES: usize = 24 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileReadInput {
+    /// Absolute path of the file.
+    pub path: String,
+    /// Byte offset to start at; negative counts back from the end (a tail). Default 0.
+    #[serde(default)]
+    pub offset: i64,
+    /// Bytes to read, 1..=24576 (default 24576). Read on from `next_offset` for more.
+    #[serde(default = "default_file_read_bytes")]
+    pub max_bytes: usize,
+}
+
+fn default_file_read_bytes() -> usize { MAX_FILE_READ_BYTES }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileContent {
+    /// The file's canonical path.
+    pub path: String,
+    /// The file's size in bytes when it was read.
+    pub size: u64,
+    /// Where these bytes start.
+    pub offset: u64,
+    /// The bytes as text, when they are UTF-8 text. A character split at the end of the
+    /// page is left for the next read.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// The raw bytes, base64, when they are not text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bytes_base64: Option<String>,
+    /// The offset to read on from.
+    pub next_offset: u64,
+    /// Whether this page reached the end of the file.
+    pub eof: bool,
+    pub modified_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileListInput {
+    /// Absolute path of the directory.
+    pub path: String,
+    /// How many levels below it to include, 0..=3 (default 0: its own entries).
+    #[serde(default)]
+    pub depth: u32,
+    /// Most entries to return, 1..=1000 (default 200).
+    #[serde(default = "default_list_entries")]
+    pub max_entries: u32,
+}
+
+fn default_list_entries() -> u32 { 200 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileEntry {
+    /// Path relative to the listed directory, `/`-separated.
+    pub path: String,
+    /// `file`, `dir`, `symlink` or `other`. Symbolic links are listed, never followed.
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modified_ms: Option<u64>,
+    /// Why a directory's own entries are missing (it could not be read).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileListing {
+    /// The directory's canonical path.
+    pub path: String,
+    /// Directories first at each level, then by name.
+    pub entries: Vec<FileEntry>,
+    /// Whether `max_entries` cut the listing short.
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BridgeError {
@@ -178,6 +261,8 @@ pub enum RequestBody {
     OperationRead(ReadInput),
     OperationCancel(GetInput),
     OperationList(ListInput),
+    FileRead(FileReadInput),
+    FileList(FileListInput),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -194,6 +279,8 @@ pub enum ResponseBody {
     Operation(OperationView),
     Output(OutputPage),
     Operations(OperationsPage),
+    File(FileContent),
+    Listing(FileListing),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

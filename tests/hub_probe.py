@@ -31,6 +31,8 @@ parser.add_argument("--cwd", default=None)
 parser.add_argument("--expect-error", default=None)
 # A broker under the `account` policy to exercise `run` on (one call: start, wait, output).
 parser.add_argument("--run-broker", default=None)
+# An absolute directory on that broker's machine (this host in the harness) for the file tools.
+parser.add_argument("--run-dir", default=None)
 args = parser.parse_args()
 base = args.base.rstrip("/")
 session = {"id": None, "rid": 0}
@@ -118,7 +120,8 @@ unannotated = [t["name"] for t in listed if not t.get("title") or not (
     "readOnlyHint" in t.get("annotations", {}) and "openWorldHint" in t.get("annotations", {})
     and (t["annotations"]["readOnlyHint"] or "destructiveHint" in t["annotations"]))]
 check("every tool has a title and annotations", not unannotated, ", ".join(unannotated))
-broker_tools = ["approval_request", "approval_wait", "machines", "operation_cancel", "operation_get", "operation_read", "operation_start", "run", "whoami"]
+broker_tools = ["approval_request", "approval_wait", "list_directory", "machines", "operation_cancel", "operation_get",
+                "operation_read", "operation_start", "read_file", "run", "whoami"]
 board_tools = [t for t in tools if t.startswith("board_")]
 check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 18,
       ", ".join(tools))
@@ -165,6 +168,24 @@ if args.run_broker:
     is_error, refused = call("run", {"machine": args.broker, "command": "echo hi"})
     check("run on a granted-only broker refused", is_error and refused.get("code") == "command_not_allowed",
           json.dumps(refused)[:200])
+
+if args.run_broker and args.run_dir:
+    import os
+    probe_file = os.path.join(args.run_dir, "devagotchi-probe.txt")
+    with open(probe_file, "w", newline="\n") as handle:
+        handle.write("devagotchi-file\n")
+    is_error, content = call("read_file", {"machine": args.run_broker, "path": probe_file})
+    check("read_file returns text in one call", not is_error and content.get("text") == "devagotchi-file\n"
+          and content.get("eof") is True, json.dumps(content)[:200])
+    is_error, tail = call("read_file", {"machine": args.run_broker, "path": probe_file, "offset": -5})
+    check("read_file reads a tail", not is_error and tail.get("text") == "file\n", json.dumps(tail)[:200])
+    is_error, listing = call("list_directory", {"machine": args.run_broker, "path": args.run_dir})
+    names = {e.get("path"): e.get("kind") for e in listing.get("entries", [])} if not is_error else {}
+    check("list_directory lists the file", names.get("devagotchi-probe.txt") == "file", json.dumps(listing)[:200])
+    # A broker that runs only granted programs reaches files only inside its workspace.
+    is_error, outside = call("read_file", {"machine": args.broker, "path": probe_file})
+    check("read_file outside a granted broker's workspace refused",
+          is_error and outside.get("code") == "path_outside_workspace", json.dumps(outside)[:200])
 
 is_error, denied = call("operation_start", {"broker": args.ungranted, "input": {
     "idempotency_key": str(uuid.uuid4()), "executable": args.git, "args": ["--version"], "deadline_ms": 5000}})

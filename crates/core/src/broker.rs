@@ -260,6 +260,16 @@ impl Broker {
                 .cancel(&input.operation_id)
                 .map(ResponseBody::Operation),
             RequestBody::OperationList(input) => self.list(input).map(ResponseBody::Operations),
+            RequestBody::FileRead(input) => self.files().read(input).map(ResponseBody::File),
+            RequestBody::FileList(input) => self.files().list(input).map(ResponseBody::Listing),
+        }
+    }
+
+    /// Where file requests may reach: the same policy as execution.
+    fn files(&self) -> crate::files::Scope<'_> {
+        crate::files::Scope {
+            workspace: &self.shared.workspace,
+            policy: self.shared.config.exec_policy,
         }
     }
 
