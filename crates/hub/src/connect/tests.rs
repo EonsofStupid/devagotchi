@@ -23,11 +23,14 @@ const CLI: &str = "300000000000000700";
 const PROJECT: &str = "300000000000000500";
 const OWNER: &str = "300000000000000001";
 
+/// App name to (app id, client id, redirect URIs).
+type Apps = HashMap<String, (String, String, Vec<String>)>;
+
 struct Fake {
     issuer: Mutex<String>,
     subject: Mutex<String>,
     decline: bool,
-    apps: Mutex<HashMap<String, (String, String, Vec<String>)>>,
+    apps: Mutex<Apps>,
     created: AtomicUsize,
     keys: AtomicUsize,
 }
@@ -147,7 +150,16 @@ async fn create_oidc(
     Json(body): Json<Value>,
 ) -> Response {
     assert!(owner_only(&headers));
-    assert_eq!(body["appType"], "OIDC_APP_TYPE_USER_AGENT");
+    let expected = if body["name"] == AI_APP {
+        "OIDC_APP_TYPE_NATIVE"
+    } else {
+        "OIDC_APP_TYPE_USER_AGENT"
+    };
+    assert_eq!(body["appType"], expected);
+    assert_eq!(
+        body["authMethodType"], "OIDC_AUTH_METHOD_TYPE_NONE",
+        "public apps only"
+    );
     let redirects = body["redirectUris"]
         .as_array()
         .unwrap()
@@ -250,15 +262,23 @@ async fn connects_a_hub_with_the_owners_approval_and_no_copied_key() {
         .unwrap();
 
     let doc = read(&config);
-    let (api_client, web_client) = {
+    let (api_client, web_client, ai_client) = {
         let apps = fake.apps.lock().unwrap();
-        (apps[API_APP].1.clone(), apps[WEB_APP].1.clone())
+        (
+            apps[API_APP].1.clone(),
+            apps[WEB_APP].1.clone(),
+            apps[AI_APP].1.clone(),
+        )
     };
     assert_eq!(doc["auth"]["mode"], "nomen");
     assert_eq!(doc["auth"]["issuer"], issuer.as_str());
     assert_eq!(doc["auth"]["audiences"], json!([PROJECT]));
     // The earlier Nomen's clients mean nothing to this one.
-    assert_eq!(doc["auth"]["clients"], json!([CLI, web_client]));
+    assert_eq!(doc["auth"]["clients"], json!([CLI, web_client, ai_client]));
+    assert_eq!(
+        fake.apps.lock().unwrap()[AI_APP].2,
+        AI_REDIRECTS.map(String::from).to_vec()
+    );
     assert_eq!(doc["owner"], OWNER);
     assert_eq!(doc["web"]["client_id"], web_client.as_str());
     assert_eq!(doc["brokers"][0]["name"], "tx-infra-prod");
@@ -299,6 +319,10 @@ async fn connects_a_hub_with_the_owners_approval_and_no_copied_key() {
         !told.contains("BEGIN RSA PRIVATE KEY"),
         "the key is never printed"
     );
+    assert!(
+        told.contains(&format!("OAuth client id {ai_client}")),
+        "{told}"
+    );
 }
 
 #[tokio::test]
@@ -317,7 +341,7 @@ async fn a_second_run_reuses_the_apps_adds_a_key_and_keeps_listed_clients() {
     std::fs::write(&config, doc.to_string()).unwrap();
 
     run(&c, &mut Vec::new()).await.unwrap();
-    assert_eq!(fake.created.load(SeqCst), 2, "the apps are made once");
+    assert_eq!(fake.created.load(SeqCst), 3, "the apps are made once");
     assert_eq!(fake.keys.load(SeqCst), 2, "each run gets a fresh key");
     let clients = read(&config)["auth"]["clients"].clone();
     assert!(

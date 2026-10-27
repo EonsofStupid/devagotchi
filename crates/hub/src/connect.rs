@@ -28,6 +28,13 @@ pub const API_SCOPE: &str =
     "openid profile email offline_access urn:zitadel:iam:org:project:id:zitadel:aud";
 pub const API_APP: &str = "devagotchi-hub";
 pub const WEB_APP: &str = "devagotchi-hub-web";
+/// The public PKCE app hosted AI clients sign people in through (a claude.ai or claude.com
+/// custom connector takes its client id); no secret, so nothing to hand over.
+pub const AI_APP: &str = "devagotchi-ai-connectors";
+pub const AI_REDIRECTS: [&str; 2] = [
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",
+];
 pub const KEY_FILE: &str = "nomen-key.json";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -79,18 +86,16 @@ pub async fn run(connect: &Connect, tell: &mut dyn Write) -> BridgeResult<()> {
         .login_with_scope(API_SCOPE, tell)
         .await
         .map_err(|e| err("nomen", e.to_string()))?;
-    if same_project {
-        if let Some(current) = doc["owner"].as_str().filter(|o| *o != owner.subject) {
-            return Err(err(
-                "not_owner",
-                format!(
-                    "this hub already belongs to {current} in project {}; {} approved. The owner changes only by editing {}",
-                    connect.project,
-                    owner.subject,
-                    connect.config.display()
-                ),
-            ));
-        }
+    if same_project && let Some(current) = doc["owner"].as_str().filter(|o| *o != owner.subject) {
+        return Err(err(
+            "not_owner",
+            format!(
+                "this hub already belongs to {current} in project {}; {} approved. The owner changes only by editing {}",
+                connect.project,
+                owner.subject,
+                connect.config.display()
+            ),
+        ));
     }
     let _ = writeln!(
         tell,
@@ -130,7 +135,7 @@ pub async fn run(connect: &Connect, tell: &mut dyn Write) -> BridgeResult<()> {
 
     let callback = format!("{public_url}/auth/callback");
     let web = match nomen.find_app(project, WEB_APP).await? {
-        Some(app) if app.redirects.iter().any(|r| *r == callback) => app,
+        Some(app) if app.redirects.contains(&callback) => app,
         Some(_) => {
             return Err(err(
                 "nomen",
@@ -158,6 +163,27 @@ pub async fn run(connect: &Connect, tell: &mut dyn Write) -> BridgeResult<()> {
         }
     };
 
+    let ai = match nomen.find_app(project, AI_APP).await? {
+        Some(app) => app,
+        None => {
+            let created = nomen
+                .post(
+                    &format!("/management/v1/projects/{project}/apps/oidc"),
+                    &json!({
+                        "name": AI_APP,
+                        "appType": "OIDC_APP_TYPE_NATIVE",
+                        "authMethodType": "OIDC_AUTH_METHOD_TYPE_NONE",
+                        "responseTypes": ["OIDC_RESPONSE_TYPE_CODE"],
+                        "grantTypes": ["OIDC_GRANT_TYPE_AUTHORIZATION_CODE", "OIDC_GRANT_TYPE_REFRESH_TOKEN"],
+                        "redirectUris": AI_REDIRECTS,
+                        "accessTokenType": "OIDC_TOKEN_TYPE_BEARER",
+                    }),
+                )
+                .await?;
+            App::created(&created)?
+        }
+    };
+
     let key_path = connect.state.join(KEY_FILE);
     write_private(&key_path, &key)?;
     let mut clients: Vec<String> = if same_project {
@@ -172,7 +198,7 @@ pub async fn run(connect: &Connect, tell: &mut dyn Write) -> BridgeResult<()> {
     } else {
         Vec::new()
     };
-    for client in [&connect.client_id, &web.client_id] {
+    for client in [&connect.client_id, &web.client_id, &ai.client_id] {
         if !clients.contains(client) {
             clients.push(client.clone());
         }
@@ -198,11 +224,12 @@ pub async fn run(connect: &Connect, tell: &mut dyn Write) -> BridgeResult<()> {
     let stale = doc["grants"].as_array().map_or(0, Vec::len);
     let _ = writeln!(
         tell,
-        "Connected: project {project}, API app {} (key in {}), web app {}; owner {}.\nThe previous config is in {}.\n{stale} grant(s) name subjects from before; people and agents sign in again and get new ones.\nRestart the hub to use it: systemctl --user restart devagotchi-hub",
+        "Connected: project {project}, API app {} (key in {}), web app {}; owner {}.\nFor a claude.ai or claude.com connector to {public_url}/mcp, use the OAuth client id {} (no secret).\nThe previous config is in {}.\n{stale} grant(s) name subjects from before; people and agents sign in again and get new ones.\nRestart the hub to use it: systemctl --user restart devagotchi-hub",
         api.client_id,
         key_path.display(),
         web.client_id,
         owner.subject,
+        ai.client_id,
         backup.display()
     );
     Ok(())

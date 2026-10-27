@@ -17,6 +17,9 @@ heading. Agents draft the fragments below; they never tag.
   else. The config gets `auth` (mode `nomen`, the project as audience, the CLI and web apps
   as clients), `owner` (whoever approved) and `web`, is checked as a hub config before it
   replaces the old one (written whole, 0600) and the old one is kept beside it.
+- It also makes `devagotchi-ai-connectors`, a public PKCE app with the claude.ai and
+  claude.com MCP callbacks (no secret), lists it as a client and prints its id: the OAuth
+  client id a claude.ai or claude.com custom connector to `<public_url>/mcp` takes.
 - Again on the same project: the apps are reused, a fresh key is added and the clients
   already listed stay. Someone other than the owner approving is refused and changes nothing;
   so is a declined code.
