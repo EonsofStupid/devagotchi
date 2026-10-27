@@ -362,81 +362,119 @@ the only bridge today and it works; the others are adapters over the same `/link
 A hub stands on its own: a person makes an account on it, links machines, connects AI
 clients and approves risky steps with nothing else deployed. Nomen ("Sign in with Shippin")
 is an extra way into the same account. Nothing here is built yet; it is the design the
-increments below build, reviewed with Jesse one decision at a time.
+increments below build, settled with Jesse one decision at a time. It was reviewed
+independently against the code and the Claude and OpenAI connector requirements before
+this version.
 
 ### What exists and stays
 
 | Piece | Today | Where |
 |---|---|---|
-| Machine identity | One Ed25519 key per machine, bound once by a one-time code (SHA-256 stored); every reconnect signs a fresh challenge. Owned machines belong to the account that added them (29a) | `devices.rs`, `link.rs` |
-| Adding a machine | "Add a machine" gives `curl -fsSL <hub>/join/<code> \| sudo sh` (or PowerShell); the operator's `devagotchi hub enroll` prints a code with no sign-in at all | `join.rs`, `web/machines.rs`, `lib.rs` |
-| Approvals | Board tickets, `/approvals` one-tap Approve/Deny, Web Push to phones (10a–10d) | `board/approval.rs`, `web/approvals.rs`, `push.rs` |
-| Browser sessions | Random id in a `__Host-` cookie, its SHA-256 on the hub, held tokens sealed under `session.key`, 30 days idle / 90 days max | `web/sessions.rs` |
-| CLI sign-in | RFC 8628 device authorization client, tokens 0600 in `account.json`, `devagotchi mcp --hub` relays an agent's session as the account (14a, 14c) | `account.rs`, `account/` |
+| Machine identity | One Ed25519 key per machine, bound once by a one-time code (only its SHA-256 stored); every reconnect signs a fresh challenge. Owned machines belong to the account that added them (29a) | `devices.rs`, `link.rs` |
+| Adding a machine | Signed in, "Add a machine" gives `curl -fsSL <hub>/join/<code> \| sudo sh` (or PowerShell) when the hub serves `downloads`; the operator's `devagotchi hub enroll` prints a bare code and the `devagotchi link enroll` line, with no sign-in | `join.rs`, `web/machines.rs`, `lib.rs` |
+| Approvals | Board tickets, `/approvals` one-tap Approve/Deny, Web Push to phones (10a, 10b, 10d; email, 10c, is not built) | `board/approval.rs`, `web/approvals.rs`, `push.rs` |
+| Browser sessions | Random id in a `__Host-` cookie, its SHA-256 on the hub, held tokens sealed under `session.key`, 30 days idle and 90 at most | `web.rs`, `web/sessions.rs` |
+| Hash-chained history | Board events chain over their `actor`, audit rows over their `subject`; neither may be rewritten | `board/mod.rs`, `audit.rs` |
+| CLI sign-in | RFC 8628 client, tokens 0600 in one `account.json`, `devagotchi mcp --hub` relaying an agent's session as the account (14a, 14c) | `account.rs`, `account/` |
 
-What ties all of it to Nomen today is two seams: the bearer check (`auth::Verifier` knows
-Nomen, a generic OIDC issuer and test tokens, nothing of its own) and the browser's
-`web::who()` (a session holds Nomen's tokens and every page asks Nomen about them). D25
-replaces what sits behind those two seams and leaves the rest.
+### Where Nomen is wired in today
+
+Not one seam but several, all of which D25 changes:
+
+- the bearer check (`auth::Verifier`: Nomen, a generic OIDC issuer, test tokens; nothing of
+  its own), and the RFC 9728 metadata naming Nomen as the authorization server with Nomen's
+  scope names in the `401`;
+- the browser: `web::who()` asks Nomen about the session's token, and `web` sign-in is only
+  allowed in `auth.mode nomen`;
+- identities: `config.owner`, grants, `is_human` and `unlimited` are Nomen subjects;
+  `Subject.org` is Nomen's org claim (B13);
+- the CLI (Nomen's endpoint paths, one `account.json`), the installer (`--auth-config`
+  required for a public hub), `connect-nomen`, and the `/privacy` page.
 
 ### Desktop Commander, for comparison (from its source, `src/remote-device/`)
 
 It has an account of its own, in its hosted service (Supabase Auth): `desktop-commander
-remote` runs a device-code sign-in with PKCE against `mcp.desktopcommander.app`, stores
-the access and refresh tokens in `~/.desktop-commander-device/device.json` (0600), and
-takes calls through a per-user Supabase Realtime channel with the database row as the
-durable queue. There is no device key (a copied `device.json` is the whole account), no
-service at boot (the terminal stays open), and no approval before a command. Devagotchi
-already has the device key, the boot service and the approvals; D25 adds what Desktop
-Commander has and Devagotchi lacks: an account built into the product.
+remote` runs a device-code sign-in with PKCE against `mcp.desktopcommander.app`, keeps the
+access and refresh tokens in `~/.desktop-commander-device/device.json` (0600), and takes
+calls through a per-user Supabase Realtime channel with a database row as the durable
+queue. There is no device key (a copied `device.json` is the whole account), no service at
+boot (the terminal stays open), and no approval before a command. Devagotchi already has
+the device key, the boot service and the approvals; D25 adds what Desktop Commander has and
+Devagotchi lacks: an account built into the product.
 
 ### The design
 
-| Piece | How | Standard |
-|---|---|---|
-| Accounts | `accounts.sqlite3` in the hub's state: `acct_` id, display name, optional email (for email approvals, B10), created, disabled. Each account starts with its own org, so B13's "a project board belongs to the org" keeps its shape | — |
-| Passkeys | Discoverable WebAuthn credentials registered and used on the hub's own pages (webauthn-rs); more than one per account; recovery codes shown once | WebAuthn |
-| The first owner | `devagotchi hub owner --state-dir …` on the hub's host prints a one-time link (15 minutes, SHA-256 stored), the same trust as `hub enroll`: whoever is root on the hub host owns the hub. Opening it on a phone registers the owner's passkey | — |
-| New accounts on a hosted hub | Invite links from the owner, or open sign-up when the config says so | — |
-| Browser sessions | The existing store; a row holds the account id instead of Nomen's tokens, so no page asks anyone else who you are | — |
-| AI clients at `/mcp` | The hub is its own authorization server: RFC 8414 metadata; authorization code with PKCE S256 only; a consent page naming the client and its redirect host; Client ID Metadata Documents (`client_id_metadata_document_supported` and `none` in `token_endpoint_auth_methods_supported`, as Claude requires) and dynamic registration for clients without them; RFC 8707 `resource` becomes the token's audience; RFC 9207 `iss` on every redirect; refresh tokens rotated, a reused one ends its family, refusals are `invalid_grant`. Redirects allowed: `https://claude.ai/api/mcp/auth_callback`, Claude Code's loopback on any port (`localhost` and `127.0.0.1`), ChatGPT's callback | MCP authorization (2026-07-28); Claude's and OpenAI's connector requirements |
-| Tokens | Opaque random values, SHA-256 in the store. The hub is both the issuer and the only resource, so a lookup costs what a signature check costs and revocation is immediate; access tokens last 15 minutes | — |
-| CLI | `devagotchi login` runs the same RFC 8628 client against the hub's own device endpoint; you approve on the phone with your passkey | RFC 8628, RFC 10027 |
-| Machine-first pairing | Next to "Add a machine": `curl -fsSL <hub>/link \| sh` carries no secret. The machine makes its key, asks the hub for a pairing, and prints a link and a short number. You open the link signed in, see the host name, OS, address and key fingerprint, pick the matching number, and the machine is yours. The pairing lives minutes and binds to that key | RFC 10027 (number matching, binding, short-lived) |
-| Nomen, optional | "Sign in with Shippin" runs the existing OIDC client flow; the first time links the Nomen subject to a hub account (a new one, or the one already signed in). A Nomen token at `/mcp` from a linked subject is that account. Nothing waits on Nomen being up | OpenID Connect |
-| Who did what | Every call carries the account, the AI client it came through, and the machine, into the hub audit and the broker journal | — |
+**Accounts and the hub's own sign-in**
+
+| Piece | How |
+|---|---|
+| Account ids | New accounts get `acct_` and 26 lowercase base32 characters: safe as a directory name, as `valid_org` requires of orgs. An existing Nomen subject stays an account id as it is (the owner on Texas keeps `395290028818825218`), so no board or audit chain is rewritten and every path that holds it keeps working |
+| Store | `accounts.sqlite3` in the hub's state: id, display name, optional email, created, disabled; linked identities (Nomen subject → account); passkeys; recovery codes (hashes); sessions, AI connections and CLI logins, each listable and revocable from the account page |
+| Passkeys | Discoverable WebAuthn credentials verified by the hub itself on `aws-lc-rs`, already in the tree (`none` attestation; ES256, EdDSA, RS256). Not `webauthn-rs`: it pulls OpenSSL, which `deny.toml` bans. More than one passkey per account; recovery codes shown once; using one, or removing a passkey, ends every other session and connection |
+| The first owner | `devagotchi hub owner --state-dir …` on the hub's host prints a one-time link (15 minutes, SHA-256 stored): whoever can write the hub's state directory owns the hub, the same trust as `hub enroll`. Opening it registers the owner's passkey. Run again, it adds a passkey to the existing owner and ends the owner's other sessions |
+| Other accounts | Invite links from the owner, or open sign-up when the config says so; the owner can disable an account and issue it a one-time reset link |
+| Config | `auth.mode hub`, with an optional `nomen` block (the issuer, the hub's Nomen application and key) for "Sign in with Shippin"; `dev` stays for tests. `web` no longer needs Nomen. Whether the generic `oidc` mode stays is settled in 32a. A public hub in `hub` mode needs no `--auth-config` |
+| Browser forms | Every state-changing POST (sign-in and passkey ceremonies, consent, approvals, pairing, invites, the owner link) carries a session-bound form token as well as the same-origin check; passkey pages allow only the hub's own scripts |
+
+**AI clients at `/mcp`: the hub is its own authorization server**
+
+| Piece | How |
+|---|---|
+| Discovery | The `401` carries `resource_metadata`; the protected-resource metadata names the hub alone in `authorization_servers` (Claude uses only the first entry), and its `resource` is `<public_url>/mcp`, exactly the URL people paste (both accepted while Texas migrates). RFC 8414 metadata gives `issuer` (no trailing slash, the same string everywhere), the authorization, token, registration, revocation and device-authorization endpoints, `response_types_supported` `code`, `grant_types_supported` (authorization code, refresh token, device code), `code_challenge_methods_supported` `S256` only, `token_endpoint_auth_methods_supported` including `none`, `client_id_metadata_document_supported` `true`, `authorization_response_iss_parameter_supported` `true`, and `scopes_supported` listing `offline_access` (Claude asks for a refresh token only then); no OpenID scopes, since the hub serves no userinfo |
+| Clients | Client ID Metadata Documents first (Claude, ChatGPT at `https://chatgpt.com/oauth/client.json`, Claude Code), dynamic registration for clients without one. Redirects must match the client's document or registration exactly, loopback on any port for `localhost` and `127.0.0.1` |
+| Consent | One page, one passkey-backed session: the client's name and the host of its `client_id`, the redirect host, what it may do; a warning when the redirects are loopback only or on another host than the `client_id`. The page's form may post on to that one validated redirect origin |
+| Fetch and registration limits | CIMD: https only, no redirects, private, loopback and link-local addresses refused after resolution, size and time caps, cached. Registration: per-address limits, a row cap, unused registrations expire. The token endpoint never fetches a document and never calls Nomen, so it answers well inside Claude's 10 seconds (30 for a refresh) |
+| Tokens | Opaque, prefixed `dgh_` so the bearer check routes them to the hub's store and never to Nomen; only their SHA-256 is stored; the hub is the issuer and the only resource, so a lookup costs what a signature would and revocation is immediate. Access tokens last 15 minutes. Refresh tokens rotate; presenting a spent one ends its family, except within a few seconds of its rotation, when the same successor is sent again (a client retrying a lost answer). Refusals are `invalid_grant`. The `resource` sent must be the hub's |
+| Who is calling | A token the hub issues to an AI client is an agent of the account, never the person: it never carries the human's standing on boards and approvals (`board/mcp.rs` treats a seatless subject as the person today). Every call records account, client and machine in the hub audit and the broker journal; the journal field is a `crates/contracts` change with schemas regenerated, and the audit gets a chain-safe column |
+
+**Machines and the command line**
+
+| Piece | How |
+|---|---|
+| Machine-first pairing | Beside "Add a machine": `curl -fsSL <hub>/pair \| sh` carries no secret (`/link` stays the machines' WebSocket). The machine makes its key, asks the hub for a pairing, and shows a short code. There is no clickable link carrying the code: you type the code on your own Machines page, signed in, which shows the machine's host name, OS, address and key fingerprint, and your own address beside the machine's. Pairings live minutes, bind to that key, and wrong codes are rate-limited (RFC 10027's warning about phished cross-device codes) |
+| CLI | `devagotchi login --hub URL` finds the hub's endpoints by RFC 8414 and uses its device endpoint; the code is typed on the hub's page as above. Credentials are kept per hub. `login --local` stays (the local tier has no account) |
 
 **PAM, both halves (ruled 2026-10-27).** Privileged access is packet 23c: no standing
-root; a command the broker may not run comes back as an approval, and once approved on the
-phone it runs one time through the privileged helper, recorded as account + client +
-machine. The account as the login on machines (SSH certificates from the hub, or no SSH at
+root; a command the broker may not run comes back as an approval, and once approved it runs
+one time through the privileged helper, recorded as account, client and machine. Whether an
+approval needs a fresh passkey tap whose challenge commits to that approval is decision 2
+below. The account as the login on machines (SSH certificates from the hub, or no SSH at
 all with everything through the link) is its own later decision, parked.
 
-**The live hub on Texas** keys today's data by Nomen subject: the owner, `boards/<account>`,
-owned machines, push subscriptions. Increment 32e upgrades it once and idempotently: back
-up the state directory, make the owner's hub account linked to that subject, rewrite the
-keys. Only Jesse's data exists.
+**Nomen, optional.** "Sign in with Shippin" runs the existing OIDC client flow; the first
+time links the Nomen subject to an account (a new one, or the one signed in). A Nomen
+token at `/mcp` from a linked subject is that account. Nothing waits on Nomen: a hub
+account signs in, connects clients and approves while Nomen is down.
+
+**The live hub on Texas.** Its owner, grants, boards, owned machines and phone are keyed
+by the Nomen subject. 32a keeps that subject as the owner's account id and links it, so the
+owner's first passkey sign-in sees the same boards, machines and approvals, and no history
+is rewritten. The state directory is backed up before the upgrade.
 
 ### Increments, each one PR with failing-first tests and an independent review
 
 | Increment | Scope | Exit |
 |---|---|---|
-| 32a | Accounts, passkeys, the first-owner link, passkey sign-in on the hub's pages; `who()` on hub sessions; Nomen sign-in keeps working beside it | a hub with no identity provider configured: the owner link on a phone makes a passkey, every page shows the account, Approve works; stopping Nomen changes nothing for it |
-| 32b | The authorization server for `/mcp` | claude.ai (custom connector) and ChatGPT connect to a test hub with a passkey and a consent tap; Claude Code through its loopback; refresh rotation and reuse detection under test |
-| 32c | The hub's own device endpoint for `devagotchi login` | `devagotchi login` and `devagotchi mcp --hub` against a hub alone |
-| 32d | Machine-first pairing with number matching | a fresh machine links with one generic line and one tap; a wrong number refuses it |
-| 32e | Nomen as a linked, optional sign-in; the live hub's migration | the Texas hub upgrades with Jesse's boards, machines and phone intact |
-| 32f | Invites and sign-up for devagotchi.com | a friend makes an account from an invite link |
+| 32a | Accounts and their store, passkeys on `aws-lc-rs`, the owner link, passkey sign-in on the hub's pages, `auth.mode hub` with optional `nomen`, the existing owner subject kept as its account, form tokens, the account page (sessions, passkeys, revoke). Harness: a software authenticator in the tests and probes | on a copy of the Texas state, the owner's passkey sign-in sees the same boards, machines and approvals; a fresh hub with no identity provider works end to end; stopping Nomen changes nothing for a hub account |
+| 32b | The authorization server for `/mcp` as above, agent tokens, attribution in the audit and the journal (contracts change) | claude.ai (custom connector) and ChatGPT connect to a test hub with a passkey and a consent tap; Claude Code through its loopback; rotation, the retry window and reuse detection under test against a fake CIMD and DCR client |
+| 32c | The CLI: discovery, the hub's device endpoint, per-hub credentials | `devagotchi login --hub` and `devagotchi mcp --hub` against a hub alone |
+| 32d | Machine-first pairing at `/pair` | a fresh machine links with one generic line and a code typed on the Machines page; a wrong code refuses it |
+| 32e | "Sign in with Shippin" for any account, and the approval rule from decision 2 | an account links its Nomen identity; with Nomen down it still signs in with its passkey |
+| 32f | Invites, sign-up, reset links; the installer (no `--auth-config` for `hub` mode, `ci-install-check.sh` to match) and the `/privacy` page | a friend makes an account from an invite link; the installer brings up a public `hub`-mode hub |
 
-The path to "the AI works on my machines" is 32a then 32b: after them the operator's
-existing one-liner links Texas and Wisconsin, and nothing depends on Nomen.
+The path to "the AI works on my machines" is 32a then 32b: after them claude.ai connects
+to the Texas hub with a passkey, and `devagotchi hub enroll` links Texas and Wisconsin
+without Nomen.
 
 ### Decisions, one at a time (proposals until ruled)
 
 | # | Question | Proposal |
 |---|---|---|
-| 1 | Token format at `/mcp` | Opaque and looked up (above), not JWTs |
-| 2 | How long an AI connection lasts without you | Refresh renewed by use; it ends after 7 days unused, and at once when the account is disabled |
-| 3 | Sign-up on devagotchi.com | Invite links only, to start |
-| 4 | All passkeys lost | Recovery codes shown once; the owner's link from the hub's host as the last resort |
-| 5 | Email | Optional at sign-up; needed only for email approvals (B10) |
+| 1 | The passkeys' relying party, which can never change for existing passkeys: `app.devagotchi.com`, or `devagotchi.com` so any future subdomain can use them | `devagotchi.com` |
+| 2 | Approvals: a fresh passkey tap on every Approve, or the signed-in session's tap | A passkey tap for root steps (23c) and machine pairing; the session's tap for the rest |
+| 3 | AI clients: any MCP client with a consent tap, or a fixed list (Claude, ChatGPT, Claude Code, Cursor) | Any client, with the consent page's warnings |
+| 4 | How long an AI connection lasts without you | It ends after 7 days unused, and at once when the account is disabled |
+| 5 | Sign-up on devagotchi.com | Invite links only, to start |
+| 6 | Orgs on hub accounts (B13): each account its own org at first; who adds members; whether a Nomen-linked account takes Nomen's org | Own org; the org's owner invites; the hub's org stays authoritative |
+| 7 | All passkeys and codes lost | Recovery codes; for others the owner's reset link; for the owner the link from the hub's host |
+| 8 | Email | Optional at sign-up; needed only for email approvals (10c) |
