@@ -436,9 +436,9 @@ Devagotchi lacks: an account built into the product.
 
 **PAM, both halves (ruled 2026-10-27).** Privileged access is packet 23c: no standing
 root; a command the broker may not run comes back as an approval, and once approved it runs
-one time through the privileged helper, recorded as account, client and machine. Whether an
-approval needs a fresh passkey tap whose challenge commits to that approval is decision 2
-below. The account as the login on machines (SSH certificates from the hub, or no SSH at
+one time through the privileged helper, recorded as account, client and machine. How much
+an approval asks of the person, from a passkey tap committed to that one approval to an
+experimental full access with no waiting, is each account's own setting (decision 2). The account as the login on machines (SSH certificates from the hub, or no SSH at
 all with everything through the link) is its own later decision, parked.
 
 **Nomen, optional.** "Sign in with Shippin" runs the existing OIDC client flow; the first
@@ -459,7 +459,7 @@ is rewritten. The state directory is backed up before the upgrade.
 | 32b | The authorization server for `/mcp` as above, agent tokens, attribution in the audit and the journal (contracts change) | claude.ai (custom connector) and ChatGPT connect to a test hub with a passkey and a consent tap; Claude Code through its loopback; rotation, the retry window and reuse detection under test against a fake CIMD and DCR client |
 | 32c | The CLI: discovery, the hub's device endpoint, per-hub credentials | `devagotchi login --hub` and `devagotchi mcp --hub` against a hub alone |
 | 32d | Machine-first pairing at `/pair` | a fresh machine links with one generic line and a code typed on the Machines page; a wrong code refuses it |
-| 32e | "Sign in with Shippin" for any account, and the approval rule from decision 2 | an account links its Nomen identity; with Nomen down it still signs in with its passkey |
+| 32e | "Sign in with Shippin" for any account, and each account's approval setting from decision 2 | an account links its Nomen identity; with Nomen down it still signs in with its passkey |
 | 32f | Invites, sign-up, reset links; the installer (no `--auth-config` for `hub` mode, `ci-install-check.sh` to match) and the `/privacy` page | a friend makes an account from an invite link; the installer brings up a public `hub`-mode hub |
 
 The path to "the AI works on my machines" is 32a then 32b: after them claude.ai connects
@@ -471,7 +471,7 @@ without Nomen.
 | # | Question | Proposal |
 |---|---|---|
 | 1 | The passkeys' relying party, which can never change for existing passkeys: `app.devagotchi.com`, or `devagotchi.com` so any future subdomain can use them | **Ruled 2026-10-27 (Jesse): `devagotchi.com`.** A self-hosted hub uses its own domain |
-| 2 | Approvals: a fresh passkey tap on every Approve, or the signed-in session's tap | A passkey tap for root steps (23c) and machine pairing; the session's tap for the rest |
+| 2 | Approvals: a fresh passkey tap on every Approve, or the signed-in session's tap | **Ruled 2026-10-27 (Jesse): the user decides, including an experimental full access.** Each account picks in its settings: a passkey for every approval; a passkey for root steps (23c) and new machines, a plain tap for the rest; a plain tap for everything; or experimental full access, where nothing waits for approval and everything is still recorded. Proposed around it: the middle setting is the default; turning full access on takes a passkey tap and is shown on every page while it is on |
 | 3 | AI clients: any MCP client with a consent tap, or a fixed list (Claude, ChatGPT, Claude Code, Cursor) | Any client, with the consent page's warnings |
 | 4 | How long an AI connection lasts without you | It ends after 7 days unused, and at once when the account is disabled |
 | 5 | Sign-up on devagotchi.com | Invite links only, to start |
