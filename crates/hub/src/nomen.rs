@@ -1,11 +1,11 @@
 //! Shippin sign-in: checking Nomen access tokens.
 //!
-//! Nomen (Shippin's identity provider, a Zitadel fork) issues opaque access tokens that
-//! only Nomen can read. The hub asks Nomen about each one (token introspection, RFC 7662),
-//! signing in as its own API application with a private-key JWT. Nomen answers `active`
-//! only when the token is live and the hub's application is in its audience; the hub
-//! then re-checks issuer, audience, client, expiry and subject itself, so a misconfigured
-//! Nomen cannot widen what the hub accepts.
+//! Nomen (Shippin's identity provider) issues opaque access tokens that only Nomen can
+//! read. The hub asks Nomen about each one (token introspection, RFC 7662), signing in as
+//! its own API application with a private-key JWT. Nomen answers `active` only when the
+//! token is live and the hub's application is in its audience; the hub then re-checks
+//! issuer, audience, client, expiry and subject itself, so a misconfigured Nomen cannot
+//! widen what the hub accepts.
 //!
 //! Any application in Nomen can ask for the hub's audience, and a person signed in to
 //! Nomen can be handed a token by any of them without typing anything. So the audience
@@ -105,8 +105,8 @@ struct Introspection {
     #[serde(default)]
     username: Option<String>,
     /// The account's org; Nomen includes it when the token was asked for with the
-    /// `urn:zitadel:iam:user:resourceowner` scope.
-    #[serde(default, rename = "urn:zitadel:iam:user:resourceowner:id")]
+    /// `urn:nomen:iam:user:resourceowner` scope.
+    #[serde(default, rename = "urn:nomen:iam:user:resourceowner:id")]
     org: Option<String>,
 }
 

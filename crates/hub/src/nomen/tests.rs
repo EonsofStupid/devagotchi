@@ -22,7 +22,7 @@ use super::*;
 use crate::test_keys::{self, TestKey};
 
 const OWNER: &str = "300000000000000001";
-/// The org Nomen reports the accounts belong to (`urn:zitadel:iam:user:resourceowner:id`).
+/// The org Nomen reports the accounts belong to (`urn:nomen:iam:user:resourceowner:id`).
 const OWNER_ORG: &str = "300000000000000900";
 const HUB_PROJECT: &str = "hub-project";
 const CLIENT_ID: &str = "devagotchi-hub@shippin";
@@ -137,7 +137,7 @@ fn verifier(issuer: &str, key: &TestKey) -> NomenVerifier {
 fn active(issuer: &str, sub: &str, aud: Value) -> Value {
     json!({"active": true, "iss": issuer, "aud": aud, "sub": sub, "exp": unix_now() + 3600,
            "username": "jessay@example.test", "client_id": RELAY, "token_type": "Bearer",
-           "urn:zitadel:iam:user:resourceowner:id": OWNER_ORG})
+           "urn:nomen:iam:user:resourceowner:id": OWNER_ORG})
 }
 
 fn with(mut answer: Value, field: &str, value: Value) -> Value {
@@ -152,7 +152,7 @@ async fn a_live_token_for_this_hub_signs_in_and_is_remembered() {
         HashMap::from([
             (
                 "tok-owner".into(),
-                active(iss, OWNER, json!([HUB_PROJECT, "zitadel"])),
+                active(iss, OWNER, json!([HUB_PROJECT, "nomen-own-project"])),
             ),
             (
                 "tok-other".into(),
