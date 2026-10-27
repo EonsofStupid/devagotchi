@@ -475,6 +475,6 @@ without Nomen.
 | 3 | AI clients: any MCP client with a consent tap, or a fixed list (Claude, ChatGPT, Claude Code, Cursor) | **Ruled 2026-10-27 (Jesse): any MCP client, with consent.** The consent page names the client and the host of its `client_id`, and warns on loopback-only or other-host redirects |
 | 4 | How long an AI connection lasts without you | **Ruled 2026-10-27 (Jesse): the user decides.** Each account picks 1, 7 or 30 days unused, or never; 7 by default. Any connection ends at once when the account is disabled, and from the account page whenever its person says so |
 | 5 | Sign-up on devagotchi.com | **Ruled 2026-10-27 (Jesse): invite links only, to start.** Open sign-up is a config switch for later |
-| 6 | Orgs on hub accounts (B13): each account its own org at first; who adds members; whether a Nomen-linked account takes Nomen's org | Own org; the org's owner invites; the hub's org stays authoritative |
+| 6 | Orgs on hub accounts (B13): each account its own org at first; who adds members; whether a Nomen-linked account takes Nomen's org | **Ruled 2026-10-27 (Jesse): the hub's org; its owner invites.** Each account starts as its own org; the org's owner invites members on the hub; linking Nomen does not change an account's org |
 | 7 | All passkeys and codes lost | Recovery codes; for others the owner's reset link; for the owner the link from the hub's host |
 | 8 | Email | Optional at sign-up; needed only for email approvals (10c) |
