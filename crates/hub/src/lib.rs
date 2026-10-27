@@ -9,6 +9,7 @@ mod audit;
 mod auth;
 pub mod board;
 mod config;
+mod connect;
 mod devices;
 mod downloads;
 mod files;
@@ -49,7 +50,7 @@ use crate::{
     link::Links,
 };
 
-pub const USAGE: &str = "Usage:\n  devagotchi hub serve --state-dir ABS_PATH --config ABS_JSON\n  devagotchi hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi hub devices --state-dir ABS_PATH\n  devagotchi board <command> …            the agents' board in this project (board --help)\n\nserve starts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\nrun and operation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' `devagotchi link` connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.";
+pub const USAGE: &str = "Usage:\n  devagotchi hub serve --state-dir ABS_PATH --config ABS_JSON\n  devagotchi hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi hub devices --state-dir ABS_PATH\n  devagotchi hub connect-nomen --state-dir ABS_PATH --config ABS_JSON --client-id ID --project ID [--issuer URL]\n  devagotchi board <command> …            the agents' board in this project (board --help)\n\nserve starts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\nrun and operation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' `devagotchi link` connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.\n\nconnect-nomen joins this hub to a Nomen with its owner's approval: it shows a code to confirm\non any device through the devagotchi-cli app (--client-id) of the Devagotchi project (--project),\nthen adds the hub's own apps to that project (the key Nomen makes is written to the state\ndirectory, owner-only, and nowhere else), sets auth, owner and web in the config, and keeps a\ncopy of the old one. Issuer: https://id.shippin.cloud unless --issuer.";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -58,6 +59,7 @@ enum Command {
     Enroll { state: PathBuf, device: String },
     Revoke { state: PathBuf, device: String },
     Devices { state: PathBuf },
+    ConnectNomen(connect::Connect),
 }
 
 #[derive(Clone)]
@@ -76,6 +78,9 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> BridgeResult<Command>
     // `serve` is the verb's name in the nested command line; the bare form still works.
     if args.first().is_some_and(|a| a == "serve") {
         args.remove(0);
+    }
+    if args.first().is_some_and(|a| a == "connect-nomen") {
+        return parse_connect(args.split_off(1));
     }
     let verb = match args.first().and_then(|a| a.to_str()) {
         Some(v @ ("enroll" | "revoke" | "devices")) => {
@@ -113,6 +118,43 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> BridgeResult<Command>
         _ => Err(BridgeError::new(
             "invalid_cli",
             "see --help for the accepted forms",
+        )),
+    }
+}
+
+fn parse_connect(args: Vec<OsString>) -> BridgeResult<Command> {
+    let (mut state, mut config, mut client, mut project, mut issuer) =
+        (None, None, None, None, None);
+    let mut iter = args.into_iter();
+    while let Some(flag) = iter.next() {
+        let value = iter
+            .next()
+            .ok_or_else(|| BridgeError::new("invalid_cli", "flag without a value"))?;
+        let text = value.to_string_lossy().into_owned();
+        match flag.to_str() {
+            Some("--state-dir") if state.is_none() => state = Some(PathBuf::from(value)),
+            Some("--config") if config.is_none() => config = Some(PathBuf::from(value)),
+            Some("--client-id") if client.is_none() => client = Some(text),
+            Some("--project") if project.is_none() => project = Some(text),
+            Some("--issuer") if issuer.is_none() => issuer = Some(text),
+            _ => return Err(BridgeError::new("invalid_cli", "unexpected flag")),
+        }
+    }
+    match (state, config, client, project) {
+        (Some(state), Some(config), Some(client_id), Some(project))
+            if state.is_absolute() && config.is_absolute() =>
+        {
+            Ok(Command::ConnectNomen(connect::Connect {
+                state,
+                config,
+                issuer: issuer.unwrap_or_else(|| account::DEFAULT_ISSUER.to_string()),
+                client_id,
+                project,
+            }))
+        }
+        _ => Err(BridgeError::new(
+            "invalid_cli",
+            "connect-nomen needs --state-dir ABS_PATH --config ABS_JSON --client-id ID --project ID",
         )),
     }
 }
@@ -202,6 +244,15 @@ fn manage(command: Command) -> BridgeResult<()> {
                 "{}",
                 serde_json::to_string_pretty(&list).unwrap_or_default()
             );
+        }
+        Command::ConnectNomen(connect) => {
+            prepare_state_dir(&connect.state)?;
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| BridgeError::new("runtime", error.to_string()))?;
+            runtime.block_on(connect::run(&connect, &mut std::io::stderr()))?;
+            operator_event(&connect.state, "nomen.connect", "", "ok")?;
         }
         Command::Help | Command::Serve { .. } => unreachable!(),
     }
@@ -505,7 +556,9 @@ pub(crate) fn log_unavailable(why: &str) {
     {
         let suppressed = SUPPRESSED.swap(0, Ordering::Relaxed);
         if suppressed > 0 {
-            eprintln!("devagotchi hub: issuer unavailable: {why} ({suppressed} more since the last line)");
+            eprintln!(
+                "devagotchi hub: issuer unavailable: {why} ({suppressed} more since the last line)"
+            );
         } else {
             eprintln!("devagotchi hub: issuer unavailable: {why}");
         }
@@ -710,6 +763,56 @@ mod tests {
         assert!(
             parse_args(["revoke", "--state-dir", STATE, "--config", CONFIG].map(OsString::from))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn connect_nomen_needs_both_ids_and_absolute_paths() {
+        let connect = |extra: &[&str]| {
+            let mut args = vec![
+                "connect-nomen",
+                "--state-dir",
+                STATE,
+                "--config",
+                CONFIG,
+                "--client-id",
+                "7",
+            ];
+            args.extend_from_slice(extra);
+            parse_args(args.into_iter().map(OsString::from))
+        };
+        assert_eq!(
+            connect(&["--project", "5"]).unwrap(),
+            Command::ConnectNomen(connect::Connect {
+                state: STATE.into(),
+                config: CONFIG.into(),
+                issuer: account::DEFAULT_ISSUER.into(),
+                client_id: "7".into(),
+                project: "5".into(),
+            })
+        );
+        assert!(matches!(
+            connect(&["--project", "5", "--issuer", "https://id.example"]).unwrap(),
+            Command::ConnectNomen(c) if c.issuer == "https://id.example"
+        ));
+        assert!(connect(&[]).is_err(), "no project");
+        assert!(connect(&["--project", "5", "--device", "x"]).is_err());
+        assert!(
+            parse_args(
+                [
+                    "connect-nomen",
+                    "--state-dir",
+                    "rel",
+                    "--config",
+                    CONFIG,
+                    "--client-id",
+                    "7",
+                    "--project",
+                    "5"
+                ]
+                .map(OsString::from)
+            )
+            .is_err()
         );
     }
 }

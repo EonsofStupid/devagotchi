@@ -283,11 +283,21 @@ impl Issuer {
     /// Sign in: show the code, wait for the person, land the tokens. `tell` gets the
     /// lines a person reads (the code and the URL) as they are known.
     pub async fn login(&self, tell: &mut dyn Write) -> Result<Account, Refusal> {
+        self.login_with_scope(SCOPE, tell).await
+    }
+
+    /// `login` asking for `scope` instead of the CLI's own: `hub connect-nomen` asks for
+    /// Nomen's management API too, with the same code-on-any-device flow.
+    pub async fn login_with_scope(
+        &self,
+        scope: &str,
+        tell: &mut dyn Write,
+    ) -> Result<Account, Refusal> {
         let started = unix_now();
         let auth: DeviceAuthorization = self
             .post(
                 "/oauth/v2/device_authorization",
-                &[("client_id", self.client_id.as_str()), ("scope", SCOPE)],
+                &[("client_id", self.client_id.as_str()), ("scope", scope)],
             )
             .await?;
         let _ = writeln!(
