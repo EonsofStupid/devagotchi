@@ -472,7 +472,7 @@ without Nomen.
 |---|---|---|
 | 1 | The passkeys' relying party, which can never change for existing passkeys: `app.devagotchi.com`, or `devagotchi.com` so any future subdomain can use them | **Ruled 2026-10-27 (Jesse): `devagotchi.com`.** A self-hosted hub uses its own domain |
 | 2 | Approvals: a fresh passkey tap on every Approve, or the signed-in session's tap | **Ruled 2026-10-27 (Jesse): the user decides, including an experimental full access.** Each account picks in its settings: a passkey for every approval; a passkey for root steps (23c) and new machines, a plain tap for the rest; a plain tap for everything; or experimental full access, where nothing waits for approval and everything is still recorded. Proposed around it: the middle setting is the default; turning full access on takes a passkey tap and is shown on every page while it is on |
-| 3 | AI clients: any MCP client with a consent tap, or a fixed list (Claude, ChatGPT, Claude Code, Cursor) | Any client, with the consent page's warnings |
+| 3 | AI clients: any MCP client with a consent tap, or a fixed list (Claude, ChatGPT, Claude Code, Cursor) | **Ruled 2026-10-27 (Jesse): any MCP client, with consent.** The consent page names the client and the host of its `client_id`, and warns on loopback-only or other-host redirects |
 | 4 | How long an AI connection lasts without you | It ends after 7 days unused, and at once when the account is disabled |
 | 5 | Sign-up on devagotchi.com | Invite links only, to start |
 | 6 | Orgs on hub accounts (B13): each account its own org at first; who adds members; whether a Nomen-linked account takes Nomen's org | Own org; the org's owner invites; the hub's org stays authoritative |
