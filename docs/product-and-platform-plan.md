@@ -279,9 +279,10 @@ Status describes the decision, not delivery: **LOCKED** is user direction; **COM
 | D19 | PROPOSED | `shippinAI/agent-hub` is frozen for reference; its design (`docs/devagotchi/`, imported 2026-10-24) lives here and its capabilities are ported per the [absorption ledger](devagotchi/README.md). Two conflicts need a ruling: GUI control (Go D7 v0.1 vs D18 deferred) and the bridge tool set (28 Go tools as the parity target for the Rust broker). |
 | D20 | LOCKED | **One `devagotchi` binary.** Vibers download and run one thing: a multicall binary carrying the broker, the stdio adapter, the link, the hub and the board (`devagotchi start`, `devagotchi mcp`, `devagotchi login`, `devagotchi board …`, `devagotchi link`, `devagotchi hub`). The process boundaries stay (D03: the broker owns jobs, the adapter stays thin, `core`/`mcp` code paths make no network call); only the packaging changes. Ruled 2026-10-24; ADR through the component. §13. |
 | D21 | LOCKED | **Three tiers, hosted by default.** (1) Vibers run locally; (2) the default hub is hosted — friends-and-family private cloud at devagotchi.com first, extending into shippin.cloud as it evolves into the bridge for all a user's systems; a free account is required and enforced there, realistically one project per free account; (3) the advanced tier self-hosts from a Docker image or on their own VM/server (`install-devagotchi.sh --role hub`). Dev tokens are for tests only. Ruled 2026-10-24. §13. |
-| D22 | LOCKED | **Sign-in rule "both".** The default build signs in on first run with a free Shippin account (device-link, RFC 8628, like `shippin_connect`) and keeps working through an offline grace; local-only and self-hosted runs may be accountless (`--local`). Ruled 2026-10-24; the grace period and what `--local` loses are PROPOSED — 14a carries the proposal in code (seven days past expiry, reported by `whoami`; `--local` loses what packet 15 adds: sync to the hosted hub). §13. |
+| D22 | SUPERSEDED by D25 (Jesse, 2026-10-27) | **Sign-in rule "both".** The default build signs in on first run with a free Shippin account (device-link, RFC 8628, like `shippin_connect`) and keeps working through an offline grace; local-only and self-hosted runs may be accountless (`--local`). Ruled 2026-10-24; the grace period and what `--local` loses are PROPOSED — 14a carries the proposal in code (seven days past expiry, reported by `whoami`; `--local` loses what packet 15 adds: sync to the hosted hub). §13. |
 | D23 | LOCKED | **Board of record is the user's choice; both must work.** The project's board stays a local file (B02) and syncs to the account's hosted hub when signed in — the hosted path is the one made smooth, because most users will take it. How a machine reaches the hub is pluggable: Shippin's own link first, then Tailscale, Cloudflare Tunnel and custom bridges, chosen without being told ("smart"). Direction ruled 2026-10-24. **Sync model ruled 2026-10-24: hub-arbitrated when bound** — claims, leases and fences need one arbiter, so a bound project's `devagotchi board …` and hooks run against the hosted hub as the account; the local file becomes a read-only mirror for offline reads; offline writes are refused honestly (B11). Bridge selection stays PROPOSED. §13. |
 | D24 | RULED 2026-10-24 (chat; ADR pending through the component) | How the link carries D23's "Shippin's own link": a machine's link starts on HTTPS (its WebSocket to the hub, which works behind any NAT or firewall) and then moves its traffic onto an Iroh connection inside `devagotchi-link` (Rust, QUIC; direct when hole punching succeeds, Shippin-run relays otherwise), falling back to HTTPS whenever that fails, so the link never drops for want of a tunnel. Tailscale and Cloudflare Tunnel are offered as routes the user chooses; Jesse's NetBird fork stays the private network for everything else on a machine. The phone never connects to machines: it talks to the hub only. Open: where the relays run and whether the hub hosts one. |
+| D25 | RULED 2026-10-27 (chat; ADR pending through the component) | **Built-in sign-in, Nomen optional.** Every hub, devagotchi.com included, has its own accounts and machine pairing and works with nothing else deployed: a person signs in with a passkey, links machines, connects AI clients and approves risky steps against the hub alone. "Sign in with Shippin" (Nomen) is an extra sign-in that links to the same account; a Nomen outage changes nothing for a hub account. Jesse's words: Desktop Commander "manages to do all of this without a central login server", and Nomen is added on top. Supersedes D22. Design and increments: §14. |
 
 Repository access is an observed external blocker, not a product decision. It blocks reconciliation with and publication to that GitHub repository; it does not block the existing Site, reference publication, or useful isolated work. Website publication is already authorized. Nonblocking future implementation details remain proposed rather than becoming artificial permission gates.
 
@@ -322,7 +323,7 @@ capability to its owner here, its status, and the increment that ports it. Where
 and this plan disagree, this plan wins; where this plan is silent, they govern. D19 records the
 freeze and the two conflicts.
 
-## 13. Distribution tiers (D20–D23, ruled 2026-10-24)
+## 13. Distribution tiers (D20–D23, ruled 2026-10-24; sign-in per D25, 2026-10-27)
 
 What today's merged work is measured against, and what it still lacks. "Live" is never the
 goal; reliable, clean, efficient binaries that work are, in this order of users:
@@ -330,7 +331,7 @@ goal; reliable, clean, efficient binaries that work are, in this order of users:
 | Tier | Who | What they get | Exists on `main` | Missing |
 |---|---|---|---|---|
 | Local | Vibers | One `devagotchi` binary from the release installer (`curl \| sh`, PowerShell): `devagotchi start` runs the broker and the local board, `devagotchi mcp` is what their CLI agent points at, `devagotchi board …` and the hook pack keep the agent on the protocol. No systemd, no Caddy, no account unless they sync. | The one `devagotchi` binary (13a, 13b), cargo-dist installers, the board, the CLI, the hook pack | — |
-| Hosted (default) | Everyone who is lazy, which is most | Sign in with a free Shippin account on first run; their boards sync to the hosted hub; their machines reach it through whichever bridge works; one project per free account, more when they pay. devagotchi.com first (friends and family), shippin.cloud as it grows into the bridge for all their systems. | The hub with Nomen sign-in and the board over MCP; the live hub signing in as the owner with three linked machines; `--role hub --caddy` for the host; `devagotchi login` from a terminal (14a) and `devagotchi mcp --hub` carrying the account into an agent's session (14c); account boards with the free rule and seats on the hub (15a); the command line bound to the hub as the account (15b) | the offline snapshot for a bound project (15c), bridge selection (later) |
+| Hosted (default) | Everyone who is lazy, which is most | A free account made on the hub itself with a passkey (D25), or Sign in with Shippin; their boards sync to the hosted hub; their machines reach it through whichever bridge works; one project per free account, more when they pay. devagotchi.com first (friends and family), shippin.cloud as it grows into the bridge for all their systems. | The hub with Nomen sign-in and the board over MCP; the live hub signing in as the owner with three linked machines; `--role hub --caddy` for the host; `devagotchi login` from a terminal (14a) and `devagotchi mcp --hub` carrying the account into an agent's session (14c); account boards with the free rule and seats on the hub (15a); the command line bound to the hub as the account (15b) | the offline snapshot for a bound project (15c), bridge selection (later) |
 | Self-hosted (advanced) | Operators | A Docker image and compose (hub + Caddy), or the bare-server installer; their own accounts or Nomen. | `install-devagotchi.sh --role hub --caddy`, proven on real systemd hosts behind Caddy; `--auth-config` for their identity provider (14b) | The image, built by the release workflow, and compose (packet 16) |
 
 Packets, one decision each, in order:
@@ -355,3 +356,87 @@ Packets, one decision each, in order:
 
 The bridge choice (own link, Tailscale, Cloudflare Tunnel, custom) stays after 16: the link is
 the only bridge today and it works; the others are adapters over the same `/link` contract.
+
+## 14. Built-in sign-in and pairing (D25, ruled 2026-10-27)
+
+A hub stands on its own: a person makes an account on it, links machines, connects AI
+clients and approves risky steps with nothing else deployed. Nomen ("Sign in with Shippin")
+is an extra way into the same account. Nothing here is built yet; it is the design the
+increments below build, reviewed with Jesse one decision at a time.
+
+### What exists and stays
+
+| Piece | Today | Where |
+|---|---|---|
+| Machine identity | One Ed25519 key per machine, bound once by a one-time code (SHA-256 stored); every reconnect signs a fresh challenge. Owned machines belong to the account that added them (29a) | `devices.rs`, `link.rs` |
+| Adding a machine | "Add a machine" gives `curl -fsSL <hub>/join/<code> \| sudo sh` (or PowerShell); the operator's `devagotchi hub enroll` prints a code with no sign-in at all | `join.rs`, `web/machines.rs`, `lib.rs` |
+| Approvals | Board tickets, `/approvals` one-tap Approve/Deny, Web Push to phones (10a–10d) | `board/approval.rs`, `web/approvals.rs`, `push.rs` |
+| Browser sessions | Random id in a `__Host-` cookie, its SHA-256 on the hub, held tokens sealed under `session.key`, 30 days idle / 90 days max | `web/sessions.rs` |
+| CLI sign-in | RFC 8628 device authorization client, tokens 0600 in `account.json`, `devagotchi mcp --hub` relays an agent's session as the account (14a, 14c) | `account.rs`, `account/` |
+
+What ties all of it to Nomen today is two seams: the bearer check (`auth::Verifier` knows
+Nomen, a generic OIDC issuer and test tokens, nothing of its own) and the browser's
+`web::who()` (a session holds Nomen's tokens and every page asks Nomen about them). D25
+replaces what sits behind those two seams and leaves the rest.
+
+### Desktop Commander, for comparison (from its source, `src/remote-device/`)
+
+It has an account of its own, in its hosted service (Supabase Auth): `desktop-commander
+remote` runs a device-code sign-in with PKCE against `mcp.desktopcommander.app`, stores
+the access and refresh tokens in `~/.desktop-commander-device/device.json` (0600), and
+takes calls through a per-user Supabase Realtime channel with the database row as the
+durable queue. There is no device key (a copied `device.json` is the whole account), no
+service at boot (the terminal stays open), and no approval before a command. Devagotchi
+already has the device key, the boot service and the approvals; D25 adds what Desktop
+Commander has and Devagotchi lacks: an account built into the product.
+
+### The design
+
+| Piece | How | Standard |
+|---|---|---|
+| Accounts | `accounts.sqlite3` in the hub's state: `acct_` id, display name, optional email (for email approvals, B10), created, disabled. Each account starts with its own org, so B13's "a project board belongs to the org" keeps its shape | — |
+| Passkeys | Discoverable WebAuthn credentials registered and used on the hub's own pages (webauthn-rs); more than one per account; recovery codes shown once | WebAuthn |
+| The first owner | `devagotchi hub owner --state-dir …` on the hub's host prints a one-time link (15 minutes, SHA-256 stored), the same trust as `hub enroll`: whoever is root on the hub host owns the hub. Opening it on a phone registers the owner's passkey | — |
+| New accounts on a hosted hub | Invite links from the owner, or open sign-up when the config says so | — |
+| Browser sessions | The existing store; a row holds the account id instead of Nomen's tokens, so no page asks anyone else who you are | — |
+| AI clients at `/mcp` | The hub is its own authorization server: RFC 8414 metadata; authorization code with PKCE S256 only; a consent page naming the client and its redirect host; Client ID Metadata Documents (`client_id_metadata_document_supported` and `none` in `token_endpoint_auth_methods_supported`, as Claude requires) and dynamic registration for clients without them; RFC 8707 `resource` becomes the token's audience; RFC 9207 `iss` on every redirect; refresh tokens rotated, a reused one ends its family, refusals are `invalid_grant`. Redirects allowed: `https://claude.ai/api/mcp/auth_callback`, Claude Code's loopback on any port (`localhost` and `127.0.0.1`), ChatGPT's callback | MCP authorization (2026-07-28); Claude's and OpenAI's connector requirements |
+| Tokens | Opaque random values, SHA-256 in the store. The hub is both the issuer and the only resource, so a lookup costs what a signature check costs and revocation is immediate; access tokens last 15 minutes | — |
+| CLI | `devagotchi login` runs the same RFC 8628 client against the hub's own device endpoint; you approve on the phone with your passkey | RFC 8628, RFC 10027 |
+| Machine-first pairing | Next to "Add a machine": `curl -fsSL <hub>/link \| sh` carries no secret. The machine makes its key, asks the hub for a pairing, and prints a link and a short number. You open the link signed in, see the host name, OS, address and key fingerprint, pick the matching number, and the machine is yours. The pairing lives minutes and binds to that key | RFC 10027 (number matching, binding, short-lived) |
+| Nomen, optional | "Sign in with Shippin" runs the existing OIDC client flow; the first time links the Nomen subject to a hub account (a new one, or the one already signed in). A Nomen token at `/mcp` from a linked subject is that account. Nothing waits on Nomen being up | OpenID Connect |
+| Who did what | Every call carries the account, the AI client it came through, and the machine, into the hub audit and the broker journal | — |
+
+**PAM, both halves (ruled 2026-10-27).** Privileged access is packet 23c: no standing
+root; a command the broker may not run comes back as an approval, and once approved on the
+phone it runs one time through the privileged helper, recorded as account + client +
+machine. The account as the login on machines (SSH certificates from the hub, or no SSH at
+all with everything through the link) is its own later decision, parked.
+
+**The live hub on Texas** keys today's data by Nomen subject: the owner, `boards/<account>`,
+owned machines, push subscriptions. Increment 32e upgrades it once and idempotently: back
+up the state directory, make the owner's hub account linked to that subject, rewrite the
+keys. Only Jesse's data exists.
+
+### Increments, each one PR with failing-first tests and an independent review
+
+| Increment | Scope | Exit |
+|---|---|---|
+| 32a | Accounts, passkeys, the first-owner link, passkey sign-in on the hub's pages; `who()` on hub sessions; Nomen sign-in keeps working beside it | a hub with no identity provider configured: the owner link on a phone makes a passkey, every page shows the account, Approve works; stopping Nomen changes nothing for it |
+| 32b | The authorization server for `/mcp` | claude.ai (custom connector) and ChatGPT connect to a test hub with a passkey and a consent tap; Claude Code through its loopback; refresh rotation and reuse detection under test |
+| 32c | The hub's own device endpoint for `devagotchi login` | `devagotchi login` and `devagotchi mcp --hub` against a hub alone |
+| 32d | Machine-first pairing with number matching | a fresh machine links with one generic line and one tap; a wrong number refuses it |
+| 32e | Nomen as a linked, optional sign-in; the live hub's migration | the Texas hub upgrades with Jesse's boards, machines and phone intact |
+| 32f | Invites and sign-up for devagotchi.com | a friend makes an account from an invite link |
+
+The path to "the AI works on my machines" is 32a then 32b: after them the operator's
+existing one-liner links Texas and Wisconsin, and nothing depends on Nomen.
+
+### Decisions, one at a time (proposals until ruled)
+
+| # | Question | Proposal |
+|---|---|---|
+| 1 | Token format at `/mcp` | Opaque and looked up (above), not JWTs |
+| 2 | How long an AI connection lasts without you | Refresh renewed by use; it ends after 7 days unused, and at once when the account is disabled |
+| 3 | Sign-up on devagotchi.com | Invite links only, to start |
+| 4 | All passkeys lost | Recovery codes shown once; the owner's link from the hub's host as the last resort |
+| 5 | Email | Optional at sign-up; needed only for email approvals (B10) |
