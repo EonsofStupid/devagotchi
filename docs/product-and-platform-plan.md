@@ -470,7 +470,7 @@ without Nomen.
 
 | # | Question | Proposal |
 |---|---|---|
-| 1 | The passkeys' relying party, which can never change for existing passkeys: `app.devagotchi.com`, or `devagotchi.com` so any future subdomain can use them | `devagotchi.com` |
+| 1 | The passkeys' relying party, which can never change for existing passkeys: `app.devagotchi.com`, or `devagotchi.com` so any future subdomain can use them | **Ruled 2026-10-27 (Jesse): `devagotchi.com`.** A self-hosted hub uses its own domain |
 | 2 | Approvals: a fresh passkey tap on every Approve, or the signed-in session's tap | A passkey tap for root steps (23c) and machine pairing; the session's tap for the rest |
 | 3 | AI clients: any MCP client with a consent tap, or a fixed list (Claude, ChatGPT, Claude Code, Cursor) | Any client, with the consent page's warnings |
 | 4 | How long an AI connection lasts without you | It ends after 7 days unused, and at once when the account is disabled |
