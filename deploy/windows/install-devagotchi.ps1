@@ -86,10 +86,13 @@ function Write-Utf8([string]$Path, [string]$Text) {
 }
 
 # One binary plays every role, so a role is told apart by its command line, not its name.
+# A broker is `broker run` (this installer, at login) or `start` (started by `devagotchi mcp`
+# when none was running).
 function Stop-Ours([string]$Role, [string]$Note) {
+    $pattern = if ($Role -eq 'broker') { '\s(broker\s+run|start)\b' } else { "\s$Role\s+run\b" }
     $ours = @(Get-CimInstance Win32_Process -Filter "Name = 'devagotchi.exe'" -ErrorAction SilentlyContinue | Where-Object {
         $_.ExecutablePath -and $_.ExecutablePath.StartsWith($Root, [System.StringComparison]::OrdinalIgnoreCase) -and
-        $_.CommandLine -and $_.CommandLine -match "\s$Role\s+run\b"
+        $_.CommandLine -and $_.CommandLine -cmatch $pattern
     })
     foreach ($process in $ours) {
         Write-Host "    stopping devagotchi $Role pid $($process.ProcessId) ($($process.ExecutablePath))$Note"
@@ -153,6 +156,13 @@ if ($Uninstall) {
         if (Get-ItemProperty -Path $RunKey -Name $name -ErrorAction SilentlyContinue) {
             Remove-ItemProperty -Path $RunKey -Name $name
             Write-Host "    removed $RunKey\$name"
+        }
+    }
+    foreach ($name in 'DEVAGOTCHI_STATE_DIR', 'DEVAGOTCHI_CONFIG_DIR') {
+        $value = [Environment]::GetEnvironmentVariable($name, 'User')
+        if ($value -and $value.StartsWith($Root, [System.StringComparison]::OrdinalIgnoreCase)) {
+            [Environment]::SetEnvironmentVariable($name, $null, 'User')
+            Write-Host "    removed the user variable $name"
         }
     }
     Write-Host "    left in place: $Root (binaries, config, journal). Delete it yourself when you no longer need the history."
@@ -265,6 +275,13 @@ $ready = Start-Ready $brokerExe @('broker', 'run', '--state-dir', "`"$State`"", 
 $endpoint = ($ready.Line -replace '^.*devagotchi broker ready: ', '').Trim()
 Write-Utf8 $EndpointFile $endpoint
 Write-Host "    ready: $endpoint (pid $($ready.Process.Id)); log $Log"
+# `devagotchi mcp` and `devagotchi setup` find this broker through these, in every new shell
+# and AI client, instead of starting a second one under %LOCALAPPDATA% on C:.
+foreach ($pair in @(@('DEVAGOTCHI_STATE_DIR', $State), @('DEVAGOTCHI_CONFIG_DIR', $ConfigDir))) {
+    [Environment]::SetEnvironmentVariable($pair[0], $pair[1], 'User')
+    Set-Item -Path "Env:$($pair[0])" -Value $pair[1]
+}
+Write-Host "    user variables DEVAGOTCHI_STATE_DIR=$State and DEVAGOTCHI_CONFIG_DIR=$ConfigDir"
 
 # ---------------------------------------------------------------- link
 $linkExe = Join-Path $Bin 'devagotchi.exe'

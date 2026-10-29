@@ -3,22 +3,23 @@
 //! runs `devagotchi start --background`, which starts the same `devagotchi start` detached
 //! and returns once it answers.
 //!
-//! - It is still one broker per user: two starts racing meet at the broker's own instance
-//!   lock, and the loser exits; both callers then find the winner through `<state>/endpoint`.
-//! - Detached: its own process group (Unix), or no console, its own process group and out
-//!   of the caller's job where the job allows it (Windows). The process that started it
-//!   exits once it answers, so closing an AI client, its terminal or its process tree
-//!   leaves the broker and its jobs running.
-//! - It writes to `<state>/broker.log` (owner-only), since no terminal is attached.
-//! - Nothing is recorded about the process: a broker is found by asking the endpoint, never
+//! - Still one broker per user: the state directory is made by the IPC layer that checks
+//!   it, exactly as the broker makes it, and a start finds a broker that already holds it
+//!   (starting up, or running and not answering yet) and waits for that one instead.
+//! - Detached (`devagotchi_core::execution::detached`): a session of its own (Linux), or no
+//!   console, its own process group and out of the caller's job where allowed (Windows);
+//!   it inherits nothing but the null device and its log, so an AI client's pipes are never
+//!   held open; it runs in its state directory with a pared-down environment. The process
+//!   that started it exits once it answers, so closing an AI client, its terminal or its
+//!   process tree leaves the broker and its jobs running.
+//! - It writes to `<state>/broker.log` (owner-only).
+//! - A broker that stops at once is reported at once, with the end of its log.
+//! - Nothing is recorded about the process: a broker is found by asking its endpoint, never
 //!   by a remembered PID.
 
 use std::{
     ffi::OsString,
-    fs::{File, OpenOptions},
-    io,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -26,7 +27,7 @@ use devagotchi_contracts::{ListInput, RequestBody};
 
 /// The background broker's output, in its state directory.
 pub const LOG_FILE: &str = "broker.log";
-/// How long a background start may take before the caller gives up and points at the log.
+/// How long a background start may take before the caller gives up and says why.
 pub const START_WITHIN: Duration = Duration::from_secs(20);
 
 /// The endpoint this user's broker answers on, when one does: the endpoint file names it,
@@ -58,20 +59,6 @@ pub fn answering(state: &Path) -> Option<PathBuf> {
     answered.then_some(endpoint)
 }
 
-/// Wait for this user's broker to answer, up to `within`.
-pub fn wait_until_answering(state: &Path, within: Duration) -> Option<PathBuf> {
-    let deadline = Instant::now() + within;
-    loop {
-        if let Some(endpoint) = answering(state) {
-            return Some(endpoint);
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 /// The last `lines` lines of `<state>/broker.log`, to say why a background start failed.
 pub fn log_tail(state: &Path, lines: usize) -> String {
     let text = std::fs::read_to_string(state.join(LOG_FILE)).unwrap_or_default();
@@ -79,76 +66,135 @@ pub fn log_tail(state: &Path, lines: usize) -> String {
     all[all.len().saturating_sub(lines)..].join("\n")
 }
 
-/// Start `exe args…` detached from this process, its output appended to
-/// `<state>/broker.log`. Returns once it is started, not once it answers.
-pub fn spawn_detached(exe: &Path, args: &[OsString], state: &Path) -> io::Result<()> {
-    private_dir(state)?;
-    let log = open_log(&state.join(LOG_FILE))?;
-    let mut command = Command::new(exe);
-    command
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(log.try_clone()?)
-        .stderr(log);
-    let mut child = spawn(command)?;
-    // Reaped here, so a broker that stops at once (another start won) is not left a zombie
-    // while this process lives.
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+/// Why a background start did not end with a broker answering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartFailure {
+    /// The broker it started stopped; the end of its log says why.
+    Stopped(String),
+    /// A broker holds the state directory but did not answer within the wait.
+    NotAnswering,
+    /// Nothing answered within the wait; the end of the log.
+    TimedOut(String),
+    /// The state directory or the process could not be set up.
+    Setup(String),
 }
 
-#[cfg(unix)]
-fn spawn(mut command: Command) -> io::Result<Child> {
-    use std::os::unix::process::CommandExt;
-    // Its own process group: a terminal's Ctrl+C, or a client signalling the adapter's
-    // group, does not reach it.
-    command.process_group(0);
-    command.spawn()
-}
-
-#[cfg(windows)]
-fn spawn(mut command: Command) -> io::Result<Child> {
-    use std::os::windows::process::CommandExt;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
-    command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_BREAKAWAY_FROM_JOB);
-    match command.spawn() {
-        Ok(child) => Ok(child),
-        // Some launchers put their children in a job that may not be left: start inside it.
-        Err(_) => {
-            command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
-            command.spawn()
+impl std::fmt::Display for StartFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartFailure::Stopped(log) => {
+                write!(f, "your broker stopped as it started:\n{log}")
+            }
+            StartFailure::NotAnswering => write!(
+                f,
+                "your broker is running but did not answer within {} s; it may be busy or stuck",
+                START_WITHIN.as_secs()
+            ),
+            StartFailure::TimedOut(log) => write!(
+                f,
+                "your broker did not answer within {} s:\n{log}",
+                START_WITHIN.as_secs()
+            ),
+            StartFailure::Setup(why) => write!(f, "your broker could not be started: {why}"),
         }
     }
 }
 
-#[cfg(not(any(unix, windows)))]
-fn spawn(mut command: Command) -> io::Result<Child> {
-    command.spawn()
+/// Start `program args…` (a `devagotchi start` with explicit paths) detached, unless a
+/// broker already holds the state directory, and wait until a broker answers there.
+pub fn start_and_wait(
+    program: &Path,
+    args: &[OsString],
+    state: &Path,
+    within: Duration,
+) -> Result<PathBuf, StartFailure> {
+    let deadline = Instant::now() + within;
+    let mut started = if prepare_state(state).map_err(StartFailure::Setup)? {
+        Some(spawn(program, args, state).map_err(|e| StartFailure::Setup(e.to_string()))?)
+    } else {
+        None
+    };
+    let mut held_by_another = started.is_none();
+    loop {
+        if let Some(endpoint) = answering(state) {
+            return Ok(endpoint);
+        }
+        if let Some(child) = &mut started
+            && child
+                .try_wait()
+                .map_err(|e| StartFailure::Setup(e.to_string()))?
+                .is_some()
+        {
+            started = None;
+            let tail = log_tail(state, 20);
+            // Another start won the state directory first: wait for that broker instead.
+            if !tail.contains("broker_already_running") {
+                return Err(StartFailure::Stopped(tail));
+            }
+            held_by_another = true;
+        }
+        if Instant::now() >= deadline {
+            return Err(if held_by_another {
+                StartFailure::NotAnswering
+            } else {
+                StartFailure::TimedOut(log_tail(state, 20))
+            });
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
-fn private_dir(dir: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(())
+#[cfg(any(target_os = "linux", windows))]
+fn spawn(
+    program: &Path,
+    args: &[OsString],
+    state: &Path,
+) -> std::io::Result<devagotchi_core::execution::detached::Detached> {
+    use devagotchi_core::execution::detached;
+    let env = detached::environment(std::env::vars_os());
+    detached::spawn(&detached::DetachedSpec {
+        program,
+        args,
+        env: &env,
+        cwd: state,
+        log: &state.join(LOG_FILE),
+    })
 }
 
-fn open_log(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+/// Where no execution provider exists there is no broker to start in the background.
+#[cfg(not(any(target_os = "linux", windows)))]
+fn spawn(_program: &Path, _args: &[OsString], _state: &Path) -> std::io::Result<Never> {
+    Err(std::io::Error::other(
+        "unsupported_platform: the macOS provider is pending",
+    ))
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+enum Never {}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+impl Never {
+    fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+        match *self {}
     }
-    options.open(path)
+}
+
+/// Make the state directory exactly as the broker does, through the IPC layer that checks
+/// it (on Windows it must be made owner-only by the operator's own SID, which a plain
+/// directory made by an administrator is not), before the log is written into it. False
+/// when a broker already holds it.
+fn prepare_state(state: &Path) -> Result<bool, String> {
+    if let Some(parent) = state.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+    }
+    match devagotchi_ipc::StateGuard::acquire(state) {
+        Ok(guard) => {
+            drop(guard);
+            Ok(true)
+        }
+        Err(error) if error.code == "broker_already_running" => Ok(false),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 #[cfg(test)]
@@ -168,24 +214,74 @@ mod tests {
         )
         .unwrap();
         assert_eq!(answering(dir.path()), None, "a stale file after a reboot");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_broker_that_stops_at_once_is_reported_at_once_with_its_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let begun = Instant::now();
+        let failure = start_and_wait(
+            Path::new("/bin/sh"),
+            &[
+                "-c".into(),
+                "echo 'config: no such file' >&2; exit 2".into(),
+            ],
+            &state,
+            START_WITHIN,
+        )
+        .unwrap_err();
+        assert!(
+            begun.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            begun.elapsed()
+        );
         assert_eq!(
-            wait_until_answering(dir.path(), Duration::from_millis(250)),
-            None
+            failure,
+            StartFailure::Stopped("config: no such file".into())
         );
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
-    fn the_log_and_its_directory_are_the_users_alone() {
+    fn nothing_is_started_while_a_broker_holds_the_state_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let held = devagotchi_ipc::StateGuard::acquire(&state).unwrap();
+        let marker = dir.path().join("started");
+        let failure = start_and_wait(
+            Path::new("/bin/sh"),
+            &["-c".into(), format!("touch {}", marker.display()).into()],
+            &state,
+            Duration::from_millis(300),
+        )
+        .unwrap_err();
+        assert_eq!(failure, StartFailure::NotAnswering);
+        assert!(!marker.exists(), "a second broker was started");
+        drop(held);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_state_and_its_log_are_the_users_alone_and_the_process_runs_there() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join("state");
-        spawn_detached(
+        let failure = start_and_wait(
             Path::new("/bin/sh"),
-            &["-c".into(), "exit 0".into()],
+            &["-c".into(), "pwd".into()],
             &state,
+            START_WITHIN,
         )
-        .unwrap();
+        .unwrap_err();
+        let StartFailure::Stopped(log) = failure else {
+            panic!("{failure:?}")
+        };
+        assert_eq!(
+            log.trim(),
+            std::fs::canonicalize(&state).unwrap().to_str().unwrap()
+        );
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&state), 0o700);
         assert_eq!(mode(&state.join(LOG_FILE)), 0o600);

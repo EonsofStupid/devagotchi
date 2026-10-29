@@ -127,9 +127,16 @@ fn connect(args: Vec<OsString>, setup: bool) -> ExitCode {
     } else {
         env_dir("XDG_CONFIG_HOME").or_else(|| home.as_ref().map(|h| h.join(".config")))
     };
-    let signed_in = paths::config_dir()
-        .map(|d| d.join(devagotchi_hub::account::FILE_NAME))
-        .is_some_and(|f| devagotchi_hub::account::signed_in(&f));
+    let account_file = paths::config_dir().map(|d| d.join(devagotchi_hub::account::FILE_NAME));
+    let signed_in = account_file
+        .as_ref()
+        .is_some_and(|f| devagotchi_hub::account::signed_in(f));
+    let account_on_file = account_file.as_ref().is_some_and(|f| {
+        matches!(
+            devagotchi_hub::account::read(f),
+            Ok(Some(devagotchi_hub::account::Stored::Account(_)))
+        )
+    });
     let machine = devagotchi_mcp::connect::Machine {
         exe,
         home,
@@ -137,6 +144,7 @@ fn connect(args: Vec<OsString>, setup: bool) -> ExitCode {
         app_config,
         path: std::env::var_os("PATH"),
         signed_in,
+        account_on_file,
     };
     if setup {
         devagotchi_mcp::connect::setup(args, machine)
@@ -173,11 +181,10 @@ fn local_broker(state: &std::path::Path) -> Result<std::path::PathBuf, String> {
         .map_err(|e| format!("could not start your broker: {e}"))?;
     devagotchi_broker::background::answering(state).ok_or_else(|| {
         format!(
-            "your broker did not start ({started}); {}:\n{}",
+            "your broker did not start ({started}; the lines above say why, and {})",
             state
                 .join(devagotchi_broker::background::LOG_FILE)
-                .display(),
-            devagotchi_broker::background::log_tail(state, 20)
+                .display()
         )
     })
 }

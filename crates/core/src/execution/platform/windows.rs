@@ -498,3 +498,196 @@ mod tests {
             .unwrap();
     }
 }
+
+/// A process started by [`spawn_detached`]: its process handle, closed on drop (which
+/// neither stops nor waits for the process).
+pub(crate) struct DetachedChild(OwnedHandle);
+
+impl DetachedChild {
+    pub(crate) fn try_wait(&mut self) -> io::Result<Option<i32>> {
+        use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+        let handle = self.0.as_raw_handle() as windows_sys::Win32::Foundation::HANDLE;
+        // SAFETY: `handle` is this process handle, open for the life of `self`.
+        match unsafe { WaitForSingleObject(handle, 0) } {
+            WAIT_OBJECT_0 => {
+                let mut code = 0u32;
+                // SAFETY: as above; `code` is a valid out pointer.
+                if unsafe { GetExitCodeProcess(handle, &mut code) } == 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(Some(code as i32))
+            }
+            WAIT_TIMEOUT => Ok(None),
+            _ => Err(io::Error::last_os_error()),
+        }
+    }
+}
+
+/// Start a process with no console and a process group of its own, outside the caller's
+/// job where the job allows breaking away, in the given directory and environment, that
+/// inherits exactly two handles: the null device as stdin and its log as stdout and stderr.
+/// `std::process::Command` cannot do the last part: it lets a child inherit every
+/// inheritable handle the caller holds, an AI client's stdio pipes among them, which a
+/// long-running process would then keep open (`detached.rs`).
+pub(crate) fn spawn_detached(
+    spec: &crate::execution::detached::DetachedSpec<'_>,
+) -> io::Result<DetachedChild> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{
+        ERROR_ACCESS_DENIED, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation,
+    };
+    use windows_sys::Win32::System::Threading::{
+        CREATE_BREAKAWAY_FROM_JOB, CREATE_NEW_PROCESS_GROUP, CREATE_UNICODE_ENVIRONMENT,
+        CreateProcessW, DETACHED_PROCESS, DeleteProcThreadAttributeList,
+        EXTENDED_STARTUPINFO_PRESENT, InitializeProcThreadAttributeList,
+        LPPROC_THREAD_ATTRIBUTE_LIST, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, PROCESS_INFORMATION,
+        STARTF_USESTDHANDLES, STARTUPINFOEXW, STARTUPINFOW, UpdateProcThreadAttribute,
+    };
+
+    let wide = |text: &OsStr| -> Vec<u16> { text.encode_wide().collect() };
+    let terminated = |text: &OsStr| -> Vec<u16> {
+        text.encode_wide().chain(std::iter::once(0)).collect()
+    };
+
+    let stdin = std::fs::OpenOptions::new().read(true).open("NUL")?;
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(spec.log)?;
+    let inherited: [HANDLE; 2] = [
+        stdin.as_raw_handle() as HANDLE,
+        log.as_raw_handle() as HANDLE,
+    ];
+    for handle in inherited {
+        // SAFETY: both handles are open files owned by this function.
+        if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+
+    // The program, quoted (a Windows path cannot hold a quote), then each argument.
+    let mut command_line = vec![b'"' as u16];
+    command_line.extend(wide(spec.program.as_os_str()));
+    command_line.push(b'"' as u16);
+    for argument in spec.args {
+        command_line.push(b' ' as u16);
+        crate::execution::detached::append_windows_argument(&mut command_line, &wide(argument));
+    }
+    command_line.push(0);
+
+    // The environment block, sorted by name as Windows keeps it.
+    let mut variables: Vec<(Vec<u16>, Vec<u16>)> = spec
+        .env
+        .iter()
+        .map(|(name, value)| (wide(name), wide(value)))
+        .collect();
+    variables.sort_by_key(|(name, _)| {
+        String::from_utf16_lossy(name).to_uppercase()
+    });
+    let mut environment = Vec::new();
+    for (name, value) in variables {
+        environment.extend(name);
+        environment.push(b'=' as u16);
+        environment.extend(value);
+        environment.push(0);
+    }
+    if environment.is_empty() {
+        environment.push(0);
+    }
+    environment.push(0);
+
+    let program = terminated(spec.program.as_os_str());
+    let cwd = terminated(spec.cwd.as_os_str());
+
+    // An attribute list naming the only handles the process may inherit.
+    let mut size = 0usize;
+    // SAFETY: a size query; the call fails with ERROR_INSUFFICIENT_BUFFER by design.
+    unsafe { InitializeProcThreadAttributeList(null_mut(), 1, 0, &mut size) };
+    let mut storage = vec![0usize; size.div_ceil(std::mem::size_of::<usize>()).max(1)];
+    let list = storage.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+    // SAFETY: `storage` is at least `size` bytes, pointer-aligned, and outlives `list`.
+    if unsafe { InitializeProcThreadAttributeList(list, 1, 0, &mut size) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    struct AttributeList(LPPROC_THREAD_ATTRIBUTE_LIST);
+    impl Drop for AttributeList {
+        fn drop(&mut self) {
+            // SAFETY: initialized above, deleted once.
+            unsafe { DeleteProcThreadAttributeList(self.0) };
+        }
+    }
+    let _list = AttributeList(list);
+    // SAFETY: `inherited` outlives the CreateProcessW calls below, which read it.
+    if unsafe {
+        UpdateProcThreadAttribute(
+            list,
+            0,
+            PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+            inherited.as_ptr().cast(),
+            std::mem::size_of_val(&inherited),
+            null_mut(),
+            null(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+
+    let mut startup = STARTUPINFOEXW::default();
+    startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
+    startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+    startup.StartupInfo.hStdInput = inherited[0];
+    startup.StartupInfo.hStdOutput = inherited[1];
+    startup.StartupInfo.hStdError = inherited[1];
+    startup.lpAttributeList = list;
+
+    let base = EXTENDED_STARTUPINFO_PRESENT
+        | CREATE_UNICODE_ENVIRONMENT
+        | DETACHED_PROCESS
+        | CREATE_NEW_PROCESS_GROUP;
+    let create = |flags| -> io::Result<PROCESS_INFORMATION> {
+        let mut line = command_line.clone();
+        let mut info = PROCESS_INFORMATION {
+            hProcess: null_mut(),
+            hThread: null_mut(),
+            dwProcessId: 0,
+            dwThreadId: 0,
+        };
+        // SAFETY: every pointer is to a live, NUL-terminated buffer or initialized struct
+        // owned by this function; `line` is a mutable copy, as CreateProcessW requires.
+        let created = unsafe {
+            CreateProcessW(
+                program.as_ptr(),
+                line.as_mut_ptr(),
+                null(),
+                null(),
+                1,
+                flags,
+                environment.as_ptr().cast(),
+                cwd.as_ptr(),
+                &startup.StartupInfo as *const STARTUPINFOW,
+                &mut info,
+            )
+        };
+        if created == 0 {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(info)
+        }
+    };
+    // Out of the caller's job where the job allows it: a job that forbids breaking away
+    // refuses with ERROR_ACCESS_DENIED, and the process then starts inside it.
+    let info = match create(base | CREATE_BREAKAWAY_FROM_JOB) {
+        Ok(info) => info,
+        Err(error) if error.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) => create(base)?,
+        Err(error) => return Err(error),
+    };
+    // SAFETY: both handles were just returned by CreateProcessW and are owned here.
+    unsafe {
+        drop(OwnedHandle::from_raw_handle(info.hThread as RawHandle));
+        Ok(DetachedChild(OwnedHandle::from_raw_handle(
+            info.hProcess as RawHandle,
+        )))
+    }
+}

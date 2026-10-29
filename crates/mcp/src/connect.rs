@@ -39,6 +39,8 @@ broker. The same as `devagotchi connect`, except that it never asks you to sign 
 
 /// How long Devagotchi may hold one tool call (a wait is at most 50 s, then the answer).
 const TOOL_TIMEOUT_SECS: u64 = 120;
+/// How long a client may wait for `devagotchi mcp` to start: it may start the broker first.
+const STARTUP_TIMEOUT_SECS: u64 = 30;
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 /// The line written above Devagotchi's table in Codex's config, replaced with it.
 const CODEX_MARK: &str =
@@ -59,6 +61,8 @@ pub struct Machine {
     pub path: Option<OsString>,
     /// Whether `devagotchi login` has signed this machine in.
     pub signed_in: bool,
+    /// Whether an account is on file at all, signed in or with its sign-in run out.
+    pub account_on_file: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -154,7 +158,15 @@ fn run(args: Vec<OsString>, machine: Machine, setup: bool) -> ExitCode {
     let target = match options.target {
         Some(target) => target,
         None if machine.signed_in => Target::Hub(None),
-        None if setup => Target::Local,
+        // No account at all: this machine's own broker. An account whose sign-in ran out
+        // keeps its hub until its person says otherwise.
+        None if setup && !machine.account_on_file => Target::Local,
+        None if setup => {
+            eprintln!(
+                "devagotchi setup: this machine's sign-in has run out. Run `devagotchi login` to renew it (setup then uses your hub), or `devagotchi setup --local` for this machine's broker alone."
+            );
+            return ExitCode::from(64);
+        }
         None => {
             eprintln!(
                 "devagotchi connect: this machine is not signed in. Run `devagotchi login` first (then connect uses the hosted hub), or `devagotchi connect --local` for this machine's broker alone."
@@ -338,7 +350,7 @@ fn codex_config(existing: &str, exe: &Path, args: &[String]) -> String {
     }
     let args = args.iter().map(|a| toml_string(a)).collect::<Vec<_>>().join(", ");
     out.push_str(&format!(
-        "{CODEX_MARK}\n[mcp_servers.devagotchi]\ncommand = {}\nargs = [{args}]\n# Devagotchi holds a wait for up to 50 s before it answers.\ntool_timeout_sec = {TOOL_TIMEOUT_SECS}\n",
+        "{CODEX_MARK}\n[mcp_servers.devagotchi]\ncommand = {}\nargs = [{args}]\n# Devagotchi holds a wait for up to 50 s before it answers.\ntool_timeout_sec = {TOOL_TIMEOUT_SECS}\n# Its first start may also start your broker, which can take longer than the default.\nstartup_timeout_sec = {STARTUP_TIMEOUT_SECS}\n",
         toml_string(&exe.to_string_lossy())
     ));
     out
@@ -501,7 +513,7 @@ mod tests {
         assert!(out.contains("[profiles.fast]\nmodel = \"o4-mini\""), "{out}");
         assert!(!out.contains("/old/devagotchi") && !out.contains("X = \"1\""), "{out}");
         assert_eq!(out.matches("[mcp_servers.devagotchi]").count(), 1, "{out}");
-        assert!(out.ends_with("[mcp_servers.devagotchi]\ncommand = '/usr/local/bin/devagotchi'\nargs = ['mcp', '--hub']\n# Devagotchi holds a wait for up to 50 s before it answers.\ntool_timeout_sec = 120\n"), "{out}");
+        assert!(out.ends_with("[mcp_servers.devagotchi]\ncommand = '/usr/local/bin/devagotchi'\nargs = ['mcp', '--hub']\n# Devagotchi holds a wait for up to 50 s before it answers.\ntool_timeout_sec = 120\n# Its first start may also start your broker, which can take longer than the default.\nstartup_timeout_sec = 30\n"), "{out}");
         // Running it again changes nothing.
         assert_eq!(codex_config(&out, Path::new("/usr/local/bin/devagotchi"), &hub()), out);
         // A new file holds only the server.

@@ -123,10 +123,15 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
     // answers `unsupported_platform` itself, before any config is written.
     #[cfg(any(target_os = "linux", windows))]
     {
-        if let Err(error) = private_dir(&state) {
+        // The broker makes the state directory itself (owner-only, through the IPC layer
+        // that checks it); only its parent is made here. On Windows a directory made here
+        // by an administrator would be owned by the Administrators group and refused.
+        if let Some(parent) = state.parent()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
             eprintln!(
                 "devagotchi start: cannot create {}: {error}",
-                state.display()
+                parent.display()
             );
             return ExitCode::FAILURE;
         }
@@ -214,12 +219,8 @@ fn background(
         args.extend(["--grant".into(), absolute(grant.clone()).into()]);
     }
     let log = state.join(background::LOG_FILE);
-    if let Err(error) = background::spawn_detached(&exe, &args, state) {
-        eprintln!("devagotchi start: could not start the broker: {error}");
-        return ExitCode::FAILURE;
-    }
-    match background::wait_until_answering(state, background::START_WITHIN) {
-        Some(endpoint) => {
+    match background::start_and_wait(&exe, &args, state, background::START_WITHIN) {
+        Ok(endpoint) => {
             eprintln!(
                 "devagotchi: your broker is running in the background: {} (log {})",
                 endpoint.display(),
@@ -227,13 +228,8 @@ fn background(
             );
             ExitCode::SUCCESS
         }
-        None => {
-            eprintln!(
-                "devagotchi start: the broker did not answer within {} s; {}:\n{}",
-                background::START_WITHIN.as_secs(),
-                log.display(),
-                background::log_tail(state, 20)
-            );
+        Err(failure) => {
+            eprintln!("devagotchi start: {failure}\n(log {})", log.display());
             ExitCode::FAILURE
         }
     }
@@ -323,7 +319,8 @@ fn write_config(
         "max_concurrent": 4,
     });
     let text = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())? + "\n";
-    let tmp = path.with_extension("json.tmp");
+    // A name of this process's own: two first starts racing never share a temporary file.
+    let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
     std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
     #[cfg(unix)]
     {

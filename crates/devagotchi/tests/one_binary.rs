@@ -139,6 +139,60 @@ fn mcp_starts_this_users_broker_when_none_is_running() {
     drop(stop);
 }
 
+/// An AI client that kills everything it started (its whole process group) when it closes
+/// leaves the broker its adapter started running: the broker has a session of its own.
+#[cfg(target_os = "linux")]
+#[test]
+fn killing_the_clients_whole_process_group_leaves_the_broker_running() {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::process::CommandExt,
+        process::Stdio,
+    };
+    let home = tempfile::tempdir().unwrap();
+    let state = home.path().join("state");
+    let env = [
+        ("DEVAGOTCHI_STATE_DIR", state.as_os_str().to_owned()),
+        ("DEVAGOTCHI_CONFIG_DIR", home.path().join("config").into_os_string()),
+        ("HOME", home.path().as_os_str().to_owned()),
+    ];
+    let stop = Broker(state.clone());
+    let mut adapter = devagotchi()
+        .arg("mcp")
+        .envs(env.iter().cloned())
+        .process_group(0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = adapter.stdin.take().unwrap();
+    let mut stdout = BufReader::new(adapter.stdout.take().unwrap());
+    let initialize = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "group-kill", "version": "0" } } });
+    writeln!(stdin, "{initialize}").unwrap();
+    let mut line = String::new();
+    assert!(stdout.read_line(&mut line).unwrap() > 0, "the adapter never answered");
+    let group = adapter.id().to_string();
+    let killed = Command::new("kill")
+        .args(["-s", "KILL", "--", &format!("-{group}")])
+        .status()
+        .unwrap();
+    assert!(killed.success(), "kill {killed}");
+    drop(stdin);
+    let status = adapter.wait().unwrap();
+    assert!(!status.success(), "the adapter was killed, not closed: {status}");
+
+    let tools = tools_of_a_fresh_adapter(&env);
+    assert!(tools.contains(&"operation_start".to_string()), "{tools:?}");
+    let log = std::fs::read_to_string(state.join("broker.log")).unwrap();
+    assert_eq!(
+        log.matches("devagotchi broker ready").count(),
+        1,
+        "the first broker survived; no second was started:\n{log}"
+    );
+    drop(stop);
+}
+
 /// Stops the broker a test started in the background (found by its state directory,
 /// which it was started with), however the test ends.
 #[cfg(any(target_os = "linux", windows))]
@@ -231,9 +285,21 @@ fn tools_of_a_fresh_adapter(env: &[(&str, std::ffi::OsString)]) -> Vec<String> {
     drop(rpc);
     drop(stdin);
     let status = adapter.wait().unwrap();
-    // The adapter's stderr reaches its end once the adapter has exited: nothing it started
-    // (the broker included) may keep the client's pipes open.
-    reader.join().unwrap();
+    // Once the adapter has exited its stdout and stderr end: nothing it started, the broker
+    // included, may hold an AI client's pipes open (a client waits for that end before it
+    // sees the server close).
+    let (ended, end) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut rest = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut stdout, &mut rest);
+        let _ = reader.join();
+        let _ = ended.send(());
+    });
+    assert!(
+        end.recv_timeout(std::time::Duration::from_secs(10)).is_ok(),
+        "{}",
+        why("the adapter's pipes stayed open after it exited")
+    );
     assert!(status.success(), "{}", why(&format!("adapter exit {status}")));
     tools["result"]["tools"]
         .as_array()
