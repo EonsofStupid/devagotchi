@@ -223,17 +223,28 @@ def brokers(exe):
     return found.returncode == 0
 
 
+def running(exe):
+    """Whether any process runs `exe`'s image, cheaply. On Windows only a disposable runner
+    reaches here, where every devagotchi.exe is this check's own."""
+    if WINDOWS:
+        listed = subprocess.run(['tasklist', '/FI', f'IMAGENAME eq {exe.name}', '/FO', 'CSV',
+                                 '/NH'], capture_output=True, encoding='utf-8', errors='replace')
+        assert listed.returncode == 0, listed.stderr
+        return f'"{exe.name}"'.lower() in listed.stdout.lower()
+    return brokers(exe)
+
+
 def kill_brokers(exe):
     """What a reboot does to the broker `setup` started: gone, its endpoint file left."""
     if WINDOWS:
-        powershell(f'{ours(exe)} | ForEach-Object {{ '
-                   'Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; exit 0')
+        # PowerShell takes tens of seconds to start on the ARM64 runner: taskkill and tasklist.
+        subprocess.run(['taskkill', '/F', '/IM', exe.name], capture_output=True)
     else:
         subprocess.run(['pkill', '-KILL', '-f', '--', f'{exe} start'], capture_output=True)
-    deadline = time.monotonic() + 10
-    while brokers(exe) and time.monotonic() < deadline:
+    deadline = time.monotonic() + 15
+    while running(exe) and time.monotonic() < deadline:
         time.sleep(0.2)
-    assert not brokers(exe), 'the broker is still running'
+    assert not running(exe), 'the broker is still running'
 
 
 def set_up(done):
@@ -329,7 +340,7 @@ def main():
         print(f'--- failed download, from {shell}: exit {done.returncode}', flush=True)
         assert done.returncode != 0 and 'Check:' not in done.stdout, \
             f'from {shell}, a failed download still ran setup:\n{done.stdout}{done.stderr}'
-        kill_brokers(exe)
+        assert not running(exe), f'from {shell}, a failed download started a broker'
 
     codex = tomllib.loads((home / '.codex' / 'config.toml').read_text(encoding='utf-8'))
     server = codex['mcp_servers']['devagotchi']
@@ -346,6 +357,9 @@ def main():
     try:
         mcp.rpc('initialize', {'protocolVersion': '2025-11-25', 'capabilities': {},
                                'clientInfo': {'name': 'install-check', 'version': '0'}})
+        # What a client waits before its server answers: the broker starts in it.
+        print(f'after a reboot, the server answered in {time.monotonic() - began:.1f} s',
+              flush=True)
         mcp.send({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         names = {t['name'] for t in mcp.rpc('tools/list', {})['tools']}
         assert {'operation_start', 'operation_wait', 'operation_read'} <= names, names

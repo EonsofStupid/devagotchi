@@ -49,7 +49,8 @@ jobs:
         # fetched: this system's own, except x64 from Git Bash on ARM64 Windows.
         os: [ubuntu-22.04, ubuntu-22.04-arm, ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-2025, windows-11-arm]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # The ARM64 Windows runner is slow: one install there takes about 25 s against 2 s on x64.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
