@@ -72,6 +72,13 @@ pub fn wait_until_answering(state: &Path, within: Duration) -> Option<PathBuf> {
     }
 }
 
+/// The last `lines` lines of `<state>/broker.log`, to say why a background start failed.
+pub fn log_tail(state: &Path, lines: usize) -> String {
+    let text = std::fs::read_to_string(state.join(LOG_FILE)).unwrap_or_default();
+    let all: Vec<&str> = text.lines().collect();
+    all[all.len().saturating_sub(lines)..].join("\n")
+}
+
 /// Start `exe args…` detached from this process, its output appended to
 /// `<state>/broker.log`. Returns once it is started, not once it answers.
 pub fn spawn_detached(exe: &Path, args: &[OsString], state: &Path) -> io::Result<()> {
@@ -173,7 +180,12 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join("state");
-        spawn_detached(Path::new("/bin/true"), &[], &state).unwrap();
+        spawn_detached(
+            Path::new("/bin/sh"),
+            &["-c".into(), "exit 0".into()],
+            &state,
+        )
+        .unwrap();
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&state), 0o700);
         assert_eq!(mode(&state.join(LOG_FILE)), 0o600);

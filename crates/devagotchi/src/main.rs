@@ -173,10 +173,11 @@ fn local_broker(state: &std::path::Path) -> Result<std::path::PathBuf, String> {
         .map_err(|e| format!("could not start your broker: {e}"))?;
     devagotchi_broker::background::answering(state).ok_or_else(|| {
         format!(
-            "your broker did not start ({started}); see {}",
+            "your broker did not start ({started}); {}:\n{}",
             state
                 .join(devagotchi_broker::background::LOG_FILE)
-                .display()
+                .display(),
+            devagotchi_broker::background::log_tail(state, 20)
         )
     })
 }

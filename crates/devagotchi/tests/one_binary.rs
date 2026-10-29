@@ -179,16 +179,43 @@ fn tools_of_a_fresh_adapter(env: &[(&str, std::ffi::OsString)]) -> Vec<String> {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
+    // What the adapter and the broker said, for any failure below.
+    let stderr = adapter.stderr.take().unwrap();
+    let said = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let collected = said.clone();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let mut said = collected.lock().unwrap();
+            said.push_str(&line);
+            said.push('\n');
+        }
+    });
+    let state = env
+        .iter()
+        .find(|(k, _)| *k == "DEVAGOTCHI_STATE_DIR")
+        .map(|(_, v)| std::path::PathBuf::from(v))
+        .unwrap();
+    let why = |what: &str| {
+        let log = std::fs::read_to_string(state.join("broker.log")).unwrap_or_default();
+        format!(
+            "{what}\n--- adapter stderr ---\n{}--- broker.log ---\n{log}",
+            said.lock().unwrap()
+        )
+    };
     let mut stdin = adapter.stdin.take().unwrap();
     let mut stdout = BufReader::new(adapter.stdout.take().unwrap());
     let mut rpc = |id: u64, method: &str, params: serde_json::Value| -> serde_json::Value {
         let message =
             serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
-        writeln!(stdin, "{message}").unwrap();
-        stdin.flush().unwrap();
+        let _ = writeln!(stdin, "{message}");
+        let _ = stdin.flush();
         loop {
             let mut line = String::new();
-            assert!(stdout.read_line(&mut line).unwrap() > 0, "adapter closed");
+            if stdout.read_line(&mut line).unwrap_or(0) == 0 {
+                // Give the reader a moment to collect what the adapter said last.
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                panic!("{}", why("adapter closed"));
+            }
             let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
             if reply["id"] == id {
                 return reply;
@@ -204,12 +231,13 @@ fn tools_of_a_fresh_adapter(env: &[(&str, std::ffi::OsString)]) -> Vec<String> {
     drop(rpc);
     drop(stdin);
     let status = adapter.wait().unwrap();
-    let mut errors = String::new();
-    let _ = std::io::Read::read_to_string(&mut adapter.stderr.take().unwrap(), &mut errors);
-    assert!(status.success(), "adapter exit {status}: {errors}");
+    // The adapter's stderr reaches its end once the adapter has exited: nothing it started
+    // (the broker included) may keep the client's pipes open.
+    reader.join().unwrap();
+    assert!(status.success(), "{}", why(&format!("adapter exit {status}")));
     tools["result"]["tools"]
         .as_array()
-        .unwrap_or_else(|| panic!("no tools: {tools} {errors}"))
+        .unwrap_or_else(|| panic!("{}", why(&format!("no tools: {tools}"))))
         .iter()
         .filter_map(|t| t["name"].as_str().map(str::to_string))
         .collect()

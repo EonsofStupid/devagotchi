@@ -229,9 +229,10 @@ fn background(
         }
         None => {
             eprintln!(
-                "devagotchi start: the broker did not answer within {} s; see {}",
+                "devagotchi start: the broker did not answer within {} s; {}:\n{}",
                 background::START_WITHIN.as_secs(),
-                log.display()
+                log.display(),
+                background::log_tail(state, 20)
             );
             ExitCode::FAILURE
         }
