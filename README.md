@@ -32,7 +32,8 @@ powershell -ExecutionPolicy Bypass -c "[Environment]::SetEnvironmentVariable('PS
 ```
 
 Restart any AI client that was open. macOS is not supported yet (its execution provider is
-pending). Another MCP client (Cursor, VS Code, Windsurf…): give it a server that runs
+pending). On ARM64 Windows, the line run from Git Bash (an x64 program there) installs the x64
+build, which runs under emulation; run it from PowerShell or Command Prompt for the ARM64 one. Another MCP client (Cursor, VS Code, Windsurf…): give it a server that runs
 `~/.local/bin/devagotchi` (Windows: `%USERPROFILE%\.local\bin\devagotchi.exe`) with the
 argument `mcp`; `setup` says it found no client when none of the three is there.
 

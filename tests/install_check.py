@@ -277,8 +277,16 @@ def main():
               done.stdout, done.stderr, sep='\n', flush=True)
         set_up(done)
         archives = [p for p in asked if p.startswith('/devagotchi-') and 'installer' not in p]
-        assert archives and all(p.startswith(f'/devagotchi-{triple}.') for p in archives), \
+        expected = [triple]
+        if shell == 'Git Bash' and triple == TRIPLES[('Windows', 'ARM64')]:
+            # Git for Windows is an x64 program on ARM64 Windows, so the PowerShell it starts
+            # reports x64 and dist's installer takes the x64 build, which runs under emulation
+            # (dist's own note; the README says so).
+            expected.append(TRIPLES[('Windows', 'X64')])
+        assert archives and all(any(p.startswith(f'/devagotchi-{t}.') for t in expected)
+                                for p in archives), \
             f'the installer fetched {asked}, not this system\'s {triple} archive'
+        print(f'    fetched {", ".join(archives)}', flush=True)
         assert exe.is_file(), f'{exe} was not installed'
         if n == 0:
             calls = claude_log.read_text(encoding='utf-8', errors='replace')
