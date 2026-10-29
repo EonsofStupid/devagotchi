@@ -12,7 +12,7 @@ Tell your AI "install Devagotchi from github.com/EonsofStupid/devagotchi", or pa
 for your system into any terminal. It installs the `devagotchi` binary for your user (no
 administrator rights), then `setup` gives every AI client it finds (Claude Code, Codex, Claude
 Desktop) an MCP server named `devagotchi`. No account, nothing to start by hand: your broker
-starts in the background the first time an AI calls it, and again after a reboot.
+starts in the background on an AI's first call, and again on the first call after a reboot.
 
 > **Not published yet.** These lines work once the first release (v0.1.0) is out; until then
 > the links return 404. Build from source instead ([Linux](#build-the-linux-core),
@@ -21,26 +21,35 @@ starts in the background the first time an AI calls it, and again after a reboot
 Linux (x86_64, ARM64; glibc 2.35 or later, e.g. Ubuntu 22.04, Debian 12):
 
 ```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.sh | sh && ~/.local/bin/devagotchi setup
+bash -o pipefail -c 'curl --proto =https --tlsv1.2 -LsSf https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.sh | sh' && ~/.local/bin/devagotchi setup
 ```
 
-Windows (x64, ARM64), from PowerShell, Command Prompt or Git Bash alike (its first part keeps
-a PowerShell 7 session's module path from breaking the Windows PowerShell that installs):
+Windows (x64, ARM64), from PowerShell, Command Prompt or Git Bash alike:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "[Environment]::SetEnvironmentVariable('PSModulePath', [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')); irm https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.ps1 | iex; & ((Get-Variable HOME -ValueOnly) + '\.local\bin\devagotchi.exe') setup"
+powershell -NoProfile -ExecutionPolicy Bypass -c "[Environment]::SetEnvironmentVariable('PSModulePath', [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')); try { irm https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.ps1 -ErrorAction Stop | iex } catch { throw }; & ((Get-Variable HOME -ValueOnly) + '\.local\bin\devagotchi.exe') setup"
 ```
 
-Restart any AI client that was open. macOS is not supported yet (its execution provider is
-pending). On ARM64 Windows, the line run from Git Bash (an x64 program there) installs the x64
-build, which runs under emulation; run it from PowerShell or Command Prompt for the ARM64 one. Another MCP client (Cursor, VS Code, Windsurf…): give it a server that runs
-`~/.local/bin/devagotchi` (Windows: `%USERPROFILE%\.local\bin\devagotchi.exe`) with the
-argument `mcp`; `setup` says it found no client when none of the three is there.
+Either line stops before `setup` if the download or the install fails. Restart any AI client
+that was open. macOS is not supported yet (its execution provider is pending). On ARM64
+Windows, the line run from Git Bash (an x64 program there) installs the x64 build, which runs
+under emulation; run it from PowerShell or Command Prompt for the ARM64 one.
+
+**Another MCP client** (Cursor, VS Code, Windsurf…): `setup` prints the server's full path
+first (`Devagotchi MCP server: /home/you/.local/bin/devagotchi mcp`); give your client a stdio
+server with that absolute path as its command and `mcp` as its argument. A client does not
+expand `~` or `%USERPROFILE%`. `setup` ends with an error when it finds none of the three
+clients above, after printing that line.
 
 **What it changes**, which an AI doing this for someone should tell them before running it:
-- the binary in `~/.local/bin` (Windows `%USERPROFILE%\.local\bin`), added to your `PATH`
-  (your shell's profile files; Windows: your user `Path`);
-- the `devagotchi` entry in each AI client's config, after backing the file up beside itself;
+- the binary, in `.local/bin` in your home folder (`setup` prints its full path);
+- your `PATH`, when `.local/bin` was not on it: on Linux the installer writes
+  `~/.config/devagotchi/env.sh` (and `env.fish`) and adds the line
+  `. "$HOME/.config/devagotchi/env.sh"` to `~/.profile`, your bash and zsh startup files, and
+  `~/.config/fish/conf.d/devagotchi.env.fish`; on Windows it adds that folder to your user
+  `Path`;
+- the `devagotchi` entry in each AI client's config: Codex's and Claude Desktop's files are
+  backed up beside themselves first (`.bak-<time>`), Claude Code's is set with `claude mcp`;
 - your broker, a background process that keeps running, with its config and state in
   `~/.config/devagotchi` and `~/.local/state/devagotchi` (Windows `%APPDATA%\devagotchi` and
   `%LOCALAPPDATA%\devagotchi`). Its first start lets AI clients run the developer tools it
@@ -51,11 +60,20 @@ argument `mcp`; `setup` says it found no client when none of the three is there.
 `setup` ends with `Check: Devagotchi answered with N tools` when it works;
 `devagotchi setup --help` lists the choices (one client, `--local` or `--hub`).
 
-**To undo:** stop the broker (`pkill -f '.local/bin/devagotchi start'`; Windows:
-`Get-Process devagotchi | Stop-Process`), remove the `devagotchi` entries
-(`claude mcp remove --scope user devagotchi`, the `[mcp_servers.devagotchi]` table in
-`~/.codex/config.toml`, `mcpServers.devagotchi` in Claude Desktop's config), delete the binary
-and the two directories above, and the installer's `PATH` line.
+**To update:** close your AI clients (an open one starts the broker again), stop the broker,
+then run the line again. Windows cannot replace the program while anything still runs it.
+
+**To undo**, in this order:
+1. Close your AI clients, then stop the broker: `pkill -f '.local/bin/devagotchi start'`
+   (Windows: `Get-Process devagotchi | Stop-Process`).
+2. Remove the `devagotchi` entries: `claude mcp remove --scope user devagotchi`, the
+   `[mcp_servers.devagotchi]` table in `~/.codex/config.toml`, `mcpServers.devagotchi` in
+   Claude Desktop's config.
+3. Linux: remove the installer's line from your startup files, then its fish file:
+   `sed -i '\#devagotchi/env.sh#d' ~/.profile ~/.bashrc ~/.bash_profile ~/.bash_login ~/.zshrc ~/.zshenv 2>/dev/null; rm -f ~/.config/fish/conf.d/devagotchi.env.fish`.
+   Windows: remove `.local\bin` in your home folder from your user `Path` (System Properties >
+   Environment Variables), unless other tools you use live there too.
+4. Delete the binary and the two directories above.
 
 **Checking what you run:** the Linux installer checks the archive's SHA-256 before installing;
 the Windows installer does not. Every release's archives carry GitHub build attestations:

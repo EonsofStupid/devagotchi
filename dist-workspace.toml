@@ -23,7 +23,8 @@ github-attestations = true
 # The release gate (.github/workflows/install-check.yml): on a fresh runner of each kind the
 # README's install line installs from this run's own installers and archives, `devagotchi
 # setup` sets up the AI clients, and a job runs after a simulated reboot. `host` publishes only
-# when it passed. dist writes this job into release.yml beside the global build.
+# when it passed. dist writes this job into release.yml; release.yml also makes it wait for the
+# global build (a hand edit allow-dirty keeps), so it tests the very installers host publishes.
 global-artifacts-jobs = ["./install-check"]
 
 # Build each released package on its own (the Tauri desktop crate needs GTK and is not released here)

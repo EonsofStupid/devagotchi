@@ -38,6 +38,8 @@ import time
 import tomllib
 
 RELEASE = 'https://github.com/EonsofStupid/devagotchi/releases/latest/download/'
+# curl's https-only flags, which a local server cannot meet.
+LINUX_TLS = '--proto =https --tlsv1.2 '
 WINDOWS = os.name == 'nt'
 TRIPLES = {
     ('Linux', 'X64'): 'x86_64-unknown-linux-gnu',
@@ -47,10 +49,19 @@ TRIPLES = {
 }
 
 
+def hosted():
+    return (os.environ.get('GITHUB_ACTIONS') == 'true'
+            and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted')
+
+
 def disposable():
-    if (os.environ.get('GITHUB_ACTIONS') == 'true'
-            and os.environ.get('RUNNER_ENVIRONMENT') == 'github-hosted'):
+    if hosted():
         return True
+    # A throwaway HOME on Linux, with nothing pointing the clients' or shells' files elsewhere.
+    elsewhere = [k for k in ('XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'CODEX_HOME',
+                             'ZDOTDIR') if os.environ.get(k)]
+    if elsewhere:
+        sys.exit(f'install_check.py: unset {", ".join(elsewhere)} for a throwaway-home run')
     return not WINDOWS and os.environ.get('INSTALL_CHECK_HOME') == str(Path.home())
 
 
@@ -105,17 +116,22 @@ def shells(line, work):
         return [('bash', ['bash', '-c', line]), ('sh', ['sh', '-c', line])]
     script = work / 'line.ps1'
     script.write_text(line + '\r\nexit $LASTEXITCODE\r\n', encoding='utf-8')
-    found = [('Command Prompt', f'cmd /d /s /c "{line}"'),
-             ('Windows PowerShell', ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
-                                     '-File', str(script)])]
-    if shutil.which('pwsh'):
-        found.append(('PowerShell 7', ['pwsh', '-NoProfile', '-File', str(script)]))
+    found = []
+    # Git Bash first: on ARM64 Windows it installs the x64 build, and the native build the
+    # shells after it install is the one the reboot below runs.
     program_files = Path(os.environ.get('ProgramFiles', r'C:\Program Files'))
     git_bash = program_files / 'Git' / 'bin' / 'bash.exe'
     if git_bash.is_file():
         sh = work / 'line.sh'
         sh.write_text(line + '\n', encoding='utf-8')
         found.append(('Git Bash', [str(git_bash), str(sh)]))
+    found += [('Command Prompt', f'cmd /d /s /c "{line}"'),
+              ('Windows PowerShell', ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass',
+                                      '-File', str(script)])]
+    if shutil.which('pwsh'):
+        found.append(('PowerShell 7', ['pwsh', '-NoProfile', '-File', str(script)]))
+    # Git Bash is the shell Claude Code uses on Windows: a runner without it proves less.
+    assert not hosted() or len(found) == 4, f'missing a shell: {[name for name, _ in found]}'
     return found
 
 
@@ -180,10 +196,14 @@ class Mcp:
 
 
 def powershell(script):
+    """`script`'s output from Windows PowerShell, with its own module path (the runner's step
+    shell is PowerShell 7, whose module path breaks Windows PowerShell's cmdlets)."""
     encoded = base64.b64encode(script.encode('utf-16-le')).decode()
-    return subprocess.run(['powershell', '-NoProfile', '-EncodedCommand', encoded],
-                          capture_output=True, encoding='utf-8',
-                          errors='replace').stdout.strip()
+    env = {k: v for k, v in os.environ.items() if k.upper() != 'PSMODULEPATH'}
+    done = subprocess.run(['powershell', '-NoProfile', '-EncodedCommand', encoded], env=env,
+                          capture_output=True, encoding='utf-8', errors='replace')
+    assert done.returncode == 0, f'{script}: {done.stderr}'
+    return done.stdout.strip()
 
 
 def ours(exe):
@@ -196,7 +216,9 @@ def brokers(exe):
     """Whether a broker started from `exe` (`devagotchi start …`) is running."""
     if WINDOWS:
         started = "Where-Object { $_.CommandLine -match '\\sstart(\\s|$)' }"
-        return powershell(f'@({ours(exe)} | {started}).Count') not in ('', '0')
+        count = powershell(f'@({ours(exe)} | {started}).Count')
+        assert count.isdigit(), f'counting brokers printed {count!r}'
+        return count != '0'
     found = subprocess.run(['pgrep', '-f', '--', f'{exe} start'], capture_output=True)
     return found.returncode == 0
 
@@ -204,7 +226,8 @@ def brokers(exe):
 def kill_brokers(exe):
     """What a reboot does to the broker `setup` started: gone, its endpoint file left."""
     if WINDOWS:
-        powershell(f'{ours(exe)} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}')
+        powershell(f'{ours(exe)} | ForEach-Object {{ '
+                   'Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; exit 0')
     else:
         subprocess.run(['pkill', '-KILL', '-f', '--', f'{exe} start'], capture_output=True)
     deadline = time.monotonic() + 10
@@ -262,8 +285,8 @@ def main():
     assert published.count(RELEASE) == 1, f'the line no longer fetches {RELEASE}: {published}'
     line = published.replace(RELEASE, base)
     if not WINDOWS:
-        assert "curl --proto '=https' --tlsv1.2 " in line, line
-        line = line.replace("--proto '=https' --tlsv1.2 ", '')
+        assert LINUX_TLS in line, line
+        line = line.replace(LINUX_TLS, '')
     assert 'github.com' not in line, line
     env = {**os.environ, 'DEVAGOTCHI_DOWNLOAD_URL': base.rstrip('/'),
            'PATH': str(stubs) + os.pathsep + os.environ['PATH']}
@@ -294,6 +317,18 @@ def main():
             assert brokers(exe), 'setup\'s check left no broker running'
         # Windows cannot replace a running executable: stop it before the next shell
         # installs over it (and before the reboot below).
+        kill_brokers(exe)
+
+    # A download that fails (a network blip, a rate limit) must fail the line, not run the
+    # setup already installed and report success.
+    gone = published.replace(RELEASE, base + 'gone/')
+    if not WINDOWS:
+        gone = gone.replace(LINUX_TLS, '')
+    for shell, argv in shells(gone, work):
+        done = run(argv, env)
+        print(f'--- failed download, from {shell}: exit {done.returncode}', flush=True)
+        assert done.returncode != 0 and 'Check:' not in done.stdout, \
+            f'from {shell}, a failed download still ran setup:\n{done.stdout}{done.stderr}'
         kill_brokers(exe)
 
     codex = tomllib.loads((home / '.codex' / 'config.toml').read_text(encoding='utf-8'))

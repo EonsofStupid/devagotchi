@@ -4,11 +4,11 @@
 
 ## Install (an AI can do this for the user)
 
-- Linux: `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.sh | sh && ~/.local/bin/devagotchi setup`
-- Windows (PowerShell, Command Prompt or Git Bash): `powershell -ExecutionPolicy Bypass -c "[Environment]::SetEnvironmentVariable('PSModulePath', [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')); irm https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.ps1 | iex; & ((Get-Variable HOME -ValueOnly) + '\.local\bin\devagotchi.exe') setup"`
-- Before running it, tell the person what it changes: the binary in ~/.local/bin added to PATH; a `devagotchi` MCP entry in each AI client's config (backed up first); a background broker that lets AI clients run the developer tools on their PATH (git, python, node and the like) in their home directory, so an AI can do whatever their account can. The README's "Install" section has the full list and how to undo it.
-- Success: `setup` ends with `Check: Devagotchi answered with N tools`. No account is needed; the broker starts itself the first time an AI calls `devagotchi mcp`. Restart any AI client that was open.
-- Another MCP client: a stdio server running `~/.local/bin/devagotchi` (Windows `%USERPROFILE%\.local\bin\devagotchi.exe`) with the argument `mcp`.
+- Linux: `bash -o pipefail -c 'curl --proto =https --tlsv1.2 -LsSf https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.sh | sh' && ~/.local/bin/devagotchi setup`
+- Windows (PowerShell, Command Prompt or Git Bash): `powershell -NoProfile -ExecutionPolicy Bypass -c "[Environment]::SetEnvironmentVariable('PSModulePath', [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')); try { irm https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.ps1 -ErrorAction Stop | iex } catch { throw }; & ((Get-Variable HOME -ValueOnly) + '\.local\bin\devagotchi.exe') setup"`
+- Before running it, tell the person what it changes: the binary in .local/bin in their home folder, added to PATH (Linux: a line in their shell startup files); a `devagotchi` MCP entry in each AI client's config; a background broker that lets AI clients run the developer tools on their PATH (git, python, node and the like) in their home directory, so an AI can do whatever their account can. The README's "Install" section has the full list, how to update and how to undo it.
+- Success: `setup` ends with `Check: Devagotchi answered with N tools`. The line stops before `setup` if the download or the install fails. No account is needed; the broker starts itself on an AI's first call. Restart any AI client that was open.
+- Another MCP client: `setup` prints `Devagotchi MCP server: <absolute path> mcp`; give the client a stdio server with that absolute path as its command and `mcp` as its argument (clients do not expand `~` or `%USERPROFILE%`).
 - Not published yet: the release links work once v0.1.0 is out.
 
 ## Docs

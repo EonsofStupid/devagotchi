@@ -228,9 +228,13 @@ jobs:
             ${{ steps.cargo-dist.outputs.paths }}
             ${{ env.BUILD_MANIFEST_NAME }}
   custom-install-check:
+    # Hand-added beyond dist's template: it also needs build-global-artifacts, so the gate
+    # tests the very installers `host` publishes. Without it the gate would find no
+    # installers and fail, never pass untested.
     needs:
       - plan
       - build-local-artifacts
+      - build-global-artifacts
     uses: ./.github/workflows/install-check.yml
     with:
       plan: ${{ needs.plan.outputs.val }}

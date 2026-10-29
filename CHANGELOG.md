@@ -10,21 +10,29 @@ heading. Agents draft the fragments below; they never tag.
 ### Install in one line, for a person or their AI (increment 33b)
 - README "Install": one line per system that installs `devagotchi` for the user from the
   latest release (cargo-dist's installers, `~/.local/bin`, no administrator rights) and runs
-  `devagotchi setup`. The Windows line works the same from PowerShell, Command Prompt and Git
-  Bash (the shell Claude Code uses there), and from under a PowerShell 7 session, whose module
-  path otherwise stops Windows PowerShell loading the installer's cmdlets. What it changes, said plainly for an AI to tell the
-  person first (PATH, client configs, a background broker whose granted tools can do whatever
-  the account can), how to undo it, another MCP client's config, and which installer checks a
-  checksum. `llms.txt` says the same. Marked unpublished until v0.1.0 exists.
-- The release gate (`.github/workflows/install-check.yml`, dist `global-artifacts-jobs`): on
+  `devagotchi setup`. Each line stops before `setup` when the download or the install fails
+  (`bash -o pipefail`; PowerShell `try … catch { throw }`). The Windows line works the same
+  from PowerShell, Command Prompt and Git Bash (the shell Claude Code uses there), and under a
+  PowerShell 7 session, whose module path otherwise stops Windows PowerShell loading the
+  installer's cmdlets. What it changes, said plainly for an AI to tell the person first (the
+  binary, the PATH lines the installer adds, client configs, a background broker whose granted
+  tools can do whatever the account can); how to update and to undo, in order; another MCP
+  client's config; and which installer checks a checksum. `llms.txt` says the same. Marked
+  unpublished until v0.1.0 exists.
+- `devagotchi setup`/`connect` print the server's absolute command before saying they found
+  no client, so another MCP client can be given it.
+- The release gate (`.github/workflows/install-check.yml`, which `host` needs): on
   ubuntu-22.04, ubuntu-22.04-arm, ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-2025
   and windows-11-arm, the README's own line, run from every shell there, installs from the
-  run's installers and archives served on 127.0.0.1 and must fetch that system's own archive;
-  `setup` sets up Claude Code (a stub records the call), Codex and Claude Desktop and its check
-  passes; the broker is killed as a reboot would; and the command Codex was given starts it
-  again and runs `git --version` to the end (`tests/install_check.py`, which runs only on a
-  GitHub-hosted runner or a declared throwaway home, and stops only processes of its own
-  install). `host` publishes a release only when every runner passed; pull requests run it too.
+  very installers and archives `host` publishes, served on 127.0.0.1. Each shell must fetch
+  its system's own archive (Git Bash on ARM64 Windows gets the x64 build, as documented), a
+  failed download must stop the line before `setup`, `setup` sets up Claude Code (a stub
+  records the call), Codex and Claude Desktop and its check passes, the broker is killed as a
+  reboot would, and the command Codex was given starts it again and runs `git --version` to
+  the end (`tests/install_check.py`, which runs only on a GitHub-hosted runner or a declared
+  throwaway home, and stops only processes of its own install). A target dist builds with no
+  runner fails it. `host` publishes a release only when every runner passed; pull requests
+  run it too.
 
 ### One step for an AI client, no account (increment 33a)
 - `devagotchi mcp` with no broker answering starts this user's broker in the background

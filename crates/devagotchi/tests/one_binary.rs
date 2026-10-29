@@ -603,6 +603,34 @@ fn connect_wires_every_client_and_checks_the_server_answers() {
     let _ = broker.wait();
 }
 
+/// `devagotchi setup` where none of the three clients it knows is installed (Cursor alone,
+/// say): it fails, but first prints the absolute command any other MCP client needs.
+#[cfg(target_os = "linux")]
+#[test]
+fn setup_with_no_known_client_still_says_what_to_give_another() {
+    let home = tempfile::tempdir().unwrap();
+    let out = devagotchi()
+        .args(["setup", "--no-check"])
+        .env("HOME", home.path())
+        .env("CODEX_HOME", home.path().join("no-codex"))
+        .env("XDG_CONFIG_HOME", home.path().join("xdg"))
+        .env("PATH", home.path().join("empty"))
+        .env("DEVAGOTCHI_CONFIG_DIR", home.path().join("config"))
+        .output()
+        .unwrap();
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert_eq!(out.status.code(), Some(1), "{stdout}{stderr}");
+    let exe = std::fs::canonicalize(env!("CARGO_BIN_EXE_devagotchi")).unwrap();
+    assert!(
+        stdout.contains(&format!("Devagotchi MCP server: {} mcp", exe.display())),
+        "the absolute command another MCP client needs: {stdout}{stderr}"
+    );
+    assert!(stderr.contains("any other MCP client"), "{stderr}");
+}
+
 /// `devagotchi setup` as an AI runs it on a fresh machine: no account, no broker running,
 /// every client found is set up and the check starts the broker and lists its tools.
 #[cfg(target_os = "linux")]
