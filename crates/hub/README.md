@@ -171,6 +171,21 @@ secret) and the **Refresh Token** grant, redirect URI `<public_url>/auth/callbac
 and in `auth.clients`; the hub refuses to start otherwise, and with any auth mode but
 `nomen`, or a `public_url` that is plain http anywhere but loopback.
 
+### Trusting devagotchi.com sign-ins (`trusted_issuers`)
+
+A person signed in on devagotchi.com reaches their own machines with that site's token:
+
+```json
+"trusted_issuers": [
+  { "issuer": "https://<project>.supabase.co/auth/v1", "audiences": ["authenticated"] }
+]
+```
+
+The token goes to the issuer its `iss` names and must be signed by that issuer's JWKS keys
+(ES256 for the site); anything else goes to `auth` as before. Grants and ownership key on the
+token's `sub` (the site's user id). The site adds machines with `POST /api/v1/machines`
+(`{"name": "laptop"}`, bearer only) and lists them with `GET /api/v1/me`.
+
 How it holds up:
 
 - Authorization code with PKCE (S256). The `state` is single-use and bound to the browser
