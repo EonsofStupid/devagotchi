@@ -88,7 +88,8 @@ fn run(args: Vec<OsString>) -> ExitCode {
     }
 }
 
-/// `devagotchi login|logout|whoami`: the account file lives beside the broker's config.
+/// `devagotchi login|logout|whoami`: the account file lives in the config directory (beside
+/// the broker's config unless DEVAGOTCHI_BROKER_CONFIG puts that elsewhere).
 fn account(verb: &str, args: Vec<OsString>) -> ExitCode {
     let Some(config_dir) = paths::config_dir() else {
         eprintln!(

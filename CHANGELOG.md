@@ -20,9 +20,9 @@ heading. Agents draft the fragments below; they never tag.
     are never held open;
   - runs in its state directory with a pared-down environment: what programs need to find
     home, temp and tools, plus the SSH agent, proxies, extra CA certificates and toolchain
-    homes jobs need; an AI client's own variables, tokens in an MCP `env` block among them, do
-    not reach it or its jobs (a broker started in a terminal keeps that terminal's whole
-    environment);
+    homes jobs need; an AI client's own variables, tokens in an MCP `env` block among them and
+    who it acts as (`DEVAGOTCHI_ACTOR`), do not reach it or its jobs (a broker started in a
+    terminal keeps that terminal's whole environment);
   - writes to `<state>/broker.log` (0600); a broker that stops at once is reported at once with
     what it wrote (not an earlier start's lines), and one that holds the state but does not
     answer is reported as such.
