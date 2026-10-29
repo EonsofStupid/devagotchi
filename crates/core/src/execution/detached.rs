@@ -74,6 +74,12 @@ const KEPT: &[&str] = &[
     "XDG_STATE_HOME",
     "XDG_DATA_HOME",
     "XDG_CACHE_HOME",
+    // Where this user's Devagotchi lives. Not every DEVAGOTCHI_ variable: who a client acts
+    // as (DEVAGOTCHI_ACTOR) or a one-time enrollment code is that client's alone, and the
+    // broker serves every client.
+    "DEVAGOTCHI_STATE_DIR",
+    "DEVAGOTCHI_CONFIG_DIR",
+    "DEVAGOTCHI_BROKER_CONFIG",
     // The SSH agent, proxies and extra CA certificates (a proxy URL may carry a password;
     // a terminal start passes it on just the same).
     "SSH_AUTH_SOCK",
@@ -145,9 +151,7 @@ fn kept(name: &OsStr) -> bool {
             known == name
         }
     };
-    KEPT.iter().any(|known| same(known))
-        || name.starts_with("LC_")
-        || name.starts_with("DEVAGOTCHI_")
+    KEPT.iter().any(|known| same(known)) || name.starts_with("LC_")
 }
 
 #[cfg_attr(not(windows), allow(dead_code))]
@@ -232,6 +236,11 @@ mod tests {
             ("CARGO_HOME".into(), "/home/pat/.cargo".into()),
             ("GOPATH".into(), "/home/pat/go".into()),
             ("AWS_SECRET_ACCESS_KEY".into(), "secret".into()),
+            // Who a client acts as, and a one-time code, are that client's alone: a broker
+            // serves every client, so its jobs must not act as the one that started it.
+            ("DEVAGOTCHI_ACTOR".into(), "claude".into()),
+            ("DEVAGOTCHI_ENROLL_CODE".into(), "one-time".into()),
+            ("DEVAGOTCHI_BROKER_CONFIG".into(), "/c/broker.json".into()),
         ]);
         let names: Vec<_> = kept.iter().map(|(n, _)| n.to_str().unwrap()).collect();
         assert_eq!(
@@ -247,6 +256,7 @@ mod tests {
                 "SSL_CERT_FILE",
                 "CARGO_HOME",
                 "GOPATH",
+                "DEVAGOTCHI_BROKER_CONFIG",
             ]
         );
     }
