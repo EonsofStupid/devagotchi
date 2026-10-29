@@ -10,16 +10,20 @@ heading. Agents draft the fragments below; they never tag.
 ### Install in one line, for a person or their AI (increment 33b)
 - README "Install": one line per system that installs `devagotchi` for the user from the
   latest release (cargo-dist's installers, `~/.local/bin`, no administrator rights) and runs
-  `devagotchi setup`, with what an AI doing it for someone needs to know (what success looks
-  like, what it changes, how to undo it). `llms.txt` says the same for an AI that reads it.
-  Marked unpublished until v0.1.0 exists.
+  `devagotchi setup`. The Windows line works the same from PowerShell, Command Prompt and Git
+  Bash (the shell Claude Code uses there). What it changes, said plainly for an AI to tell the
+  person first (PATH, client configs, a background broker whose granted tools can do whatever
+  the account can), how to undo it, another MCP client's config, and which installer checks a
+  checksum. `llms.txt` says the same. Marked unpublished until v0.1.0 exists.
 - The release gate (`.github/workflows/install-check.yml`, dist `global-artifacts-jobs`): on
-  ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-2025 and windows-11-arm,
-  the README's own line installs from the run's installers and archives served on 127.0.0.1,
+  ubuntu-22.04, ubuntu-22.04-arm, ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-2025
+  and windows-11-arm, the README's own line, run from every shell there, installs from the
+  run's installers and archives served on 127.0.0.1 and must fetch that system's own archive;
   `setup` sets up Claude Code (a stub records the call), Codex and Claude Desktop and its check
-  passes, the broker is killed as a reboot would, and the command Codex was given starts it
-  again and runs `git --version` to the end (`tests/install_check.py`). `host` publishes a
-  release only when every runner passed; pull requests run it too.
+  passes; the broker is killed as a reboot would; and the command Codex was given starts it
+  again and runs `git --version` to the end (`tests/install_check.py`, which runs only on a
+  GitHub-hosted runner or a declared throwaway home, and stops only processes of its own
+  install). `host` publishes a release only when every runner passed; pull requests run it too.
 
 ### One step for an AI client, no account (increment 33a)
 - `devagotchi mcp` with no broker answering starts this user's broker in the background

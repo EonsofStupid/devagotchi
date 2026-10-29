@@ -9,38 +9,56 @@ This working copy starts the replacement for DesktopCommanderMCP with a separate
 ## Install: one line, for you or your AI
 
 Tell your AI "install Devagotchi from github.com/EonsofStupid/devagotchi", or paste the line
-for your system. It installs the `devagotchi` binary for your user (no administrator rights),
-then `setup` gives every AI client it finds (Claude Code, Codex, Claude Desktop) an MCP server
-named `devagotchi`. No account, nothing to start: the first time an AI calls it, your broker
-starts in the background and keeps running.
+for your system into any terminal. It installs the `devagotchi` binary for your user (no
+administrator rights), then `setup` gives every AI client it finds (Claude Code, Codex, Claude
+Desktop) an MCP server named `devagotchi`. No account, nothing to start by hand: your broker
+starts in the background the first time an AI calls it, and again after a reboot.
 
 > **Not published yet.** These lines work once the first release (v0.1.0) is out; until then
 > the links return 404. Build from source instead ([Linux](#build-the-linux-core),
 > [Windows](#build-and-run-on-windows)).
 
-Linux (x86_64, ARM64):
+Linux (x86_64, ARM64; glibc 2.35 or later, e.g. Ubuntu 22.04, Debian 12):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.sh | sh && ~/.local/bin/devagotchi setup
 ```
 
-Windows (x64, ARM64), in PowerShell:
+Windows (x64, ARM64), from PowerShell, Command Prompt or Git Bash alike:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.ps1 | iex"; & "$HOME\.local\bin\devagotchi.exe" setup
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.ps1 | iex; & (Join-Path (Get-Variable HOME -ValueOnly) '.local\bin\devagotchi.exe') setup"
 ```
 
 Restart any AI client that was open. macOS is not supported yet (its execution provider is
-pending). Every release's archives carry GitHub build attestations:
-`gh attestation verify <archive> --repo EonsofStupid/devagotchi`.
+pending). Another MCP client (Cursor, VS Code, Windsurf…): give it a server that runs
+`~/.local/bin/devagotchi` (Windows: `%USERPROFILE%\.local\bin\devagotchi.exe`) with the
+argument `mcp`; `setup` says it found no client when none of the three is there.
 
-**For an AI doing this for someone:** run the line for their system; `setup` prints which
-clients it set up and ends with `Check: Devagotchi answered with N tools`, which means it
-works. `devagotchi setup --help` lists the choices (one client, `--local` or `--hub`). It
-changes only the `devagotchi` entry in each client's config, after backing the file up. To
-undo: remove that entry (`claude mcp remove --scope user devagotchi`, the
-`[mcp_servers.devagotchi]` table in `~/.codex/config.toml`, `mcpServers.devagotchi` in
-Claude Desktop's config) and delete the binary.
+**What it changes**, which an AI doing this for someone should tell them before running it:
+- the binary in `~/.local/bin` (Windows `%USERPROFILE%\.local\bin`), added to your `PATH`
+  (your shell's profile files; Windows: your user `Path`);
+- the `devagotchi` entry in each AI client's config, after backing the file up beside itself;
+- your broker, a background process that keeps running, with its config and state in
+  `~/.config/devagotchi` and `~/.local/state/devagotchi` (Windows `%APPDATA%\devagotchi` and
+  `%LOCALAPPDATA%\devagotchi`). Its first start lets AI clients run the developer tools it
+  finds on your `PATH` (git, python, node, cargo, go, uv and the like) in your home
+  directory. Those tools can run any program, so an AI client with Devagotchi can do whatever
+  your account can.
+
+`setup` ends with `Check: Devagotchi answered with N tools` when it works;
+`devagotchi setup --help` lists the choices (one client, `--local` or `--hub`).
+
+**To undo:** stop the broker (`pkill -f '.local/bin/devagotchi start'`; Windows:
+`Get-Process devagotchi | Stop-Process`), remove the `devagotchi` entries
+(`claude mcp remove --scope user devagotchi`, the `[mcp_servers.devagotchi]` table in
+`~/.codex/config.toml`, `mcpServers.devagotchi` in Claude Desktop's config), delete the binary
+and the two directories above, and the installer's `PATH` line.
+
+**Checking what you run:** the Linux installer checks the archive's SHA-256 before installing;
+the Windows installer does not. Every release's archives carry GitHub build attestations:
+download one from the release page and run
+`gh attestation verify <archive> --repo EonsofStupid/devagotchi`.
 
 ## Project status and source preview
 
