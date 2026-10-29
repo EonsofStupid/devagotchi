@@ -11,7 +11,8 @@ heading. Agents draft the fragments below; they never tag.
 - README "Install": one line per system that installs `devagotchi` for the user from the
   latest release (cargo-dist's installers, `~/.local/bin`, no administrator rights) and runs
   `devagotchi setup`. The Windows line works the same from PowerShell, Command Prompt and Git
-  Bash (the shell Claude Code uses there). What it changes, said plainly for an AI to tell the
+  Bash (the shell Claude Code uses there), and from under a PowerShell 7 session, whose module
+  path otherwise stops Windows PowerShell loading the installer's cmdlets. What it changes, said plainly for an AI to tell the
   person first (PATH, client configs, a background broker whose granted tools can do whatever
   the account can), how to undo it, another MCP client's config, and which installer checks a
   checksum. `llms.txt` says the same. Marked unpublished until v0.1.0 exists.

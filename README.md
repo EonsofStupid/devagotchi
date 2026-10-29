@@ -24,10 +24,11 @@ Linux (x86_64, ARM64; glibc 2.35 or later, e.g. Ubuntu 22.04, Debian 12):
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.sh | sh && ~/.local/bin/devagotchi setup
 ```
 
-Windows (x64, ARM64), from PowerShell, Command Prompt or Git Bash alike:
+Windows (x64, ARM64), from PowerShell, Command Prompt or Git Bash alike (its first part keeps
+a PowerShell 7 session's module path from breaking the Windows PowerShell that installs):
 
 ```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.ps1 | iex; & (Join-Path (Get-Variable HOME -ValueOnly) '.local\bin\devagotchi.exe') setup"
+powershell -ExecutionPolicy Bypass -c "[Environment]::SetEnvironmentVariable('PSModulePath', [Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')); irm https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.ps1 | iex; & ((Get-Variable HOME -ValueOnly) + '\.local\bin\devagotchi.exe') setup"
 ```
 
 Restart any AI client that was open. macOS is not supported yet (its execution provider is
