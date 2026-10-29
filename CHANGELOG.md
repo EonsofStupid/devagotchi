@@ -39,6 +39,10 @@ heading. Agents draft the fragments below; they never tag.
   broker on D: instead of starting a second one, while the sign-in stays in `%APPDATA%`; it
   stops a broker started either way before replacing binaries.
 - `devagotchi start` writes a first config through a temporary file of its own process.
+- Windows: a broker started by an elevated administrator can be started again by the same user
+  unelevated or from Git Bash. Its lock and journal, owned by the Administrators group when made
+  elevated, were refused (`lock_permissions`) where the token's owner is the user. A private
+  file may now be owned by that group too; its DACL must still grant the user alone.
 
 ### devagotchi.com sign-ins reach the hub (increment 31)
 - `trusted_issuers: [{ "issuer", "audiences" }]` in the hub config: more OpenID Connect
