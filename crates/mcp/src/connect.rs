@@ -20,7 +20,7 @@ Points your AI clients at Devagotchi. Each gets an MCP server named `devagotchi`
 this binary:
   --hub [URL]  (the default once `devagotchi login` has signed you in) the hosted hub, as your
                account: every machine you linked, the boards and approvals
-  --local      this machine's own broker (`devagotchi start` must be running)
+  --local      this machine's own broker (started in the background when it is not running)
 Clients (default: every one found here):
   claude-code     `claude mcp add --scope user devagotchi -- devagotchi mcp …`
   codex           [mcp_servers.devagotchi] in ~/.codex/config.toml (CODEX_HOME honoured)
@@ -28,6 +28,14 @@ Clients (default: every one found here):
 Each file is backed up beside itself (.bak-<time>) and written whole. Then the server is
 started once and asked for its tools (--no-check skips that). Restart a client that is
 open to pick the server up.";
+
+pub const SETUP_USAGE: &str = "Usage: devagotchi setup [claude-code|codex|claude-desktop|all] [--hub [URL] | --local] [--no-check]
+
+Sets Devagotchi up for every AI client on this machine in one step, with no account needed:
+Claude Code, Codex and Claude Desktop each get an MCP server named `devagotchi`, and the
+server is started once to check it answers (which also starts your broker in the background).
+Signed in (`devagotchi login`), it uses your account's hub; otherwise this machine's own
+broker. The same as `devagotchi connect`, except that it never asks you to sign in first.";
 
 /// How long Devagotchi may hold one tool call (a wait is at most 50 s, then the answer).
 const TOOL_TIMEOUT_SECS: u64 = 120;
@@ -117,20 +125,36 @@ fn parse(args: &[OsString]) -> Result<Option<Options>, String> {
 
 /// `devagotchi connect …`
 pub fn cli(args: Vec<OsString>, machine: Machine) -> ExitCode {
+    run(args, machine, false)
+}
+
+/// `devagotchi setup …`: `connect`, with this machine's own broker when no account is on
+/// file, so an AI can set Devagotchi up with one command and no sign-in.
+pub fn setup(args: Vec<OsString>, machine: Machine) -> ExitCode {
+    run(args, machine, true)
+}
+
+fn run(args: Vec<OsString>, machine: Machine, setup: bool) -> ExitCode {
+    let (verb, usage) = if setup {
+        ("setup", SETUP_USAGE)
+    } else {
+        ("connect", USAGE)
+    };
     let options = match parse(&args) {
         Ok(Some(options)) => options,
         Ok(None) => {
-            println!("{USAGE}");
+            println!("{usage}");
             return ExitCode::SUCCESS;
         }
         Err(why) => {
-            eprintln!("devagotchi connect: {why}\n\n{USAGE}");
+            eprintln!("devagotchi {verb}: {why}\n\n{usage}");
             return ExitCode::from(64);
         }
     };
     let target = match options.target {
         Some(target) => target,
         None if machine.signed_in => Target::Hub(None),
+        None if setup => Target::Local,
         None => {
             eprintln!(
                 "devagotchi connect: this machine is not signed in. Run `devagotchi login` first (then connect uses the hosted hub), or `devagotchi connect --local` for this machine's broker alone."

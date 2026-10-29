@@ -95,6 +95,13 @@ Each root is created suspended, assigned to a new Job Object, and only then resu
 
 ## Connect a local MCP client
 
+One step, no account: `devagotchi setup` gives Claude Code, Codex and Claude Desktop (every one
+it finds) an MCP server named `devagotchi`, then starts it once to check it answers. The
+server is `devagotchi mcp`, which starts your broker in the background when none is running
+(log in `<state>/broker.log`) and finds it after that, so nothing has to be started first and
+the broker keeps running when the client closes. Signed in with `devagotchi login`, `setup`
+points the clients at your account's hub instead; `--local` or `--hub` choose explicitly.
+
 For clients using an `mcpServers` configuration object, the entry has this shape:
 
 ```json
@@ -108,7 +115,7 @@ For clients using an `mcpServers` configuration object, the entry has this shape
 }
 ```
 
-After `devagotchi start`, `"args": ["mcp"]` is enough. On Windows, `command` is the path to `devagotchi.exe` and the `--socket` value is the broker's `\\.\pipe\` endpoint, escaped as `"\\\\.\\pipe\\devagotchi-broker-<digest>"` in JSON.
+`"args": ["mcp"]` is enough: it finds your broker, or starts it. On Windows, `command` is the path to `devagotchi.exe` and the `--socket` value is the broker's `\\.\pipe\` endpoint, escaped as `"\\\\.\\pipe\\devagotchi-broker-<digest>"` in JSON.
 
 The exact configuration location and format depend on the selected host. A named desktop client's integration has not yet been certified. The adapter's raw stdio tests cover both `initialize` with protocol `2025-11-25` and discovery/per-request metadata with `2026-07-28`.
 

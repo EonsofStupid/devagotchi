@@ -7,6 +7,18 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### One step for an AI client, no account (increment 33a)
+- `devagotchi mcp` with no broker answering starts this user's broker in the background
+  (`devagotchi start --background`) and uses it, so an AI client's whole config is
+  `devagotchi mcp`, as Desktop Commander's is one `npx` line. The broker is detached (its own
+  process group; on Windows no console, its own group, out of the caller's job where allowed),
+  writes to `<state>/broker.log` (0600), and keeps running when the client closes. Two starts
+  racing meet at the broker's instance lock; a broker is found by asking its endpoint, never by
+  a remembered PID.
+- `devagotchi start --background`: the same start, detached; returns once the broker answers.
+- `devagotchi setup`: `connect` for every AI client found, with this machine's broker when no
+  account is on file instead of asking to sign in first.
+
 ### devagotchi.com sign-ins reach the hub (increment 31)
 - `trusted_issuers: [{ "issuer", "audiences" }]` in the hub config: more OpenID Connect
   issuers whose signed JWTs the hub accepts next to `auth` (Nomen stays the primary). A token

@@ -13,9 +13,11 @@ use std::{
 use crate::paths;
 
 pub const USAGE: &str =
-    "Usage: devagotchi start [--workspace DIR] [--grant PATH]... [--state-dir DIR] [--config FILE]
+    "Usage: devagotchi start [--background] [--workspace DIR] [--grant PATH]... [--state-dir DIR] [--config FILE]
 
-Runs your broker in the foreground (Ctrl+C stops it; jobs are settled first). The first run
+Runs your broker in the foreground (Ctrl+C stops it; jobs are settled first). With --background
+it starts the broker detached, writing to <state>/broker.log, and returns once it answers (at
+once when one already does); `devagotchi mcp` does this on its own when no broker answers. The first run
 writes the broker's config with the workspace (default: your home directory) and the
 toolchains found on PATH (git, rg, python3/python, node, npm, npx, cargo, rustup, go, uv), plus
 any --grant; later runs keep the file. Then point your agent at `devagotchi mcp`. A grant
@@ -38,6 +40,7 @@ struct Options {
     config: Option<PathBuf>,
     workspace: Option<PathBuf>,
     grants: Vec<PathBuf>,
+    background: bool,
 }
 
 fn parse(args: Vec<OsString>) -> Result<Options, String> {
@@ -46,6 +49,7 @@ fn parse(args: Vec<OsString>) -> Result<Options, String> {
         config: None,
         workspace: None,
         grants: Vec::new(),
+        background: false,
     };
     let mut iter = args.into_iter();
     while let Some(flag) = iter.next() {
@@ -56,6 +60,7 @@ fn parse(args: Vec<OsString>) -> Result<Options, String> {
                 .ok_or_else(|| format!("{flag} needs a value"))
         };
         match flag.as_str() {
+            "--background" => options.background = true,
             "--state-dir" => options.state = Some(value()?),
             "--config" => options.config = Some(value()?),
             "--workspace" => options.workspace = Some(value()?),
@@ -111,6 +116,9 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
             return ExitCode::from(64);
         }
     };
+    if options.background {
+        return background(&state, &config, options.workspace, &options.grants);
+    }
     // Where no native execution provider exists there is nothing to prepare: the broker
     // answers `unsupported_platform` itself, before any config is written.
     #[cfg(any(target_os = "linux", windows))]
@@ -164,6 +172,67 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("devagotchi start: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `devagotchi start --background`: the same start, detached, with every path explicit so
+/// the broker it starts is this one whatever its environment; returns once it answers.
+fn background(
+    state: &Path,
+    config: &Path,
+    workspace: Option<PathBuf>,
+    grants: &[PathBuf],
+) -> ExitCode {
+    use devagotchi_broker::background;
+    if let Some(endpoint) = background::answering(state) {
+        eprintln!(
+            "devagotchi: your broker is already running: {}",
+            endpoint.display()
+        );
+        return ExitCode::SUCCESS;
+    }
+    let exe = match env::current_exe() {
+        Ok(exe) => exe,
+        Err(error) => {
+            eprintln!("devagotchi start: cannot find this binary: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut args: Vec<OsString> = vec![
+        "start".into(),
+        "--state-dir".into(),
+        state.into(),
+        "--config".into(),
+        config.into(),
+    ];
+    if let Some(workspace) = workspace {
+        args.extend(["--workspace".into(), absolute(workspace).into()]);
+    }
+    for grant in grants {
+        args.extend(["--grant".into(), absolute(grant.clone()).into()]);
+    }
+    let log = state.join(background::LOG_FILE);
+    if let Err(error) = background::spawn_detached(&exe, &args, state) {
+        eprintln!("devagotchi start: could not start the broker: {error}");
+        return ExitCode::FAILURE;
+    }
+    match background::wait_until_answering(state, background::START_WITHIN) {
+        Some(endpoint) => {
+            eprintln!(
+                "devagotchi: your broker is running in the background: {} (log {})",
+                endpoint.display(),
+                log.display()
+            );
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!(
+                "devagotchi start: the broker did not answer within {} s; see {}",
+                background::START_WITHIN.as_secs(),
+                log.display()
+            );
             ExitCode::FAILURE
         }
     }

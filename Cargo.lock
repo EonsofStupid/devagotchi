@@ -768,6 +768,7 @@ dependencies = [
  "devagotchi-core",
  "devagotchi-ipc",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
