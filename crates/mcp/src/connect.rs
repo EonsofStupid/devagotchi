@@ -441,7 +441,9 @@ fn check(exe: &Path, args: &[String]) -> Result<Vec<String>, String> {
         let _ = said_tx.send(lines);
     });
     let mut send = |message: serde_json::Value| -> Result<(), String> {
-        writeln!(stdin, "{message}").map_err(|e| format!("could not talk to the server: {e}"))
+        // A pipe that will not take the message means the server has already exited.
+        writeln!(stdin, "{message}")
+            .map_err(|e| format!("it stopped before answering (writing to it: {e})"))
     };
     let result = (|| {
         send(serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
@@ -570,14 +572,18 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_server_that_stops_is_reported_at_once_with_what_it_said() {
-        let begun = std::time::Instant::now();
-        let why = check(
-            Path::new("/bin/sh"),
-            &["-c".into(), "echo 'ipc_io: path must be shorter than SUN_LEN' >&2; exit 1".into()],
-        )
-        .unwrap_err();
-        assert!(begun.elapsed() < Duration::from_secs(5), "{:?}", begun.elapsed());
-        assert!(why.contains("stopped"), "{why}");
-        assert!(why.contains("path must be shorter than SUN_LEN"), "{why}");
+        // Gone before it is written to; and one that answers, then has closed its input by
+        // the time the next message is written, but has not exited yet.
+        let answers_then_closes = r#"read line; exec 0<&-; echo 'ipc_io: path must be shorter than SUN_LEN' >&2; echo '{"jsonrpc":"2.0","id":1,"result":{}}'; sleep 0.3; exit 1"#;
+        for script in [
+            "echo 'ipc_io: path must be shorter than SUN_LEN' >&2; exit 1",
+            answers_then_closes,
+        ] {
+            let begun = std::time::Instant::now();
+            let why = check(Path::new("/bin/sh"), &["-c".into(), script.into()]).unwrap_err();
+            assert!(begun.elapsed() < Duration::from_secs(5), "{:?}", begun.elapsed());
+            assert!(why.contains("stopped"), "{why}");
+            assert!(why.contains("path must be shorter than SUN_LEN"), "{why}");
+        }
     }
 }
