@@ -18,10 +18,14 @@ heading. Agents draft the fragments below; they never tag.
   - inherits nothing but the null device and its log: every other descriptor is closed on
     exec (Linux), and Windows gets an explicit inherited-handle list, so an AI client's pipes
     are never held open;
-  - runs in its state directory with a pared-down environment (an AI client's own variables,
-    tokens in an MCP `env` block among them, do not reach it or its jobs);
+  - runs in its state directory with a pared-down environment: what programs need to find
+    home, temp and tools, plus the SSH agent, proxies, extra CA certificates and toolchain
+    homes jobs need; an AI client's own variables, tokens in an MCP `env` block among them, do
+    not reach it or its jobs (a broker started in a terminal keeps that terminal's whole
+    environment);
   - writes to `<state>/broker.log` (0600); a broker that stops at once is reported at once with
-    the end of its log, and one that holds the state but does not answer is reported as such.
+    what it wrote (not an earlier start's lines), and one that holds the state but does not
+    answer is reported as such.
   The state directory is made by the IPC layer that checks it, which also fixes `devagotchi
   start` on Windows for administrators (a directory they make is owned by Administrators and
   was refused). Two starts racing meet at the broker's instance lock; a broker is found by
@@ -30,8 +34,9 @@ heading. Agents draft the fragments below; they never tag.
 - `devagotchi setup`: `connect` for every AI client found, with this machine's broker when no
   account is on file instead of asking to sign in first; an account whose sign-in ran out keeps
   its hub. Codex gets `startup_timeout_sec = 30`, since a first start may start the broker.
-- The Windows installer sets `DEVAGOTCHI_STATE_DIR` and `DEVAGOTCHI_CONFIG_DIR` for the user, so
-  plain `devagotchi mcp` and `setup` find its broker on D: instead of starting a second one, and
+- `DEVAGOTCHI_BROKER_CONFIG` names the broker's config file alone. The Windows installer sets
+  it and `DEVAGOTCHI_STATE_DIR` for the user, so plain `devagotchi mcp` and `setup` find its
+  broker on D: instead of starting a second one, while the sign-in stays in `%APPDATA%`; it
   stops a broker started either way before replacing binaries.
 - `devagotchi start` writes a first config through a temporary file of its own process.
 

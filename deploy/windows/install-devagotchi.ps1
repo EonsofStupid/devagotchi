@@ -158,7 +158,7 @@ if ($Uninstall) {
             Write-Host "    removed $RunKey\$name"
         }
     }
-    foreach ($name in 'DEVAGOTCHI_STATE_DIR', 'DEVAGOTCHI_CONFIG_DIR') {
+    foreach ($name in 'DEVAGOTCHI_STATE_DIR', 'DEVAGOTCHI_BROKER_CONFIG', 'DEVAGOTCHI_CONFIG_DIR') {
         $value = [Environment]::GetEnvironmentVariable($name, 'User')
         if ($value -and $value.StartsWith($Root, [System.StringComparison]::OrdinalIgnoreCase)) {
             [Environment]::SetEnvironmentVariable($name, $null, 'User')
@@ -276,12 +276,20 @@ $endpoint = ($ready.Line -replace '^.*devagotchi broker ready: ', '').Trim()
 Write-Utf8 $EndpointFile $endpoint
 Write-Host "    ready: $endpoint (pid $($ready.Process.Id)); log $Log"
 # `devagotchi mcp` and `devagotchi setup` find this broker through these, in every new shell
-# and AI client, instead of starting a second one under %LOCALAPPDATA% on C:.
-foreach ($pair in @(@('DEVAGOTCHI_STATE_DIR', $State), @('DEVAGOTCHI_CONFIG_DIR', $ConfigDir))) {
+# and AI client, instead of starting a second one under %LOCALAPPDATA% on C:. Only the
+# broker's config file is named: the sign-in (`devagotchi login`) stays in %APPDATA%.
+foreach ($pair in @(@('DEVAGOTCHI_STATE_DIR', $State), @('DEVAGOTCHI_BROKER_CONFIG', $Config))) {
     [Environment]::SetEnvironmentVariable($pair[0], $pair[1], 'User')
     Set-Item -Path "Env:$($pair[0])" -Value $pair[1]
 }
-Write-Host "    user variables DEVAGOTCHI_STATE_DIR=$State and DEVAGOTCHI_CONFIG_DIR=$ConfigDir"
+# An earlier build of this installer moved the whole config directory, sign-in included.
+$old = [Environment]::GetEnvironmentVariable('DEVAGOTCHI_CONFIG_DIR', 'User')
+if ($old -and $old.StartsWith($Root, [System.StringComparison]::OrdinalIgnoreCase)) {
+    [Environment]::SetEnvironmentVariable('DEVAGOTCHI_CONFIG_DIR', $null, 'User')
+    Remove-Item Env:DEVAGOTCHI_CONFIG_DIR -ErrorAction SilentlyContinue
+    Write-Host "    removed the user variable DEVAGOTCHI_CONFIG_DIR an earlier install set"
+}
+Write-Host "    user variables DEVAGOTCHI_STATE_DIR=$State and DEVAGOTCHI_BROKER_CONFIG=$Config"
 
 # ---------------------------------------------------------------- link
 $linkExe = Join-Path $Bin 'devagotchi.exe'

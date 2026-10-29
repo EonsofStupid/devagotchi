@@ -26,7 +26,8 @@ npm and npx are .cmd scripts there, so they stay out).
 
 Defaults: state in ~/.local/state/devagotchi (Windows: %LOCALAPPDATA%\\devagotchi\\state),
 config in ~/.config/devagotchi/broker.json (Windows: %APPDATA%\\devagotchi); DEVAGOTCHI_STATE_DIR
-and DEVAGOTCHI_CONFIG_DIR override them.";
+and DEVAGOTCHI_CONFIG_DIR override them, and DEVAGOTCHI_BROKER_CONFIG names the config file
+alone (your sign-in stays in the config directory).";
 
 /// Executables worth granting when they are on PATH, in the order they are listed
 /// (`python` is what Windows installs; a Store alias for both resolves to one grant).
@@ -103,11 +104,7 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
         );
         return ExitCode::from(64);
     };
-    let config = match options
-        .config
-        .map(absolute)
-        .or_else(|| paths::config_dir().map(|d| d.join("broker.json")))
-    {
+    let config = match options.config.map(absolute).or_else(paths::broker_config) {
         Some(config) => config,
         None => {
             eprintln!(
@@ -169,8 +166,9 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
         );
         // D22: the default signs in; the choice not to is recorded, and until one of the
         // two is on file every run says so. Nothing local waits on it.
-        if let Some(parent) = config.parent() {
-            account_line(&parent.join(devagotchi_hub::account::FILE_NAME));
+        // The sign-in lives in the config directory, wherever the broker's config is.
+        if let Some(dir) = paths::config_dir().or_else(|| config.parent().map(Path::to_path_buf)) {
+            account_line(&dir.join(devagotchi_hub::account::FILE_NAME));
         }
     }
     match devagotchi_broker::serve_blocking(state, config) {

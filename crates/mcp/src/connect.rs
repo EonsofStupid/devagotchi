@@ -425,6 +425,7 @@ fn check(exe: &Path, args: &[String]) -> Result<Vec<String>, String> {
         .map_err(|e| format!("could not start {}: {e}", exe.display()))?;
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     let stdout = child.stdout.take().ok_or("no stdout")?;
+    let stderr = child.stderr.take().ok_or("no stderr")?;
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -432,6 +433,12 @@ fn check(exe: &Path, args: &[String]) -> Result<Vec<String>, String> {
                 break;
             }
         }
+    });
+    // What the server says on stderr is why it did not answer, when it did not.
+    let (said_tx, said_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let lines: Vec<String> = BufReader::new(stderr).lines().map_while(Result::ok).collect();
+        let _ = said_tx.send(lines);
     });
     let mut send = |message: serde_json::Value| -> Result<(), String> {
         writeln!(stdin, "{message}").map_err(|e| format!("could not talk to the server: {e}"))
@@ -455,16 +462,27 @@ fn check(exe: &Path, args: &[String]) -> Result<Vec<String>, String> {
     })();
     let _ = child.kill();
     let _ = child.wait();
-    result
+    result.map_err(|why| {
+        let said = said_rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
+        let said = &said[said.len().saturating_sub(10)..];
+        if said.is_empty() {
+            why
+        } else {
+            format!("{why}; it said:\n{}", said.join("\n"))
+        }
+    })
 }
 
 fn answer(rx: &mpsc::Receiver<String>, id: i64) -> Result<serde_json::Value, String> {
     let until = std::time::Instant::now() + CHECK_TIMEOUT;
     loop {
         let left = until.saturating_duration_since(std::time::Instant::now());
-        let line = rx
-            .recv_timeout(left)
-            .map_err(|_| format!("no answer within {} s", CHECK_TIMEOUT.as_secs()))?;
+        let line = rx.recv_timeout(left).map_err(|error| match error {
+            mpsc::RecvTimeoutError::Disconnected => "it stopped before answering".to_string(),
+            mpsc::RecvTimeoutError::Timeout => {
+                format!("no answer within {} s", CHECK_TIMEOUT.as_secs())
+            }
+        })?;
         let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
@@ -547,5 +565,19 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "two\n");
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), "one\n");
         assert!(backup.file_name().unwrap().to_string_lossy().starts_with("config.toml.bak-"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_server_that_stops_is_reported_at_once_with_what_it_said() {
+        let begun = std::time::Instant::now();
+        let why = check(
+            Path::new("/bin/sh"),
+            &["-c".into(), "echo 'ipc_io: path must be shorter than SUN_LEN' >&2; exit 1".into()],
+        )
+        .unwrap_err();
+        assert!(begun.elapsed() < Duration::from_secs(5), "{:?}", begun.elapsed());
+        assert!(why.contains("stopped"), "{why}");
+        assert!(why.contains("path must be shorter than SUN_LEN"), "{why}");
     }
 }

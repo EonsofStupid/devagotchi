@@ -46,8 +46,12 @@ pub fn spawn(spec: &DetachedSpec<'_>) -> io::Result<Detached> {
 
 /// The variables a long-running background process keeps from the environment it was
 /// started in: what programs need to find their home, their temporary directory, their
-/// tools and the system, and nothing an AI client happened to put in its own (tokens in an
-/// MCP server's `env` block, say). Names compare case-insensitively on Windows.
+/// tools and the system, and what jobs need to reach the network, git hosts and their
+/// toolchains as they would from a broker started in a terminal (the SSH agent, proxies,
+/// extra CA certificates, toolchain homes), and nothing an AI client happened to put in its
+/// own (tokens in an MCP server's `env` block, say). A broker started in a terminal keeps
+/// that terminal's whole environment; one started in the background keeps only these, and
+/// so do its jobs. Names compare case-insensitively on Windows.
 pub fn environment(
     from: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> Vec<(OsString, OsString)> {
@@ -70,6 +74,38 @@ const KEPT: &[&str] = &[
     "XDG_STATE_HOME",
     "XDG_DATA_HOME",
     "XDG_CACHE_HOME",
+    // The SSH agent, proxies and extra CA certificates (a proxy URL may carry a password;
+    // a terminal start passes it on just the same).
+    "SSH_AUTH_SOCK",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "no_proxy",
+    "all_proxy",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "GIT_SSL_CAINFO",
+    // Toolchain homes.
+    "CARGO_HOME",
+    "RUSTUP_HOME",
+    "GOPATH",
+    "GOROOT",
+    "GOBIN",
+    "GOMODCACHE",
+    "JAVA_HOME",
+    "NVM_DIR",
+    "NVM_HOME",
+    "NVM_SYMLINK",
+    "PNPM_HOME",
+    "VOLTA_HOME",
+    "BUN_INSTALL",
+    "PYENV_ROOT",
     // Windows.
     "SystemRoot",
     "SystemDrive",
@@ -187,8 +223,31 @@ mod tests {
             ("GITHUB_TOKEN".into(), "secret".into()),
             ("ANTHROPIC_API_KEY".into(), "secret".into()),
             ("CLAUDECODE".into(), "1".into()),
+            // What jobs need to reach the network, git hosts and their toolchains, as
+            // they would from a broker started in a terminal.
+            ("SSH_AUTH_SOCK".into(), "/run/user/1000/ssh".into()),
+            ("HTTPS_PROXY".into(), "http://proxy:3128".into()),
+            ("no_proxy".into(), "localhost".into()),
+            ("SSL_CERT_FILE".into(), "/etc/ca.pem".into()),
+            ("CARGO_HOME".into(), "/home/pat/.cargo".into()),
+            ("GOPATH".into(), "/home/pat/go".into()),
+            ("AWS_SECRET_ACCESS_KEY".into(), "secret".into()),
         ]);
         let names: Vec<_> = kept.iter().map(|(n, _)| n.to_str().unwrap()).collect();
-        assert_eq!(names, ["PATH", "HOME", "LC_ALL", "DEVAGOTCHI_STATE_DIR"]);
+        assert_eq!(
+            names,
+            [
+                "PATH",
+                "HOME",
+                "LC_ALL",
+                "DEVAGOTCHI_STATE_DIR",
+                "SSH_AUTH_SOCK",
+                "HTTPS_PROXY",
+                "no_proxy",
+                "SSL_CERT_FILE",
+                "CARGO_HOME",
+                "GOPATH",
+            ]
+        );
     }
 }

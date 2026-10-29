@@ -13,7 +13,8 @@
 //!   that started it exits once it answers, so closing an AI client, its terminal or its
 //!   process tree leaves the broker and its jobs running.
 //! - It writes to `<state>/broker.log` (owner-only).
-//! - A broker that stops at once is reported at once, with the end of its log.
+//! - A broker that stops at once is reported at once, with what it wrote to its log (only
+//!   what this start's broker wrote: the log is appended to by every start).
 //! - Nothing is recorded about the process: a broker is found by asking its endpoint, never
 //!   by a remembered PID.
 
@@ -61,7 +62,27 @@ pub fn answering(state: &Path) -> Option<PathBuf> {
 
 /// The last `lines` lines of `<state>/broker.log`, to say why a background start failed.
 pub fn log_tail(state: &Path, lines: usize) -> String {
-    let text = std::fs::read_to_string(state.join(LOG_FILE)).unwrap_or_default();
+    log_tail_since(state, 0, lines)
+}
+
+/// How long the log is now: a start reads only what was written after it, since the log
+/// is appended to by every start (an earlier one that lost a race says so in it).
+fn log_len(state: &Path) -> u64 {
+    std::fs::metadata(state.join(LOG_FILE))
+        .map(|m| m.len())
+        .unwrap_or(0)
+}
+
+/// The last `lines` lines written to the log after its first `since` bytes.
+fn log_tail_since(state: &Path, since: u64, lines: usize) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut bytes = Vec::new();
+    if let Ok(mut file) = std::fs::File::open(state.join(LOG_FILE))
+        && file.seek(SeekFrom::Start(since)).is_ok()
+    {
+        let _ = file.read_to_end(&mut bytes);
+    }
+    let text = String::from_utf8_lossy(&bytes);
     let all: Vec<&str> = text.lines().collect();
     all[all.len().saturating_sub(lines)..].join("\n")
 }
@@ -109,6 +130,7 @@ pub fn start_and_wait(
     within: Duration,
 ) -> Result<PathBuf, StartFailure> {
     let deadline = Instant::now() + within;
+    let since = log_len(state);
     let mut started = if prepare_state(state).map_err(StartFailure::Setup)? {
         Some(spawn(program, args, state).map_err(|e| StartFailure::Setup(e.to_string()))?)
     } else {
@@ -126,7 +148,7 @@ pub fn start_and_wait(
                 .is_some()
         {
             started = None;
-            let tail = log_tail(state, 20);
+            let tail = log_tail_since(state, since, 20);
             // Another start won the state directory first: wait for that broker instead.
             if !tail.contains("broker_already_running") {
                 return Err(StartFailure::Stopped(tail));
@@ -137,7 +159,7 @@ pub fn start_and_wait(
             return Err(if held_by_another {
                 StartFailure::NotAnswering
             } else {
-                StartFailure::TimedOut(log_tail(state, 20))
+                StartFailure::TimedOut(log_tail_since(state, since, 20))
             });
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -221,6 +243,42 @@ mod tests {
     fn a_broker_that_stops_at_once_is_reported_at_once_with_its_log() {
         let dir = tempfile::tempdir().unwrap();
         let state = dir.path().join("state");
+        let begun = Instant::now();
+        let failure = start_and_wait(
+            Path::new("/bin/sh"),
+            &[
+                "-c".into(),
+                "echo 'config: no such file' >&2; exit 2".into(),
+            ],
+            &state,
+            START_WITHIN,
+        )
+        .unwrap_err();
+        assert!(
+            begun.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            begun.elapsed()
+        );
+        assert_eq!(
+            failure,
+            StartFailure::Stopped("config: no such file".into())
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_earlier_lost_race_in_the_log_does_not_hide_a_new_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        devagotchi_ipc::StateGuard::acquire(&state)
+            .map(drop)
+            .unwrap();
+        // What a start that lost the race to another broker left behind, minutes ago.
+        std::fs::write(
+            state.join(LOG_FILE),
+            "devagotchi start: broker_already_running: another broker holds the state\n",
+        )
+        .unwrap();
         let begun = Instant::now();
         let failure = start_and_wait(
             Path::new("/bin/sh"),
