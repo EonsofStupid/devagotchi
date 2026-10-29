@@ -1,0 +1,83 @@
+# The release gate, run by release.yml beside dist's global build (dist-workspace.toml
+# `global-artifacts-jobs`): on a fresh runner of each kind, the README's own install line
+# installs Devagotchi from this run's installers and archives (served on 127.0.0.1), its
+# `devagotchi setup` sets up Claude Code, Codex and Claude Desktop, and after the broker is
+# killed as a reboot would, the command Codex was given starts it again and runs a job
+# (tests/install_check.py). `host` publishes a release only when every runner passed; pull
+# requests and main run it too.
+name: install-check
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  installers:
+    # The installers dist's global build makes, made here from the same archives with the
+    # same dist, since this job runs beside that build rather than after it.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Install cached dist
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: cargo-dist-cache
+          path: ~/.cargo/bin/
+      - run: chmod +x ~/.cargo/bin/dist
+      - name: Fetch local artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: artifacts-*
+          path: target/distrib/
+          merge-multiple: true
+      - name: Build the installers
+        env:
+          TAG_FLAG: ${{ startsWith(github.ref, 'refs/tags/') && format('--tag={0}', github.ref_name) || '' }}
+        run: dist build $TAG_FLAG --output-format=json --artifacts=global > dist-manifest.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # Not `artifacts-*`: nothing here is published.
+          name: install-check-installers
+          path: |
+            target/distrib/devagotchi-installer.sh
+            target/distrib/devagotchi-installer.ps1
+          if-no-files-found: error
+
+  install:
+    name: install (${{ matrix.os }})
+    needs: installers
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22.04 is the oldest glibc the archives are built for; windows-2022 has the
+        # pre-24H2 console; both ARM64 systems install their native archive.
+        os: [ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.13"
+      # Every archive, as a release has them: the installer picks this system's.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: artifacts-build-local-*
+          path: served
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: install-check-installers
+          path: served
+      - run: python tests/install_check.py --served served

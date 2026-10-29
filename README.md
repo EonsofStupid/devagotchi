@@ -6,6 +6,42 @@ Devagotchi is a universal workspace bridge, beginning with locally installed MCP
 
 This working copy starts the replacement for DesktopCommanderMCP with a separate process broker, a thin official-SDK MCP adapter, and a Tauri desktop inspector. **Execution providers are implemented for Linux and Windows. The macOS provider is still required before a cross-platform release.**
 
+## Install: one line, for you or your AI
+
+Tell your AI "install Devagotchi from github.com/EonsofStupid/devagotchi", or paste the line
+for your system. It installs the `devagotchi` binary for your user (no administrator rights),
+then `setup` gives every AI client it finds (Claude Code, Codex, Claude Desktop) an MCP server
+named `devagotchi`. No account, nothing to start: the first time an AI calls it, your broker
+starts in the background and keeps running.
+
+> **Not published yet.** These lines work once the first release (v0.1.0) is out; until then
+> the links return 404. Build from source instead ([Linux](#build-the-linux-core),
+> [Windows](#build-and-run-on-windows)).
+
+Linux (x86_64, ARM64):
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.sh | sh && ~/.local/bin/devagotchi setup
+```
+
+Windows (x64, ARM64), in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.ps1 | iex"; & "$HOME\.local\bin\devagotchi.exe" setup
+```
+
+Restart any AI client that was open. macOS is not supported yet (its execution provider is
+pending). Every release's archives carry GitHub build attestations:
+`gh attestation verify <archive> --repo EonsofStupid/devagotchi`.
+
+**For an AI doing this for someone:** run the line for their system; `setup` prints which
+clients it set up and ends with `Check: Devagotchi answered with N tools`, which means it
+works. `devagotchi setup --help` lists the choices (one client, `--local` or `--hub`). It
+changes only the `devagotchi` entry in each client's config, after backing the file up. To
+undo: remove that entry (`claude mcp remove --scope user devagotchi`, the
+`[mcp_servers.devagotchi]` table in `~/.codex/config.toml`, `mcpServers.devagotchi` in
+Claude Desktop's config) and delete the binary.
+
 ## Project status and source preview
 
 | Surface | Current status | What its evidence establishes |

@@ -7,6 +7,20 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### Install in one line, for a person or their AI (increment 33b)
+- README "Install": one line per system that installs `devagotchi` for the user from the
+  latest release (cargo-dist's installers, `~/.local/bin`, no administrator rights) and runs
+  `devagotchi setup`, with what an AI doing it for someone needs to know (what success looks
+  like, what it changes, how to undo it). `llms.txt` says the same for an AI that reads it.
+  Marked unpublished until v0.1.0 exists.
+- The release gate (`.github/workflows/install-check.yml`, dist `global-artifacts-jobs`): on
+  ubuntu-22.04, ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-2025 and windows-11-arm,
+  the README's own line installs from the run's installers and archives served on 127.0.0.1,
+  `setup` sets up Claude Code (a stub records the call), Codex and Claude Desktop and its check
+  passes, the broker is killed as a reboot would, and the command Codex was given starts it
+  again and runs `git --version` to the end (`tests/install_check.py`). `host` publishes a
+  release only when every runner passed; pull requests run it too.
+
 ### One step for an AI client, no account (increment 33a)
 - `devagotchi mcp` with no broker answering starts this user's broker in the background
   (`devagotchi start --background`) and uses it, so an AI client's whole config is

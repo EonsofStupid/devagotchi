@@ -1,0 +1,15 @@
+# Devagotchi
+
+> Lets your AI (Claude Code, Codex, Claude Desktop, any MCP client) run commands and long jobs on your own machines, reliably: a per-user broker owns every job, so closing the AI client does not lose work. A replacement for Desktop Commander.
+
+## Install (an AI can do this for the user)
+
+- Linux: `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.sh | sh && ~/.local/bin/devagotchi setup`
+- Windows (PowerShell): `powershell -ExecutionPolicy Bypass -c "irm https://github.com/EonsofStupid/devagotchi/releases/latest/download/devagotchi-installer.ps1 | iex"; & "$HOME\.local\bin\devagotchi.exe" setup`
+- Success: `setup` ends with `Check: Devagotchi answered with N tools`. No account is needed; the broker starts itself the first time an AI calls `devagotchi mcp`. Restart any AI client that was open.
+- Not published yet: the release links work once v0.1.0 is out.
+
+## Docs
+
+- [README](README.md): install, behaviour, components
+- [Plan](docs/product-and-platform-plan.md): decisions and gates
