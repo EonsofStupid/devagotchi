@@ -1398,7 +1398,10 @@ async fn the_one_line_joins_once_and_downloads_only_what_the_hub_vouches_for() {
     for (name, bytes) in [
         ("install-devagotchi.sh", b"#!/usr/bin/env bash\n".as_slice()),
         ("install-devagotchi.ps1", b"param()\n".as_slice()),
-        ("devagotchi-x86_64-unknown-linux-gnu.tar.xz", b"linux build".as_slice()),
+        (
+            "devagotchi-x86_64-unknown-linux-gnu.tar.xz",
+            b"linux build".as_slice(),
+        ),
     ] {
         std::fs::write(dist.path().join(name), bytes).unwrap();
         sums.push_str(&format!("{}  {name}\n", hex::encode(Sha256::digest(bytes))));
@@ -1426,8 +1429,14 @@ async fn the_one_line_joins_once_and_downloads_only_what_the_hub_vouches_for() {
         .find(|word| word.starts_with("dvg-") && word.len() == 36)
         .unwrap()
         .to_string();
-    assert!(page.contains(&format!("curl -fsSL {}/join/{code} | sudo sh", w.url)), "{page}");
-    assert!(page.contains(&format!("irm {}/join/{code}.ps1 | iex", w.url)), "{page}");
+    assert!(
+        page.contains(&format!("curl -fsSL {}/join/{code} | sudo sh", w.url)),
+        "{page}"
+    );
+    assert!(
+        page.contains(&format!("irm {}/join/{code}.ps1 | iex", w.url)),
+        "{page}"
+    );
 
     // Fetching the script, any number of times, does not spend the code.
     for _ in 0..2 {
@@ -1436,24 +1445,157 @@ async fn the_one_line_joins_once_and_downloads_only_what_the_hub_vouches_for() {
         assert_eq!(script.headers()[header::CACHE_CONTROL], "no-store");
         let text = script.text().await.unwrap();
         assert!(text.contains("device='platinum'") && text.contains("version='main-test123'"));
-        assert!(text.contains(downloads.sha256("devagotchi-x86_64-unknown-linux-gnu.tar.xz").unwrap()));
+        assert!(
+            text.contains(
+                downloads
+                    .sha256("devagotchi-x86_64-unknown-linux-gnu.tar.xz")
+                    .unwrap()
+            )
+        );
     }
-    let ps = w.get(&format!("/join/{code}.ps1"), None).await.text().await.unwrap();
+    let ps = w
+        .get(&format!("/join/{code}.ps1"), None)
+        .await
+        .text()
+        .await
+        .unwrap();
     assert!(ps.contains("$device = 'platinum'"), "{ps}");
 
     // Only what SHA256SUMS lists is served.
-    let file = w.get("/dist/devagotchi-x86_64-unknown-linux-gnu.tar.xz", None).await;
+    let file = w
+        .get("/dist/devagotchi-x86_64-unknown-linux-gnu.tar.xz", None)
+        .await;
     assert_eq!(file.status(), StatusCode::OK);
     assert_eq!(file.bytes().await.unwrap().as_ref(), b"linux build");
     for name in ["not-listed.txt", "SHA256SUMS", "..%2FSHA256SUMS"] {
-        assert_eq!(w.get(&format!("/dist/{name}"), None).await.status(), StatusCode::NOT_FOUND, "{name}");
+        assert_eq!(
+            w.get(&format!("/dist/{name}"), None).await.status(),
+            StatusCode::NOT_FOUND,
+            "{name}"
+        );
     }
 
     // Enrolling spends it; the same line then only says so.
     let devices = Devices::open(&w.dir.path().join("devices.sqlite3")).unwrap();
-    devices.enroll("platinum", &code, "platinum-key", false).unwrap();
-    let spent = w.get(&format!("/join/{code}"), None).await.text().await.unwrap();
-    assert!(spent.contains("already used, has expired or is unknown") && !spent.contains("device="), "{spent}");
-    let unknown = w.get("/join/dvg-00000000000000000000000000000000", None).await.text().await.unwrap();
+    devices
+        .enroll("platinum", &code, "platinum-key", false)
+        .unwrap();
+    let spent = w
+        .get(&format!("/join/{code}"), None)
+        .await
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        spent.contains("already used, has expired or is unknown") && !spent.contains("device="),
+        "{spent}"
+    );
+    let unknown = w
+        .get("/join/dvg-00000000000000000000000000000000", None)
+        .await
+        .text()
+        .await
+        .unwrap();
     assert!(unknown.contains("exit 1"));
+}
+
+/// The Connect page's call: a bearer gets a one-time code and the hub's own join lines;
+/// the hub's cookie alone gets nothing (no cross-site code minting); the code is spent by
+/// one enroll and the machine then shows under that account's `/api/v1/me` only.
+#[tokio::test]
+async fn api_add_machine_is_bearer_only_and_the_code_joins_for_that_account() {
+    use sha2::{Digest, Sha256};
+    let dist = tempfile::tempdir().unwrap();
+    let mut sums = String::new();
+    for (name, bytes) in [
+        ("install-devagotchi.sh", b"#!/usr/bin/env bash\n".as_slice()),
+        ("install-devagotchi.ps1", b"param()\n".as_slice()),
+    ] {
+        std::fs::write(dist.path().join(name), bytes).unwrap();
+        sums.push_str(&format!("{}  {name}\n", hex::encode(Sha256::digest(bytes))));
+    }
+    std::fs::write(dist.path().join("SHA256SUMS"), sums).unwrap();
+    std::fs::write(dist.path().join("VERSION"), "main-test123\n").unwrap();
+    let downloads = Arc::new(crate::downloads::Downloads::open(dist.path()).unwrap());
+    let w = world_with(Some(downloads)).await;
+
+    let cookie = w.sign_in("tok-other").await;
+    let by_cookie = w
+        .http
+        .post(format!("{}/api/v1/machines", w.url))
+        .header(header::COOKIE, &cookie)
+        .json(&serde_json::json!({ "name": "laptop" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(by_cookie.status(), StatusCode::UNAUTHORIZED);
+
+    let refused = w
+        .http
+        .post(format!("{}/api/v1/machines", w.url))
+        .bearer_auth("nope")
+        .json(&serde_json::json!({ "name": "laptop" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::UNAUTHORIZED);
+
+    let issued = w
+        .http
+        .post(format!("{}/api/v1/machines", w.url))
+        .bearer_auth("tok-other")
+        .json(&serde_json::json!({ "name": "Laptop" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(issued.status(), StatusCode::CREATED);
+    assert_eq!(issued.headers()[header::CACHE_CONTROL], "no-store");
+    let body: Value = issued.json().await.unwrap();
+    let code = body["code"].as_str().unwrap().to_string();
+    assert_eq!(body["name"], "laptop");
+    assert_eq!(
+        body["commands"]["linux"],
+        format!(
+            "curl -fsSL {}/join/{code} | sudo sh",
+            w.url.trim_end_matches('/')
+        )
+    );
+    assert_eq!(
+        body["commands"]["windows"],
+        format!("irm {}/join/{code}.ps1 | iex", w.url.trim_end_matches('/'))
+    );
+
+    let devices = Devices::open(&w.dir.path().join("devices.sqlite3")).unwrap();
+    devices
+        .enroll("laptop", &code, "laptop-key", false)
+        .unwrap();
+    assert!(
+        devices.enroll("laptop", &code, "again-key", false).is_err(),
+        "a code works once"
+    );
+    let mine: Value = w
+        .http
+        .get(format!("{}/api/v1/me", w.url))
+        .bearer_auth("tok-other")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(mine["machines"].to_string().contains("laptop"));
+    let theirs: Value = w
+        .http
+        .get(format!("{}/api/v1/me", w.url))
+        .bearer_auth("tok-owner")
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        !theirs["machines"].to_string().contains("laptop"),
+        "another account never sees it: {theirs}"
+    );
 }

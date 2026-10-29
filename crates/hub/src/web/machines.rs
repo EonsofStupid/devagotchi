@@ -9,7 +9,10 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::Response,
 };
+use axum::{Json, http::header, response::IntoResponse};
 use serde::Deserialize;
+
+use crate::auth::AuthError;
 
 use super::{
     approvals::same_origin,
@@ -126,5 +129,86 @@ this page is the only place it is shown.</p><pre class=\"what\">{code}</pre>\
 shows up under your machines. Only your account reaches it.</p>\
 <p><a class=\"button\" href=\"/account\">Your machines</a></p>"
         ),
+    )
+}
+
+fn json_reply(status: StatusCode, body: serde_json::Value) -> Response {
+    let mut response = (status, Json(body)).into_response();
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        header::HeaderValue::from_static("no-store"),
+    );
+    response
+}
+
+/// `POST /api/v1/machines` `{ "name": "..." }` with `Authorization: Bearer <token>`: the
+/// same one-time code "Add a machine" issues, for an app the person is signed in to (the
+/// devagotchi.com Connect page). Bearer only, never the hub's cookie, so another site cannot
+/// make a signed-in browser issue codes. The code is in this response once and nowhere else.
+pub async fn add_json(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(form): Json<Named>,
+) -> Response {
+    let bearer = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+        })
+        .map(str::trim);
+    let Some(token) = bearer else {
+        return json_reply(
+            StatusCode::UNAUTHORIZED,
+            serde_json::json!({ "error": "signed_out" }),
+        );
+    };
+    let owner = match state.verifier.verify(token).await {
+        Ok(subject) => subject.id,
+        Err(AuthError::Invalid(why)) => {
+            crate::log_refusal(why);
+            return json_reply(
+                StatusCode::UNAUTHORIZED,
+                serde_json::json!({ "error": "invalid_token" }),
+            );
+        }
+        Err(AuthError::Unavailable(_)) => {
+            return json_reply(
+                StatusCode::SERVICE_UNAVAILABLE,
+                serde_json::json!({ "error": "issuer_unavailable" }),
+            );
+        }
+    };
+    let name = form.name.trim().to_ascii_lowercase();
+    let code = match state.hub.links.issue_owned_code(&owner, &name) {
+        Ok(code) => code,
+        Err(error) => {
+            let status = match error.code.as_str() {
+                "device_store" => StatusCode::SERVICE_UNAVAILABLE,
+                _ => StatusCode::CONFLICT,
+            };
+            return json_reply(
+                status,
+                serde_json::json!({ "error": error.code, "message": error.message }),
+            );
+        }
+    };
+    let hub = state.hub.config.public_url.trim_end_matches('/');
+    let commands = state.hub.downloads.is_some().then(|| {
+        serde_json::json!({
+            "linux": format!("curl -fsSL {hub}/join/{code} | sudo sh"),
+            "windows": format!("irm {hub}/join/{code}.ps1 | iex"),
+        })
+    });
+    json_reply(
+        StatusCode::CREATED,
+        serde_json::json!({
+            "name": name,
+            "code": code,
+            "expires_at": devices::now_secs() + devices::CODE_TTL_SECS,
+            "commands": commands,
+        }),
     )
 }

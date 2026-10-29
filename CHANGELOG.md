@@ -7,6 +7,17 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### devagotchi.com sign-ins reach the hub (increment 31)
+- `trusted_issuers: [{ "issuer", "audiences" }]` in the hub config: more OpenID Connect
+  issuers whose signed JWTs the hub accepts next to `auth` (Nomen stays the primary). A token
+  is checked by the issuer its `iss` names, with that issuer's keys; every other token goes to
+  `auth`. https only, no duplicates, never beside `auth.mode dev`. Discovery runs at start.
+- `POST /api/v1/machines` `{ "name" }`, bearer only: the same one-time owned code "Add a
+  machine" issues, plus the hub's `/join` lines when it serves downloads, `Cache-Control:
+  no-store`. The hub's cookie is not accepted there, so another site cannot mint codes.
+- Verified: `cargo test -p devagotchi-hub` (121, including ES256 routing, a forged-key token
+  refused, config rules, bearer-only issuing and the code joining for that account only).
+
 ### The hub connects itself to a Nomen (increment 30)
 - `devagotchi hub connect-nomen --state-dir … --config … --client-id ID --project ID
   [--issuer URL]` joins the hub to a Nomen with its owner's approval and nothing else: it
