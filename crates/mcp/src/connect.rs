@@ -184,14 +184,15 @@ fn run(args: Vec<OsString>, machine: Machine, setup: bool) -> ExitCode {
         Some(clients) => clients,
         None => Client::ALL.into_iter().filter(|c| present(*c, &machine)).collect(),
     };
+    // First, so a person with another MCP client has the absolute command to give it.
+    let shown = format!("{} {}", machine.exe.display(), args.join(" "));
+    println!("Devagotchi MCP server: {shown}");
     if clients.is_empty() {
         eprintln!(
-            "devagotchi connect: found no Claude Code (`claude`), Codex (~/.codex or `codex`) or Claude Desktop here; name one to set it up anyway"
+            "devagotchi {verb}: found no Claude Code (`claude`), Codex (~/.codex or `codex`) or Claude Desktop here; name one to set it up anyway, or give any other MCP client the server above (a stdio server: that command, with its arguments)"
         );
         return ExitCode::from(1);
     }
-    let shown = format!("{} {}", machine.exe.display(), args.join(" "));
-    println!("Devagotchi MCP server: {shown}");
     let mut failed = false;
     for client in clients {
         let done = match client {
