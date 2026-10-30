@@ -7,6 +7,43 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
 
+### One step for an AI client, no account (increment 33a)
+- `devagotchi mcp` with no broker answering starts this user's broker in the background
+  (`devagotchi start --background`) and uses it, so an AI client's whole config is
+  `devagotchi mcp`, as Desktop Commander's is one `npx` line. The broker
+  (`devagotchi_core::execution::detached`, native code in the platform modules):
+  - has a session of its own (Linux), or no console, a process group of its own and is out of
+    the caller's job where the job allows it (Windows), so a client closing its whole process
+    tree leaves it running;
+  - inherits nothing but the null device and its log: every other descriptor is closed on
+    exec (Linux), and Windows gets an explicit inherited-handle list, so an AI client's pipes
+    are never held open;
+  - runs in its state directory with a pared-down environment: what programs need to find
+    home, temp and tools, plus the SSH agent, proxies, extra CA certificates and toolchain
+    homes jobs need; an AI client's own variables, tokens in an MCP `env` block among them and
+    who it acts as (`DEVAGOTCHI_ACTOR`), do not reach it or its jobs (a broker started in a
+    terminal keeps that terminal's whole environment);
+  - writes to `<state>/broker.log` (0600); a broker that stops at once is reported at once with
+    what it wrote (not an earlier start's lines), and one that holds the state but does not
+    answer is reported as such.
+  The state directory is made by the IPC layer that checks it, which also fixes `devagotchi
+  start` on Windows for administrators (a directory they make is owned by Administrators and
+  was refused). Two starts racing meet at the broker's instance lock; a broker is found by
+  asking its endpoint, never by a remembered PID.
+- `devagotchi start --background`: the same start, detached; returns once the broker answers.
+- `devagotchi setup`: `connect` for every AI client found, with this machine's broker when no
+  account is on file instead of asking to sign in first; an account whose sign-in ran out keeps
+  its hub. Codex gets `startup_timeout_sec = 30`, since a first start may start the broker.
+- `DEVAGOTCHI_BROKER_CONFIG` names the broker's config file alone. The Windows installer sets
+  it and `DEVAGOTCHI_STATE_DIR` for the user, so plain `devagotchi mcp` and `setup` find its
+  broker on D: instead of starting a second one, while the sign-in stays in `%APPDATA%`; it
+  stops a broker started either way before replacing binaries.
+- `devagotchi start` writes a first config through a temporary file of its own process.
+- Windows: a broker started by an elevated administrator can be started again by the same user
+  unelevated or from Git Bash. Its lock and journal, owned by the Administrators group when made
+  elevated, were refused (`lock_permissions`) where the token's owner is the user. A private
+  file may now be owned by that group too; its DACL must still grant the user alone.
+
 ### devagotchi.com sign-ins reach the hub (increment 31)
 - `trusted_issuers: [{ "issuer", "audiences" }]` in the hub config: more OpenID Connect
   issuers whose signed JWTs the hub accepts next to `auth` (Nomen stays the primary). A token

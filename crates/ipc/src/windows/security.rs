@@ -20,7 +20,8 @@ use windows_sys::Win32::Foundation::{
     ERROR_SUCCESS, FALSE, HANDLE, HLOCAL, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+    ConvertStringSidToSidW, GetSecurityInfo,
     SDDL_REVISION_1, SE_FILE_OBJECT, SE_OBJECT_TYPE,
 };
 use windows_sys::Win32::Security::{
@@ -73,6 +74,17 @@ impl Sid {
     fn as_psid(&self) -> PSID {
         // EqualSid and ConvertSidToStringSidW read through this pointer only.
         self.words.as_ptr().cast_mut().cast()
+    }
+
+    /// The built-in Administrators group, `S-1-5-32-544`.
+    pub fn administrators() -> io::Result<Self> {
+        let text = wide(OsStr::new("S-1-5-32-544"));
+        let mut sid: PSID = null_mut();
+        if unsafe { ConvertStringSidToSidW(text.as_ptr(), &mut sid) } == FALSE {
+            return Err(io::Error::last_os_error());
+        }
+        let _allocation = LocalAllocation(sid.cast());
+        unsafe { Self::copy_from(sid) }
     }
 
     pub fn equals(&self, other: &Sid) -> bool {
@@ -374,8 +386,17 @@ pub enum Entry {
 ///
 /// A private directory is an actual directory owned by the operator's user
 /// with a protected DACL that grants only that user. A private file is a
-/// regular file with one link, owned by the operator, whose DACL grants only
-/// the operator's user. Neither may be a reparse point.
+/// regular file with one link, owned by the operator (its user, the owner its
+/// token gives new objects, or the Administrators group), whose DACL grants
+/// only the operator's user. Neither may be a reparse point.
+///
+/// The Administrators group owns what an elevated administrator creates without
+/// an explicit owner, and the same user later runs unelevated, or in Git Bash,
+/// whose runtime makes the token's owner the user: a broker one of them started
+/// must start again from the other. Only an elevated administrator or SYSTEM can
+/// make an object that group owns, and either already controls every account's
+/// files, so accepting it lets no one else in; the DACL must still grant the user
+/// alone.
 pub fn private_entry_defect(
     entry: &File,
     kind: Entry,
@@ -411,6 +432,7 @@ pub fn private_entry_defect(
             }
             if !security.owner.equals(&operator.user)
                 && !security.owner.equals(&operator.default_owner)
+                && !security.owner.equals(&Sid::administrators()?)
             {
                 return Ok(Some("is not owned by the operator"));
             }
@@ -420,4 +442,77 @@ pub fn private_entry_defect(
         return Ok(Some("grants access to another account"));
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::Foundation::ERROR_INVALID_OWNER;
+
+    /// A new file with this security descriptor, opened for inspection; `None` when this
+    /// process may not give it that owner.
+    fn file_with(path: &Path, sddl: &str) -> Option<File> {
+        let descriptor = SecurityDescriptor::from_sddl(sddl).unwrap();
+        let attributes = descriptor.attributes();
+        let name = wide(path.as_os_str());
+        let handle = unsafe {
+            CreateFileW(
+                name.as_ptr(),
+                FILE_GENERIC_WRITE,
+                0,
+                &attributes,
+                CREATE_NEW,
+                FILE_FLAG_OPEN_REPARSE_POINT,
+                null_mut(),
+            )
+        };
+        if handle == INVALID_HANDLE_VALUE {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() == Some(ERROR_INVALID_OWNER as i32) {
+                return None;
+            }
+            panic!("{}: {error}", path.display());
+        }
+        drop(unsafe { OwnedHandle::from_raw_handle(handle) });
+        Some(open_entry(path).unwrap())
+    }
+
+    #[test]
+    fn a_file_the_user_made_elevated_stays_private_to_them_unelevated() {
+        let elevated = Operator::current().unwrap();
+        // The same user unelevated, or in Git Bash, whose runtime makes the token's owner the
+        // user: the broker one of them started must start again from the other.
+        let unelevated = Operator {
+            user: elevated.user.clone(),
+            default_owner: elevated.user.clone(),
+        };
+        let user = elevated.user.to_sddl().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        // What an elevated administrator's broker leaves: owned by the Administrators group.
+        let Some(lock) = file_with(
+            &dir.path().join("broker.lock"),
+            &format!("O:BAD:P(A;;FA;;;{user})"),
+        ) else {
+            assert!(
+                std::env::var_os("GITHUB_ACTIONS").is_none(),
+                "GitHub's Windows runners are elevated administrators"
+            );
+            eprintln!("only an elevated administrator can make a file the Administrators group owns");
+            return;
+        };
+        assert_eq!(
+            private_entry_defect(&lock, Entry::File, &unelevated).unwrap(),
+            None
+        );
+        // Whoever owns it, a file that grants anyone else is still refused.
+        let shared = file_with(
+            &dir.path().join("shared"),
+            &format!("O:BAD:P(A;;FA;;;{user})(A;;FR;;;WD)"),
+        )
+        .unwrap();
+        assert_eq!(
+            private_entry_defect(&shared, Entry::File, &unelevated).unwrap(),
+            Some("grants access to another account")
+        );
+    }
 }

@@ -4,6 +4,7 @@
 //! packaging does, so a person downloads one thing and runs one command.
 //!
 //! ```text
+//! devagotchi setup                 every AI client here, in one step, no account needed
 //! devagotchi start                 this user's broker, no paths to remember
 //! devagotchi mcp                   the stdio MCP adapter an agent runs; finds that broker
 //! devagotchi connect               point Claude Code, Codex and Claude Desktop at it
@@ -24,8 +25,10 @@ pub const USAGE: &str =
 
 Usage: devagotchi <command> [options]
 
+  setup        set Devagotchi up for every AI client here in one step, no account needed
   start        run this user's broker (first run writes its config); Ctrl+C stops it
-  mcp          the stdio MCP adapter your agent runs; finds the broker `start` left running
+               (start --background: detached; `mcp` does this itself when none is running)
+  mcp          the stdio MCP adapter your agent runs; finds your broker, or starts it
                (mcp --hub [URL]: the hosted hub instead, as the account you signed in with)
   connect      point Claude Code, Codex and Claude Desktop at Devagotchi, then check it answers
   board        the project's ticket board: prime, claim, beat, note, done, handoff … (board --help)
@@ -54,7 +57,8 @@ fn run(args: Vec<OsString>) -> ExitCode {
     match command.to_str() {
         Some("start") => start::run(args),
         Some("mcp") => mcp(args),
-        Some("connect") => connect(args),
+        Some("connect") => connect(args, false),
+        Some("setup") => connect(args, true),
         Some("board") => devagotchi_hub::board_cli(
             args,
             paths::config_dir().map(|d| d.join(devagotchi_hub::account::FILE_NAME)),
@@ -84,7 +88,8 @@ fn run(args: Vec<OsString>) -> ExitCode {
     }
 }
 
-/// `devagotchi login|logout|whoami`: the account file lives beside the broker's config.
+/// `devagotchi login|logout|whoami`: the account file lives in the config directory (beside
+/// the broker's config unless DEVAGOTCHI_BROKER_CONFIG puts that elsewhere).
 fn account(verb: &str, args: Vec<OsString>) -> ExitCode {
     let Some(config_dir) = paths::config_dir() else {
         eprintln!(
@@ -99,8 +104,9 @@ fn account(verb: &str, args: Vec<OsString>) -> ExitCode {
     )
 }
 
-/// `devagotchi connect`: the machine as the clients' config files and PATH describe it.
-fn connect(args: Vec<OsString>) -> ExitCode {
+/// `devagotchi connect` and `devagotchi setup`: the machine as the clients' config files
+/// and PATH describe it.
+fn connect(args: Vec<OsString>, setup: bool) -> ExitCode {
     let exe = match std::env::current_exe().and_then(|exe| exe.canonicalize()) {
         Ok(exe) => dunce_path(exe),
         Err(error) => {
@@ -122,20 +128,30 @@ fn connect(args: Vec<OsString>) -> ExitCode {
     } else {
         env_dir("XDG_CONFIG_HOME").or_else(|| home.as_ref().map(|h| h.join(".config")))
     };
-    let signed_in = paths::config_dir()
-        .map(|d| d.join(devagotchi_hub::account::FILE_NAME))
-        .is_some_and(|f| devagotchi_hub::account::signed_in(&f));
-    devagotchi_mcp::connect::cli(
-        args,
-        devagotchi_mcp::connect::Machine {
-            exe,
-            home,
-            codex_home: env_dir("CODEX_HOME"),
-            app_config,
-            path: std::env::var_os("PATH"),
-            signed_in,
-        },
-    )
+    let account_file = paths::config_dir().map(|d| d.join(devagotchi_hub::account::FILE_NAME));
+    let signed_in = account_file
+        .as_ref()
+        .is_some_and(|f| devagotchi_hub::account::signed_in(f));
+    let account_on_file = account_file.as_ref().is_some_and(|f| {
+        matches!(
+            devagotchi_hub::account::read(f),
+            Ok(Some(devagotchi_hub::account::Stored::Account(_)))
+        )
+    });
+    let machine = devagotchi_mcp::connect::Machine {
+        exe,
+        home,
+        codex_home: env_dir("CODEX_HOME"),
+        app_config,
+        path: std::env::var_os("PATH"),
+        signed_in,
+        account_on_file,
+    };
+    if setup {
+        devagotchi_mcp::connect::setup(args, machine)
+    } else {
+        devagotchi_mcp::connect::cli(args, machine)
+    }
 }
 
 /// Windows `canonicalize` answers `\\?\C:\…`, which other programs may not accept.
@@ -147,8 +163,48 @@ fn dunce_path(path: std::path::PathBuf) -> std::path::PathBuf {
     }
 }
 
-/// `devagotchi mcp [--socket ENDPOINT]`: without the flag, the endpoint `devagotchi start`
-/// wrote to `<state>/endpoint`, so an agent's MCP config is just `devagotchi mcp`.
+/// This user's broker for `devagotchi mcp`: the one answering at `<state>/endpoint`, or,
+/// when none answers, one started in the background (`devagotchi start --background`, run as
+/// its own process so the broker is not left a child of the AI client's adapter).
+#[cfg(any(target_os = "linux", windows))]
+fn local_broker(state: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    if let Some(endpoint) = devagotchi_broker::background::answering(state) {
+        return Ok(endpoint);
+    }
+    let exe = std::env::current_exe().map_err(|e| format!("cannot find this binary: {e}"))?;
+    // stdout is the MCP stream: the starter writes only to stderr, and that is kept away.
+    let started = std::process::Command::new(exe)
+        .args(["start", "--background"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::inherit())
+        .status()
+        .map_err(|e| format!("could not start your broker: {e}"))?;
+    devagotchi_broker::background::answering(state).ok_or_else(|| {
+        format!(
+            "your broker is not answering ({started}); the lines above say why, and {} has its output",
+            state
+                .join(devagotchi_broker::background::LOG_FILE)
+                .display()
+        )
+    })
+}
+
+/// Where no execution provider exists yet there is no broker to start.
+#[cfg(not(any(target_os = "linux", windows)))]
+fn local_broker(state: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    let file = state.join(devagotchi_broker::ENDPOINT_FILE);
+    match std::fs::read_to_string(&file) {
+        Ok(text) if !text.trim().is_empty() => Ok(std::path::PathBuf::from(text.trim())),
+        _ => Err(format!(
+            "no broker is running for this user ({} is missing); run `devagotchi start` first, or pass --socket ENDPOINT",
+            file.display()
+        )),
+    }
+}
+
+/// `devagotchi mcp [--socket ENDPOINT]`: without the flag, this user's broker, started in the
+/// background when none answers, so an agent's whole MCP config is `devagotchi mcp`.
 /// `devagotchi mcp --hub [URL]`: the hosted hub's MCP instead, as the account on file.
 fn mcp(args: Vec<OsString>) -> ExitCode {
     if args.first().is_some_and(|a| a == "--hub") {
@@ -185,18 +241,14 @@ fn mcp(args: Vec<OsString>) -> ExitCode {
             );
             return ExitCode::from(64);
         };
-        let file = state.join(devagotchi_broker::ENDPOINT_FILE);
-        let endpoint = match std::fs::read_to_string(&file) {
-            Ok(text) if !text.trim().is_empty() => text.trim().to_string(),
-            _ => {
-                eprintln!(
-                    "devagotchi mcp: no broker is running for this user ({} is missing); run `devagotchi start` first, or pass --socket ENDPOINT",
-                    file.display()
-                );
+        let endpoint = match local_broker(&state) {
+            Ok(endpoint) => endpoint,
+            Err(why) => {
+                eprintln!("devagotchi mcp: {why}");
                 return ExitCode::from(69);
             }
         };
-        return devagotchi_mcp::cli(vec![OsString::from("--socket"), OsString::from(endpoint)]);
+        return devagotchi_mcp::cli(vec![OsString::from("--socket"), endpoint.into_os_string()]);
     }
     devagotchi_mcp::cli(args)
 }

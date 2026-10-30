@@ -19,6 +19,7 @@ const GROUP_SETTLE: Duration = Duration::from_millis(1000);
 const ROOT_WAIT: Duration = Duration::from_millis(2000);
 const PIPE_DRAIN: Duration = Duration::from_millis(1000);
 
+pub mod detached;
 pub(crate) mod platform;
 
 /// The canonical, validated inputs of one admitted process.
