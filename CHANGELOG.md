@@ -5,7 +5,9 @@ Releases are the operator's act: a tag `vX.Y.Z` on `main` runs `.github/workflow
 The version in `Cargo.toml` is bumped by the operator in the same commit as this file's next
 heading. Agents draft the fragments below; they never tag.
 
-## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
+## 0.1.0 - 2026-10-30
+
+The first release, tagged at the operator's word (30 Oct 2026).
 
 ### Install in one line, for a person or their AI (increment 33b)
 - README "Install": one line per system that installs `devagotchi` for the user from the
