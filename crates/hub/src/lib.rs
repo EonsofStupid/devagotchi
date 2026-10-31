@@ -14,6 +14,7 @@ mod devices;
 mod downloads;
 mod files;
 mod hub;
+mod identity;
 mod join;
 mod link;
 mod nomen;
