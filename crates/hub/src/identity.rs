@@ -145,6 +145,10 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+pub fn acceptable_email(email: &str) -> bool {
+    normalize_email(email).is_ok()
+}
+
 pub fn is_account_id(id: &str) -> bool {
     let Some(rest) = id.strip_prefix("dg_") else {
         return false;
@@ -297,6 +301,80 @@ impl Store {
             }
         }
         Err(BridgeError::new("constraint", "local sign-in lost a race"))
+    }
+
+    /// Attach a provider to an account the person is already signed in to.
+    /// Does not move an identity, and does not take a verified email from another account.
+    pub fn link_to(&self, account_id: &str, claim: &Claim) -> BridgeResult<Resolved> {
+        let claim = normalize(claim)?;
+        if !account_exists_conn(self, account_id)? {
+            return Err(BridgeError::new("not_linked", "unknown account"));
+        }
+        for _ in 0..4 {
+            match self.link_to_once(account_id, &claim) {
+                Err(error) if error.code == "constraint" => continue,
+                other => return other,
+            }
+        }
+        Err(BridgeError::new("constraint", "link lost a race"))
+    }
+
+    fn link_to_once(&self, account_id: &str, claim: &Norm) -> BridgeResult<Resolved> {
+        let mut connection = self.connection.lock().expect("identity lock");
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        if let Some(existing) = linked_account(&tx, &claim.issuer, &claim.sub)? {
+            if existing != account_id {
+                return Err(BridgeError::new(
+                    "already_linked",
+                    "that sign-in belongs to another account",
+                ));
+            }
+            let workspace_id = personal_workspace(&tx, account_id)?;
+            tx.commit().map_err(store_error)?;
+            return Ok(Resolved {
+                account_id: account_id.to_string(),
+                workspace_id,
+                outcome: Outcome::Existing,
+            });
+        }
+        if claim.email_verified
+            && let Some(email) = &claim.email
+            && let Some(owner) = email_owner(&tx, email)?
+            && owner != account_id
+        {
+            return Err(BridgeError::new(
+                "email_conflict",
+                "that verified email belongs to another account",
+            ));
+        }
+        insert_identity(&tx, claim, account_id)?;
+        if claim.email_verified
+            && let Some(email) = &claim.email
+            && email_owner(&tx, email)?.is_none()
+        {
+            tx.execute(
+                "INSERT INTO verified_emails (email, account_id) VALUES (?1, ?2)",
+                params![email, account_id],
+            )
+            .map_err(store_error)?;
+        }
+        record(
+            &tx,
+            "link",
+            account_id,
+            Some(&claim.issuer),
+            Some(&claim.sub),
+            "linked while signed in",
+        )?;
+        let workspace_id = personal_workspace(&tx, account_id)?;
+        tx.commit().map_err(store_error)?;
+        Ok(Resolved {
+            account_id: account_id.to_string(),
+            workspace_id,
+            outcome: Outcome::Linked,
+        })
     }
 
     /// Drop one linked provider. Fails when the account would have no way to sign in.
@@ -703,6 +781,17 @@ fn email_owner(tx: &Transaction<'_>, email: &str) -> BridgeResult<Option<String>
     )
     .optional()
     .map_err(store_error)
+}
+
+fn account_exists_conn(store: &Store, id: &str) -> BridgeResult<bool> {
+    let connection = store.connection.lock().expect("identity lock");
+    connection
+        .query_row("SELECT 1 FROM accounts WHERE id = ?1", params![id], |_| {
+            Ok(())
+        })
+        .optional()
+        .map_err(store_error)
+        .map(|row| row.is_some())
 }
 
 fn account_exists(tx: &Transaction<'_>, id: &str) -> BridgeResult<bool> {

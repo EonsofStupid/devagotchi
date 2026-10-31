@@ -130,9 +130,13 @@ impl Verifier {
                 OidcVerifier::discover(issuer, audiences).await?,
             )),
             AuthConfig::Dev { tokens_file } => Ok(Verifier::Dev(read_dev_tokens(tokens_file)?)),
-            AuthConfig::Devagotchi { .. } => Ok(Verifier::Devagotchi(std::sync::Arc::new(
-                crate::oauth::Authority::open(state_dir, public_url)?,
-            ))),
+            AuthConfig::Devagotchi {
+                upstream, local, ..
+            } => {
+                let mut authority = crate::oauth::Authority::open(state_dir, public_url)?;
+                authority.configure_login(upstream.clone(), local.clone());
+                Ok(Verifier::Devagotchi(std::sync::Arc::new(authority)))
+            }
         }
     }
 

@@ -90,6 +90,20 @@ pub struct Authority {
     keys: Mutex<KeyRing>,
     key_path: std::path::PathBuf,
     connection: Mutex<Connection>,
+    upstream: Vec<crate::config::UpstreamProvider>,
+    local: crate::config::LocalLogin,
+    outbox: std::path::PathBuf,
+    identity: crate::identity::Store,
+    discovery: Mutex<std::collections::HashMap<String, Discovery>>,
+    http: reqwest::Client,
+}
+
+#[derive(Clone)]
+struct Discovery {
+    authorization: String,
+    token: String,
+    userinfo: Option<String>,
+    issuer: String,
 }
 
 struct KeyRing {
@@ -241,17 +255,46 @@ impl Authority {
         }
         let connection = Connection::open(&db_path).map_err(store_error)?;
         connection.execute_batch(SCHEMA).map_err(store_error)?;
+        connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS magic_links (
+                   token_hash TEXT PRIMARY KEY,
+                   email TEXT NOT NULL,
+                   resume TEXT NOT NULL,
+                   expires_at INTEGER NOT NULL,
+                   used INTEGER NOT NULL
+                 );
+                 CREATE TABLE IF NOT EXISTS upstream_tx (
+                   state TEXT PRIMARY KEY,
+                   provider TEXT NOT NULL,
+                   verifier TEXT NOT NULL,
+                   resume TEXT NOT NULL,
+                   expires_at INTEGER NOT NULL
+                 );",
+            )
+            .map_err(store_error)?;
         let key_path = state_dir.join("oauth-signing.json");
         let mut keys = load_or_create_keys(&key_path)?;
         if now().saturating_sub(keys.current.created_at) > KEY_LIFE {
             keys = rotate_ring(keys);
             save_keys(&key_path, &keys)?;
         }
+        let http = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|error| BridgeError::new("oauth", error.to_string()))?;
         let authority = Self {
             public_url,
             keys: Mutex::new(keys),
             key_path,
             connection: Mutex::new(connection),
+            upstream: Vec::new(),
+            local: crate::config::LocalLogin::default(),
+            outbox: state_dir.join("login-outbox"),
+            identity: crate::identity::Store::open(&state_dir.join("identities.sqlite3"))?,
+            discovery: Mutex::new(std::collections::HashMap::new()),
+            http,
         };
         authority.seed_cli_client()?;
         Ok(authority)
@@ -259,6 +302,329 @@ impl Authority {
 
     pub fn issuer(&self) -> &str {
         &self.public_url
+    }
+
+    pub fn configure_login(
+        &mut self,
+        upstream: Vec<crate::config::UpstreamProvider>,
+        local: crate::config::LocalLogin,
+    ) {
+        self.upstream = upstream;
+        self.local = local;
+    }
+
+    pub fn providers(&self) -> &[crate::config::UpstreamProvider] {
+        &self.upstream
+    }
+
+    pub fn identity(&self) -> &crate::identity::Store {
+        &self.identity
+    }
+
+    /// Whether a magic link may be written to the journal and the outbox.
+    pub fn magic_delivery(&self) -> Result<(), BridgeError> {
+        if !self.local.magic_link {
+            return Err(oauth_error(
+                "invalid_request",
+                "local sign-in is turned off",
+            ));
+        }
+        let deliver = match self.local.deliver.as_deref() {
+            Some("log") => true,
+            Some("off") => false,
+            _ => {
+                self.public_url.starts_with("http://127.0.0.1")
+                    || self.public_url.starts_with("http://localhost")
+                    || self.public_url.starts_with("http://[::1]")
+            }
+        };
+        if !deliver {
+            return Err(oauth_error(
+                "invalid_request",
+                "magic links are off on a public URL until auth.local.deliver is \"log\"",
+            ));
+        }
+        Ok(())
+    }
+
+    /// Issue a magic link. The HTTP caller does not receive it. The URL is written
+    /// to `{state}/login-outbox` and the hub journal.
+    pub fn request_magic_link(&self, email: &str, resume: &str) -> BridgeResult<()> {
+        self.magic_delivery()?;
+        if !crate::identity::acceptable_email(email) {
+            return Err(oauth_error("invalid_request", "email is not usable"));
+        }
+        let email = email.trim().to_lowercase();
+        let token = random_token();
+        let connection = self.connection.lock().expect("oauth lock");
+        connection
+            .execute(
+                "INSERT INTO magic_links (token_hash, email, resume, expires_at, used)
+                 VALUES (?1, ?2, ?3, ?4, 0)",
+                params![
+                    digest(&token).as_slice(),
+                    email,
+                    resume,
+                    (now() + CODE_TTL) as i64
+                ],
+            )
+            .map_err(store_error)?;
+        drop(connection);
+        let url = format!("{}/login/redeem?token={token}", self.public_url);
+        std::fs::create_dir_all(&self.outbox)
+            .map_err(|error| BridgeError::new("oauth", format!("login outbox: {error}")))?;
+        let path = self
+            .outbox
+            .join(format!("{}-{}", now(), &hex::encode(digest(&token))[..8]));
+        crate::push::write_private(&path, url.as_bytes())?;
+        eprintln!("devagotchi hub: magic link for {email}: {url}");
+        Ok(())
+    }
+
+    pub fn redeem_magic_link(&self, token: &str) -> BridgeResult<(String, String)> {
+        let mut connection = self.connection.lock().expect("oauth lock");
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        let row: Option<(String, String, i64, i64)> = tx
+            .query_row(
+                "SELECT email, resume, expires_at, used FROM magic_links WHERE token_hash = ?1",
+                params![digest(token).as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(store_error)?;
+        let Some((email, resume, exp, used)) = row else {
+            return Err(oauth_error("invalid_grant", "unknown sign-in link"));
+        };
+        if used != 0 || (exp as u64) <= now() {
+            return Err(oauth_error(
+                "invalid_grant",
+                "sign-in link is no longer valid",
+            ));
+        }
+        tx.execute(
+            "UPDATE magic_links SET used = 1 WHERE token_hash = ?1",
+            params![digest(token).as_slice()],
+        )
+        .map_err(store_error)?;
+        tx.commit().map_err(store_error)?;
+        let resolved = self.identity.redeem_local(&email, None)?;
+        Ok((resolved.account_id, resume))
+    }
+
+    pub async fn start_upstream(&self, name: &str, resume: &str) -> BridgeResult<String> {
+        let provider = self
+            .upstream
+            .iter()
+            .find(|provider| provider.name == name)
+            .ok_or_else(|| oauth_error("invalid_request", "unknown sign-in provider"))?;
+        let discovery = self.discover(provider).await?;
+        let verifier = random_token();
+        let challenge = s256(&verifier);
+        let state = random_token();
+        let redirect = format!("{}/login/upstream/{name}/callback", self.public_url);
+        let connection = self.connection.lock().expect("oauth lock");
+        connection
+            .execute(
+                "INSERT INTO upstream_tx (state, provider, verifier, resume, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![state, name, verifier, resume, (now() + CODE_TTL) as i64],
+            )
+            .map_err(store_error)?;
+        drop(connection);
+        let scope = provider
+            .scopes
+            .clone()
+            .unwrap_or_else(|| "openid email profile".to_string());
+        Ok(format!(
+            "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method=S256",
+            discovery.authorization,
+            urlencoding(&provider.client_id),
+            urlencoding(&redirect),
+            urlencoding(&scope),
+            urlencoding(&state),
+            urlencoding(&challenge),
+        ))
+    }
+
+    pub async fn finish_upstream(
+        &self,
+        state: &str,
+        code: &str,
+        signed_in: Option<&str>,
+    ) -> BridgeResult<(String, String)> {
+        let (provider_name, verifier, resume) = {
+            let mut connection = self.connection.lock().expect("oauth lock");
+            let tx = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(store_error)?;
+            let row: Option<(String, String, String, i64)> = tx
+                .query_row(
+                    "SELECT provider, verifier, resume, expires_at FROM upstream_tx WHERE state = ?1",
+                    params![state],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+                .optional()
+                .map_err(store_error)?;
+            let Some((provider_name, verifier, resume, exp)) = row else {
+                return Err(oauth_error("invalid_request", "unknown sign-in"));
+            };
+            tx.execute("DELETE FROM upstream_tx WHERE state = ?1", params![state])
+                .map_err(store_error)?;
+            tx.commit().map_err(store_error)?;
+            if (exp as u64) <= now() {
+                return Err(oauth_error("invalid_request", "sign-in has expired"));
+            }
+            (provider_name, verifier, resume)
+        };
+        let provider = self
+            .upstream
+            .iter()
+            .find(|provider| provider.name == provider_name)
+            .ok_or_else(|| oauth_error("invalid_request", "unknown sign-in provider"))?
+            .clone();
+        let discovery = self.discover(&provider).await?;
+        let redirect = format!(
+            "{}/login/upstream/{provider_name}/callback",
+            self.public_url
+        );
+        let response = self
+            .http
+            .post(&discovery.token)
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("code", code),
+                ("redirect_uri", redirect.as_str()),
+                ("client_id", provider.client_id.as_str()),
+                ("code_verifier", verifier.as_str()),
+            ])
+            .send()
+            .await
+            .map_err(|error| oauth_error("invalid_request", &format!("provider token: {error}")))?;
+        if !response.status().is_success() {
+            return Err(oauth_error(
+                "invalid_request",
+                "the sign-in provider refused the code",
+            ));
+        }
+        let token_body: Value = response
+            .json()
+            .await
+            .map_err(|_| oauth_error("invalid_request", "provider token was not JSON"))?;
+        let access = token_body["access_token"]
+            .as_str()
+            .ok_or_else(|| oauth_error("invalid_request", "provider sent no access token"))?;
+        let userinfo = discovery
+            .userinfo
+            .ok_or_else(|| oauth_error("invalid_request", "provider has no userinfo endpoint"))?;
+        let info: Value = self
+            .http
+            .get(&userinfo)
+            .bearer_auth(access)
+            .send()
+            .await
+            .map_err(|error| oauth_error("invalid_request", &format!("userinfo: {error}")))?
+            .json()
+            .await
+            .map_err(|_| oauth_error("invalid_request", "userinfo was not JSON"))?;
+        let sub = info["sub"]
+            .as_str()
+            .filter(|sub| !sub.is_empty())
+            .ok_or_else(|| oauth_error("invalid_request", "userinfo has no sub"))?;
+        let email = info["email"].as_str().map(str::to_string);
+        let verified = info["email_verified"].as_bool().unwrap_or(false);
+        let claim = crate::identity::Claim {
+            issuer: discovery.issuer,
+            sub: sub.to_string(),
+            email,
+            email_verified: verified,
+            name: info["name"].as_str().map(str::to_string),
+        };
+        let resolved = if let Some(account) = signed_in {
+            self.identity.link_to(account, &claim)?
+        } else {
+            self.identity.resolve(&claim)?
+        };
+        Ok((resolved.account_id, resume))
+    }
+
+    async fn discover(
+        &self,
+        provider: &crate::config::UpstreamProvider,
+    ) -> BridgeResult<Discovery> {
+        let issuer = provider.issuer.trim_end_matches('/').to_string();
+        if let Some(cached) = self
+            .discovery
+            .lock()
+            .expect("discovery")
+            .get(&issuer)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+        let url = format!("{issuer}/.well-known/openid-configuration");
+        let doc: Value = self
+            .http
+            .get(&url)
+            .send()
+            .await
+            .map_err(|error| oauth_error("invalid_request", &format!("discovery: {error}")))?
+            .json()
+            .await
+            .map_err(|_| oauth_error("invalid_request", "discovery was not JSON"))?;
+        let got = doc["issuer"].as_str().unwrap_or("").trim_end_matches('/');
+        if got != issuer {
+            return Err(oauth_error(
+                "invalid_request",
+                "discovery issuer does not match the configured issuer",
+            ));
+        }
+        let discovery = Discovery {
+            authorization: doc["authorization_endpoint"]
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            token: doc["token_endpoint"].as_str().unwrap_or("").to_string(),
+            userinfo: doc["userinfo_endpoint"].as_str().map(str::to_string),
+            issuer,
+        };
+        if discovery.authorization.is_empty() || discovery.token.is_empty() {
+            return Err(oauth_error(
+                "invalid_request",
+                "discovery is missing authorization or token endpoint",
+            ));
+        }
+        self.discovery.lock().expect("discovery").insert(
+            provider.issuer.trim_end_matches('/').to_string(),
+            discovery.clone(),
+        );
+        Ok(discovery)
+    }
+
+    pub fn login_page(&self, resume: &str) -> String {
+        let mut providers = String::new();
+        for provider in &self.upstream {
+            providers.push_str(&format!(
+                "<p><a href=\"/login/upstream/{}?resume={}\">Sign in with {}</a></p>",
+                escape(&provider.name),
+                escape(resume),
+                escape(&provider.name)
+            ));
+        }
+        let magic = if self.magic_delivery().is_ok() {
+            format!(
+                "<form method=\"post\" action=\"/login/magic\"><input type=\"hidden\" name=\"resume\" value=\"{}\">\
+                 <label>Email <input name=\"email\" type=\"email\" required></label>\
+                 <button type=\"submit\">Email me a sign-in link</button></form>",
+                escape(resume)
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            "<!doctype html><title>Sign in</title><h1>Sign in to Devagotchi</h1>{providers}{magic}"
+        )
     }
 
     pub fn resource(&self) -> String {
@@ -1156,7 +1522,7 @@ where
 {
     use axum::{
         Json, Router,
-        extract::{Form, Query},
+        extract::{Form, Path, Query},
         response::IntoResponse,
         routing::{get, post},
     };
@@ -1192,6 +1558,12 @@ where
     let consent_auth = auth.clone();
     let token_auth = auth.clone();
     let revoke_auth = auth.clone();
+    let resume_auth = auth.clone();
+    let login_auth = auth.clone();
+    let magic_auth = auth.clone();
+    let redeem_auth = auth.clone();
+    let up_auth = auth.clone();
+    let up_cb_auth = auth.clone();
 
     axum::Router::<S>::new()
         .route(
@@ -1253,7 +1625,7 @@ where
                             [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
                             format!(
                                 "<!doctype html><title>Sign in</title><p>Sign in to Devagotchi to continue.</p>\
-                                 <p><a href=\"/auth/login?resume={}\">Sign in</a></p>",
+                                 <p><a href=\"/login?resume={}\">Sign in</a></p>",
                                 escape(&pending)
                             ),
                         )
@@ -1328,6 +1700,173 @@ where
                 }
             }),
         )
+        .route(
+            "/authorize/resume",
+            get(move |headers: axum::http::HeaderMap, Query(query): Query<ResumeRequest>| {
+                let auth = resume_auth.clone();
+                async move {
+                    let Some(cookie) = cookie_value(&headers, "dg_as") else {
+                        return (axum::http::StatusCode::UNAUTHORIZED, "sign in required").into_response();
+                    };
+                    if auth.browser_account(&cookie).is_none() {
+                        return (axum::http::StatusCode::UNAUTHORIZED, "sign in required").into_response();
+                    }
+                    let Some((name, scope)) = auth.pending(&query.request).ok().flatten() else {
+                        return (axum::http::StatusCode::BAD_REQUEST, "this sign-in has expired").into_response();
+                    };
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                        format!(
+                            "<!doctype html><title>Allow access</title><h1>Allow {}</h1><p>Scopes: {}</p>\
+                             <form method=\"post\" action=\"/authorize/consent\">\
+                             <input type=\"hidden\" name=\"request\" value=\"{}\">\
+                             <button name=\"decision\" value=\"allow\">Allow</button>\
+                             <button name=\"decision\" value=\"deny\">Deny</button></form>",
+                            escape(&name),
+                            escape(&scope),
+                            escape(&query.request)
+                        ),
+                    )
+                        .into_response()
+                }
+            }),
+        )
+        .route(
+            "/login",
+            get(move |Query(query): Query<ResumeQuery>| {
+                let auth = login_auth.clone();
+                async move {
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                        auth.login_page(&query.resume.unwrap_or_default()),
+                    )
+                }
+            }),
+        )
+        .route(
+            "/login/magic",
+            post(move |Form(form): Form<MagicForm>| {
+                let auth = magic_auth.clone();
+                async move {
+                    if auth
+                        .request_magic_link(&form.email, form.resume.as_deref().unwrap_or(""))
+                        .is_err()
+                        && !crate::identity::acceptable_email(&form.email)
+                    {
+                        return (axum::http::StatusCode::BAD_REQUEST, "email is not usable").into_response();
+                    }
+                    (
+                        axum::http::StatusCode::OK,
+                        "If that address can sign in, a link was issued.",
+                    )
+                        .into_response()
+                }
+            }),
+        )
+        .route(
+            "/login/redeem",
+            get(move |Query(query): Query<TokenQuery>| {
+                let auth = redeem_auth.clone();
+                async move {
+                    let Ok((account, resume)) = auth.redeem_magic_link(&query.token) else {
+                        return (axum::http::StatusCode::BAD_REQUEST, "sign-in link is not valid").into_response();
+                    };
+                    let Ok(cookie) = auth.open_browser_session(&account) else {
+                        return (axum::http::StatusCode::BAD_REQUEST, "could not start a session").into_response();
+                    };
+                    let secure = if auth.issuer().starts_with("https://") { "; Secure" } else { "" };
+                    let set = format!("dg_as={cookie}; HttpOnly; SameSite=Lax; Path=/{secure}");
+                    let next = if resume.is_empty() {
+                        "/account/identities".to_string()
+                    } else {
+                        format!("/authorize/resume?request={resume}")
+                    };
+                    (
+                        axum::http::StatusCode::SEE_OTHER,
+                        [
+                            (axum::http::header::SET_COOKIE, set),
+                            (axum::http::header::LOCATION, next),
+                        ],
+                    )
+                        .into_response()
+                }
+            }),
+        )
+        .route(
+            "/login/upstream/{name}",
+            get(move |Path(name): Path<String>, Query(query): Query<ResumeQuery>| {
+                let auth = up_auth.clone();
+                async move {
+                    match auth.start_upstream(&name, query.resume.as_deref().unwrap_or("")).await {
+                        Ok(location) => axum::response::Redirect::to(&location).into_response(),
+                        Err(error) => oauth_http_error(&error),
+                    }
+                }
+            }),
+        )
+        .route(
+            "/login/upstream/{name}/callback",
+            get(move |headers: axum::http::HeaderMap, Query(query): Query<CallbackQuery>| {
+                let auth = up_cb_auth.clone();
+                async move {
+                    let signed_in = cookie_value(&headers, "dg_as").and_then(|cookie| auth.browser_account(&cookie));
+                    let Ok((account, resume)) = auth
+                        .finish_upstream(&query.state, &query.code, signed_in.as_deref())
+                        .await
+                    else {
+                        return (axum::http::StatusCode::BAD_REQUEST, "sign-in did not finish").into_response();
+                    };
+                    let account = signed_in.unwrap_or(account);
+                    let Ok(cookie) = auth.open_browser_session(&account) else {
+                        return (axum::http::StatusCode::BAD_REQUEST, "could not start a session").into_response();
+                    };
+                    let secure = if auth.issuer().starts_with("https://") { "; Secure" } else { "" };
+                    let set = format!("dg_as={cookie}; HttpOnly; SameSite=Lax; Path=/{secure}");
+                    let next = if resume.is_empty() {
+                        "/account/identities".into()
+                    } else {
+                        format!("/authorize/resume?request={resume}")
+                    };
+                    (
+                        axum::http::StatusCode::SEE_OTHER,
+                        [
+                            (axum::http::header::SET_COOKIE, set),
+                            (axum::http::header::LOCATION, next),
+                        ],
+                    )
+                        .into_response()
+                }
+            }),
+        )
+}
+
+#[derive(Deserialize)]
+struct ResumeRequest {
+    #[serde(default)]
+    request: String,
+}
+#[derive(Deserialize)]
+struct ResumeQuery {
+    #[serde(default)]
+    resume: Option<String>,
+}
+#[derive(Deserialize)]
+struct MagicForm {
+    email: String,
+    #[serde(default)]
+    resume: Option<String>,
+}
+#[derive(Deserialize)]
+struct TokenQuery {
+    #[serde(default)]
+    token: String,
+}
+#[derive(Deserialize)]
+struct CallbackQuery {
+    #[serde(default)]
+    code: String,
+    #[serde(default)]
+    state: String,
 }
 
 #[derive(Deserialize)]
@@ -1577,5 +2116,160 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, "redirect");
         assert!(err.message.contains("error=invalid_request"));
+    }
+
+    #[tokio::test]
+    async fn magic_link_and_a_second_provider_share_one_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let idp = fake_provider("person-1", "ada@example.com", true).await;
+        let other = fake_provider("person-2", "ada@example.com", true).await;
+        let mut auth = Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
+        auth.configure_login(
+            vec![
+                crate::config::UpstreamProvider {
+                    name: "one".into(),
+                    issuer: idp,
+                    client_id: "hub".into(),
+                    client_secret_file: None,
+                    scopes: None,
+                },
+                crate::config::UpstreamProvider {
+                    name: "two".into(),
+                    issuer: other,
+                    client_id: "hub".into(),
+                    client_secret_file: None,
+                    scopes: None,
+                },
+            ],
+            crate::config::LocalLogin {
+                magic_link: true,
+                deliver: Some("log".into()),
+            },
+        );
+        auth.request_magic_link("Ada@Example.com", "pending-1")
+            .unwrap();
+        let url = std::fs::read_dir(dir.path().join("login-outbox"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        let body = std::fs::read_to_string(url).unwrap();
+        let token = body.split("token=").nth(1).unwrap();
+        let (account, resume) = auth.redeem_magic_link(token).unwrap();
+        assert_eq!(resume, "pending-1");
+        assert!(is_account_id(&account));
+        let started = auth.start_upstream("two", "pending-2").await.unwrap();
+        let state = started
+            .split("state=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap();
+        let state = urlencoding_decode(state);
+        let (linked, _) = auth
+            .finish_upstream(&state, "the-code", None)
+            .await
+            .unwrap();
+        assert_eq!(linked, account);
+        let unverified = fake_provider("person-3", "ada@example.com", false).await;
+        auth.configure_login(
+            vec![crate::config::UpstreamProvider {
+                name: "plain".into(),
+                issuer: unverified,
+                client_id: "hub".into(),
+                client_secret_file: None,
+                scopes: None,
+            }],
+            crate::config::LocalLogin::default(),
+        );
+        let started = auth.start_upstream("plain", "x").await.unwrap();
+        let state = started
+            .split("state=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap();
+        let (other_account, _) = auth
+            .finish_upstream(&urlencoding_decode(state), "the-code", None)
+            .await
+            .unwrap();
+        assert_ne!(other_account, account);
+    }
+
+    async fn fake_provider(sub: &str, email: &str, verified: bool) -> String {
+        use axum::Router;
+        use axum::routing::get;
+        let sub = sub.to_string();
+        let email = email.to_string();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let issuer = format!("http://{addr}");
+        let issuer_body = issuer.clone();
+        let app = Router::new()
+            .route(
+                "/.well-known/openid-configuration",
+                get(move || {
+                    let issuer = issuer_body.clone();
+                    async move {
+                        axum::Json(json!({
+                            "issuer": issuer,
+                            "authorization_endpoint": format!("{issuer}/authorize"),
+                            "token_endpoint": format!("{issuer}/token"),
+                            "userinfo_endpoint": format!("{issuer}/userinfo"),
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/token",
+                axum::routing::post(|| async {
+                    axum::Json(json!({"access_token": "provider-access", "token_type": "Bearer"}))
+                }),
+            )
+            .route(
+                "/userinfo",
+                get(move || {
+                    let sub = sub.clone();
+                    let email = email.clone();
+                    async move {
+                        axum::Json(json!({
+                            "sub": sub,
+                            "email": email,
+                            "email_verified": verified,
+                        }))
+                    }
+                }),
+            );
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        issuer
+    }
+
+    fn urlencoding_decode(value: &str) -> String {
+        let mut out = Vec::new();
+        let bytes = value.as_bytes();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'%' if i + 2 < bytes.len() => {
+                    let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or("00");
+                    out.push(u8::from_str_radix(hex, 16).unwrap_or(0));
+                    i += 3;
+                }
+                b'+' => {
+                    out.push(b' ');
+                    i += 1;
+                }
+                byte => {
+                    out.push(byte);
+                    i += 1;
+                }
+            }
+        }
+        String::from_utf8(out).unwrap_or_default()
     }
 }
