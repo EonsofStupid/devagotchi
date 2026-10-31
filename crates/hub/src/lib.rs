@@ -712,20 +712,30 @@ async fn healthz(State(state): State<AppState>) -> Response {
     }
     let audit = state.hub.audit.verify();
     let chain_ok = audit.as_ref().map(|status| status.ok).unwrap_or(false);
+    let auth = if let Some(authority) = state.verifier.authority() {
+        authority.readiness().await
+    } else {
+        serde_json::Value::Null
+    };
+    let signing_ok = auth
+        .get("signing_key")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     // The identity provider is reported, not counted: an outage there leaves the hub, its
     // links and confirmed sign-ins working (see nomen.rs).
     let body = serde_json::json!({
-        "ok": all_up && chain_ok,
+        "ok": all_up && chain_ok && signing_ok,
         "brokers": brokers,
         "audit": audit.ok(),
         "issuer": state.verifier.issuer_health(),
+        "auth": auth,
         "downloads": match (&state.hub.downloads, &state.hub.config.downloads) {
             (Some(downloads), _) => serde_json::json!({ "version": downloads.version, "files": downloads.files().count() }),
             (None, Some(_)) => serde_json::json!({ "off": "the downloads directory did not check out; see the hub's log" }),
             (None, None) => serde_json::Value::Null,
         },
     });
-    let status = if all_up && chain_ok {
+    let status = if all_up && chain_ok && signing_ok {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE

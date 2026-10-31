@@ -612,6 +612,49 @@ impl Authority {
         Ok(discovery)
     }
 
+    /// Readiness for `/healthz`. A down upstream is degraded, not a dead process.
+    /// No upstreams is a healthy local-only hub.
+    pub async fn readiness(&self) -> Value {
+        let mut upstreams = Vec::new();
+        let mut degraded = Vec::new();
+        for provider in &self.upstream {
+            match self.discover(provider).await {
+                Ok(_) => upstreams.push(json!({
+                    "name": provider.name,
+                    "issuer": provider.issuer,
+                    "discovery": true,
+                })),
+                Err(error) => {
+                    let message = error.message.clone();
+                    upstreams.push(json!({
+                        "name": provider.name,
+                        "issuer": provider.issuer,
+                        "discovery": false,
+                        "error": message,
+                    }));
+                    degraded.push(format!("{}: {message}", provider.name));
+                }
+            }
+        }
+        let signing_key = self
+            .jwks()
+            .get("keys")
+            .and_then(|keys| keys.as_array())
+            .is_some_and(|keys| !keys.is_empty());
+        if !signing_key {
+            degraded.insert(0, "signing key is missing".into());
+        }
+        let ready = signing_key && upstreams.iter().all(|row| row["discovery"] == true);
+        json!({
+            "mode": "devagotchi",
+            "ready": ready,
+            "identity_store": true,
+            "signing_key": signing_key,
+            "upstreams": upstreams,
+            "degraded": degraded,
+        })
+    }
+
     pub fn login_page(&self, resume: &str) -> String {
         let mut providers = String::new();
         for provider in &self.upstream {
@@ -2255,6 +2298,31 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, "redirect");
         assert!(err.message.contains("error=invalid_request"));
+    }
+
+    #[tokio::test]
+    async fn readiness_names_a_provider_that_cannot_be_discovered() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut auth = Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
+        let alone = auth.readiness().await;
+        assert_eq!(alone["ready"], true);
+        assert_eq!(alone["signing_key"], true);
+        assert_eq!(alone["identity_store"], true);
+        auth.configure_login(
+            vec![crate::config::UpstreamProvider {
+                name: "gone".into(),
+                issuer: "http://127.0.0.1:1".into(),
+                client_id: "hub".into(),
+                client_secret_file: None,
+                scopes: None,
+            }],
+            crate::config::LocalLogin::default(),
+        );
+        let down = auth.readiness().await;
+        assert_eq!(down["ready"], false);
+        assert_eq!(down["signing_key"], true);
+        let text = down["degraded"][0].as_str().unwrap();
+        assert!(text.contains("gone"), "{text}");
     }
 
     #[test]
