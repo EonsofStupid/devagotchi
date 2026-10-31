@@ -394,7 +394,7 @@ impl Hub {
 
     #[tool(
         name = "read_image",
-        description = "Look at an image file on one of the user's machines: a PNG, JPEG, GIF or WebP up to 3.75 MB comes back as an image you can see. The type is taken from the file's bytes. Get machine names from `machines`.",
+        description = "Look at an image file on one of the user's machines: a PNG, JPEG, GIF or WebP up to 3.75 MB comes back as an image you can see. The type comes from the file's bytes; over 8000 pixels on a side is refused, since AI clients refuse it. Some clients do not pass tool images to the model, which then sees only the line describing it. Get machine names from `machines`.",
         title = "Look at an image on a machine",
         annotations(
             title = "Look at an image on a machine",

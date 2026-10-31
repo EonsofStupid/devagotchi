@@ -14,6 +14,13 @@ heading. Agents draft the fragments below; they never tag.
   refused with `not_an_image`, a larger file with `too_large` at the first page. The image is
   read in the broker's ordinary 24 KiB pages (no contract change), so it works on any broker
   this release talks to. Local server and hub; the hub audits the path.
+- It refuses an image over 8000 pixels on a side (`too_large`, read from the PNG, GIF, JPEG or
+  WebP header): the Claude API refuses one, and a refused image stays in the conversation and
+  fails every later request. Pages must join exactly and the file must keep its size and
+  time, so pages of two files are never joined and a machine that misreports is refused, not
+  followed; a text page that starts a byte late (an image's text metadata) is read again
+  from its character's first byte. Some clients (ChatGPT, as of October 2026) do not show
+  tool images to the model; the tool's description says so.
 
 ### Read by lines (increment 34b-2)
 - `read_file` reads by lines, as Desktop Commander's does: `start_line` (1-based, or negative

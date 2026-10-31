@@ -213,6 +213,9 @@ if args.run_broker and args.run_dir:
     call("write_file", {"machine": args.run_broker, "path": picture, "bytes_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="})
     seen = rpc("tools/call", {"name": "read_image", "arguments": {"machine": args.run_broker, "path": picture}})
     blocks = {b.get("type"): b for b in seen.get("content", [])}
+    refused = rpc("tools/call", {"name": "read_image", "arguments": {"machine": args.run_broker, "path": probe_file}})
+    check("read_image refuses what is not an image", refused.get("isError") is True
+          and "not_an_image" in refused["content"][0]["text"], json.dumps(refused)[:200])
     check("read_image returns the image", not seen.get("isError") and blocks.get("image", {}).get("data") == "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
           and blocks.get("image", {}).get("mimeType") == "image/png", json.dumps(seen)[:240])
     # A directory, a move, info and several files at once, on the machine.

@@ -312,7 +312,7 @@ impl BridgeAdapter {
 
     #[tool(
         name = "read_image",
-        description = "Look at an image file: a PNG, JPEG, GIF or WebP up to 3.75 MB comes back as an image you can see (a screenshot, a chart, a design). The type is taken from the file's bytes, not its name. For anything else use read_file.",
+        description = "Look at an image file: a PNG, JPEG, GIF or WebP up to 3.75 MB comes back as an image you can see (a screenshot, a chart, a design). The type comes from the file's bytes; over 8000 pixels on a side is refused, since AI clients refuse it. Some clients do not pass tool images to the model, which then sees only the line describing it, not its name. For anything else use read_file.",
         title = "Look at an image",
         annotations(title = "Look at an image", read_only_hint = true, open_world_hint = false)
     )]

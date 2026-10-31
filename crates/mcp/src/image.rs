@@ -16,6 +16,9 @@ use crate::unexpected;
 
 /// Largest image returned: its base64 stays under the 5 MB an AI client takes per image.
 pub const MAX_IMAGE_BYTES: u64 = 3_750_000;
+/// Widest or tallest image returned: the Claude API refuses a larger one, and an image it
+/// refused stays in the conversation and fails every later request.
+pub const MAX_IMAGE_SIDE: u32 = 8000;
 
 /// An image as read: its bytes, base64, and what it is.
 #[derive(Debug)]
@@ -23,6 +26,8 @@ pub struct Image {
     pub path: String,
     pub mime_type: &'static str,
     pub size: u64,
+    pub width: u32,
+    pub height: u32,
     pub base64: String,
 }
 
@@ -30,7 +35,10 @@ impl Image {
     /// The tool's answer: a line saying what it is, then the image itself.
     pub fn into_result(self) -> CallToolResult {
         CallToolResult::success(vec![
-            ContentBlock::text(format!("{}: {}, {} bytes", self.path, self.mime_type, self.size)),
+            ContentBlock::text(format!(
+                "{}: {}, {}x{}, {} bytes",
+                self.path, self.mime_type, self.width, self.height, self.size
+            )),
             ContentBlock::image(self.base64, self.mime_type),
         ])
     }
@@ -47,6 +55,66 @@ pub fn sniff(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+fn be16(bytes: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from(u16::from_be_bytes(bytes.get(at..at + 2)?.try_into().ok()?)))
+}
+
+fn le16(bytes: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from(u16::from_le_bytes(bytes.get(at..at + 2)?.try_into().ok()?)))
+}
+
+fn le24(bytes: &[u8], at: usize) -> Option<u32> {
+    let b = bytes.get(at..at + 3)?;
+    Some(u32::from(b[0]) | u32::from(b[1]) << 8 | u32::from(b[2]) << 16)
+}
+
+/// Width and height from the image's own header: PNG's IHDR, GIF's screen, JPEG's frame
+/// (SOFn) marker, WebP's VP8, VP8L or VP8X chunk.
+pub fn dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    match sniff(bytes)? {
+        "image/png" => {
+            let width = u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?);
+            let height = u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?);
+            Some((width, height))
+        }
+        "image/gif" => Some((le16(bytes, 6)?, le16(bytes, 8)?)),
+        "image/webp" => match bytes.get(12..16)? {
+            b"VP8X" => Some((le24(bytes, 24)? + 1, le24(bytes, 27)? + 1)),
+            b"VP8L" => {
+                let bits = u32::from_le_bytes(bytes.get(21..25)?.try_into().ok()?);
+                Some(((bits & 0x3FFF) + 1, ((bits >> 14) & 0x3FFF) + 1))
+            }
+            b"VP8 " => Some((le16(bytes, 26)? & 0x3FFF, le16(bytes, 28)? & 0x3FFF)),
+            _ => None,
+        },
+        _ => {
+            // JPEG: walk the segments to the first frame header.
+            let mut at = 2;
+            loop {
+                while *bytes.get(at)? != 0xFF {
+                    at += 1;
+                }
+                while *bytes.get(at)? == 0xFF {
+                    at += 1;
+                }
+                let marker = *bytes.get(at)?;
+                at += 1;
+                if matches!(marker, 0xD8 | 0x01 | 0xD0..=0xD7) {
+                    continue;
+                }
+                let length = be16(bytes, at)? as usize;
+                if matches!(marker, 0xC0..=0xCF) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
+                    return Some((be16(bytes, at + 5)?, be16(bytes, at + 3)?));
+                }
+                if length < 2 {
+                    return None;
+                }
+                at += length;
+            }
+        }
+    }
+}
+
 fn page_bytes(text: Option<String>, base64: Option<String>) -> Result<Vec<u8>, BridgeError> {
     match (text, base64) {
         (Some(text), _) => Ok(text.into_bytes()),
@@ -57,7 +125,16 @@ fn page_bytes(text: Option<String>, base64: Option<String>) -> Result<Vec<u8>, B
     }
 }
 
-/// Read the image at `path` through `call`, page by page.
+fn changed(path: &str) -> BridgeError {
+    BridgeError::new(
+        "changed_while_reading",
+        format!("{path} changed while it was read, or its pages did not join up; read it again"),
+    )
+}
+
+/// Read the image at `path` through `call`, page by page. Each page must join the last
+/// exactly and the file must keep its size and time, so pages of two files are never
+/// joined and a broker that makes no progress is never followed.
 pub async fn read_image<C, F>(call: C, path: String) -> Result<Image, BridgeError>
 where
     C: Fn(RequestBody) -> F,
@@ -65,7 +142,8 @@ where
 {
     let mut bytes = Vec::new();
     let mut offset = 0u64;
-    let mut shown = path.clone();
+    let mut first: Option<(u64, Option<u64>, String)> = None;
+    let mut realigned_at = None;
     loop {
         let page = match call(RequestBody::FileRead(FileReadInput {
             path: path.clone(),
@@ -79,111 +157,89 @@ where
             ResponseBody::File(page) => page,
             other => return Err(unexpected("file", &other)),
         };
-        if page.size > MAX_IMAGE_BYTES {
+        let (size, modified, shown) = match &first {
+            Some(first) => first.clone(),
+            None => (page.size, page.modified_ms, page.path.clone()),
+        };
+        if (page.size, page.modified_ms) != (size, modified) {
+            return Err(changed(&shown));
+        }
+        // A text page that would start inside a character starts at the next one: step
+        // back to that character's first byte, already read, and read on from there.
+        let shift = page.offset.wrapping_sub(offset);
+        if page.text.is_some() && (1..=3).contains(&shift) && realigned_at != Some(offset) {
+            let tail = bytes.len().saturating_sub(3);
+            let Some(lead) = (tail..bytes.len()).rev().find(|i| bytes[*i] & 0xC0 != 0x80) else {
+                return Err(changed(&shown));
+            };
+            offset -= (bytes.len() - lead) as u64;
+            bytes.truncate(lead);
+            realigned_at = Some(offset);
+            continue;
+        }
+        if page.offset != offset {
+            return Err(changed(&shown));
+        }
+        let eof = page.eof;
+        let next = page.next_offset;
+        let read = page_bytes(page.text, page.bytes_base64)?;
+        if next != offset + read.len() as u64 || (next == offset && !eof) {
+            return Err(changed(&shown));
+        }
+        bytes.extend(read);
+        if first.is_none() {
+            let Some(mime_type) = sniff(&bytes) else {
+                return Err(BridgeError::new(
+                    "not_an_image",
+                    format!("{shown} is not a PNG, JPEG, GIF or WebP image; read_file reads its bytes"),
+                ));
+            };
+            if size > MAX_IMAGE_BYTES {
+                return Err(BridgeError::new(
+                    "too_large",
+                    format!(
+                        "{shown} is a {mime_type} of {size} bytes; read_image returns images up to {MAX_IMAGE_BYTES} bytes (scale it down with run first)"
+                    ),
+                ));
+            }
+            bytes.reserve(size as usize);
+            first = Some((size, modified, shown.clone()));
+        }
+        if bytes.len() as u64 > size {
+            return Err(changed(&shown));
+        }
+        if !eof {
+            offset = next;
+            continue;
+        }
+        if bytes.len() as u64 != size {
+            return Err(changed(&shown));
+        }
+        let mime_type = sniff(&bytes).ok_or_else(|| changed(&shown))?;
+        let (width, height) = dimensions(&bytes).ok_or_else(|| {
+            BridgeError::new(
+                "not_an_image",
+                format!("{shown} is a {mime_type} whose size could not be read; it may be damaged"),
+            )
+        })?;
+        if width > MAX_IMAGE_SIDE || height > MAX_IMAGE_SIDE {
             return Err(BridgeError::new(
                 "too_large",
                 format!(
-                    "{} is {} bytes; read_image returns images up to {MAX_IMAGE_BYTES} bytes (scale it down with run first)",
-                    page.path, page.size
+                    "{shown} is {width}x{height}; AI clients refuse images over {MAX_IMAGE_SIDE} pixels on a side (scale it down with run first)"
                 ),
             ));
         }
-        if page.offset != offset {
-            return Err(BridgeError::new(
-                "changed_while_reading",
-                format!("{} changed while it was read; read it again", page.path),
-            ));
-        }
-        if offset == 0 {
-            shown = page.path.clone();
-        }
-        let next = page.next_offset;
-        let eof = page.eof;
-        bytes.extend(page_bytes(page.text, page.bytes_base64)?);
-        if offset == 0 && sniff(&bytes).is_none() {
-            return Err(BridgeError::new(
-                "not_an_image",
-                format!("{shown} is not a PNG, JPEG, GIF or WebP image; read_file reads its bytes"),
-            ));
-        }
-        if eof || next == offset {
-            let mime_type = sniff(&bytes).ok_or_else(|| {
-                BridgeError::new(
-                    "not_an_image",
-                    format!("{shown} is not a PNG, JPEG, GIF or WebP image"),
-                )
-            })?;
-            return Ok(Image {
-                path: shown,
-                mime_type,
-                size: bytes.len() as u64,
-                base64: BASE64.encode(&bytes),
-            });
-        }
-        offset = next;
+        return Ok(Image {
+            path: shown,
+            mime_type,
+            size,
+            width,
+            height,
+            base64: BASE64.encode(&bytes),
+        });
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use devagotchi_contracts::FileContent;
-
-    use super::*;
-
-    /// A broker holding `bytes` at `/img`, answering reads as the real one does: pages of
-    /// at most the asked size, binary as base64.
-    fn broker(bytes: Vec<u8>) -> impl Fn(RequestBody) -> std::future::Ready<Result<ResponseBody, BridgeError>> {
-        move |body| {
-            let RequestBody::FileRead(input) = body else {
-                panic!("only reads")
-            };
-            let start = (input.offset as usize).min(bytes.len());
-            let end = (start + input.max_bytes).min(bytes.len());
-            std::future::ready(Ok(ResponseBody::File(FileContent {
-                path: "/img".into(),
-                size: bytes.len() as u64,
-                offset: start as u64,
-                text: None,
-                bytes_base64: Some(BASE64.encode(&bytes[start..end])),
-                next_offset: end as u64,
-                eof: end >= bytes.len(),
-                modified_ms: None,
-                start_line: None,
-                next_line: None,
-                total_lines: None,
-            })))
-        }
-    }
-
-    fn png(len: usize) -> Vec<u8> {
-        let mut bytes = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
-        bytes.extend((0..len).map(|i| (i % 251) as u8));
-        bytes
-    }
-
-    #[tokio::test]
-    async fn an_image_over_many_pages_comes_back_whole() {
-        let bytes = png(3 * MAX_FILE_READ_BYTES + 17);
-        let image = read_image(broker(bytes.clone()), "/img".into()).await.unwrap();
-        assert_eq!(image.mime_type, "image/png");
-        assert_eq!(image.size, bytes.len() as u64);
-        assert_eq!(BASE64.decode(image.base64).unwrap(), bytes);
-    }
-
-    #[tokio::test]
-    async fn what_is_not_an_image_or_too_large_is_refused_at_the_first_page() {
-        let text = read_image(broker(b"just words".to_vec()), "/img".into()).await;
-        assert_eq!(text.unwrap_err().code, "not_an_image");
-        let huge = read_image(broker(png(MAX_IMAGE_BYTES as usize)), "/img".into()).await;
-        assert_eq!(huge.unwrap_err().code, "too_large");
-    }
-
-    #[test]
-    fn types_come_from_the_first_bytes() {
-        assert_eq!(sniff(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
-        assert_eq!(sniff(b"GIF89a...."), Some("image/gif"));
-        assert_eq!(sniff(b"RIFF\x10\x00\x00\x00WEBPVP8 "), Some("image/webp"));
-        assert_eq!(sniff(b"RIFF\x10\x00\x00\x00WAVEfmt "), None);
-        assert_eq!(sniff(b"<svg"), None);
-    }
-}
+mod tests;
