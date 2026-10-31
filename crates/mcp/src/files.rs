@@ -57,6 +57,8 @@ where
             path: path.clone(),
             offset: 0,
             max_bytes,
+            start_line: None,
+            line_count: None,
         }))
         .await;
         let (content, error) = match read {
@@ -87,6 +89,9 @@ mod tests {
             next_offset: text.len() as u64,
             eof: true,
             modified_ms: None,
+            start_line: None,
+            next_line: None,
+            total_lines: None,
         }
     }
 

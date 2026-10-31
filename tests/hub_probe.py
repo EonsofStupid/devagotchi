@@ -196,6 +196,10 @@ if args.run_broker and args.run_dir:
     check("edit_file replaces exactly once", not is_error and edited.get("replacements") == 1, json.dumps(edited)[:200])
     is_error, back = call("read_file", {"machine": args.run_broker, "path": written_file})
     check("the edit reads back", not is_error and back.get("text") == "alpha\ngamma\n", json.dumps(back)[:200])
+    # By lines, as Desktop Commander reads: the last line, numbered, with the count.
+    is_error, last = call("read_file", {"machine": args.run_broker, "path": written_file, "start_line": -1})
+    check("read_file reads the last line", not is_error and last.get("text") == "gamma\n"
+          and last.get("start_line") == 2 and last.get("total_lines") == 2, json.dumps(last)[:200])
     is_error, stale = call("write_file", {"machine": args.run_broker, "path": written_file, "text": "lost",
                                           "expected_sha256": made.get("sha256", "")})
     check("a stale checksum refuses the overwrite", is_error and stale.get("code") == "changed_since_read",

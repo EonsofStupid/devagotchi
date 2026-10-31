@@ -196,12 +196,25 @@ pub struct FileReadInput {
     /// Absolute path of the file.
     pub path: String,
     /// Byte offset to start at; negative counts back from the end (a tail). Default 0.
+    /// With a positive `start_line`: the `next_offset` that came with that `next_line`, so
+    /// the line is not searched for again.
     #[serde(default)]
     pub offset: i64,
     /// Bytes to read, 1..=24576 (default 24576). Read on from `next_offset` for more.
     #[serde(default = "default_file_read_bytes")]
     pub max_bytes: usize,
+    /// Read by lines instead of bytes: the 1-based line to start at, or negative to count
+    /// back from the end (-50: the last 50 lines). `offset` is then not used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<i64>,
+    /// With `start_line`: how many lines, 1..=5000 (default 1000; from a negative
+    /// `start_line`, the lines to the end). Never more than `max_bytes` of text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_count: Option<u32>,
 }
+
+/// Most lines one read by lines returns.
+pub const MAX_READ_LINES: u32 = 5000;
 
 fn default_file_read_bytes() -> usize { MAX_FILE_READ_BYTES }
 
@@ -226,6 +239,19 @@ pub struct FileContent {
     /// Whether this page reached the end of the file.
     pub eof: bool,
     pub modified_ms: Option<u64>,
+    /// Read by lines: the 1-based number of the first line returned, when known (always
+    /// for a positive `start_line`; from the end, for files up to 8 MiB).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<u64>,
+    /// Read by lines: the `start_line` to read on from, when lines remain and the number
+    /// is known. A single line longer than `max_bytes` is read on by bytes, from
+    /// `next_offset`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_line: Option<u64>,
+    /// Read by lines: the file's line count, for files up to 8 MiB, or once a read from a
+    /// known line number reaches the end.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_lines: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

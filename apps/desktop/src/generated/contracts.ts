@@ -83,6 +83,12 @@ export interface FileContent {
   eof: boolean;
   modified_ms?: number | null;
   /**
+   * Read by lines: the `start_line` to read on from, when lines remain and the number
+   * is known. A single line longer than `max_bytes` is read on by bytes, from
+   * `next_offset`.
+   */
+  next_line?: number | null;
+  /**
    * The offset to read on from.
    */
   next_offset: number;
@@ -99,10 +105,20 @@ export interface FileContent {
    */
   size: number;
   /**
+   * Read by lines: the 1-based number of the first line returned, when known (always
+   * for a positive `start_line`; from the end, for files up to 8 MiB).
+   */
+  start_line?: number | null;
+  /**
    * The bytes as text, when they are UTF-8 text. A character split at the end of the
    * page is left for the next read.
    */
   text?: string | null;
+  /**
+   * Read by lines: the file's line count, for files up to 8 MiB, or once a read from a
+   * known line number reaches the end.
+   */
+  total_lines?: number | null;
 }
 export interface FileEditInput {
   /**
@@ -231,17 +247,29 @@ export interface FileMoveInput {
 }
 export interface FileReadInput {
   /**
+   * With `start_line`: how many lines, 1..=5000 (default 1000; from a negative
+   * `start_line`, the lines to the end). Never more than `max_bytes` of text.
+   */
+  line_count?: number | null;
+  /**
    * Bytes to read, 1..=24576 (default 24576). Read on from `next_offset` for more.
    */
   max_bytes?: number;
   /**
    * Byte offset to start at; negative counts back from the end (a tail). Default 0.
+   * With a positive `start_line`: the `next_offset` that came with that `next_line`, so
+   * the line is not searched for again.
    */
   offset?: number;
   /**
    * Absolute path of the file.
    */
   path: string;
+  /**
+   * Read by lines instead of bytes: the 1-based line to start at, or negative to count
+   * back from the end (-50: the last 50 lines). `offset` is then not used.
+   */
+  start_line?: number | null;
 }
 export interface FileWriteInput {
   /**

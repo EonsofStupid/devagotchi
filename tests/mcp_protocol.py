@@ -44,7 +44,7 @@ TOOL_SCHEMAS = {
         {"command", "cwd", "wait_seconds", "timeout_seconds"},
         {"operation_id", "state", "exit_code", "output", "truncated"},
     ),
-    "read_file": ({"path", "offset", "max_bytes"}, {"path", "size", "offset", "next_offset", "eof"}),
+    "read_file": ({"path", "offset", "max_bytes", "start_line", "line_count"}, {"path", "size", "offset", "next_offset", "eof"}),
     "list_directory": ({"path", "depth", "max_entries"}, {"path", "entries", "truncated"}),
     "write_file": (
         {"path", "text", "bytes_base64", "mode", "expected_sha256", "create_dirs"},

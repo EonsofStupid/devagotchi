@@ -16,8 +16,6 @@ use devagotchi_contracts::{
 use super::{Scope, display, invalid, io_error, modified_ms, text_prefix};
 use crate::broker::ExecPolicy;
 
-/// Largest text file whose lines `info` counts.
-const MAX_COUNTED_BYTES: u64 = 8 * 1024 * 1024;
 /// Most entries a directory move checks for links under `granted`.
 const MAX_CHECKED_ENTRIES: usize = 10_000;
 
@@ -97,15 +95,14 @@ fn same_file(_: &Metadata, _: &Metadata) -> bool {
 
 /// Lines in a text file small enough to count; `None` for anything else.
 fn lines(path: &Path, metadata: &Metadata) -> Option<u64> {
-    if !metadata.is_file() || metadata.len() > MAX_COUNTED_BYTES {
+    if !metadata.is_file() || metadata.len() > super::lines::COUNTED_BYTES {
         return None;
     }
     let bytes = fs::read(path).ok()?;
     if text_prefix(&bytes)? != bytes.len() {
         return None;
     }
-    let breaks = bytes.iter().filter(|b| **b == b'\n').count() as u64;
-    Some(breaks + u64::from(bytes.last().is_some_and(|b| *b != b'\n')))
+    Some(super::lines::count(&bytes))
 }
 
 impl Scope<'_> {

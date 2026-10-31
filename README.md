@@ -200,7 +200,7 @@ Those are historical local-adapter results. The separate Site reference MCP targ
 | Tool | Effect |
 |---|---|
 | `run` | Run a command line in one call: start it, wait up to 50 s, return its output and exit code; one still running keeps running and is followed with the operation tools |
-| `read_file` | Read a file (text as text, anything else as base64), 24 KiB a call, a negative offset for a log's end |
+| `read_file` | Read a file (text as text, anything else as base64), 24 KiB a call: by lines (`start_line`, negative for the last lines, `line_count`; it gives `next_line` and `total_lines`) or by bytes (`offset`, negative for a log's end) |
 | `list_directory` | List a directory, up to three levels deep |
 | `write_file` | Overwrite (atomically), create or append; returns the SHA-256 to guard the next write |
 | `edit_file` | Replace exact text an exact number of times, or change nothing |
