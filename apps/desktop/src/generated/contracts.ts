@@ -115,7 +115,8 @@ export interface FileContent {
    */
   text?: string | null;
   /**
-   * Read by lines: the file's line count, for files up to 8 MiB or once the end is read.
+   * Read by lines: the file's line count, for files up to 8 MiB, or once a read from a
+   * known line number reaches the end.
    */
   total_lines?: number | null;
 }
@@ -256,6 +257,8 @@ export interface FileReadInput {
   max_bytes?: number;
   /**
    * Byte offset to start at; negative counts back from the end (a tail). Default 0.
+   * With a positive `start_line`: the `next_offset` that came with that `next_line`, so
+   * the line is not searched for again.
    */
   offset?: number;
   /**
