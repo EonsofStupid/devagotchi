@@ -17,6 +17,7 @@ name = "devagotchi_mcp"
 path = "src/lib.rs"
 
 [dependencies]
+base64 = { workspace = true }
 devagotchi-contracts = { workspace = true }
 devagotchi-ipc = { workspace = true }
 rmcp = { workspace = true }
