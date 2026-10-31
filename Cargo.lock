@@ -883,6 +883,7 @@ dependencies = [
 name = "devagotchi-mcp"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "devagotchi-contracts",
  "devagotchi-ipc",
  "rmcp",

@@ -122,7 +122,8 @@ unannotated = [t["name"] for t in listed if not t.get("title") or not (
 check("every tool has a title and annotations", not unannotated, ", ".join(unannotated))
 broker_tools = ["approval_request", "approval_wait", "create_directory", "edit_file", "get_file_info",
                 "list_directory", "machines", "move_file", "operation_cancel", "operation_get", "operation_read",
-                "operation_start", "operation_wait", "read_file", "read_multiple_files", "run", "whoami", "write_file"]
+                "operation_start", "operation_wait", "read_file", "read_image", "read_multiple_files", "run", "whoami",
+                "write_file"]
 board_tools = [t for t in tools if t.startswith("board_")]
 check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 18,
       ", ".join(tools))
@@ -207,6 +208,16 @@ if args.run_broker and args.run_dir:
     is_error, outside_write = call("write_file", {"machine": args.broker, "path": written_file, "text": "x"})
     check("write_file outside a granted broker's workspace refused",
           is_error and outside_write.get("code") == "path_outside_workspace", json.dumps(outside_write)[:200])
+    # An image the AI can see, from the machine.
+    picture = os.path.join(args.run_dir, "dot.png")
+    call("write_file", {"machine": args.run_broker, "path": picture, "bytes_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="})
+    seen = rpc("tools/call", {"name": "read_image", "arguments": {"machine": args.run_broker, "path": picture}})
+    blocks = {b.get("type"): b for b in seen.get("content", [])}
+    refused = rpc("tools/call", {"name": "read_image", "arguments": {"machine": args.run_broker, "path": probe_file}})
+    check("read_image refuses what is not an image", refused.get("isError") is True
+          and "not_an_image" in refused["content"][0]["text"], json.dumps(refused)[:200])
+    check("read_image returns the image", not seen.get("isError") and blocks.get("image", {}).get("data") == "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+          and blocks.get("image", {}).get("mimeType") == "image/png", json.dumps(seen)[:240])
     # A directory, a move, info and several files at once, on the machine.
     made_dir = os.path.join(args.run_dir, "probe-dir", "deeper")
     is_error, directory = call("create_directory", {"machine": args.run_broker, "path": made_dir})
