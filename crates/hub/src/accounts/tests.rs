@@ -44,6 +44,8 @@ fn asserted(accounts: &Accounts, id: u8, count: u32, handle: &str) -> Asserted {
     Asserted {
         id: vec![id; 16],
         public_key: vec![0x30, id],
+        alg: Alg::Es256,
+        backup_eligible: true,
         sign_count: count,
         user_handle: handle.as_bytes().to_vec(),
         challenge: accounts.challenge(Ceremony::SignIn, None),
@@ -363,6 +365,57 @@ fn a_spent_challenge_stays_spent_across_a_clock_step() {
 }
 
 #[test]
+fn a_clock_set_back_does_not_lock_everyone_out() {
+    let (_dir, accounts) = store();
+    accounts.create(A, "Jesse", true).unwrap();
+    seed(&accounts, A, 1, "synced").unwrap();
+    let at = |nonce: u8, issued: u64| {
+        let mut sign_in = asserted(&accounts, 1, 0, A);
+        sign_in.challenge = accounts.challenge_at(Ceremony::SignIn, None, [nonce; 16], issued);
+        sign_in
+    };
+    accounts.sign_in_at(&at(1, 5_000), 5_000).unwrap();
+    let before = at(5, 5_350);
+    // Clears the first record: everything expiring by 5_300 is behind the horizon.
+    accounts.sign_in_at(&at(2, 5_400), 5_400).unwrap();
+    // Set back about an hour. The ceremony that finds it fails; challenges made before
+    // the step fail too, so none whose record was cleared can come back.
+    assert_eq!(
+        accounts.sign_in_at(&at(3, 1_800), 1_801).unwrap_err().code,
+        "invalid_ceremony"
+    );
+    assert_eq!(
+        accounts.sign_in_at(&before, 1_802).unwrap_err().code,
+        "invalid_ceremony"
+    );
+    // A fresh one works at once, not an hour later.
+    assert_eq!(accounts.sign_in_at(&at(4, 1_810), 1_811).unwrap().id, A);
+}
+
+#[test]
+fn a_damaged_horizon_is_refused_not_ignored() {
+    let (_dir, accounts) = store();
+    accounts.create(A, "Jesse", true).unwrap();
+    seed(&accounts, A, 1, "synced").unwrap();
+    accounts
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "INSERT INTO secrets (name, value) VALUES ('spent_horizon', x'01')",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        accounts
+            .sign_in(&asserted(&accounts, 1, 0, A))
+            .unwrap_err()
+            .code,
+        "account_store"
+    );
+}
+
+#[test]
 fn passkeys_belong_to_one_account() {
     let (_dir, accounts) = store();
     let jesse = accounts.create(A, "Jesse", true).unwrap();
@@ -415,8 +468,11 @@ fn signing_in_moves_the_counter_forward_once_and_only_for_a_live_account() {
     seed(&accounts, A, 2, "synced").unwrap();
     seed(&accounts, A, 3, "spare").unwrap();
     let go = |id: u8, count: u32, handle: &str| {
+        let mut sign_in = asserted(&accounts, id, count, handle);
+        // Passkey 1 is the one that keeps a counter and is not synced.
+        sign_in.backup_eligible = id != 1;
         accounts
-            .sign_in(&asserted(&accounts, id, count, handle))
+            .sign_in(&sign_in)
             .map(|account| account.id)
             .map_err(|error| error.code)
     };
@@ -485,6 +541,19 @@ fn the_store_signs_in_only_the_passkey_that_was_verified() {
         accounts.sign_in(&swapped).unwrap_err().code,
         "invalid_passkey"
     );
+    // Checked as another algorithm, or with another backup eligibility, than was stored.
+    let mut other_alg = asserted(&accounts, 1, 0, A);
+    other_alg.alg = Alg::EdDsa;
+    assert_eq!(
+        accounts.sign_in(&other_alg).unwrap_err().code,
+        "invalid_passkey"
+    );
+    let mut not_synced = asserted(&accounts, 1, 0, A);
+    not_synced.backup_eligible = false;
+    assert_eq!(
+        accounts.sign_in(&not_synced).unwrap_err().code,
+        "invalid_passkey"
+    );
     assert_eq!(
         accounts.sign_in(&asserted(&accounts, 1, 0, A)).unwrap().id,
         A
@@ -544,6 +613,7 @@ fn the_store_is_the_hubs_alone_new_or_found() {
     }
     let _accounts = Accounts::open(&dir.path().join("accounts.sqlite3")).unwrap();
     let found = modes(dir.path());
+    assert_eq!(found.len(), 3, "{found:?}");
     assert!(found.iter().all(|(_, mode)| *mode == 0o600), "{found:?}");
 }
 
@@ -564,5 +634,14 @@ fn a_challenge_key_that_is_not_32_bytes_stops_the_store() {
     assert_eq!(
         opened.err().map(|e| e.code),
         Some("account_store".to_string())
+    );
+}
+
+#[test]
+fn an_authority_never_prints_its_link() {
+    let shown = format!("{:?}", Authority::Link(LinkPurpose::Owner, "dgl_secret"));
+    assert!(
+        !shown.contains("dgl_secret") && shown.contains("Owner"),
+        "{shown}"
     );
 }

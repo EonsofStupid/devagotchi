@@ -112,6 +112,9 @@ impl NewCredential {
 pub struct Asserted {
     pub(in crate::accounts) id: Vec<u8>,
     pub(in crate::accounts) public_key: Vec<u8>,
+    /// The algorithm and backup eligibility the signature was checked with.
+    pub(in crate::accounts) alg: Alg,
+    pub(in crate::accounts) backup_eligible: bool,
     pub(in crate::accounts) sign_count: u32,
     pub(in crate::accounts) user_handle: Vec<u8>,
     pub(in crate::accounts) challenge: Vec<u8>,
@@ -232,6 +235,8 @@ pub fn check_sign_in(
     Ok(Asserted {
         id: passkey.id.clone(),
         public_key: passkey.public_key.clone(),
+        alg: passkey.alg,
+        backup_eligible: passkey.backup_eligible,
         sign_count,
         user_handle: user_handle.to_vec(),
         challenge: challenge.to_vec(),

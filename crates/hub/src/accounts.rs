@@ -101,9 +101,18 @@ impl Ceremony {
 
 /// What lets a passkey be added to an account: a live one-time link for it. (A signed-in
 /// session of the account joins this with the account page.)
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub enum Authority<'a> {
     Link(LinkPurpose, &'a str),
+}
+
+/// Never prints the link itself: it is a live secret until spent.
+impl std::fmt::Debug for Authority<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Authority::Link(purpose, _) => write!(f, "Link({purpose:?}, <redacted>)"),
+        }
+    }
 }
 
 fn invalid_ceremony() -> BridgeError {
@@ -131,8 +140,9 @@ pub struct Passkey {
 
 pub struct Accounts {
     connection: Mutex<Connection>,
-    /// Signs this hub's passkey challenges.
-    challenge_key: hmac::Key,
+    /// Signs this hub's passkey challenges. Replaced only when the clock is found set back
+    /// (`clock_set_back`), with the connection held.
+    challenge_key: std::sync::RwLock<hmac::Key>,
 }
 
 fn store_error(error: rusqlite::Error) -> BridgeError {
@@ -245,7 +255,7 @@ impl Accounts {
         make_private(path)?;
         Ok(Self {
             connection: Mutex::new(connection),
-            challenge_key: hmac::Key::new(hmac::HMAC_SHA256, &key),
+            challenge_key: std::sync::RwLock::new(hmac::Key::new(hmac::HMAC_SHA256, &key)),
         })
     }
 
@@ -432,12 +442,6 @@ impl Accounts {
         link: Option<(LinkPurpose, &str)>,
         now: u64,
     ) -> BridgeResult<()> {
-        let (mac, issued) = self.check_challenge(
-            Ceremony::Register,
-            Some(account),
-            &credential.challenge,
-            now,
-        )?;
         let label = label.trim();
         if label.is_empty() || label.len() > 64 || label.chars().any(char::is_control) {
             return Err(BridgeError::new(
@@ -446,6 +450,15 @@ impl Accounts {
             ));
         }
         let mut connection = self.connection.lock().expect("accounts");
+        if self.clock_set_back(&mut connection, now)? {
+            return Err(invalid_ceremony());
+        }
+        let (mac, issued) = self.check_challenge(
+            Ceremony::Register,
+            Some(account),
+            &credential.challenge,
+            now,
+        )?;
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(store_error)?;
@@ -528,7 +541,7 @@ impl Accounts {
         challenge.extend_from_slice(&now.to_be_bytes());
         challenge.extend_from_slice(&nonce);
         let tag = hmac::sign(
-            &self.challenge_key,
+            &self.challenge_key.read().expect("challenge key"),
             &challenge_message(&challenge, purpose, account),
         );
         challenge.extend_from_slice(tag.as_ref());
@@ -550,7 +563,7 @@ impl Accounts {
         }
         let (signed, tag) = challenge.split_at(CHALLENGE_LEN - 32);
         hmac::verify(
-            &self.challenge_key,
+            &self.challenge_key.read().expect("challenge key"),
             &challenge_message(signed, purpose, account),
             tag,
         )
@@ -560,6 +573,41 @@ impl Accounts {
             return Err(invalid_ceremony());
         }
         Ok((tag.to_vec(), issued))
+    }
+
+    /// Whether the clock is now more than five minutes behind the horizon of cleared spent
+    /// challenges: set back after running ahead. Then a challenge made before the step could
+    /// be one whose record was cleared, and refusing all of them until the clock catches up
+    /// could take hours. Instead the challenge key is replaced (with the connection held, so
+    /// no ceremony is between its check and its spending) and the records and horizon start
+    /// over: every challenge made before fails once, every one made after works.
+    fn clock_set_back(&self, connection: &mut Connection, now: u64) -> BridgeResult<bool> {
+        if now.saturating_add(CHALLENGE_TTL_SECS) > spent_horizon(connection)? {
+            return Ok(false);
+        }
+        let key = crate::link::random::<32>();
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        transaction
+            .execute(
+                "UPDATE secrets SET value = ?1 WHERE name = 'challenge_key'",
+                params![key.to_vec()],
+            )
+            .map_err(store_error)?;
+        transaction
+            .execute_batch(
+                "DELETE FROM secrets WHERE name = 'spent_horizon';
+                 DELETE FROM spent_challenges;",
+            )
+            .map_err(store_error)?;
+        transaction.commit().map_err(store_error)?;
+        *self.challenge_key.write().expect("challenge key") =
+            hmac::Key::new(hmac::HMAC_SHA256, &key);
+        eprintln!(
+            "devagotchi-hub: the clock was set back (now {now}); passkey challenges made before were withdrawn"
+        );
+        Ok(true)
     }
 
     pub fn passkey(&self, id: &[u8]) -> BridgeResult<Option<Passkey>> {
@@ -598,9 +646,12 @@ impl Accounts {
     }
 
     fn sign_in_at(&self, asserted: &Asserted, now: u64) -> BridgeResult<Account> {
+        let mut connection = self.connection.lock().expect("accounts");
+        if self.clock_set_back(&mut connection, now)? {
+            return Err(invalid_ceremony());
+        }
         let (mac, issued) =
             self.check_challenge(Ceremony::SignIn, None, &asserted.challenge, now)?;
-        let mut connection = self.connection.lock().expect("accounts");
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(store_error)?;
@@ -616,7 +667,12 @@ impl Accounts {
             .optional()
             .map_err(store_error)?
             .ok_or_else(not_here)?;
-        if passkey.public_key != asserted.public_key {
+        // The key, algorithm and backup eligibility the signature was checked with must be
+        // the ones stored for this passkey.
+        if passkey.public_key != asserted.public_key
+            || passkey.alg != asserted.alg
+            || passkey.backup_eligible != asserted.backup_eligible
+        {
             return Err(not_here());
         }
         let account = transaction
@@ -719,16 +775,7 @@ fn challenge_message(signed: &[u8], purpose: Ceremony, account: Option<&str>) ->
 /// cleared while it looked expired cannot be used again.
 fn spend_challenge(connection: &Connection, mac: &[u8], issued: u64, now: u64) -> BridgeResult<()> {
     let expires = issued.saturating_add(CHALLENGE_TTL_SECS);
-    let horizon: u64 = connection
-        .query_row(
-            "SELECT value FROM secrets WHERE name = 'spent_horizon'",
-            [],
-            |row| row.get::<_, Vec<u8>>(0),
-        )
-        .optional()
-        .map_err(store_error)?
-        .and_then(|bytes| bytes.try_into().ok().map(u64::from_be_bytes))
-        .unwrap_or(0);
+    let horizon = spent_horizon(connection)?;
     if expires <= horizon {
         return Err(invalid_ceremony());
     }
@@ -764,6 +811,28 @@ fn spend_challenge(connection: &Connection, mac: &[u8], issued: u64, now: u64) -
         Ok(())
     } else {
         Err(invalid_ceremony())
+    }
+}
+
+/// The latest expiry of the spent challenges cleared so far (0 before any). A value that is
+/// not 8 bytes stops ceremonies rather than switching the protection off.
+fn spent_horizon(connection: &Connection) -> BridgeResult<u64> {
+    let stored: Option<Vec<u8>> = connection
+        .query_row(
+            "SELECT value FROM secrets WHERE name = 'spent_horizon'",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(store_error)?;
+    match stored {
+        None => Ok(0),
+        Some(bytes) => bytes.try_into().map(u64::from_be_bytes).map_err(|_| {
+            BridgeError::new(
+                "account_store",
+                "the spent-challenge horizon in accounts.sqlite3 is damaged; restore the store from a backup",
+            )
+        }),
     }
 }
 
