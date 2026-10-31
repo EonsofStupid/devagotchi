@@ -5,6 +5,7 @@
 //! `devagotchi login`, `logout` and `whoami` (`account`) are how a machine signs in to one.
 
 pub mod account;
+mod accounts;
 mod audit;
 mod auth;
 pub mod board;
