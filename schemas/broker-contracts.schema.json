@@ -76,6 +76,15 @@
             "null"
           ]
         },
+        "next_line": {
+          "description": "Read by lines: the `start_line` to read on from, when lines remain and the number\nis known. A single line longer than `max_bytes` is read on by bytes, from\n`next_offset`.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "next_offset": {
           "description": "The offset to read on from.",
           "format": "uint64",
@@ -98,10 +107,28 @@
           "minimum": 0,
           "type": "integer"
         },
+        "start_line": {
+          "description": "Read by lines: the 1-based number of the first line returned, when known (always\nfor a positive `start_line`; from the end, for files up to 8 MiB).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "text": {
           "description": "The bytes as text, when they are UTF-8 text. A character split at the end of the\npage is left for the next read.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "total_lines": {
+          "description": "Read by lines: the file's line count, for files up to 8 MiB, or once a read from a\nknown line number reaches the end.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
             "null"
           ]
         }
@@ -361,6 +388,15 @@
     "FileReadInput": {
       "additionalProperties": false,
       "properties": {
+        "line_count": {
+          "description": "With `start_line`: how many lines, 1..=5000 (default 1000; from a negative\n`start_line`, the lines to the end). Never more than `max_bytes` of text.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_bytes": {
           "default": 24576,
           "description": "Bytes to read, 1..=24576 (default 24576). Read on from `next_offset` for more.",
@@ -370,13 +406,21 @@
         },
         "offset": {
           "default": 0,
-          "description": "Byte offset to start at; negative counts back from the end (a tail). Default 0.",
+          "description": "Byte offset to start at; negative counts back from the end (a tail). Default 0.\nWith a positive `start_line`: the `next_offset` that came with that `next_line`, so\nthe line is not searched for again.",
           "format": "int64",
           "type": "integer"
         },
         "path": {
           "description": "Absolute path of the file.",
           "type": "string"
+        },
+        "start_line": {
+          "description": "Read by lines instead of bytes: the 1-based line to start at, or negative to count\nback from the end (-50: the last 50 lines). `offset` is then not used.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
