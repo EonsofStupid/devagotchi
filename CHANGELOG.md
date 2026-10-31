@@ -5,7 +5,11 @@ Releases are the operator's act: a tag `vX.Y.Z` on `main` runs `.github/workflow
 The version in `Cargo.toml` is bumped by the operator in the same commit as this file's next
 heading. Agents draft the fragments below; they never tag.
 
-## Unreleased
+## 0.1.0 - 2026-10-31
+
+The first release, at the operator's word (30 Oct 2026; tagged once the tool surface of
+increments 34a and 34b had merged, 31 Oct). Devagotchi's local server serves 16 tools, the
+hub the same file and command tools for every linked machine.
 
 ### Images the AI can see (increment 34b-3)
 - `read_image` returns a PNG, JPEG, GIF or WebP file up to 3.75 MB (so its base64 stays under
@@ -79,9 +83,6 @@ heading. Agents draft the fragments below; they never tag.
     (`operation_start` with an executable, or `exec_policy` `account`), not with a field
     `run` does not have.
 
-## 0.1.0 - 2026-10-30
-
-The first release, tagged at the operator's word (30 Oct 2026).
 
 ### Install in one line, for a person or their AI (increment 33b)
 - README "Install": one line per system that installs `devagotchi` for the user from the
