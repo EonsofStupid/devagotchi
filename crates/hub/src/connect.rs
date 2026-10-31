@@ -25,7 +25,7 @@ use crate::{account::Issuer, config::HubConfig};
 
 /// Nomen's management API, on top of the sign-in itself.
 pub const API_SCOPE: &str =
-    "openid profile email offline_access urn:zitadel:iam:org:project:id:zitadel:aud";
+    "openid profile email offline_access urn:nomen:iam:org:project:id:nomen:aud";
 pub const API_APP: &str = "devagotchi-hub";
 pub const WEB_APP: &str = "devagotchi-hub-web";
 /// The public PKCE app hosted AI clients sign people in through (a claude.ai or claude.com
