@@ -59,11 +59,11 @@ fn display(path: &Path) -> BridgeResult<String> {
 }
 
 /// Text an AI can read as is: UTF-8 with no control characters but tab, newline, carriage
-/// return and form feed.
+/// return, form feed and escape (a coloured log's ANSI codes).
 fn readable(text: &str) -> bool {
     !text
         .chars()
-        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r' | '\u{c}'))
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r' | '\u{c}' | '\u{1b}'))
 }
 
 /// How many leading bytes of `bytes` are readable text: all of them, or all but a
@@ -115,8 +115,13 @@ impl Scope<'_> {
         }
         let size = metadata.len();
         if let Some(start_line) = input.start_line {
-            let lines =
-                lines::read_lines(&mut file, size, start_line, input.line_count, input.max_bytes)?;
+            let ask = lines::Ask {
+                start_line,
+                line_count: input.line_count,
+                max_bytes: input.max_bytes,
+                offset: input.offset,
+            };
+            let lines = lines::read_lines(&mut file, size, ask)?;
             return Ok(FileContent {
                 path: shown,
                 size,

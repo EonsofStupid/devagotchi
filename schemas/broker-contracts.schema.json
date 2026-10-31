@@ -124,7 +124,7 @@
           ]
         },
         "total_lines": {
-          "description": "Read by lines: the file's line count, for files up to 8 MiB or once the end is read.",
+          "description": "Read by lines: the file's line count, for files up to 8 MiB, or once a read from a\nknown line number reaches the end.",
           "format": "uint64",
           "minimum": 0,
           "type": [
@@ -406,7 +406,7 @@
         },
         "offset": {
           "default": 0,
-          "description": "Byte offset to start at; negative counts back from the end (a tail). Default 0.",
+          "description": "Byte offset to start at; negative counts back from the end (a tail). Default 0.\nWith a positive `start_line`: the `next_offset` that came with that `next_line`, so\nthe line is not searched for again.",
           "format": "int64",
           "type": "integer"
         },

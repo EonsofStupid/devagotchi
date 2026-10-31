@@ -196,6 +196,8 @@ pub struct FileReadInput {
     /// Absolute path of the file.
     pub path: String,
     /// Byte offset to start at; negative counts back from the end (a tail). Default 0.
+    /// With a positive `start_line`: the `next_offset` that came with that `next_line`, so
+    /// the line is not searched for again.
     #[serde(default)]
     pub offset: i64,
     /// Bytes to read, 1..=24576 (default 24576). Read on from `next_offset` for more.
@@ -246,7 +248,8 @@ pub struct FileContent {
     /// `next_offset`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_line: Option<u64>,
-    /// Read by lines: the file's line count, for files up to 8 MiB or once the end is read.
+    /// Read by lines: the file's line count, for files up to 8 MiB, or once a read from a
+    /// known line number reaches the end.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_lines: Option<u64>,
 }
