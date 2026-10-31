@@ -96,7 +96,13 @@ impl Hub {
             "timeout_seconds",
         )
         .map_err(Json)?;
-        let route = self.route(&subject, &input.machine)?;
+        let route = match self.route(&subject, &input.machine) {
+            Ok(route) => route,
+            Err(Json(error)) => {
+                self.record(&subject, "run", &input.machine, "", &error.code)?;
+                return Err(Json(error));
+            }
+        };
         let start = StartInput {
             idempotency_key: format!("run-{}", hex::encode(crate::link::random::<16>())),
             executable: String::new(),

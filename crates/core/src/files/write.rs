@@ -72,24 +72,18 @@ impl Scope<'_> {
                 let name = given
                     .file_name()
                     .ok_or_else(|| invalid("path must name a file"))?;
-                if create_dirs {
-                    if self.policy == ExecPolicy::Granted {
-                        // Directories are made only below an existing ancestor that is
-                        // itself inside the workspace.
-                        let mut ancestor = parent;
-                        while !ancestor.exists() {
-                            ancestor = ancestor
-                                .parent()
-                                .ok_or_else(|| invalid("path has no existing ancestor"))?;
-                        }
-                        let real = dunce::canonicalize(ancestor).map_err(|e| io_error(path, e))?;
-                        if !real.starts_with(self.workspace) {
-                            return Err(outside());
-                        }
-                    }
-                    fs::create_dir_all(parent).map_err(|e| io_error(path, e))?;
+                // A link whose target is missing: writing through it makes the target.
+                if let Ok(link) = fs::symlink_metadata(given) {
+                    self.link_inside(given, &link)?;
                 }
-                let parent = dunce::canonicalize(parent).map_err(|e| io_error(path, e))?;
+                let parent = if create_dirs {
+                    let parent = parent
+                        .to_str()
+                        .ok_or_else(|| invalid("path must be UTF-8"))?;
+                    self.make_dirs(parent)?.0
+                } else {
+                    dunce::canonicalize(parent).map_err(|e| io_error(path, e))?
+                };
                 (parent.join(name), false)
             }
             Err(error) => return Err(io_error(path, error)),
@@ -341,5 +335,45 @@ mod tests {
         let written = account.write(write).unwrap();
         assert!(written.created);
         assert_eq!(fs::read_to_string(&outside).unwrap(), "x");
+    }
+
+    /// A path whose missing part climbs back out (`nope/../..`) makes nothing outside.
+    #[test]
+    fn made_parents_never_climb_out_of_the_workspace() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let workspace = root.join("ws");
+        fs::create_dir(&workspace).unwrap();
+        let granted = Scope {
+            workspace: &workspace,
+            policy: ExecPolicy::Granted,
+        };
+        let climbing = format!("{}/nope/../../made/file.txt", workspace.display());
+        let mut write = input(Path::new(&climbing), "x", WriteMode::Overwrite);
+        write.create_dirs = true;
+        assert!(granted.write(write).is_err());
+        assert!(!root.join("made").exists(), "nothing made outside the workspace");
+    }
+
+    /// A link inside the workspace whose target is missing and outside: appending through it
+    /// would create the file outside.
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_link_out_of_the_workspace_is_not_written_through() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = dunce::canonicalize(directory.path()).unwrap();
+        let workspace = root.join("ws");
+        fs::create_dir(&workspace).unwrap();
+        let link = workspace.join("door");
+        std::os::unix::fs::symlink(root.join("loot.txt"), &link).unwrap();
+        let granted = Scope {
+            workspace: &workspace,
+            policy: ExecPolicy::Granted,
+        };
+        let refused = granted
+            .write(input(&link, "x", WriteMode::Append))
+            .unwrap_err();
+        assert_eq!(refused.code, "path_outside_workspace");
+        assert!(!root.join("loot.txt").exists(), "nothing written outside");
     }
 }

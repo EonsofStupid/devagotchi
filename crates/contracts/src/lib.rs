@@ -343,6 +343,66 @@ pub struct FileWritten {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
+pub struct FileInfoInput {
+    /// Absolute path of a file, directory or symbolic link.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DirectoryInput {
+    /// Absolute path of the directory to make; missing parents are made too. An existing
+    /// directory is not an error.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileMoveInput {
+    /// Absolute path of the file, directory or link to move or rename (a link moves as
+    /// itself, never what it points to).
+    pub source: String,
+    /// Absolute path it moves to, on the same filesystem. Its parent directory must exist.
+    pub destination: String,
+    /// Replace a file already at the destination (never a directory). Default false: an
+    /// existing destination refuses the move and changes nothing.
+    #[serde(default)]
+    pub overwrite: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct FileInfo {
+    /// The path, canonical up to its own name (a link is reported as itself).
+    pub path: String,
+    /// `file`, `dir`, `symlink` or `other`.
+    pub kind: String,
+    /// Size in bytes (for a link, the link's own).
+    pub size: u64,
+    pub modified_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_ms: Option<u64>,
+    /// Whether its permissions mark it read-only.
+    pub readonly: bool,
+    /// Unix permission bits in octal (`0644`); absent on Windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    /// Where a symbolic link points, as stored in the link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_target: Option<String>,
+    /// For a text file of at most 8 MiB: how many lines it has.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<u64>,
+    /// After create_directory: whether this call made it (false: it existed already).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made: Option<bool>,
+    /// After move_file: whether a file at the destination was replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct BridgeError {
     pub code: String,
     pub message: String,
@@ -376,6 +436,9 @@ pub enum RequestBody {
     FileList(FileListInput),
     FileWrite(FileWriteInput),
     FileEdit(FileEditInput),
+    FileInfo(FileInfoInput),
+    FileMkdir(DirectoryInput),
+    FileMove(FileMoveInput),
 }
 
 impl RequestBody {
@@ -410,6 +473,7 @@ pub enum ResponseBody {
     Listing(FileListing),
     Written(FileWritten),
     Revision(Revision),
+    Info(FileInfo),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

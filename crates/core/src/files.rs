@@ -17,6 +17,7 @@ use devagotchi_contracts::{
 
 use crate::broker::ExecPolicy;
 
+mod manage;
 mod write;
 
 const MAX_ENTRIES: u32 = 1000;

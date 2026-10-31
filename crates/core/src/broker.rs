@@ -281,6 +281,9 @@ impl Broker {
             RequestBody::FileList(input) => self.files().list(input).map(ResponseBody::Listing),
             RequestBody::FileWrite(input) => self.files().write(input).map(ResponseBody::Written),
             RequestBody::FileEdit(input) => self.files().edit(input).map(ResponseBody::Written),
+            RequestBody::FileInfo(input) => self.files().info(input).map(ResponseBody::Info),
+            RequestBody::FileMkdir(input) => self.files().mkdir(input).map(ResponseBody::Info),
+            RequestBody::FileMove(input) => self.files().moved(input).map(ResponseBody::Info),
         }
     }
 

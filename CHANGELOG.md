@@ -7,6 +7,25 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### The rest of Desktop Commander's file tools (increment 34b)
+- `read_multiple_files` (up to 20 files in one call, each answered or its error reported),
+  `get_file_info` (kind, size, modified and created times, read-only, Unix mode, a link's
+  target, a text file's line count), `create_directory` (with missing parents; an existing
+  directory is not an error) and `move_file` (same filesystem; refuses an existing
+  destination unless `overwrite`, never replaces a directory, moves a link as itself), on the
+  local server and on the hub for every machine.
+- Contracts: `FileInfo`, `FileMkdir` and `FileMove` requests and the `Info` response; a broker
+  from before this answers them with `invalid_request`.
+- Under `granted`, directories are made one plain name at a time below a part that exists and
+  is inside the workspace (a `..` in the part to make is refused, for `write_file`'s
+  `create_dirs` too); a link is judged by where it lands, from where it is or would be after a
+  move, and from its text when its target is missing (`write_file` no longer writes through a
+  dangling link out of the workspace); a directory moves only when none of its links climbs
+  with `..` or points outside. Moving a file onto another name of itself (a hard link, or a
+  change of case where the filesystem ignores case) moves rather than reporting a
+  replacement. The hub audits a move's destination, every path `read_multiple_files` asked
+  for, and a refused route for `run` and `read_multiple_files`.
+
 ### The local server has the hub's tools, and runs as you (increment 34a)
 - `devagotchi mcp` serves `run`, `read_file`, `list_directory`, `write_file` and `edit_file`
   (the hub's tools, names and inputs, without the machine's name) and `operation_list`

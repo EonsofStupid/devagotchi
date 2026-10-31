@@ -120,9 +120,9 @@ unannotated = [t["name"] for t in listed if not t.get("title") or not (
     "readOnlyHint" in t.get("annotations", {}) and "openWorldHint" in t.get("annotations", {})
     and (t["annotations"]["readOnlyHint"] or "destructiveHint" in t["annotations"]))]
 check("every tool has a title and annotations", not unannotated, ", ".join(unannotated))
-broker_tools = ["approval_request", "approval_wait", "edit_file", "list_directory", "machines", "operation_cancel",
-                "operation_get", "operation_read", "operation_start", "operation_wait", "read_file", "run", "whoami",
-                "write_file"]
+broker_tools = ["approval_request", "approval_wait", "create_directory", "edit_file", "get_file_info",
+                "list_directory", "machines", "move_file", "operation_cancel", "operation_get", "operation_read",
+                "operation_start", "operation_wait", "read_file", "read_multiple_files", "run", "whoami", "write_file"]
 board_tools = [t for t in tools if t.startswith("board_")]
 check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 18,
       ", ".join(tools))
@@ -203,6 +203,29 @@ if args.run_broker and args.run_dir:
     is_error, outside_write = call("write_file", {"machine": args.broker, "path": written_file, "text": "x"})
     check("write_file outside a granted broker's workspace refused",
           is_error and outside_write.get("code") == "path_outside_workspace", json.dumps(outside_write)[:200])
+    # A directory, a move, info and several files at once, on the machine.
+    made_dir = os.path.join(args.run_dir, "probe-dir", "deeper")
+    is_error, directory = call("create_directory", {"machine": args.run_broker, "path": made_dir})
+    check("create_directory makes the parents", not is_error and directory.get("made") is True
+          and directory.get("kind") == "dir", json.dumps(directory)[:200])
+    moved_file = os.path.join(made_dir, "moved.txt")
+    is_error, moved = call("move_file", {"machine": args.run_broker, "source": written_file,
+                                         "destination": moved_file})
+    check("move_file moves", not is_error and moved.get("replaced") is False and not os.path.exists(written_file),
+          json.dumps(moved)[:200])
+    is_error, again = call("move_file", {"machine": args.run_broker, "source": probe_file,
+                                         "destination": moved_file})
+    check("move_file never replaces without overwrite", is_error and again.get("code") == "already_exists",
+          json.dumps(again)[:200])
+    is_error, info = call("get_file_info", {"machine": args.run_broker, "path": moved_file})
+    check("get_file_info counts lines", not is_error and info.get("kind") == "file" and info.get("lines") == 2,
+          json.dumps(info)[:200])
+    is_error, both = call("read_multiple_files", {"machine": args.run_broker,
+                                                  "paths": [moved_file, os.path.join(args.run_dir, "missing.txt")]})
+    files = both.get("files", []) if not is_error else []
+    check("read_multiple_files reads one and reports the other", len(files) == 2
+          and (files[0].get("content") or {}).get("text") == "alpha\ngamma\n"
+          and (files[1].get("error") or {}).get("code") == "path_not_found", json.dumps(both)[:240])
     # A broker that runs only granted programs reaches files only inside its workspace.
     is_error, outside = call("read_file", {"machine": args.broker, "path": probe_file})
     check("read_file outside a granted broker's workspace refused",

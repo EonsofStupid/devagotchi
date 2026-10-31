@@ -51,6 +51,10 @@ TOOL_SCHEMAS = {
         {"path", "size", "sha256", "created"},
     ),
     "edit_file": ({"path", "old_text", "new_text", "expected_replacements"}, {"path", "size", "sha256", "created"}),
+    "read_multiple_files": ({"paths", "max_bytes_each"}, {"files"}),
+    "get_file_info": ({"path"}, {"path", "kind", "size", "readonly"}),
+    "create_directory": ({"path"}, {"path", "kind", "size", "readonly"}),
+    "move_file": ({"source", "destination", "overwrite"}, {"path", "kind", "size", "readonly"}),
 }
 
 
