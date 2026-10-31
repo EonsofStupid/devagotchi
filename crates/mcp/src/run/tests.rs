@@ -69,7 +69,8 @@ fn waited(state: OperationState, exit_code: Option<i32>) -> Option<Result<Respon
     Some(Ok(ResponseBody::Operation(view(state, exit_code))))
 }
 
-fn page(texts: &[&str], next_cursor: u64, has_more: bool, gap: bool) -> Option<Result<ResponseBody, BridgeError>> {
+/// A page of output; `latest` is the newest sequence the broker held when it was read.
+fn page(texts: &[&str], next_cursor: u64, has_more: bool, gap: bool, latest: u64) -> Option<Result<ResponseBody, BridgeError>> {
     Some(Ok(ResponseBody::Output(OutputPage {
         operation_id: "op-1".into(),
         frames: texts
@@ -85,7 +86,7 @@ fn page(texts: &[&str], next_cursor: u64, has_more: bool, gap: bool) -> Option<R
         next_cursor,
         gap,
         earliest_retained_sequence: 1,
-        latest_sequence: next_cursor,
+        latest_sequence: latest,
         has_more,
         operation: view(OperationState::Succeeded, Some(0)),
     })))
@@ -111,8 +112,8 @@ async fn a_command_that_finishes_comes_back_with_all_its_output_in_order() {
     let script = Script::new(vec![
         started(OperationState::Running),
         waited(OperationState::Succeeded, Some(0)),
-        page(&["one ", "two "], 2, true, false),
-        page(&["three"], 3, false, false),
+        page(&["one ", "two "], 2, true, false, 3),
+        page(&["three"], 3, false, false, 3),
     ]);
     let ran = run(|body| script.call(body), start_input(), 30, never())
         .await
@@ -131,7 +132,7 @@ async fn a_command_that_finishes_comes_back_with_all_its_output_in_order() {
 async fn a_command_already_done_at_start_is_not_waited_for() {
     let script = Script::new(vec![
         started(OperationState::Failed),
-        page(&["boom"], 1, false, false),
+        page(&["boom"], 1, false, false, 1),
     ]);
     let ran = run(|body| script.call(body), start_input(), 30, never())
         .await
@@ -145,7 +146,7 @@ async fn a_command_still_running_after_the_wait_says_where_to_follow_it() {
     let script = Script::new(vec![
         started(OperationState::Running),
         waited(OperationState::Running, None),
-        page(&["building…"], 7, false, false),
+        page(&["building…"], 7, false, false, 7),
     ]);
     let ran = run(|body| script.call(body), start_input(), 30, never())
         .await
@@ -176,13 +177,15 @@ async fn stopping_the_wait_leaves_the_command_running_and_names_it() {
 
 #[tokio::test]
 async fn a_refused_start_started_nothing_and_a_later_failure_names_the_operation() {
-    let refused = BridgeError::new("command_not_allowed", "granted policy");
+    let refused = BridgeError::new("command_not_allowed", "pass executable and args instead of command");
     let script = Script::new(vec![Some(Err(refused))]);
     let failed = run(|body| script.call(body), start_input(), 30, never())
         .await
         .unwrap_err();
+    // What works instead, in words a run caller can act on (it has no executable field).
     assert!(
-        matches!(&failed, Failed::NotStarted(error) if error.code == "command_not_allowed"),
+        matches!(&failed, Failed::NotStarted(error) if error.code == "command_not_allowed"
+            && error.message.contains("operation_start") && error.message.contains("exec_policy")),
         "{failed:?}"
     );
 
@@ -213,7 +216,7 @@ async fn long_output_keeps_its_end_and_says_so() {
     let long = "x".repeat(OUTPUT_LIMIT) + "the end";
     let script = Script::new(vec![
         started(OperationState::Succeeded),
-        page(&[long.as_str()], 1, false, false),
+        page(&[long.as_str()], 1, false, false, 1),
     ]);
     let ran = run(|body| script.call(body), start_input(), 30, never())
         .await
@@ -225,7 +228,7 @@ async fn long_output_keeps_its_end_and_says_so() {
     // Output the broker no longer kept is a cut too.
     let script = Script::new(vec![
         started(OperationState::Succeeded),
-        page(&["later lines"], 9, false, true),
+        page(&["later lines"], 9, false, true, 9),
     ]);
     let ran = run(|body| script.call(body), start_input(), 30, never())
         .await
@@ -250,4 +253,42 @@ fn bounds_refuse_zero_and_too_much() {
     assert_eq!(bounded(Some(50), 30, 50, "wait_seconds").unwrap(), 50);
     assert!(bounded(Some(0), 30, 50, "wait_seconds").is_err());
     assert!(bounded(Some(51), 30, 50, "wait_seconds").is_err());
+}
+
+#[tokio::test]
+async fn a_command_still_writing_is_read_only_up_to_what_it_had_written() {
+    // The first page says 2 frames exist; a third page would chase new output.
+    let script = Script::new(vec![
+        started(OperationState::Running),
+        waited(OperationState::Running, None),
+        page(&["a"], 1, true, false, 2),
+        page(&["b"], 2, true, false, 40),
+    ]);
+    let ran = run(|body| script.call(body), start_input(), 30, never())
+        .await
+        .unwrap();
+    assert_eq!(ran.output, "ab");
+    assert_eq!(ran.cursor, 2);
+    assert_eq!(
+        script.asked(),
+        ["operation_start", "operation_wait", "operation_read", "operation_read"]
+    );
+}
+
+#[tokio::test]
+async fn stopping_while_output_is_read_leaves_the_command_running() {
+    let script = Script::new(vec![started(OperationState::Succeeded), None]);
+    let failed = run(
+        |body| script.call(body),
+        start_input(),
+        30,
+        std::future::ready(()),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        matches!(&failed, Failed::Cancelled { operation_id } if operation_id == "op-1"),
+        "{failed:?}"
+    );
+    assert_eq!(script.asked(), ["operation_start", "operation_read"]);
 }

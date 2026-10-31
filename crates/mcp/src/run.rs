@@ -75,8 +75,8 @@ pub fn tail(text: String, limit: usize) -> (String, bool) {
 }
 
 /// Start `start` through `call`, wait up to `wait_s` seconds for it to finish (one held
-/// request: the broker answers the moment it does), then read its output. `cancelled`
-/// resolving during the wait stops waiting and leaves the command running.
+/// request: the broker answers the moment it does), then read the output it had written by
+/// then. `cancelled` resolving stops the wait or the reading and leaves the command running.
 pub async fn run<C, F>(
     call: C,
     start: StartInput,
@@ -87,10 +87,11 @@ where
     C: Fn(RequestBody) -> F,
     F: Future<Output = Result<ResponseBody, BridgeError>>,
 {
+    tokio::pin!(cancelled);
     let operation = match call(RequestBody::OperationStart(start)).await {
         Ok(ResponseBody::Start(output)) => output.operation,
         Ok(other) => return Err(Failed::NotStarted(unexpected("start", &other))),
-        Err(error) => return Err(Failed::NotStarted(error)),
+        Err(error) => return Err(Failed::NotStarted(granted_only(error))),
     };
     let id = operation.operation_id;
     let started = |error| Failed::Started {
@@ -107,7 +108,7 @@ where
         }));
         let view = tokio::select! {
             biased;
-            _ = cancelled => return Err(Failed::Cancelled { operation_id: id.clone() }),
+            _ = &mut cancelled => return Err(Failed::Cancelled { operation_id: id.clone() }),
             view = wait => view,
         };
         match view {
@@ -123,14 +124,21 @@ where
     let mut gap = false;
     let mut cursor = 0;
     let mut follow;
+    // The output written by the time of the first read, and no more: a command still
+    // writing fast is not chased past the wait it was given.
+    let mut until = None;
     loop {
-        let page = match call(RequestBody::OperationRead(ReadInput {
+        let read = call(RequestBody::OperationRead(ReadInput {
             operation_id: id.clone(),
             cursor,
             max_bytes: MAX_OUTPUT_PAGE_BYTES,
-        }))
-        .await
-        {
+        }));
+        let page = tokio::select! {
+            biased;
+            _ = &mut cancelled => return Err(Failed::Cancelled { operation_id: id.clone() }),
+            page = read => page,
+        };
+        let page = match page {
             Ok(ResponseBody::Output(page)) => page,
             Ok(other) => return Err(started(unexpected("output", &other))),
             Err(error) => return Err(started(error)),
@@ -144,7 +152,8 @@ where
             text = tail(text, OUTPUT_LIMIT).0;
             gap = true;
         }
-        if !page.has_more || page.next_cursor == cursor {
+        let written = *until.get_or_insert(page.latest_sequence);
+        if !page.has_more || page.next_cursor == cursor || page.next_cursor >= written {
             break;
         }
         cursor = page.next_cursor;
@@ -158,6 +167,17 @@ where
         truncated: cut || gap,
         cursor: follow,
     })
+}
+
+/// A broker that runs only granted programs refuses `run`'s command line; say what works.
+fn granted_only(error: BridgeError) -> BridgeError {
+    if error.code != "command_not_allowed" {
+        return error;
+    }
+    BridgeError::new(
+        &error.code,
+        "This broker runs only granted programs, so a command line is refused. Start a granted program with operation_start (its executable and args), or ask the person to set \"exec_policy\": \"account\" in the broker's broker.json.",
+    )
 }
 
 #[cfg(test)]

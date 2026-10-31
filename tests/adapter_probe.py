@@ -5,7 +5,10 @@
 
 Speaks MCP over the adapter's stdio: initialize, list the tools, run `git --version`
 under the broker in the given cwd, read its output, and confirm an ungranted
-executable is refused. Exit 0 only when every step holds. The endpoint is the broker's
+executable, and `run`'s command line, are refused (with what to do instead). With
+--account the broker runs as its account: then a command line runs through `run`, and a
+file in the cwd is written, edited, read and listed, each in one call, and
+`operation_list` shows the run. Exit 0 only when every step holds. The endpoint is the broker's
 ready line: a Unix socket path, or a named pipe on Windows. The adapter command is given
 as its words (`--adapter target/debug/devagotchi mcp`), never as one string to split:
 a Windows path is full of backslashes. The probe adds `--socket <endpoint>` itself.
@@ -25,6 +28,8 @@ parser.add_argument("--adapter", required=True, nargs="+", metavar="WORD",
                     help="the adapter command, word by word: the executable, then its words (e.g. devagotchi mcp)")
 parser.add_argument("--git", default="/usr/bin/git")
 parser.add_argument("--cwd", default=None)
+parser.add_argument("--account", action="store_true",
+                    help="the broker runs as its account (exec_policy account): probe the one-call tools")
 args = parser.parse_args()
 
 proc = subprocess.Popen(
@@ -76,6 +81,10 @@ print("server:", init["serverInfo"]["name"], init["serverInfo"].get("version"), 
 rpc("notifications/initialized", notify=True)
 tools = rpc("tools/list")["result"]["tools"]
 print("tools:", ", ".join(sorted(t["name"] for t in tools)))
+missing = {"run", "read_file", "list_directory", "write_file", "edit_file", "operation_list",
+           "operation_start", "operation_wait"} - {t["name"] for t in tools}
+if missing:
+    raise SystemExit(f"tools missing: {sorted(missing)}")
 
 started = call("operation_start", {
     "idempotency_key": str(uuid.uuid4()), "executable": args.git, "args": ["--version"],
@@ -98,6 +107,38 @@ text = "".join(f.get("text", f.get("data", "")) for f in frames) if frames else 
 print("output:", text.strip()[:200])
 if state["state"] != "succeeded" or "git version" not in text:
     raise SystemExit("git --version did not succeed under the broker")
+
+if args.account:
+    # Desktop Commander's everyday calls, one call each. No `&&`: Windows PowerShell 5.1
+    # has none, and the line must read the same on every system.
+    ran = call("run", {"command": "echo devagotchi-local-run"})
+    print("run:", ran["state"], ran.get("exit_code"), ran["output"].strip()[:80])
+    if ran["state"] != "succeeded" or "devagotchi-local-run" not in ran["output"]:
+        raise SystemExit("run did not return the command's output")
+    path = os.path.join(args.cwd, "local-tools.txt")
+    written = call("write_file", {"path": path, "text": "one line\n"})
+    edited = call("edit_file", {"path": path, "old_text": "one", "new_text": "two"})
+    content = call("read_file", {"path": path})
+    listing = call("list_directory", {"path": args.cwd})
+    print("file:", written["created"], edited["replacements"], repr(content.get("text")))
+    if not written["created"] or edited["replacements"] != 1 or content.get("text") != "two line\n":
+        raise SystemExit("write_file, edit_file and read_file did not round-trip")
+    if "local-tools.txt" not in [entry["path"] for entry in listing["entries"]]:
+        raise SystemExit("list_directory did not list the written file")
+    operations = call("operation_list", {})["operations"]
+    if ran["operation_id"] not in [op["operation_id"] for op in operations]:
+        raise SystemExit("operation_list did not show the run")
+    proc.stdin.close()
+    proc.wait(timeout=5)
+    raise SystemExit(0)
+
+# A command line under the granted policy: refused, with what works instead.
+denied = rpc("tools/call", {"name": "run", "arguments": {"command": "echo hi"}})
+result = denied.get("result", {})
+detail = (result.get("content") or [{}])[0].get("text", str(denied.get("error", "")))[:400]
+print("run refused under granted:", bool(result.get("isError")), detail[:140])
+if not result.get("isError") or "command_not_allowed" not in detail or "operation_start" not in detail:
+    raise SystemExit("run was not refused with command_not_allowed and what to do instead")
 
 # An executable that exists on every machine of this OS and is never granted.
 ungranted = r"C:\Windows\System32\whoami.exe" if os.name == "nt" else "/usr/bin/env"

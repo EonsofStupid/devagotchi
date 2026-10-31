@@ -331,23 +331,19 @@ fn write_config(
         let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
     }
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let listed = executables
+        .iter()
+        .filter_map(|e| e.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(", ");
     Ok(format!(
-        "workspace {}, {} executable grant{}{}",
+        "workspace {}, runs as your account; {}",
         workspace.display(),
-        executables.len(),
-        if executables.len() == 1 { "" } else { "s" },
-        if executables.is_empty() {
-            " (none of the usual toolchains is on PATH; add some with --grant)".to_string()
+        if listed.is_empty() {
+            "no usual toolchain on PATH to list for exec_policy granted".to_string()
         } else {
-            format!(
-                " ({})",
-                executables
-                    .iter()
-                    .filter_map(|e| e.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
+            format!("listed for exec_policy granted: {listed}")
         }
     ))
 }
