@@ -26,6 +26,12 @@ heading. Agents draft the fragments below; they never tag.
   Nothing in this change deploys.
 - A devagotchi.com profile links to a Devagotchi account only when a hub token carries
   the same verified email (`apps/website/lib/hub-account.ts`).
+- An AI can open a provisional account and add the person's machine before anyone
+  finishes a sign-in. A remote connector's one Allow, or `POST /auth/agent/start`
+  (`devagotchi login`), mints the account and tokens. `machine_add` returns the
+  join line; the enrolled machine belongs to that account. A later claim attaches
+  a sign-in to the same account, or merges it when the verified email already
+  belongs to one. Unclaimed accounts expire. Creation is rate limited.
 
 ## 0.1.0 - 2026-10-30
 
