@@ -7,6 +7,17 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### The rest of Desktop Commander's file tools (increment 34b)
+- `read_multiple_files` (up to 20 files in one call, each answered or its error reported),
+  `get_file_info` (kind, size, modified and created times, read-only, Unix mode, a link's
+  target, a text file's line count), `create_directory` (with missing parents; an existing
+  directory is not an error) and `move_file` (same filesystem; refuses an existing
+  destination unless `overwrite`, never replaces a directory, moves a link as itself), on the
+  local server and on the hub for every machine.
+- Contracts: `FileInfo`, `FileMkdir` and `FileMove` requests and the `Info` response; a broker
+  from before this answers them with `invalid_request`. Under `granted` every path, and what a
+  link points to, stays inside the workspace.
+
 ### The local server has the hub's tools, and runs as you (increment 34a)
 - `devagotchi mcp` serves `run`, `read_file`, `list_directory`, `write_file` and `edit_file`
   (the hub's tools, names and inputs, without the machine's name) and `operation_list`

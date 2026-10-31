@@ -204,6 +204,10 @@ Those are historical local-adapter results. The separate Site reference MCP targ
 | `list_directory` | List a directory, up to three levels deep |
 | `write_file` | Overwrite (atomically), create or append; returns the SHA-256 to guard the next write |
 | `edit_file` | Replace exact text an exact number of times, or change nothing |
+| `read_multiple_files` | Read up to 20 files in one call; a file that cannot be read is reported beside the rest |
+| `get_file_info` | Kind, size, times, read-only, Unix mode, a link's target, a text file's line count |
+| `create_directory` | Make a directory and its missing parents; an existing one is not an error |
+| `move_file` | Move or rename on the same filesystem; never replaces without `overwrite`, never a directory |
 | `operation_start` | Admit a command line, or an executable with exact arguments, with a retry key |
 | `operation_list` | List the broker's operations, newest first, before and after restarts |
 | `operation_wait` | Wait until an operation finishes or prints, without polling |

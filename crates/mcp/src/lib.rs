@@ -3,6 +3,7 @@
 //! broker: `devagotchi mcp` runs only this code.
 
 pub mod connect;
+pub mod files;
 pub mod run;
 
 use std::{ffi::OsString, path::PathBuf, process::ExitCode};
@@ -96,6 +97,7 @@ pub fn response_kind(actual: &ResponseBody) -> &'static str {
         ResponseBody::Listing(_) => "listing",
         ResponseBody::Written(_) => "written",
         ResponseBody::Revision(_) => "revision",
+        ResponseBody::Info(_) => "info",
     }
 }
 
