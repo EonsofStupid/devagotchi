@@ -124,10 +124,6 @@ export interface FileEditInput {
   path: string;
 }
 export interface FileInfo {
-  /**
-   * After create_directory: whether the directory was made now (false: it existed).
-   */
-  created?: boolean | null;
   created_ms?: number | null;
   /**
    * `file`, `dir`, `symlink` or `other`.
@@ -141,6 +137,10 @@ export interface FileInfo {
    * Where a symbolic link points, as stored in the link.
    */
   link_target?: string | null;
+  /**
+   * After create_directory: whether this call made it (false: it existed already).
+   */
+  made?: boolean | null;
   /**
    * Unix permission bits in octal (`0644`); absent on Windows.
    */

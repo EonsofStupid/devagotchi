@@ -292,7 +292,7 @@ impl Hub {
             RequestBody::FileEdit(input) => input.path.clone(),
             RequestBody::FileInfo(input) => input.path.clone(),
             RequestBody::FileMkdir(input) => input.path.clone(),
-            RequestBody::FileMove(input) => input.source.clone(),
+            RequestBody::FileMove(input) => format!("{} -> {}", input.source, input.destination),
             _ => String::new(),
         };
         let result = match self.route(&subject, broker) {

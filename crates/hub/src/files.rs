@@ -266,7 +266,15 @@ impl Hub {
         context: RequestContext<RoleServer>,
     ) -> Result<Json<Files>, Json<BridgeError>> {
         let subject = self.subject(&context)?;
-        let route = self.route(&subject, &input.machine)?;
+        // The audit names every path asked for, as read_file names its one.
+        let asked = input.paths.join("; ");
+        let route = match self.route(&subject, &input.machine) {
+            Ok(route) => route,
+            Err(Json(error)) => {
+                self.record(&subject, "read_multiple_files", &input.machine, &asked, &error.code)?;
+                return Err(Json(error));
+            }
+        };
         let read = read_many(
             |body| self.send(&route, body),
             input.paths,
@@ -284,7 +292,7 @@ impl Hub {
             Ok(_) => "ok",
             Err(error) => error.code.as_str(),
         };
-        self.record(&subject, "read_multiple_files", &input.machine, "", code)?;
+        self.record(&subject, "read_multiple_files", &input.machine, &asked, code)?;
         files.map(Json).map_err(Json)
     }
 
@@ -315,7 +323,7 @@ impl Hub {
 
     #[tool(
         name = "create_directory",
-        description = "Make a directory, and any missing parents, on one of the user's machines. An existing directory is not an error: created says whether anything was made. Get machine names from `machines`.",
+        description = "Make a directory, and any missing parents, on one of the user's machines. An existing directory is not an error: made says whether anything was made. Get machine names from `machines`.",
         title = "Make a directory on a machine",
         annotations(
             title = "Make a directory on a machine",

@@ -89,9 +89,9 @@ fn mkdir_makes_the_missing_parents_and_says_whether_it_made_anything() {
     let deep = workspace.join("a").join("b").join("c");
     let made = scope.mkdir(DirectoryInput { path: text(&deep) }).unwrap();
     assert!(deep.is_dir());
-    assert_eq!((made.kind.as_str(), made.created), ("dir", Some(true)));
+    assert_eq!((made.kind.as_str(), made.made), ("dir", Some(true)));
     let again = scope.mkdir(DirectoryInput { path: text(&deep) }).unwrap();
-    assert_eq!(again.created, Some(false), "an existing directory is not an error");
+    assert_eq!(again.made, Some(false), "an existing directory is not an error");
 
     fs::write(workspace.join("file"), "x").unwrap();
     let blocked = scope
@@ -101,7 +101,7 @@ fn mkdir_makes_the_missing_parents_and_says_whether_it_made_anything() {
     let under_file = scope
         .mkdir(DirectoryInput { path: text(&workspace.join("file").join("x")) })
         .unwrap_err();
-    assert_ne!(under_file.code, "path_outside_workspace", "{under_file:?}");
+    assert_eq!(under_file.code, "not_a_directory", "{under_file:?}");
 }
 
 #[test]
@@ -183,4 +183,117 @@ fn move_stays_inside_the_workspace_under_granted() {
         .moved(moving(&outside, &workspace.join("brought.txt"), false))
         .unwrap();
     assert!(workspace.join("brought.txt").exists());
+}
+
+#[test]
+fn mkdir_never_climbs_out_through_dot_dot() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(dir.path()).unwrap();
+    let workspace = root.join("ws");
+    fs::create_dir(&workspace).unwrap();
+    let granted = scope(&workspace, ExecPolicy::Granted);
+    let climbing = format!("{}/nope/../../escaped", workspace.display());
+    assert!(granted.mkdir(DirectoryInput { path: climbing }).is_err());
+    assert!(!root.join("escaped").exists(), "nothing made outside the workspace");
+    assert!(!workspace.join("nope").exists(), "nothing made inside either");
+}
+
+#[test]
+fn info_on_a_root_answers_under_account() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dunce::canonicalize(dir.path()).unwrap();
+    let root = workspace.ancestors().last().unwrap().to_path_buf();
+    let info = scope(&workspace, ExecPolicy::Account)
+        .info(FileInfoInput { path: text(&root) })
+        .unwrap();
+    assert_eq!(info.kind, "dir");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_link_out_of_the_workspace_is_refused_under_granted() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(dir.path()).unwrap();
+    let workspace = root.join("ws");
+    fs::create_dir(&workspace).unwrap();
+    std::os::unix::fs::symlink(root.join("not-yet"), workspace.join("door")).unwrap();
+    let granted = scope(&workspace, ExecPolicy::Granted);
+    let refused = granted
+        .info(FileInfoInput { path: text(&workspace.join("door")) })
+        .unwrap_err();
+    assert_eq!(refused.code, "path_outside_workspace");
+    let moved = granted
+        .moved(moving(&workspace.join("door"), &workspace.join("door2"), false))
+        .unwrap_err();
+    assert_eq!(moved.code, "path_outside_workspace");
+    assert!(fs::symlink_metadata(workspace.join("door")).is_ok(), "nothing moved");
+}
+
+/// A relative link that points inside from where it is, but outside from where it would go.
+#[cfg(unix)]
+#[test]
+fn a_relative_link_is_judged_from_where_it_moves_to() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(dir.path()).unwrap();
+    let workspace = root.join("ws");
+    fs::create_dir_all(workspace.join("a").join("b")).unwrap();
+    fs::write(workspace.join("target.txt"), "in").unwrap();
+    fs::write(root.join("target.txt"), "out").unwrap();
+    let link = workspace.join("a").join("b").join("rel");
+    std::os::unix::fs::symlink("../../target.txt", &link).unwrap();
+    let granted = scope(&workspace, ExecPolicy::Granted);
+    assert!(granted.info(FileInfoInput { path: text(&link) }).is_ok(), "inside where it is");
+    let refused = granted
+        .moved(moving(&link, &workspace.join("a").join("rel"), false))
+        .unwrap_err();
+    assert_eq!(refused.code, "path_outside_workspace");
+    assert!(fs::symlink_metadata(&link).is_ok(), "nothing moved");
+    // The same link one level down still points inside, so it moves.
+    fs::create_dir(workspace.join("a").join("c")).unwrap();
+    granted
+        .moved(moving(&link, &workspace.join("a").join("c").join("rel"), false))
+        .unwrap();
+}
+
+/// Under granted a directory moves only when no link in it climbs with `..` or points outside.
+#[cfg(unix)]
+#[test]
+fn a_directory_whose_links_climb_does_not_move_under_granted() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dunce::canonicalize(dir.path()).unwrap();
+    let workspace = root.join("ws");
+    fs::create_dir_all(workspace.join("pack").join("inner")).unwrap();
+    fs::write(workspace.join("top.txt"), "in").unwrap();
+    std::os::unix::fs::symlink("../../top.txt", workspace.join("pack").join("inner").join("up")).unwrap();
+    let granted = scope(&workspace, ExecPolicy::Granted);
+    let refused = granted
+        .moved(moving(&workspace.join("pack"), &workspace.join("pack2"), false))
+        .unwrap_err();
+    assert_eq!(refused.code, "path_outside_workspace");
+    assert!(workspace.join("pack").is_dir(), "nothing moved");
+    scope(&workspace, ExecPolicy::Account)
+        .moved(moving(&workspace.join("pack"), &workspace.join("pack2"), false))
+        .unwrap();
+}
+
+/// Two names of one file (a hard link): a move without overwrite is refused; with it, the
+/// source name goes and the file stays, as a move should.
+#[cfg(unix)]
+#[test]
+fn two_names_of_one_file_move_as_a_move() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = dunce::canonicalize(dir.path()).unwrap();
+    fs::write(workspace.join("one"), "same").unwrap();
+    fs::hard_link(workspace.join("one"), workspace.join("two")).unwrap();
+    let granted = scope(&workspace, ExecPolicy::Granted);
+    let refused = granted
+        .moved(moving(&workspace.join("one"), &workspace.join("two"), false))
+        .unwrap_err();
+    assert_eq!(refused.code, "already_exists");
+    let moved = granted
+        .moved(moving(&workspace.join("one"), &workspace.join("two"), true))
+        .unwrap();
+    assert!(!workspace.join("one").exists(), "the source name is gone");
+    assert_eq!(fs::read_to_string(workspace.join("two")).unwrap(), "same");
+    assert_eq!(moved.replaced, Some(false), "nothing else was replaced");
 }

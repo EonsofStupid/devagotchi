@@ -130,9 +130,9 @@ if args.account:
     moved = call("move_file", {"source": path, "destination": os.path.join(args.cwd, "made", "moved.txt")})
     info = call("get_file_info", {"path": moved["path"]})
     both = call("read_multiple_files", {"paths": [moved["path"], os.path.join(args.cwd, "missing.txt")]})["files"]
-    print("manage:", made.get("created"), moved.get("replaced"), info.get("lines"),
+    print("manage:", made.get("made"), moved.get("replaced"), info.get("lines"),
           [bool(f.get("content")) for f in both], [f.get("error", {}).get("code") for f in both])
-    if made.get("created") is not True or made.get("kind") != "dir":
+    if made.get("made") is not True or made.get("kind") != "dir":
         raise SystemExit("create_directory did not make the directory")
     if moved.get("replaced") is not False or os.path.exists(path):
         raise SystemExit("move_file did not move the file")

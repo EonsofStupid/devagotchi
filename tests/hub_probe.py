@@ -189,7 +189,7 @@ if args.run_broker and args.run_dir:
     written_file = os.path.join(args.run_dir, "devagotchi-written.txt")
     is_error, made = call("write_file", {"machine": args.run_broker, "path": written_file,
                                          "text": "alpha\nbeta\n", "mode": "create"})
-    check("write_file creates", not is_error and made.get("created") is True and len(made.get("sha256", "")) == 64,
+    check("write_file creates", not is_error and made.get("made") is True and len(made.get("sha256", "")) == 64,
           json.dumps(made)[:200])
     is_error, edited = call("edit_file", {"machine": args.run_broker, "path": written_file,
                                           "old_text": "beta", "new_text": "gamma"})
@@ -206,7 +206,7 @@ if args.run_broker and args.run_dir:
     # A directory, a move, info and several files at once, on the machine.
     made_dir = os.path.join(args.run_dir, "probe-dir", "deeper")
     is_error, made = call("create_directory", {"machine": args.run_broker, "path": made_dir})
-    check("create_directory makes the parents", not is_error and made.get("created") is True
+    check("create_directory makes the parents", not is_error and made.get("made") is True
           and made.get("kind") == "dir", json.dumps(made)[:200])
     moved_file = os.path.join(made_dir, "moved.txt")
     is_error, moved = call("move_file", {"machine": args.run_broker, "source": written_file,

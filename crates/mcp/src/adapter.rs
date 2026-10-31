@@ -319,7 +319,7 @@ impl BridgeAdapter {
 
     #[tool(
         name = "create_directory",
-        description = "Make a directory, and any missing parents. An existing directory is not an error: `created` says whether anything was made.",
+        description = "Make a directory, and any missing parents. An existing directory is not an error: `made` says whether anything was made.",
         title = "Make a directory",
         annotations(
             title = "Make a directory",

@@ -393,9 +393,9 @@ pub struct FileInfo {
     /// For a text file of at most 8 MiB: how many lines it has.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lines: Option<u64>,
-    /// After create_directory: whether the directory was made now (false: it existed).
+    /// After create_directory: whether this call made it (false: it existed already).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub created: Option<bool>,
+    pub made: Option<bool>,
     /// After move_file: whether a file at the destination was replaced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub replaced: Option<bool>,

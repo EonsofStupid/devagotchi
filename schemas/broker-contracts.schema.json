@@ -189,13 +189,6 @@
     "FileInfo": {
       "additionalProperties": false,
       "properties": {
-        "created": {
-          "description": "After create_directory: whether the directory was made now (false: it existed).",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "created_ms": {
           "format": "uint64",
           "minimum": 0,
@@ -221,6 +214,13 @@
           "description": "Where a symbolic link points, as stored in the link.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "made": {
+          "description": "After create_directory: whether this call made it (false: it existed already).",
+          "type": [
+            "boolean",
             "null"
           ]
         },
