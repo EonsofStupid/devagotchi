@@ -177,3 +177,12 @@ fn other_modes_have_no_accounts_of_their_own() {
     assert!(!config.has_accounts());
     assert_eq!(config.rp_id(), None);
 }
+
+#[test]
+fn a_hub_without_nomen_takes_no_other_issuers_tokens() {
+    // Their `sub` would be compared with the hub's own account ids.
+    let mut trusting = hub();
+    trusting["trusted_issuers"] =
+        serde_json::json!([{ "issuer": "https://x.example", "audiences": ["a"] }]);
+    assert!(refused(&trusting).contains("trusted_issuers"));
+}

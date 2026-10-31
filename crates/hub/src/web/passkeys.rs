@@ -29,7 +29,7 @@ use super::{cookie_value, pages, safe_return_to};
 use crate::{
     AppState,
     accounts::{
-        Accounts, Authority, Ceremony, LinkPurpose,
+        Accounts, Ceremony, LinkPurpose,
         passkey::{self, Assertion, Registration, Relying},
         sessions::SESSION_MAX_SECS,
     },
@@ -123,19 +123,46 @@ impl HubSignIn {
         }
     }
 
-    /// Whether this request's cookie names a live session (for the top bar).
-    pub fn signed_in(&self, headers: &HeaderMap) -> bool {
-        cookie_value(headers, self.session_cookie())
-            .is_some_and(|token| matches!(self.accounts.session(&token), Ok(Some(_))))
+    /// Whether this request's cookie names a live session (for the top bar). The store is
+    /// asked off the async workers, as every page asks.
+    pub async fn signed_in(&self, headers: &HeaderMap) -> bool {
+        let Some(token) = cookie_value(headers, self.session_cookie()) else {
+            return false;
+        };
+        let accounts = self.accounts.clone();
+        matches!(
+            tokio::task::spawn_blocking(move || accounts.session(&token)).await,
+            Ok(Ok(Some(_)))
+        )
     }
 
     /// Sign out: the session ends on the hub, whatever the browser does with its cookie.
-    pub fn end_session(&self, headers: &HeaderMap) {
-        if let Some(token) = cookie_value(headers, self.session_cookie())
-            && let Err(error) = self.accounts.end_session(&token)
+    pub async fn end_session(&self, headers: &HeaderMap) {
+        let Some(token) = cookie_value(headers, self.session_cookie()) else {
+            return;
+        };
+        let accounts = self.accounts.clone();
+        if let Ok(Err(error)) =
+            tokio::task::spawn_blocking(move || accounts.end_session(&token)).await
         {
             eprintln!("devagotchi-hub: account store: {}", error.message);
         }
+    }
+
+    /// An owner link names the owner the config already knows, if it knows one: a store
+    /// whose owner was made without the config's id is refused before its link is spent.
+    fn owner_mismatch(&self, account: &str) -> Option<Response> {
+        let known = self.config.owner_id()?;
+        (known != account).then(|| {
+            eprintln!(
+                "devagotchi-hub: an owner link names {account}, but the config's owner is {known}; run devagotchi hub owner with the config the hub runs with"
+            );
+            refuse(
+                StatusCode::CONFLICT,
+                "owner_mismatch",
+                "This link is for another owner than this hub's. Make a new one on the hub's host with the config the hub runs with.",
+            )
+        })
     }
 
     /// The JSON endpoints answer only the hub's own pages.
@@ -225,6 +252,17 @@ fn store_failed(message: &str) -> Response {
     )
 }
 
+/// The request body as `T`, read only after the origin check has passed.
+fn body<T: serde::de::DeserializeOwned>(raw: &[u8]) -> Result<T, Response> {
+    serde_json::from_slice(raw).map_err(|_| {
+        refuse(
+            StatusCode::BAD_REQUEST,
+            "malformed",
+            "The passkey's answer was garbled.",
+        )
+    })
+}
+
 fn bytes(field: &str) -> Option<Vec<u8>> {
     URL_SAFE_NO_PAD.decode(field.trim_end_matches('=')).ok()
 }
@@ -278,7 +316,7 @@ pub struct LinkIn {
 pub async fn register_options(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(input): Json<LinkIn>,
+    raw: axum::body::Bytes,
 ) -> Response {
     let Some(hub) = state.passkeys.clone() else {
         return super::routes::not_set_up();
@@ -286,6 +324,10 @@ pub async fn register_options(
     if !hub.from_own_page(&headers) {
         return not_own_page();
     }
+    let input: LinkIn = match body(&raw) {
+        Ok(input) => input,
+        Err(refused) => return refused,
+    };
     let accounts = hub.accounts.clone();
     let found = tokio::task::spawn_blocking(move || {
         let account = accounts.check_link(LinkPurpose::Owner, &input.link)?;
@@ -300,6 +342,9 @@ pub async fn register_options(
         Ok(Err(error)) if error.code != "invalid_link" => return store_failed(&error.message),
         _ => return expired(),
     };
+    if let Some(refused) = hub.owner_mismatch(&account.id) {
+        return refused;
+    }
     let exclude: Vec<_> = existing
         .iter()
         .map(|p| json!({ "type": "public-key", "id": URL_SAFE_NO_PAD.encode(&p.id) }))
@@ -347,7 +392,7 @@ pub struct RegisterIn {
 pub async fn register(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(input): Json<RegisterIn>,
+    raw: axum::body::Bytes,
 ) -> Response {
     let Some(hub) = state.passkeys.clone() else {
         return super::routes::not_set_up();
@@ -355,6 +400,10 @@ pub async fn register(
     if !hub.from_own_page(&headers) {
         return not_own_page();
     }
+    let input: RegisterIn = match body(&raw) {
+        Ok(input) => input,
+        Err(refused) => return refused,
+    };
     let Some(challenge) = hub.challenge_from(&headers) else {
         return expired();
     };
@@ -374,6 +423,16 @@ pub async fn register(
     let done = tokio::task::spawn_blocking(move || {
         let accounts = &worker.accounts;
         let account = accounts.check_link(LinkPurpose::Owner, &input.link)?;
+        if worker
+            .config
+            .owner_id()
+            .is_some_and(|known| known != account)
+        {
+            return Err(devagotchi_contracts::BridgeError::new(
+                "owner_mismatch",
+                account,
+            ));
+        }
         let credential = passkey::verify_registration(
             worker.relying(),
             &challenge,
@@ -390,13 +449,14 @@ pub async fn register(
             devagotchi_contracts::BridgeError::new("refused", refusal.0)
         })?;
         let label = format!("Passkey made {}", pages::utc(crate::devices::now_secs()));
-        accounts.add_passkey(
+        // The passkey, the link spent and the session it signs in to: all or nothing.
+        let token = accounts.register_with_link(
             &account,
             &credential,
             &label,
-            Authority::Link(LinkPurpose::Owner, &input.link),
+            LinkPurpose::Owner,
+            &input.link,
         )?;
-        let token = accounts.open_session(&account, Some(credential.id()))?;
         Ok::<_, devagotchi_contracts::BridgeError>((account, token))
     })
     .await;
@@ -408,6 +468,9 @@ pub async fn register(
         }
         Ok(Err(error)) => match error.code.as_str() {
             "invalid_link" | "invalid_ceremony" => expired(),
+            "owner_mismatch" => hub
+                .owner_mismatch(&error.message)
+                .unwrap_or_else(|| store_failed("the owner changed during a registration")),
             "refused" => refuse(
                 StatusCode::BAD_REQUEST,
                 "refused",
@@ -466,7 +529,7 @@ pub struct SignInIn {
 pub async fn sign_in(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(input): Json<SignInIn>,
+    raw: axum::body::Bytes,
 ) -> Response {
     let Some(hub) = state.passkeys.clone() else {
         return super::routes::not_set_up();
@@ -474,6 +537,10 @@ pub async fn sign_in(
     if !hub.from_own_page(&headers) {
         return not_own_page();
     }
+    let input: SignInIn = match body(&raw) {
+        Ok(input) => input,
+        Err(refused) => return refused,
+    };
     let Some(challenge) = hub.challenge_from(&headers) else {
         return expired();
     };
@@ -523,6 +590,13 @@ pub async fn sign_in(
         )
         .map_err(|refusal| {
             eprintln!("devagotchi-hub: refused a passkey sign-in: {refusal}");
+            // A counter that went backwards means a copy of the key: the sessions this
+            // passkey opened end too, whoever holds them.
+            if refusal.0 == "signature counter"
+                && let Err(error) = accounts.end_passkey_sessions(&stored.id)
+            {
+                eprintln!("devagotchi-hub: account store: {}", error.message);
+            }
             devagotchi_contracts::BridgeError::new("refused", refusal.0)
         })?;
         let account = accounts.sign_in(&asserted)?;
@@ -579,7 +653,7 @@ pub async fn login(
 ) -> Response {
     let return_to = query.return_to.as_deref().unwrap_or("/account");
     match &state.passkeys {
-        Some(hub) if hub.signed_in(&headers) => {
+        Some(hub) if hub.signed_in(&headers).await => {
             super::routes::see_other(safe_return_to(return_to), &[])
         }
         Some(_) => login_page(return_to),

@@ -686,11 +686,17 @@ fn the_owner_is_made_once_and_keeps_a_configured_id() {
     let owner = accounts
         .ensure_owner(Some("395290028818825218"), "Jesse", [1; 16])
         .unwrap();
-    assert_eq!((owner.id.as_str(), owner.owner), ("395290028818825218", true));
+    assert_eq!(
+        (owner.id.as_str(), owner.owner),
+        ("395290028818825218", true)
+    );
     // Run again, with or without the config's id: the same owner.
     for configured in [Some("395290028818825218"), None] {
         assert_eq!(
-            accounts.ensure_owner(configured, "Other", [2; 16]).unwrap().id,
+            accounts
+                .ensure_owner(configured, "Other", [2; 16])
+                .unwrap()
+                .id,
             owner.id
         );
     }

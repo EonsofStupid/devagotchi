@@ -32,18 +32,29 @@ struct World {
 }
 
 async fn world() -> World {
+    world_owned_by(None).await
+}
+
+/// A hub whose config names `owner`, as the Texas hub's names its Nomen subject.
+async fn world_owned_by(owner: Option<&str>) -> World {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let config = Arc::new(
         HubConfig::parse(
-            &json!({
-                "listen": "127.0.0.1:1",
-                "public_url": url,
-                "auth": { "mode": "hub" },
-                "brokers": [{ "name": "wi1", "link": true }],
-                "grants": []
-            })
+            &{
+                let mut value = json!({
+                    "listen": "127.0.0.1:1",
+                    "public_url": url,
+                    "auth": { "mode": "hub" },
+                    "brokers": [{ "name": "wi1", "link": true }],
+                    "grants": []
+                });
+                if let Some(owner) = owner {
+                    value["owner"] = owner.into();
+                }
+                value
+            }
             .to_string(),
         )
         .unwrap(),
@@ -289,27 +300,33 @@ async fn ceremonies_answer_only_the_hubs_own_pages_and_work_once() {
     let mut phone = world.phone();
     world.make_passkey(&phone, &link).await;
 
-    // Another site, or no Origin at all: refused before anything is made.
-    for origin in [Some("https://evil.example"), None] {
-        let mut request = world
-            .http
-            .post(format!("{}/passkey/sign-in/options", world.url))
-            .json(&json!({}));
-        if let Some(origin) = origin {
-            request = request.header(header::ORIGIN, origin);
+    // Another site, no Origin at all, or a cross-site fetch: every ceremony endpoint
+    // refuses before anything is made.
+    for path in [
+        "/passkey/sign-in/options",
+        "/passkey/sign-in",
+        "/passkey/register/options",
+        "/passkey/register",
+    ] {
+        for (origin, site) in [
+            (Some("https://evil.example"), None),
+            (None, None),
+            (Some(world.url.as_str()), Some("cross-site")),
+        ] {
+            let mut request = world
+                .http
+                .post(format!("{}{path}", world.url))
+                .json(&json!({ "link": link }));
+            if let Some(origin) = origin {
+                request = request.header(header::ORIGIN, origin);
+            }
+            if let Some(site) = site {
+                request = request.header("sec-fetch-site", site);
+            }
+            let status = request.send().await.unwrap().status();
+            assert_eq!(status, 403, "{path} {origin:?} {site:?}");
         }
-        assert_eq!(request.send().await.unwrap().status(), 403, "{origin:?}");
     }
-    let fetched = world
-        .http
-        .post(format!("{}/passkey/sign-in/options", world.url))
-        .header(header::ORIGIN, &world.url)
-        .header("sec-fetch-site", "cross-site")
-        .json(&json!({}))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(fetched.status(), 403);
 
     // No challenge cookie: the answer is not for this browser.
     let (challenge, jar, _) = world.options("/passkey/sign-in/options", json!({})).await;
@@ -321,7 +338,8 @@ async fn ceremonies_answer_only_the_hubs_own_pages_and_work_once() {
             .status(),
         400
     );
-    // With it, once; the same request again is refused.
+    // With it, once. A fresh answer to the same challenge (its counter moved on, so only
+    // the challenge being spent can refuse it) is refused as expired.
     assert_eq!(
         world
             .post("/passkey/sign-in", Some(&jar), body.clone())
@@ -329,13 +347,10 @@ async fn ceremonies_answer_only_the_hubs_own_pages_and_work_once() {
             .status(),
         200
     );
-    assert_eq!(
-        world
-            .post("/passkey/sign-in", Some(&jar), body)
-            .await
-            .status(),
-        400
-    );
+    let again = World::assertion(&mut phone, &challenge, Some(&owner.id));
+    let replayed = world.post("/passkey/sign-in", Some(&jar), again).await;
+    assert_eq!(replayed.status(), 400);
+    assert_eq!(replayed.json::<Value>().await.unwrap()["error"], "expired");
 
     // Login CSRF: another site's own valid sign-in, sent with this browser's challenge.
     let (_, victim_jar, _) = world.options("/passkey/sign-in/options", json!({})).await;
@@ -407,4 +422,176 @@ async fn a_hub_alone_signs_people_in_with_no_identity_provider() {
         )
         .await;
     assert_eq!(made_up.status(), 400);
+}
+
+#[tokio::test]
+async fn the_owner_takes_the_account_back_from_a_passkey_it_did_not_make() {
+    // Someone used a leaked owner link first. `hub owner --replace` gives the owner a link
+    // whose use removes every other passkey of the account and ends its sessions.
+    let world = world().await;
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let leaked = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &owner.id)
+        .unwrap();
+    let mut intruder = world.phone();
+    let theirs = world.make_passkey(&intruder, &leaked).await;
+    let replacing = world
+        .accounts
+        .issue_replacing_link(LinkPurpose::Owner, &owner.id)
+        .unwrap();
+    let mine = world.make_passkey(&world.phone(), &replacing).await;
+    assert_eq!(world.accounts.passkeys_of(&owner.id).unwrap().len(), 1);
+    assert_eq!(world.get("/account", Some(&theirs)).await.status(), 303);
+    assert_eq!(world.get("/account", Some(&mine)).await.status(), 200);
+    let (challenge, jar, _) = world.options("/passkey/sign-in/options", json!({})).await;
+    let body = World::assertion(&mut intruder, &challenge, Some(&owner.id));
+    assert_eq!(
+        world
+            .post("/passkey/sign-in", Some(&jar), body)
+            .await
+            .status(),
+        400
+    );
+}
+
+#[tokio::test]
+async fn using_an_owner_link_ends_the_owners_other_sessions() {
+    let world = world().await;
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let first = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &owner.id)
+        .unwrap();
+    let laptop = world.make_passkey(&world.phone(), &first).await;
+    let second = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &owner.id)
+        .unwrap();
+    let phone = world.make_passkey(&world.phone(), &second).await;
+    assert_eq!(world.get("/account", Some(&laptop)).await.status(), 303);
+    assert_eq!(world.get("/account", Some(&phone)).await.status(), 200);
+    // Without --replace, the laptop's passkey stays and signs in again.
+    assert_eq!(world.accounts.passkeys_of(&owner.id).unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn signing_out_takes_the_hubs_own_page() {
+    let world = world().await;
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let link = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &owner.id)
+        .unwrap();
+    let session = world.make_passkey(&world.phone(), &link).await;
+    let out = world
+        .http
+        .post(format!("{}/auth/logout", world.url))
+        .header(header::ORIGIN, "https://evil.example")
+        .header("sec-fetch-site", "cross-site")
+        .header(header::COOKIE, &session)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(out.status(), 403);
+    assert!(
+        cookie(&out, "dg_session").is_none(),
+        "the cookie is left alone"
+    );
+    assert_eq!(world.get("/account", Some(&session)).await.status(), 200);
+}
+
+#[tokio::test]
+async fn a_link_for_another_owner_than_the_configs_is_refused_before_it_is_spent() {
+    // The config names the Texas owner, but the store's owner was made without it.
+    let world = world_owned_by(Some("395290028818825218")).await;
+    let stray = world.accounts.ensure_owner(None, "Owner", [1; 16]).unwrap();
+    let link = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &stray.id)
+        .unwrap();
+    let options = world
+        .post("/passkey/register/options", None, json!({ "link": link }))
+        .await;
+    assert_eq!(options.status(), 409);
+    // A registration answer that would otherwise reach the store, with a challenge cookie.
+    let (challenge, jar, _) = world.options("/passkey/sign-in/options", json!({})).await;
+    let sent = world.phone().register(&challenge);
+    let register = world
+        .post(
+            "/passkey/register",
+            Some(&jar),
+            json!({
+                "link": link,
+                "id": b64(&sent.credential_id),
+                "clientDataJSON": b64(&sent.client_data_json),
+                "authenticatorData": b64(&sent.authenticator_data),
+                "publicKey": b64(&sent.public_key),
+                "publicKeyAlgorithm": sent.alg,
+            }),
+        )
+        .await;
+    assert_eq!(register.status(), 409);
+    assert_eq!(
+        world
+            .accounts
+            .check_link(LinkPurpose::Owner, &link)
+            .unwrap(),
+        stray.id
+    );
+    assert!(world.accounts.passkeys_of(&stray.id).unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_copied_passkey_ends_the_sessions_it_opened() {
+    let world = world().await;
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let link = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &owner.id)
+        .unwrap();
+    let mut phone = Authenticator::for_site(Alg::Es256, "127.0.0.1", &world.url);
+    world.make_passkey(&phone, &link).await;
+    let (challenge, jar, _) = world.options("/passkey/sign-in/options", json!({})).await;
+    let body = World::assertion(&mut phone, &challenge, Some(&owner.id));
+    let signed_in = world.post("/passkey/sign-in", Some(&jar), body).await;
+    let session = cookie(&signed_in, "dg_session").unwrap();
+    // A second copy of the key, its counter behind.
+    phone.count = 0;
+    let (challenge, jar, _) = world.options("/passkey/sign-in/options", json!({})).await;
+    let body = World::assertion(&mut phone, &challenge, Some(&owner.id));
+    assert_eq!(
+        world
+            .post("/passkey/sign-in", Some(&jar), body)
+            .await
+            .status(),
+        400
+    );
+    assert_eq!(world.get("/account", Some(&session)).await.status(), 303);
+}
+
+#[tokio::test]
+async fn on_https_the_cookies_are_the_hosts_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = Arc::new(
+        HubConfig::parse(
+            &json!({
+                "listen": "127.0.0.1:1",
+                "public_url": "https://app.devagotchi.com",
+                "auth": { "mode": "hub", "rp_id": "devagotchi.com" },
+                "brokers": [],
+                "grants": []
+            })
+            .to_string(),
+        )
+        .unwrap(),
+    );
+    let accounts = Arc::new(Accounts::open(&dir.path().join("accounts.sqlite3")).unwrap());
+    let hub = HubSignIn::new(config, accounts).unwrap();
+    assert_eq!(hub.session_cookie(), "__Host-dg_session");
+    let set = hub.cookie(hub.session_cookie(), "dgs_x", 60);
+    for part in ["Path=/", "HttpOnly", "SameSite=Lax", "Secure", "Max-Age=60"] {
+        assert!(set.contains(part), "{set}");
+    }
+    assert!(!set.to_ascii_lowercase().contains("domain"), "{set}");
 }

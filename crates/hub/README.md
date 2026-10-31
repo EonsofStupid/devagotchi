@@ -123,9 +123,17 @@ Open the link on the device that will hold the passkey and press **Make a passke
 signs you in. The first run makes the owner's account, with the config's `owner` as its id
 when it names one, so a hub that had a Nomen owner keeps every board, machine and audit row
 keyed by it. Run it again to add a passkey: using the new link ends the owner's other
-sessions. After that, `/auth/login` signs in with the passkey. Sessions last 30 days unused
-and 90 at most, end when their passkey is removed or the account is disabled, and are kept
-only as hashes.
+sessions. With `--replace`, using it also removes every other passkey of the owner: the way
+to take the account back if someone else used a leaked link first. The config the command
+reads must name the same owner as the hub's, or the link is refused before it is spent.
+After that, `/auth/login` signs in with the passkey. Sessions last 30 days unused and 90 at
+most, end when their passkey is removed, when a copy of it is seen (its counter going back),
+or when the account is disabled, and are kept only as hashes. Signing out takes the hub's
+own page.
+
+Until the hub issues its own tokens (32b), a hub with no `nomen` block takes no bearer token
+at `/mcp`, and refuses `trusted_issuers`. Plain `http` on loopback is for tests: its cookies
+reach any other service on the same host's loopback.
 
 Challenges are signed by the hub and stored only once used, so unanswered sign-ins cost the
 hub nothing; each also rides in a `__Host-` cookie, so another site cannot sign a browser in

@@ -51,7 +51,7 @@ use crate::{
     link::Links,
 };
 
-pub const USAGE: &str = "Usage:\n  devagotchi hub serve --state-dir ABS_PATH --config ABS_JSON\n  devagotchi hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi hub devices --state-dir ABS_PATH\n  devagotchi hub owner --state-dir ABS_PATH --config ABS_JSON [--name NAME]\n  devagotchi hub connect-nomen --state-dir ABS_PATH --config ABS_JSON --client-id ID --project ID [--issuer URL]\n  devagotchi board <command> …            the agents' board in this project (board --help)\n\nserve starts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\nrun and operation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' `devagotchi link` connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.\n\nowner (auth.mode hub) prints a one-time link (15 minutes) that makes the owner's passkey:\nthe first time it makes the owner's account, with the config's owner id if it names one;\nagain, it adds a passkey to the owner and ends the owner's other sessions.\n\nconnect-nomen joins this hub to a Nomen with its owner's approval: it shows a code to confirm\non any device through the devagotchi-cli app (--client-id) of the Devagotchi project (--project),\nthen adds the hub's own apps to that project (the key Nomen makes is written to the state\ndirectory, owner-only, and nowhere else), sets auth, owner and web in the config, and keeps a\ncopy of the old one. Issuer: https://id.shippin.cloud unless --issuer.";
+pub const USAGE: &str = "Usage:\n  devagotchi hub serve --state-dir ABS_PATH --config ABS_JSON\n  devagotchi hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi hub devices --state-dir ABS_PATH\n  devagotchi hub owner --state-dir ABS_PATH --config ABS_JSON [--name NAME] [--replace]\n  devagotchi hub connect-nomen --state-dir ABS_PATH --config ABS_JSON --client-id ID --project ID [--issuer URL]\n  devagotchi board <command> …            the agents' board in this project (board --help)\n\nserve starts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\nrun and operation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' `devagotchi link` connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.\n\nowner (auth.mode hub) prints a one-time link (15 minutes) that makes the owner's passkey:\nthe first time it makes the owner's account, with the config's owner id if it names one;\nagain, it adds a passkey to the owner and ends the owner's other sessions; with --replace the\nlink also removes every other passkey of the owner (to take the account back).\n\nconnect-nomen joins this hub to a Nomen with its owner's approval: it shows a code to confirm\non any device through the devagotchi-cli app (--client-id) of the Devagotchi project (--project),\nthen adds the hub's own apps to that project (the key Nomen makes is written to the state\ndirectory, owner-only, and nowhere else), sets auth, owner and web in the config, and keeps a\ncopy of the old one. Issuer: https://id.shippin.cloud unless --issuer.";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -64,6 +64,8 @@ enum Command {
         state: PathBuf,
         config: PathBuf,
         name: Option<String>,
+        /// The link removes every other passkey of the owner when used.
+        replace: bool,
     },
     ConnectNomen(connect::Connect),
 }
@@ -172,8 +174,13 @@ fn parse_connect(args: Vec<OsString>) -> BridgeResult<Command> {
 
 fn parse_owner(args: Vec<OsString>) -> BridgeResult<Command> {
     let (mut state, mut config, mut name) = (None, None, None);
+    let mut replace = false;
     let mut iter = args.into_iter();
     while let Some(flag) = iter.next() {
+        if flag == "--replace" && !replace {
+            replace = true;
+            continue;
+        }
         let value = iter
             .next()
             .ok_or_else(|| BridgeError::new("invalid_cli", "flag without a value"))?;
@@ -190,6 +197,7 @@ fn parse_owner(args: Vec<OsString>) -> BridgeResult<Command> {
                 state,
                 config,
                 name,
+                replace,
             })
         }
         _ => Err(BridgeError::new(
@@ -301,6 +309,7 @@ fn manage(command: Command) -> BridgeResult<()> {
             state,
             config,
             name,
+            replace,
         } => {
             let config = read_config(&config)?;
             if !config.has_accounts() {
@@ -315,16 +324,24 @@ fn manage(command: Command) -> BridgeResult<()> {
                 name.as_deref().unwrap_or("Owner"),
                 link::random::<16>(),
             )?;
-            let token =
-                accounts.issue_link(accounts::LinkPurpose::Owner, &owner.id)?;
+            let token = if replace {
+                accounts.issue_replacing_link(accounts::LinkPurpose::Owner, &owner.id)?
+            } else {
+                accounts.issue_link(accounts::LinkPurpose::Owner, &owner.id)?
+            };
             // The link itself is never audited or logged; only that one was issued.
             operator_event(&state, "account.owner_link", &owner.id, "ok")?;
             // The link is the one secret this prints; it goes to stdout only, once.
             println!("{}/owner#{token}", config.public_url.trim_end_matches('/'));
             eprintln!(
-                "One-time link for the owner ({}), valid {} minutes; any earlier unused one no longer works.\nOpen it on the phone or computer that will hold your passkey. Using it ends the owner's other sessions.",
+                "One-time link for the owner ({}), valid {} minutes; any earlier unused one no longer works.\nOpen it on the phone or computer that will hold your passkey. Using it ends the owner's other sessions{}.",
                 owner.id,
-                accounts::LINK_TTL_SECS / 60
+                accounts::LINK_TTL_SECS / 60,
+                if replace {
+                    " and removes every other passkey of the owner"
+                } else {
+                    " (add --replace to also remove the owner's other passkeys)"
+                }
             );
         }
         Command::ConnectNomen(connect) => {
@@ -500,6 +517,11 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         eprintln!(
             "devagotchi hub web sign-in: {}/account",
             config.public_url.trim_end_matches('/')
+        );
+    }
+    if state.passkeys.is_some() && !config.public_url.starts_with("https://") {
+        eprintln!(
+            "devagotchi hub: signing people in over plain http on loopback, for tests only: its cookies reach any other service on this host's loopback"
         );
     }
     if state.passkeys.is_some() && config.owner_id().is_none() {
@@ -880,13 +902,19 @@ mod tests {
             Command::Owner {
                 state: STATE.into(),
                 config: CONFIG.into(),
-                name: None
+                name: None,
+                replace: false
             }
         );
         assert!(matches!(
             owner(&["--name", "Jesse"]).unwrap(),
             Command::Owner { name: Some(n), .. } if n == "Jesse"
         ));
+        assert!(matches!(
+            owner(&["--replace"]).unwrap(),
+            Command::Owner { replace: true, .. }
+        ));
+        assert!(owner(&["--replace", "--replace"]).is_err());
         assert!(owner(&["--device", "x"]).is_err());
         assert!(
             parse_args(["owner", "--state-dir", STATE].map(OsString::from)).is_err(),
@@ -917,6 +945,7 @@ mod tests {
                 state: state.clone(),
                 config: config.clone(),
                 name: name.map(str::to_string),
+                replace: false,
             })
         };
         let tokens = dir.path().join("tokens.json");

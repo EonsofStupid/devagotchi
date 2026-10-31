@@ -196,3 +196,83 @@ fn an_account_keeps_a_bounded_number_of_sessions() {
         "least recently used"
     );
 }
+
+#[test]
+fn a_link_adds_the_passkey_and_opens_its_session_together_or_not_at_all() {
+    let (_dir, accounts) = store();
+    let link = accounts.issue_link(LinkPurpose::Owner, A).unwrap();
+    // The session cannot be stored: nothing else happens either.
+    accounts
+        .connection
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "CREATE TEMP TRIGGER no_sessions BEFORE INSERT ON sessions
+             BEGIN SELECT RAISE(ABORT, 'no sessions'); END;",
+        )
+        .unwrap();
+    assert!(
+        accounts
+            .register_with_link(
+                A,
+                &credential(&accounts, A, 7),
+                "phone",
+                LinkPurpose::Owner,
+                &link
+            )
+            .is_err()
+    );
+    assert_eq!(
+        accounts.check_link(LinkPurpose::Owner, &link).unwrap(),
+        A,
+        "still live"
+    );
+    assert!(accounts.passkeys_of(A).unwrap().is_empty());
+    accounts
+        .connection
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER no_sessions;")
+        .unwrap();
+    let token = accounts
+        .register_with_link(
+            A,
+            &credential(&accounts, A, 7),
+            "phone",
+            LinkPurpose::Owner,
+            &link,
+        )
+        .unwrap();
+    assert_eq!(who(&accounts, &token, now_secs()), Some(A.to_string()));
+}
+
+#[test]
+fn a_counter_that_goes_back_ends_the_sessions_that_passkey_opened() {
+    // The race the verifier cannot see: the store holds a newer counter than the one the
+    // page read. The sign-in is refused and the passkey's sessions end; others stay.
+    let (_dir, accounts) = store();
+    let mut counted = credential(&accounts, A, 1);
+    counted.backup_eligible = false;
+    accounts
+        .store_passkey(A, &counted, "key", None, now_secs())
+        .unwrap();
+    let other = passkey(&accounts, A, 2);
+    let by_key = accounts.open_session(A, Some(&[1; 16])).unwrap();
+    let by_other = accounts.open_session(A, Some(&other)).unwrap();
+    let at = |count: u32| Asserted {
+        id: vec![1; 16],
+        public_key: vec![0x30, 1],
+        alg: Alg::Es256,
+        backup_eligible: false,
+        sign_count: count,
+        user_handle: A.as_bytes().to_vec(),
+        challenge: accounts.challenge(Ceremony::SignIn, None),
+    };
+    accounts.sign_in(&at(5)).unwrap();
+    assert_eq!(
+        accounts.sign_in(&at(5)).unwrap_err().code,
+        "signature_counter"
+    );
+    assert_eq!(who(&accounts, &by_key, now_secs()), None);
+    assert_eq!(who(&accounts, &by_other, now_secs()), Some(A.to_string()));
+}

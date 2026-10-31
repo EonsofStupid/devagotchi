@@ -358,6 +358,14 @@ impl HubConfig {
                         .into(),
                 ));
             }
+            // A hub with only its own accounts takes no other issuer's tokens: their `sub`
+            // would be compared with the hub's own account ids.
+            if matches!(&self.auth, AuthConfig::Hub { nomen: None, .. }) {
+                return Err(invalid(
+                    "trusted_issuers needs auth.nomen in auth mode hub: until the hub issues its own tokens (32b), another issuer's would name its accounts"
+                        .into(),
+                ));
+            }
             let primary = match &self.auth {
                 AuthConfig::Oidc { issuer, .. } | AuthConfig::Nomen { issuer, .. } => {
                     Some(issuer.trim_end_matches('/'))

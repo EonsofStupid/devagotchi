@@ -61,7 +61,7 @@ pub async fn bar(
 ) -> axum::response::Response {
     let bar = if state.web.is_none() && state.passkeys.is_none() {
         pages::Bar::Plain
-    } else if routes::signed_in(&state, request.headers()) {
+    } else if routes::signed_in(&state, request.headers()).await {
         pages::Bar::SignedIn
     } else {
         pages::Bar::SignedOut {

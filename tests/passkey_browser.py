@@ -52,12 +52,14 @@ def wait_ready(url: str, process: subprocess.Popen) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--devagotchi", required=True, help="absolute path of the binary")
+    parser.add_argument("--allow-skip", action="store_true",
+                        help="exit 0 when Playwright is missing instead of failing")
     args = parser.parse_args()
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
-        print("SKIPPED: Python Playwright is not installed")
-        return 0
+        print("NOT RUN: Python Playwright is not installed")
+        return 0 if args.allow_skip else 2
 
     work = Path(tempfile.mkdtemp(prefix="passkey-browser-"))
     state, config = work / "state", work / "hub.json"
@@ -102,7 +104,9 @@ def main() -> int:
 
             # 1. The owner's link makes the passkey and signs in.
             page.goto(link)
+            page.wait_for_function("!location.hash")
             assert page.url == f"{url}/owner", f"the token stayed in the address bar: {page.url}"
+            assert page.evaluate("location.hash") == ""
             page.click("#passkey-register")
             page.wait_for_url(f"{url}/account", timeout=15_000)
             text = page.inner_text("main")

@@ -34,7 +34,6 @@ impl Accounts {
         random: [u8; 32],
         now: u64,
     ) -> BridgeResult<String> {
-        let token = format!("dgs_{}", URL_SAFE_NO_PAD.encode(random));
         let mut connection = self.connection.lock().expect("accounts");
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -51,28 +50,7 @@ impl Accounts {
         if holder.disabled_at.is_some() {
             return Err(account_disabled(account));
         }
-        transaction
-            .execute(
-                "DELETE FROM sessions WHERE expires_at <= ?1 OR last_seen + ?2 <= ?1",
-                params![now, SESSION_IDLE_SECS],
-            )
-            .map_err(store_error)?;
-        // Past the cap, the least recently used of the account's sessions make room.
-        transaction
-            .execute(
-                "DELETE FROM sessions WHERE hash IN (
-                   SELECT hash FROM sessions WHERE account = ?1
-                   ORDER BY last_seen DESC, created_at DESC LIMIT -1 OFFSET ?2)",
-                params![account, MAX_SESSIONS_PER_ACCOUNT - 1],
-            )
-            .map_err(store_error)?;
-        transaction
-            .execute(
-                "INSERT INTO sessions (hash, account, passkey, created_at, last_seen, expires_at)
-                 VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
-                params![hash(&token), account, passkey, now, now + SESSION_MAX_SECS],
-            )
-            .map_err(store_error)?;
+        let token = insert_session(&transaction, account, passkey, random, now)?;
         transaction.commit().map_err(store_error)?;
         Ok(token)
     }
@@ -134,6 +112,28 @@ impl Accounts {
         Ok(Some(session))
     }
 
+    /// Add a passkey on a link's authority and open the session it signs in to, in one
+    /// transaction: if the session cannot be stored, the link stays live and no passkey is
+    /// added. Returns the session's token.
+    pub fn register_with_link(
+        &self,
+        account: &str,
+        credential: &NewCredential,
+        label: &str,
+        purpose: LinkPurpose,
+        token: &str,
+    ) -> BridgeResult<String> {
+        self.put_passkey(
+            account,
+            credential,
+            label,
+            Some((purpose, token)),
+            now_secs(),
+            Some(crate::link::random::<32>()),
+        )?
+        .ok_or_else(|| BridgeError::new("account_store", "no session was opened"))
+    }
+
     /// End one session (signing out); false when there was none.
     pub fn end_session(&self, token: &str) -> BridgeResult<bool> {
         let removed = self
@@ -145,6 +145,15 @@ impl Accounts {
         Ok(removed == 1)
     }
 
+    /// End every session `passkey` opened (a copy of it is about); how many there were.
+    pub fn end_passkey_sessions(&self, passkey: &[u8]) -> BridgeResult<usize> {
+        self.connection
+            .lock()
+            .expect("accounts")
+            .execute("DELETE FROM sessions WHERE passkey = ?1", params![passkey])
+            .map_err(store_error)
+    }
+
     /// End every session of `account`; how many there were.
     pub fn end_sessions(&self, account: &str) -> BridgeResult<usize> {
         self.connection
@@ -153,6 +162,40 @@ impl Accounts {
             .execute("DELETE FROM sessions WHERE account = ?1", params![account])
             .map_err(store_error)
     }
+}
+
+/// Store a new session of `account` inside `transaction`: expired sessions are cleared,
+/// and past the cap the account's least recently used ones make room. Returns its token.
+pub(super) fn insert_session(
+    transaction: &Connection,
+    account: &str,
+    passkey: Option<&[u8]>,
+    random: [u8; 32],
+    now: u64,
+) -> BridgeResult<String> {
+    let token = format!("dgs_{}", URL_SAFE_NO_PAD.encode(random));
+    transaction
+        .execute(
+            "DELETE FROM sessions WHERE expires_at <= ?1 OR last_seen + ?2 <= ?1",
+            params![now, SESSION_IDLE_SECS],
+        )
+        .map_err(store_error)?;
+    transaction
+        .execute(
+            "DELETE FROM sessions WHERE hash IN (
+               SELECT hash FROM sessions WHERE account = ?1
+               ORDER BY last_seen DESC, created_at DESC LIMIT -1 OFFSET ?2)",
+            params![account, MAX_SESSIONS_PER_ACCOUNT - 1],
+        )
+        .map_err(store_error)?;
+    transaction
+        .execute(
+            "INSERT INTO sessions (hash, account, passkey, created_at, last_seen, expires_at)
+             VALUES (?1, ?2, ?3, ?4, ?4, ?5)",
+            params![hash(&token), account, passkey, now, now + SESSION_MAX_SECS],
+        )
+        .map_err(store_error)?;
+    Ok(token)
 }
 
 #[cfg(test)]

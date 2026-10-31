@@ -30,7 +30,10 @@ pub fn router() -> Router<AppState> {
         .route("/auth/callback", get(callback))
         .route("/auth/logout", post(logout))
         .route("/owner", get(passkeys::owner_page))
-        .route("/passkey/register/options", post(passkeys::register_options))
+        .route(
+            "/passkey/register/options",
+            post(passkeys::register_options),
+        )
         .route("/passkey/register", post(passkeys::register))
         .route("/passkey/sign-in/options", post(passkeys::sign_in_options))
         .route("/passkey/sign-in", post(passkeys::sign_in))
@@ -103,8 +106,8 @@ pub(super) fn not_set_up() -> Response {
 pub(super) fn unavailable() -> Response {
     pages::message(
         StatusCode::SERVICE_UNAVAILABLE,
-        "Shippin sign-in is unavailable",
-        "The hub could not reach Shippin's sign-in service. Your access has not changed; try again in a minute.",
+        "Sign-in is unavailable",
+        "The hub could not check your sign-in just now. Your access has not changed; try again in a minute.",
         Some(("/account", "Try again")),
     )
 }
@@ -124,9 +127,9 @@ pub(super) async fn who(state: &AppState, headers: &HeaderMap) -> Who {
 }
 
 /// Whether this request carries a live session, without asking any other service.
-pub(super) fn signed_in(state: &AppState, headers: &HeaderMap) -> bool {
+pub(super) async fn signed_in(state: &AppState, headers: &HeaderMap) -> bool {
     match (&state.passkeys, &state.web) {
-        (Some(hub), _) => hub.signed_in(headers),
+        (Some(hub), _) => hub.signed_in(headers).await,
         (None, Some(web)) => web.signed_in(headers),
         (None, None) => false,
     }
@@ -155,7 +158,7 @@ async fn nomen_who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -> Who
 /// Signed in, `/` is your machines; signed out, it says what Devagotchi is and offers
 /// one Sign in, instead of sending a stranger straight to an identity provider.
 async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if signed_in(&state, &headers) {
+    if signed_in(&state, &headers).await {
         see_other("/account", &[])
     } else if state.passkeys.is_some() || state.web.is_some() {
         pages::home(state.passkeys.is_some())
@@ -303,8 +306,17 @@ async fn account(State(state): State<AppState>, headers: HeaderMap) -> Response 
 }
 
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    // Another site cannot sign you out, here or in your browser.
+    if !super::approvals::same_origin(&headers, &state.hub.config.public_url) {
+        return pages::message(
+            StatusCode::FORBIDDEN,
+            "Sign out from this hub's own page",
+            "That sign-out came from another site, so nothing was changed.",
+            Some(("/account", "Your account")),
+        );
+    }
     if let Some(hub) = state.passkeys.clone() {
-        hub.end_session(&headers);
+        hub.end_session(&headers).await;
         return see_other("/signed-out", &[hub.cookie(hub.session_cookie(), "", 0)]);
     }
     let Some(web) = state.web.clone() else {
