@@ -645,3 +645,35 @@ fn an_authority_never_prints_its_link() {
         "{shown}"
     );
 }
+
+#[test]
+fn a_second_process_uses_the_key_the_store_holds_now() {
+    // Two processes on one store: the first finds the clock set back and replaces the key,
+    // clearing every spent record. The second, holding the old key, must not take a
+    // challenge that was spent before.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("accounts.sqlite3");
+    let one = Accounts::open(&path).unwrap();
+    let two = Accounts::open(&path).unwrap();
+    one.create(A, "Jesse", true).unwrap();
+    seed(&one, A, 1, "synced").unwrap();
+    let at = |store: &Accounts, nonce: u8, issued: u64| {
+        let mut sign_in = asserted(store, 1, 0, A);
+        sign_in.challenge = store.challenge_at(Ceremony::SignIn, None, [nonce; 16], issued);
+        sign_in
+    };
+    let spent = at(&two, 1, 5_000);
+    two.sign_in_at(&spent, 5_001).unwrap();
+    one.sign_in_at(&at(&one, 2, 5_400), 5_400).unwrap();
+    assert!(
+        one.sign_in_at(&at(&one, 3, 1_800), 1_801).is_err(),
+        "the key is replaced"
+    );
+    // Back in the second process, its clock right: the old challenge is still spent.
+    assert_eq!(
+        two.sign_in_at(&spent, 5_002).unwrap_err().code,
+        "invalid_ceremony"
+    );
+    // And it takes up the new key for what it makes from here.
+    assert_eq!(two.sign_in_at(&at(&two, 4, 1_810), 1_811).unwrap().id, A);
+}

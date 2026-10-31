@@ -140,8 +140,10 @@ pub struct Passkey {
 
 pub struct Accounts {
     connection: Mutex<Connection>,
-    /// Signs this hub's passkey challenges. Replaced only when the clock is found set back
-    /// (`clock_set_back`), with the connection held.
+    /// Signs the passkey challenges this process makes: the store's key as last read. The
+    /// store's copy is the one that counts: every ceremony checks against it, read in its
+    /// own transaction, and refreshes this one. It changes only when a clock is found set
+    /// back (`clock_set_back`).
     challenge_key: std::sync::RwLock<hmac::Key>,
 }
 
@@ -239,23 +241,11 @@ impl Accounts {
                 params![crate::link::random::<32>().to_vec()],
             )
             .map_err(store_error)?;
-        let key: Vec<u8> = connection
-            .query_row(
-                "SELECT value FROM secrets WHERE name = 'challenge_key'",
-                [],
-                |row| row.get(0),
-            )
-            .map_err(store_error)?;
-        if key.len() != 32 {
-            return Err(BridgeError::new(
-                "account_store",
-                "the challenge key in accounts.sqlite3 is not 32 bytes; restore the store from a backup",
-            ));
-        }
+        let key = stored_key(&connection)?;
         make_private(path)?;
         Ok(Self {
             connection: Mutex::new(connection),
-            challenge_key: std::sync::RwLock::new(hmac::Key::new(hmac::HMAC_SHA256, &key)),
+            challenge_key: std::sync::RwLock::new(key),
         })
     }
 
@@ -453,15 +443,16 @@ impl Accounts {
         if self.clock_set_back(&mut connection, now)? {
             return Err(invalid_ceremony());
         }
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(store_error)?;
         let (mac, issued) = self.check_challenge(
+            &transaction,
             Ceremony::Register,
             Some(account),
             &credential.challenge,
             now,
         )?;
-        let transaction = connection
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(store_error)?;
         spend_challenge(&transaction, &mac, issued, now)?;
         let holder = transaction
             .query_row(
@@ -548,26 +539,28 @@ impl Accounts {
         challenge
     }
 
-    /// Check that `challenge` is this hub's, for `purpose` (and `account`), and unexpired;
-    /// returns its MAC, the key it is spent under, and when it was issued. Whether it is
-    /// spent is checked when it is.
+    /// Check, inside the ceremony's transaction, that `challenge` is this hub's, for
+    /// `purpose` (and `account`), and unexpired; returns its MAC, the key it is spent under,
+    /// and when it was issued. The key is the one the store holds now, read in the same
+    /// transaction, so a key another process replaced is never trusted here; this process
+    /// takes it up for the challenges it makes next. Whether the challenge is spent is
+    /// checked when it is.
     fn check_challenge(
         &self,
+        transaction: &Connection,
         purpose: Ceremony,
         account: Option<&str>,
         challenge: &[u8],
         now: u64,
     ) -> BridgeResult<(Vec<u8>, u64)> {
+        let key = stored_key(transaction)?;
+        *self.challenge_key.write().expect("challenge key") = key.clone();
         if challenge.len() != CHALLENGE_LEN || challenge[0] != CHALLENGE_FORMAT {
             return Err(invalid_ceremony());
         }
         let (signed, tag) = challenge.split_at(CHALLENGE_LEN - 32);
-        hmac::verify(
-            &self.challenge_key.read().expect("challenge key"),
-            &challenge_message(signed, purpose, account),
-            tag,
-        )
-        .map_err(|_| invalid_ceremony())?;
+        hmac::verify(&key, &challenge_message(signed, purpose, account), tag)
+            .map_err(|_| invalid_ceremony())?;
         let issued = u64::from_be_bytes(signed[1..9].try_into().expect("8 bytes"));
         if issued > now || now >= issued.saturating_add(CHALLENGE_TTL_SECS) {
             return Err(invalid_ceremony());
@@ -650,11 +643,16 @@ impl Accounts {
         if self.clock_set_back(&mut connection, now)? {
             return Err(invalid_ceremony());
         }
-        let (mac, issued) =
-            self.check_challenge(Ceremony::SignIn, None, &asserted.challenge, now)?;
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(store_error)?;
+        let (mac, issued) = self.check_challenge(
+            &transaction,
+            Ceremony::SignIn,
+            None,
+            &asserted.challenge,
+            now,
+        )?;
         spend_challenge(&transaction, &mac, issued, now)?;
         let not_here =
             || BridgeError::new("invalid_passkey", "this passkey is not registered here");
@@ -812,6 +810,24 @@ fn spend_challenge(connection: &Connection, mac: &[u8], issued: u64, now: u64) -
     } else {
         Err(invalid_ceremony())
     }
+}
+
+/// The challenge key the store holds: 32 bytes, or the store is damaged.
+fn stored_key(connection: &Connection) -> BridgeResult<hmac::Key> {
+    let key: Vec<u8> = connection
+        .query_row(
+            "SELECT value FROM secrets WHERE name = 'challenge_key'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(store_error)?;
+    if key.len() != 32 {
+        return Err(BridgeError::new(
+            "account_store",
+            "the challenge key in accounts.sqlite3 is not 32 bytes; restore the store from a backup",
+        ));
+    }
+    Ok(hmac::Key::new(hmac::HMAC_SHA256, &key))
 }
 
 /// The latest expiry of the spent challenges cleared so far (0 before any). A value that is
