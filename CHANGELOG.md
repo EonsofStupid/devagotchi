@@ -7,6 +7,14 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Images the AI can see (increment 34b-3)
+- `read_image` returns a PNG, JPEG, GIF or WebP file up to 3.75 MB (so its base64 stays under
+  the 5 MB an AI client takes per image) as an MCP image block, with a line naming its type
+  and size. The type comes from the file's first bytes, never its name; anything else is
+  refused with `not_an_image`, a larger file with `too_large` at the first page. The image is
+  read in the broker's ordinary 24 KiB pages (no contract change), so it works on any broker
+  this release talks to. Local server and hub; the hub audits the path.
+
 ### Read by lines (increment 34b-2)
 - `read_file` reads by lines, as Desktop Commander's does: `start_line` (1-based, or negative
   for the last lines) and `line_count` (default 1000, at most 5000; never more than the page's

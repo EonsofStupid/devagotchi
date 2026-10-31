@@ -7,10 +7,13 @@ use devagotchi_contracts::{
     FileListInput, FileListing, FileMoveInput, FileReadInput, FileWriteInput, FileWritten,
     MAX_FILE_READ_BYTES, RequestBody, ResponseBody, WriteMode,
 };
-use devagotchi_mcp::files::{Files, read_many};
+use devagotchi_mcp::{
+    files::{Files, read_many},
+    image::read_image,
+};
 use rmcp::{
-    Json, RoleServer, handler::server::wrapper::Parameters, service::RequestContext, tool,
-    tool_router,
+    Json, RoleServer, handler::server::wrapper::Parameters, model::CallToolResult,
+    service::RequestContext, tool, tool_router,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -387,5 +390,45 @@ impl Hub {
             ResponseBody::Info(info) => Ok(Json(info)),
             other => Err(unexpected_response("info", &other)),
         }
+    }
+
+    #[tool(
+        name = "read_image",
+        description = "Look at an image file on one of the user's machines: a PNG, JPEG, GIF or WebP up to 3.75 MB comes back as an image you can see. The type is taken from the file's bytes. Get machine names from `machines`.",
+        title = "Look at an image on a machine",
+        annotations(
+            title = "Look at an image on a machine",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn read_image(
+        &self,
+        Parameters(input): Parameters<PathOnMachine>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, Json<BridgeError>> {
+        let subject = self.subject(&context)?;
+        let route = match self.route(&subject, &input.machine) {
+            Ok(route) => route,
+            Err(Json(error)) => {
+                self.record(&subject, "read_image", &input.machine, &input.path, &error.code)?;
+                return Err(Json(error));
+            }
+        };
+        let read = read_image(|body| self.send(&route, body), input.path.clone());
+        let image = tokio::select! {
+            biased;
+            _ = context.ct.cancelled() => Err(BridgeError::new(
+                "request_cancelled",
+                "stopped reading; nothing was changed",
+            )),
+            image = read => image,
+        };
+        let code = match &image {
+            Ok(_) => "ok",
+            Err(error) => error.code.as_str(),
+        };
+        self.record(&subject, "read_image", &input.machine, &input.path, code)?;
+        image.map(|image| image.into_result()).map_err(Json)
     }
 }

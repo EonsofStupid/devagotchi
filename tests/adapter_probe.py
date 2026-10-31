@@ -135,6 +135,18 @@ if args.account:
         raise SystemExit("read_file by lines did not read line 2")
     if last.get("text") != "gamma\n" or last.get("start_line") != 3:
         raise SystemExit("read_file did not read the last line")
+    # An image the AI can see: written as bytes, read back as an MCP image block.
+    picture = os.path.join(args.cwd, "dot.png")
+    call("write_file", {"path": picture, "bytes_base64": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="})
+    seen = rpc("tools/call", {"name": "read_image", "arguments": {"path": picture}})["result"]
+    blocks = {block.get("type"): block for block in seen.get("content", [])}
+    print("image:", seen.get("isError"), sorted(blocks), blocks.get("image", {}).get("mimeType"))
+    if seen.get("isError") or blocks.get("image", {}).get("data") != "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==" \
+            or blocks["image"].get("mimeType") != "image/png":
+        raise SystemExit("read_image did not return the PNG as an image")
+    not_image = rpc("tools/call", {"name": "read_image", "arguments": {"path": numbered}})["result"]
+    if not not_image.get("isError") or "not_an_image" not in not_image["content"][0]["text"]:
+        raise SystemExit("read_image did not refuse a text file")
     # The rest of Desktop Commander's file tools: a directory, a move, info, several files.
     made = call("create_directory", {"path": os.path.join(args.cwd, "made", "deeper")})
     moved = call("move_file", {"source": path, "destination": os.path.join(args.cwd, "made", "moved.txt")})
