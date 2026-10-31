@@ -18,6 +18,7 @@ mod identity;
 mod join;
 mod link;
 mod nomen;
+mod oauth;
 mod push;
 mod run;
 #[cfg(test)]
@@ -507,7 +508,15 @@ fn app(state: AppState) -> Router {
                 )),
         )
         .merge(web::router().layer(middleware::from_fn_with_state(state.clone(), web::bar)))
+        .merge(oauth_routes(state.verifier.authority()))
         .with_state(state)
+}
+
+fn oauth_routes(authority: Option<std::sync::Arc<oauth::Authority>>) -> Router<AppState> {
+    let Some(authority) = authority else {
+        return Router::new();
+    };
+    oauth::http_router(authority)
 }
 
 async fn require_bearer(
@@ -515,16 +524,25 @@ async fn require_bearer(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let scope = match &state.hub.config.auth {
-        config::AuthConfig::Nomen { audiences, .. } => {
-            format!(", scope=\"{}\"", crate::auth::sign_in_scopes(audiences))
-        }
-        _ => String::new(),
+    let origin = state.hub.config.public_url.trim_end_matches('/');
+    let (metadata_url, scope) = if state.verifier.authority().is_some() {
+        (
+            format!("{origin}/.well-known/oauth-protected-resource/mcp"),
+            ", scope=\"openid email profile offline_access mcp\"".to_string(),
+        )
+    } else {
+        let scope = match &state.hub.config.auth {
+            config::AuthConfig::Nomen { audiences, .. } => {
+                format!(", scope=\"{}\"", crate::auth::sign_in_scopes(audiences))
+            }
+            _ => String::new(),
+        };
+        (
+            format!("{origin}/.well-known/oauth-protected-resource"),
+            scope,
+        )
     };
-    let metadata = format!(
-        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"{scope}",
-        state.hub.config.public_url.trim_end_matches('/')
-    );
+    let metadata = format!("Bearer resource_metadata=\"{metadata_url}\"{scope}");
     let token = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -632,7 +650,11 @@ fn challenge(status: StatusCode, metadata: &str, error: Option<&str>) -> Respons
     response
 }
 
-async fn protected_resource(State(state): State<AppState>) -> Response {
+async fn protected_resource(State(state): State<AppState>, request: Request) -> Response {
+    if let Some(authority) = state.verifier.authority() {
+        let mcp = request.uri().path().ends_with("/mcp");
+        return axum::Json(authority.protected_resource(mcp)).into_response();
+    }
     let Some(issuer) = state.verifier.issuer() else {
         return (StatusCode::NOT_FOUND, "no authorization server in dev mode").into_response();
     };

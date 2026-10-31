@@ -68,6 +68,8 @@ pub enum Verifier {
         primary: Box<Verifier>,
         trusted: Vec<OidcVerifier>,
     },
+    /// Tokens this hub issued. Checked locally, with the hub's own signing key.
+    Devagotchi(std::sync::Arc<crate::oauth::Authority>),
 }
 
 /// The `iss` a JWT claims, unverified: only for choosing which issuer checks it.
@@ -93,7 +95,7 @@ impl Verifier {
         config: &crate::config::HubConfig,
         state_dir: &Path,
     ) -> BridgeResult<Self> {
-        let primary = Self::primary(&config.auth, state_dir).await?;
+        let primary = Self::primary(&config.auth, state_dir, &config.public_url).await?;
         if config.trusted_issuers.is_empty() {
             return Ok(primary);
         }
@@ -109,7 +111,11 @@ impl Verifier {
 
     /// The verifier `auth` names. A Nomen verifier keeps the sign-ins Nomen confirmed
     /// in `state_dir`, so a restart during a Nomen outage signs nobody out.
-    async fn primary(config: &AuthConfig, state_dir: &Path) -> BridgeResult<Self> {
+    async fn primary(
+        config: &AuthConfig,
+        state_dir: &Path,
+        public_url: &str,
+    ) -> BridgeResult<Self> {
         match config {
             AuthConfig::Nomen {
                 issuer,
@@ -124,12 +130,9 @@ impl Verifier {
                 OidcVerifier::discover(issuer, audiences).await?,
             )),
             AuthConfig::Dev { tokens_file } => Ok(Verifier::Dev(read_dev_tokens(tokens_file)?)),
-            // The authorization server (phase 3) replaces this. Until it does, a
-            // devagotchi hub refuses bearers rather than treating a Nomen token as one.
-            AuthConfig::Devagotchi { .. } => Err(BridgeError::new(
-                "invalid_config",
-                "auth.mode devagotchi is not serving bearers yet",
-            )),
+            AuthConfig::Devagotchi { .. } => Ok(Verifier::Devagotchi(std::sync::Arc::new(
+                crate::oauth::Authority::open(state_dir, public_url)?,
+            ))),
         }
     }
 
@@ -156,6 +159,7 @@ impl Verifier {
                 .ok_or(AuthError::Invalid("unknown token")),
             Verifier::Nomen(nomen) => nomen.verify(bearer).await,
             Verifier::Oidc(oidc) => oidc.verify(bearer).await,
+            Verifier::Devagotchi(authority) => authority.verify_access(bearer),
             Verifier::Federated { primary, trusted } => {
                 let claimed = claimed_issuer(bearer);
                 let chosen = claimed.as_deref().and_then(|iss| {
@@ -178,7 +182,7 @@ impl Verifier {
         match self {
             Verifier::Nomen(nomen) => Some(nomen.health()),
             Verifier::Federated { primary, .. } => primary.issuer_health(),
-            _ => None,
+            Verifier::Devagotchi(_) | Verifier::Oidc(_) | Verifier::Dev(_) => None,
         }
     }
 
@@ -188,6 +192,15 @@ impl Verifier {
             Verifier::Oidc(oidc) => Some(&oidc.issuer),
             Verifier::Dev(_) => None,
             Verifier::Federated { primary, .. } => primary.issuer(),
+            Verifier::Devagotchi(authority) => Some(authority.issuer()),
+        }
+    }
+
+    pub fn authority(&self) -> Option<std::sync::Arc<crate::oauth::Authority>> {
+        match self {
+            Verifier::Devagotchi(authority) => Some(authority.clone()),
+            Verifier::Federated { primary, .. } => primary.authority(),
+            _ => None,
         }
     }
 }
