@@ -30,6 +30,7 @@ pub fn router() -> Router<AppState> {
         .route("/auth/callback", get(callback))
         .route("/auth/logout", post(logout))
         .route("/api/v1/me", get(me))
+        .route("/api/v1/machines", post(machines::add_json))
         .route("/approvals", get(approvals::list))
         .route("/approvals/decide", post(approvals::decide))
         .route("/approvals/test", post(approvals::test))

@@ -3,6 +3,8 @@
 
 use std::{ffi::OsString, path::PathBuf, process::ExitCode};
 
+pub mod background;
+
 pub const USAGE: &str = "Usage: devagotchi broker run --state-dir ABS_PATH --config ABS_JSON\n\nStarts a private per-user local broker. The state parent directory must exist.\nExecutable grants authorize process execution as your OS user, not a sandbox.\nThe ready line names the endpoint clients pass to `devagotchi mcp --socket`: a Unix socket path\non Linux, or a \\\\.\\pipe\\ named-pipe path on Windows; the same endpoint is written to\n<state>/endpoint for `devagotchi mcp` to find on its own. The macOS provider is pending.";
 
 /// The file beside the socket that names the endpoint, for clients that know only the

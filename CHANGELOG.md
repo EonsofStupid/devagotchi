@@ -5,7 +5,158 @@ Releases are the operator's act: a tag `vX.Y.Z` on `main` runs `.github/workflow
 The version in `Cargo.toml` is bumped by the operator in the same commit as this file's next
 heading. Agents draft the fragments below; they never tag.
 
-## Unreleased (would be 0.1.0 — the first release; no tag exists yet)
+## Unreleased
+
+### Images the AI can see (increment 34b-3)
+- `read_image` returns a PNG, JPEG, GIF or WebP file up to 3.75 MB (so its base64 stays under
+  the 5 MB an AI client takes per image) as an MCP image block, with a line naming its type
+  and size. The type comes from the file's first bytes, never its name; anything else is
+  refused with `not_an_image`, a larger file with `too_large` at the first page. The image is
+  read in the broker's ordinary 24 KiB pages (no contract change), so it works on any broker
+  this release talks to. Local server and hub; the hub audits the path.
+- It refuses an image over 8000 pixels on a side (`too_large`, read from the PNG, GIF, JPEG or
+  WebP header): the Claude API refuses one, and a refused image stays in the conversation and
+  fails every later request. Pages must join exactly and the file must keep its size and
+  time, so pages of two files are never joined and a machine that misreports is refused, not
+  followed; a text page that starts a byte late (an image's text metadata) is read again
+  from its character's first byte. Some clients (ChatGPT, as of October 2026) do not show
+  tool images to the model; the tool's description says so.
+
+### Read by lines (increment 34b-2)
+- `read_file` reads by lines, as Desktop Commander's does: `start_line` (1-based, or negative
+  for the last lines) and `line_count` (default 1000, at most 5000; never more than the page's
+  bytes). The answer says `start_line`, `next_line` and `total_lines`: exact for files up to
+  8 MiB, and once a read from a known line number reaches the end. To read on, pass
+  `next_line` as `start_line` and `next_offset` as `offset`: nothing is scanned again, so
+  paging through a large file costs one page a call. A line longer than the page goes on by
+  bytes. Local server and hub.
+- The broker finds a start by scanning at most 256 MiB in 64 KiB chunks (`too_far` past that,
+  pointing to `offset` or a tail), reads only up to the size the file had when the call
+  began (a log growing meanwhile is read as it was; one that shrank answers
+  `changed_while_reading`), and refuses a file that is not text with `not_text`. Escape
+  counts as text now, so a coloured log reads as text by lines and by bytes.
+- Every file request runs on the broker's blocking pool, so a large file never stalls jobs,
+  waits or other callers.
+- Contracts: `FileReadInput.start_line`/`line_count`, `FileContent.start_line`/`next_line`/
+  `total_lines`; a broker from before this refuses them with `invalid_request`.
+
+### The rest of Desktop Commander's file tools (increment 34b)
+- `read_multiple_files` (up to 20 files in one call, each answered or its error reported),
+  `get_file_info` (kind, size, modified and created times, read-only, Unix mode, a link's
+  target, a text file's line count), `create_directory` (with missing parents; an existing
+  directory is not an error) and `move_file` (same filesystem; refuses an existing
+  destination unless `overwrite`, never replaces a directory, moves a link as itself), on the
+  local server and on the hub for every machine.
+- Contracts: `FileInfo`, `FileMkdir` and `FileMove` requests and the `Info` response; a broker
+  from before this answers them with `invalid_request`.
+- Under `granted`, directories are made one plain name at a time below a part that exists and
+  is inside the workspace (a `..` in the part to make is refused, for `write_file`'s
+  `create_dirs` too); a link is judged by where it lands, from where it is or would be after a
+  move, and from its text when its target is missing (`write_file` no longer writes through a
+  dangling link out of the workspace); a directory moves only when none of its links climbs
+  with `..` or points outside. Moving a file onto another name of itself (a hard link, or a
+  change of case where the filesystem ignores case) moves rather than reporting a
+  replacement. The hub audits a move's destination, every path `read_multiple_files` asked
+  for, and a refused route for `run` and `read_multiple_files`.
+
+### The local server has the hub's tools, and runs as you (increment 34a)
+- `devagotchi mcp` serves `run`, `read_file`, `list_directory`, `write_file` and `edit_file`
+  (the hub's tools, names and inputs, without the machine's name) and `operation_list`
+  beside the operation tools. An AI runs a command, or reads, writes or edits a file, in one
+  call. The server is named `devagotchi` (was `desktop-bridge`), its instructions steer an AI
+  to `run` and the file tools, and every tool has a title and read-only/destructive hints.
+- A first `devagotchi start` (and so `setup` and an AI's first `devagotchi mcp`) writes
+  `exec_policy: account`: the broker runs what the person's account can, shell lines included,
+  as Desktop Commander does (trust by default, ruled 30 Oct 2026). An existing `broker.json`
+  is kept; `"exec_policy": "granted"` narrows it again. Server installers keep their own default.
+- `run`'s composition (start, one held wait, read) lives in `devagotchi-mcp` and serves both
+  the local server and the hub. On the way, for both:
+  - the cursor `run` gives for a command still running points past the output it already
+    returned (it named the start of the last page, so following it repeated that page);
+  - it reads only the output written by its first read, so a command still writing fast is
+    not chased past the wait it was given, and stopping the call stops the reading too;
+  - a broker that runs only granted programs refuses `run` with what works instead
+    (`operation_start` with an executable, or `exec_policy` `account`), not with a field
+    `run` does not have.
+
+## 0.1.0 - 2026-10-30
+
+The first release, tagged at the operator's word (30 Oct 2026).
+
+### Install in one line, for a person or their AI (increment 33b)
+- README "Install": one line per system that installs `devagotchi` for the user from the
+  latest release (cargo-dist's installers, `~/.local/bin`, no administrator rights) and runs
+  `devagotchi setup`. Each line stops before `setup` when the download or the install fails
+  (`bash -o pipefail`; PowerShell `try … catch { throw }`). The Windows line works the same
+  from PowerShell, Command Prompt and Git Bash (the shell Claude Code uses there), and under a
+  PowerShell 7 session, whose module path otherwise stops Windows PowerShell loading the
+  installer's cmdlets. What it changes, said plainly for an AI to tell the person first (the
+  binary, the PATH lines the installer adds, client configs, a background broker whose granted
+  tools can do whatever the account can); how to update and to undo, in order; another MCP
+  client's config; and which installer checks a checksum. `llms.txt` says the same. Marked
+  unpublished until v0.1.0 exists.
+- `devagotchi setup`/`connect` print the server's absolute command before saying they found
+  no client, so another MCP client can be given it.
+- The release gate (`.github/workflows/install-check.yml`, which `host` needs): on
+  ubuntu-22.04, ubuntu-22.04-arm, ubuntu-24.04, ubuntu-24.04-arm, windows-2022, windows-2025
+  and windows-11-arm, the README's own line, run from every shell there, installs from the
+  very installers and archives `host` publishes, served on 127.0.0.1. Each shell must fetch
+  its system's own archive (Git Bash on ARM64 Windows gets the x64 build, as documented), a
+  failed download must stop the line before `setup`, `setup` sets up Claude Code (a stub
+  records the call), Codex and Claude Desktop and its check passes, the broker is killed as a
+  reboot would, and the command Codex was given starts it again and runs `git --version` to
+  the end (`tests/install_check.py`, which runs only on a GitHub-hosted runner or a declared
+  throwaway home, and stops only processes of its own install). A target dist builds with no
+  runner fails it. `host` publishes a release only when every runner passed; pull requests
+  run it too.
+
+### One step for an AI client, no account (increment 33a)
+- `devagotchi mcp` with no broker answering starts this user's broker in the background
+  (`devagotchi start --background`) and uses it, so an AI client's whole config is
+  `devagotchi mcp`, as Desktop Commander's is one `npx` line. The broker
+  (`devagotchi_core::execution::detached`, native code in the platform modules):
+  - has a session of its own (Linux), or no console, a process group of its own and is out of
+    the caller's job where the job allows it (Windows), so a client closing its whole process
+    tree leaves it running;
+  - inherits nothing but the null device and its log: every other descriptor is closed on
+    exec (Linux), and Windows gets an explicit inherited-handle list, so an AI client's pipes
+    are never held open;
+  - runs in its state directory with a pared-down environment: what programs need to find
+    home, temp and tools, plus the SSH agent, proxies, extra CA certificates and toolchain
+    homes jobs need; an AI client's own variables, tokens in an MCP `env` block among them and
+    who it acts as (`DEVAGOTCHI_ACTOR`), do not reach it or its jobs (a broker started in a
+    terminal keeps that terminal's whole environment);
+  - writes to `<state>/broker.log` (0600); a broker that stops at once is reported at once with
+    what it wrote (not an earlier start's lines), and one that holds the state but does not
+    answer is reported as such.
+  The state directory is made by the IPC layer that checks it, which also fixes `devagotchi
+  start` on Windows for administrators (a directory they make is owned by Administrators and
+  was refused). Two starts racing meet at the broker's instance lock; a broker is found by
+  asking its endpoint, never by a remembered PID.
+- `devagotchi start --background`: the same start, detached; returns once the broker answers.
+- `devagotchi setup`: `connect` for every AI client found, with this machine's broker when no
+  account is on file instead of asking to sign in first; an account whose sign-in ran out keeps
+  its hub. Codex gets `startup_timeout_sec = 30`, since a first start may start the broker.
+- `DEVAGOTCHI_BROKER_CONFIG` names the broker's config file alone. The Windows installer sets
+  it and `DEVAGOTCHI_STATE_DIR` for the user, so plain `devagotchi mcp` and `setup` find its
+  broker on D: instead of starting a second one, while the sign-in stays in `%APPDATA%`; it
+  stops a broker started either way before replacing binaries.
+- `devagotchi start` writes a first config through a temporary file of its own process.
+- Windows: a broker started by an elevated administrator can be started again by the same user
+  unelevated or from Git Bash. Its lock and journal, owned by the Administrators group when made
+  elevated, were refused (`lock_permissions`) where the token's owner is the user. A private
+  file may now be owned by that group too; its DACL must still grant the user alone.
+
+### devagotchi.com sign-ins reach the hub (increment 31)
+- `trusted_issuers: [{ "issuer", "audiences" }]` in the hub config: more OpenID Connect
+  issuers whose signed JWTs the hub accepts next to `auth` (Nomen stays the primary). A token
+  is checked by the issuer its `iss` names, with that issuer's keys; every other token goes to
+  `auth`. https only, no duplicates, never beside `auth.mode dev`. Discovery runs at start.
+- `POST /api/v1/machines` `{ "name" }`, bearer only: the same one-time owned code "Add a
+  machine" issues, plus the hub's `/join` lines when it serves downloads, `Cache-Control:
+  no-store`. The hub's cookie is not accepted there, so another site cannot mint codes.
+- Verified: `cargo test -p devagotchi-hub` (121, including ES256 routing, a forged-key token
+  refused, config rules, bearer-only issuing and the code joining for that account only).
 
 ### The hub connects itself to a Nomen (increment 30)
 - `devagotchi hub connect-nomen --state-dir … --config … --client-id ID --project ID

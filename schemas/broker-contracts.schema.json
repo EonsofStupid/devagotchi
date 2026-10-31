@@ -41,6 +41,19 @@
       ],
       "type": "object"
     },
+    "DirectoryInput": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Absolute path of the directory to make; missing parents are made too. An existing\ndirectory is not an error.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
     "FileContent": {
       "additionalProperties": false,
       "properties": {
@@ -56,6 +69,15 @@
           "type": "boolean"
         },
         "modified_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "next_line": {
+          "description": "Read by lines: the `start_line` to read on from, when lines remain and the number\nis known. A single line longer than `max_bytes` is read on by bytes, from\n`next_offset`.",
           "format": "uint64",
           "minimum": 0,
           "type": [
@@ -85,10 +107,28 @@
           "minimum": 0,
           "type": "integer"
         },
+        "start_line": {
+          "description": "Read by lines: the 1-based number of the first line returned, when known (always\nfor a positive `start_line`; from the end, for files up to 8 MiB).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "text": {
           "description": "The bytes as text, when they are UTF-8 text. A character split at the end of the\npage is left for the next read.",
           "type": [
             "string",
+            "null"
+          ]
+        },
+        "total_lines": {
+          "description": "Read by lines: the file's line count, for files up to 8 MiB, or once a read from a\nknown line number reaches the end.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
             "null"
           ]
         }
@@ -173,6 +213,102 @@
       ],
       "type": "object"
     },
+    "FileInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "created_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "`file`, `dir`, `symlink` or `other`.",
+          "type": "string"
+        },
+        "lines": {
+          "description": "For a text file of at most 8 MiB: how many lines it has.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "link_target": {
+          "description": "Where a symbolic link points, as stored in the link.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "made": {
+          "description": "After create_directory: whether this call made it (false: it existed already).",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "mode": {
+          "description": "Unix permission bits in octal (`0644`); absent on Windows.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modified_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "The path, canonical up to its own name (a link is reported as itself).",
+          "type": "string"
+        },
+        "readonly": {
+          "description": "Whether its permissions mark it read-only.",
+          "type": "boolean"
+        },
+        "replaced": {
+          "description": "After move_file: whether a file at the destination was replaced.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "size": {
+          "description": "Size in bytes (for a link, the link's own).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "size",
+        "readonly"
+      ],
+      "type": "object"
+    },
+    "FileInfoInput": {
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Absolute path of a file, directory or symbolic link.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "type": "object"
+    },
     "FileListInput": {
       "additionalProperties": false,
       "properties": {
@@ -226,9 +362,41 @@
       ],
       "type": "object"
     },
+    "FileMoveInput": {
+      "additionalProperties": false,
+      "properties": {
+        "destination": {
+          "description": "Absolute path it moves to, on the same filesystem. Its parent directory must exist.",
+          "type": "string"
+        },
+        "overwrite": {
+          "default": false,
+          "description": "Replace a file already at the destination (never a directory). Default false: an\nexisting destination refuses the move and changes nothing.",
+          "type": "boolean"
+        },
+        "source": {
+          "description": "Absolute path of the file, directory or link to move or rename (a link moves as\nitself, never what it points to).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "destination"
+      ],
+      "type": "object"
+    },
     "FileReadInput": {
       "additionalProperties": false,
       "properties": {
+        "line_count": {
+          "description": "With `start_line`: how many lines, 1..=5000 (default 1000; from a negative\n`start_line`, the lines to the end). Never more than `max_bytes` of text.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "max_bytes": {
           "default": 24576,
           "description": "Bytes to read, 1..=24576 (default 24576). Read on from `next_offset` for more.",
@@ -238,13 +406,21 @@
         },
         "offset": {
           "default": 0,
-          "description": "Byte offset to start at; negative counts back from the end (a tail). Default 0.",
+          "description": "Byte offset to start at; negative counts back from the end (a tail). Default 0.\nWith a positive `start_line`: the `next_offset` that came with that `next_line`, so\nthe line is not searched for again.",
           "format": "int64",
           "type": "integer"
         },
         "path": {
           "description": "Absolute path of the file.",
           "type": "string"
+        },
+        "start_line": {
+          "description": "Read by lines instead of bytes: the 1-based line to start at, or negative to count\nback from the end (-50: the last 50 lines). `offset` is then not used.",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
         }
       },
       "required": [
@@ -748,17 +924,29 @@
     "changes_input": {
       "$ref": "#/$defs/ChangesInput"
     },
+    "directory_input": {
+      "$ref": "#/$defs/DirectoryInput"
+    },
     "file_content": {
       "$ref": "#/$defs/FileContent"
     },
     "file_edit_input": {
       "$ref": "#/$defs/FileEditInput"
     },
+    "file_info": {
+      "$ref": "#/$defs/FileInfo"
+    },
+    "file_info_input": {
+      "$ref": "#/$defs/FileInfoInput"
+    },
     "file_list_input": {
       "$ref": "#/$defs/FileListInput"
     },
     "file_listing": {
       "$ref": "#/$defs/FileListing"
+    },
+    "file_move_input": {
+      "$ref": "#/$defs/FileMoveInput"
     },
     "file_read_input": {
       "$ref": "#/$defs/FileReadInput"
@@ -819,6 +1007,10 @@
     "file_write_input",
     "file_edit_input",
     "file_written",
+    "file_info_input",
+    "directory_input",
+    "file_move_input",
+    "file_info",
     "bridge_error"
   ],
   "title": "BrokerContracts",

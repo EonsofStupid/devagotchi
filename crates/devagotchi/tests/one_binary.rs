@@ -15,7 +15,7 @@ fn help_names_every_command_and_each_answers_help() {
     assert!(out.status.success());
     let text = String::from_utf8_lossy(&out.stdout);
     for word in [
-        "start", "mcp", "connect", "board", "broker", "hub", "link", "login", "logout", "whoami",
+        "setup", "start", "mcp", "connect", "board", "broker", "hub", "link", "login", "logout", "whoami",
         "version",
     ] {
         assert!(
@@ -24,7 +24,7 @@ fn help_names_every_command_and_each_answers_help() {
         );
     }
     for command in [
-        "start", "mcp", "connect", "board", "broker", "hub", "link", "login", "logout", "whoami",
+        "setup", "start", "mcp", "connect", "board", "broker", "hub", "link", "login", "logout", "whoami",
     ] {
         let out = devagotchi().args([command, "--help"]).output().unwrap();
         assert!(
@@ -90,6 +90,8 @@ fn mcp_hub_without_an_account_answers_on_the_wire_and_refuses_bad_flags() {
     assert!(front.wait().unwrap().success());
 }
 
+/// Where no execution provider exists yet, `mcp` says so instead of starting a broker.
+#[cfg(not(any(target_os = "linux", windows)))]
 #[test]
 fn mcp_without_a_broker_says_what_to_run() {
     let dir = tempfile::tempdir().unwrap();
@@ -100,6 +102,211 @@ fn mcp_without_a_broker_says_what_to_run() {
         .unwrap();
     assert_eq!(out.status.code(), Some(69));
     assert!(String::from_utf8_lossy(&out.stderr).contains("devagotchi start"));
+}
+
+/// The whole of an AI client's setup is `devagotchi mcp`, as with Desktop Commander's
+/// `npx`: with no broker running and nothing configured, the first call starts this user's
+/// broker in the background. The broker outlives the adapter, and the next agent finds it.
+#[cfg(any(target_os = "linux", windows))]
+#[test]
+fn mcp_starts_this_users_broker_when_none_is_running() {
+    let home = tempfile::tempdir().unwrap();
+    let state = home.path().join("state");
+    let config_dir = home.path().join("config");
+    let env = [
+        ("DEVAGOTCHI_STATE_DIR", state.as_os_str().to_owned()),
+        ("DEVAGOTCHI_CONFIG_DIR", config_dir.as_os_str().to_owned()),
+        ("HOME", home.path().as_os_str().to_owned()),
+        ("USERPROFILE", home.path().as_os_str().to_owned()),
+    ];
+    let stop = Broker(state.clone());
+
+    let tools = tools_of_a_fresh_adapter(&env);
+    assert!(tools.contains(&"operation_start".to_string()), "{tools:?}");
+    assert!(config_dir.join("broker.json").is_file(), "the first start wrote its config");
+    let endpoint = std::fs::read_to_string(state.join("endpoint")).unwrap();
+
+    // The adapter has exited; the broker it started has not. A second agent uses it.
+    let tools = tools_of_a_fresh_adapter(&env);
+    assert!(tools.contains(&"operation_start".to_string()), "{tools:?}");
+    assert_eq!(std::fs::read_to_string(state.join("endpoint")).unwrap(), endpoint);
+    let log = std::fs::read_to_string(state.join("broker.log")).unwrap();
+    assert_eq!(
+        log.matches("devagotchi broker ready").count(),
+        1,
+        "one broker, started once:\n{log}"
+    );
+    drop(stop);
+}
+
+/// An AI client that kills everything it started (its whole process group) when it closes
+/// leaves the broker its adapter started running: the broker has a session of its own.
+#[cfg(target_os = "linux")]
+#[test]
+fn killing_the_clients_whole_process_group_leaves_the_broker_running() {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        os::unix::process::CommandExt,
+        process::Stdio,
+    };
+    let home = tempfile::tempdir().unwrap();
+    let state = home.path().join("state");
+    let env = [
+        ("DEVAGOTCHI_STATE_DIR", state.as_os_str().to_owned()),
+        ("DEVAGOTCHI_CONFIG_DIR", home.path().join("config").into_os_string()),
+        ("HOME", home.path().as_os_str().to_owned()),
+    ];
+    let stop = Broker(state.clone());
+    let mut adapter = devagotchi()
+        .arg("mcp")
+        .envs(env.iter().cloned())
+        .process_group(0)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = adapter.stdin.take().unwrap();
+    let mut stdout = BufReader::new(adapter.stdout.take().unwrap());
+    let initialize = serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "group-kill", "version": "0" } } });
+    writeln!(stdin, "{initialize}").unwrap();
+    let mut line = String::new();
+    assert!(stdout.read_line(&mut line).unwrap() > 0, "the adapter never answered");
+    let group = adapter.id().to_string();
+    let killed = Command::new("kill")
+        .args(["-s", "KILL", "--", &format!("-{group}")])
+        .status()
+        .unwrap();
+    assert!(killed.success(), "kill {killed}");
+    drop(stdin);
+    let status = adapter.wait().unwrap();
+    assert!(!status.success(), "the adapter was killed, not closed: {status}");
+
+    let tools = tools_of_a_fresh_adapter(&env);
+    assert!(tools.contains(&"operation_start".to_string()), "{tools:?}");
+    let log = std::fs::read_to_string(state.join("broker.log")).unwrap();
+    assert_eq!(
+        log.matches("devagotchi broker ready").count(),
+        1,
+        "the first broker survived; no second was started:\n{log}"
+    );
+    drop(stop);
+}
+
+/// Stops the broker a test started in the background (found by its state directory,
+/// which it was started with), however the test ends.
+#[cfg(any(target_os = "linux", windows))]
+struct Broker(std::path::PathBuf);
+
+#[cfg(any(target_os = "linux", windows))]
+impl Drop for Broker {
+    fn drop(&mut self) {
+        let state = self.0.display().to_string();
+        #[cfg(target_os = "linux")]
+        let _ = Command::new("pkill").args(["-INT", "-f", &state]).status();
+        #[cfg(windows)]
+        let _ = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "Get-CimInstance Win32_Process -Filter \"Name='devagotchi.exe'\" | Where-Object {{ $_.CommandLine -like '*{}*' }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}",
+                    state.replace('\'', "''")
+                ),
+            ])
+            .status();
+    }
+}
+
+/// Run `devagotchi mcp` as an AI client does: initialize, list the tools, hang up.
+#[cfg(any(target_os = "linux", windows))]
+fn tools_of_a_fresh_adapter(env: &[(&str, std::ffi::OsString)]) -> Vec<String> {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        process::Stdio,
+    };
+    let mut adapter = devagotchi()
+        .arg("mcp")
+        .envs(env.iter().cloned())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // What the adapter and the broker said, for any failure below.
+    let stderr = adapter.stderr.take().unwrap();
+    let said = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let collected = said.clone();
+    let reader = std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+            let mut said = collected.lock().unwrap();
+            said.push_str(&line);
+            said.push('\n');
+        }
+    });
+    let state = env
+        .iter()
+        .find(|(k, _)| *k == "DEVAGOTCHI_STATE_DIR")
+        .map(|(_, v)| std::path::PathBuf::from(v))
+        .unwrap();
+    let why = |what: &str| {
+        let log = std::fs::read_to_string(state.join("broker.log")).unwrap_or_default();
+        format!(
+            "{what}\n--- adapter stderr ---\n{}--- broker.log ---\n{log}",
+            said.lock().unwrap()
+        )
+    };
+    let mut stdin = adapter.stdin.take().unwrap();
+    let mut stdout = BufReader::new(adapter.stdout.take().unwrap());
+    let mut rpc = |id: u64, method: &str, params: serde_json::Value| -> serde_json::Value {
+        let message =
+            serde_json::json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+        let _ = writeln!(stdin, "{message}");
+        let _ = stdin.flush();
+        loop {
+            let mut line = String::new();
+            if stdout.read_line(&mut line).unwrap_or(0) == 0 {
+                // Give the reader a moment to collect what the adapter said last.
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                panic!("{}", why("adapter closed"));
+            }
+            let reply: serde_json::Value = serde_json::from_str(&line).unwrap();
+            if reply["id"] == id {
+                return reply;
+            }
+        }
+    };
+    rpc(
+        1,
+        "initialize",
+        serde_json::json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "on-demand-test", "version": "0" } }),
+    );
+    let tools = rpc(2, "tools/list", serde_json::json!({}));
+    drop(rpc);
+    drop(stdin);
+    let status = adapter.wait().unwrap();
+    // Once the adapter has exited its stdout and stderr end: nothing it started, the broker
+    // included, may hold an AI client's pipes open (a client waits for that end before it
+    // sees the server close).
+    let (ended, end) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut rest = Vec::new();
+        let _ = std::io::Read::read_to_end(&mut stdout, &mut rest);
+        let _ = reader.join();
+        let _ = ended.send(());
+    });
+    assert!(
+        end.recv_timeout(std::time::Duration::from_secs(10)).is_ok(),
+        "{}",
+        why("the adapter's pipes stayed open after it exited")
+    );
+    assert!(status.success(), "{}", why(&format!("adapter exit {status}")));
+    tools["result"]["tools"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{}", why(&format!("no tools: {tools}"))))
+        .iter()
+        .filter_map(|t| t["name"].as_str().map(str::to_string))
+        .collect()
 }
 
 #[cfg(target_os = "linux")]
@@ -198,10 +405,7 @@ fn start_then_mcp_then_board_from_one_binary() {
         "initialize",
         serde_json::json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "one-binary-test", "version": "0" } }),
     );
-    assert_eq!(
-        init["result"]["serverInfo"]["name"], "desktop-bridge",
-        "{init}"
-    );
+    assert_eq!(init["result"]["serverInfo"]["name"], "devagotchi", "{init}");
     let tools = rpc(2, "tools/list", serde_json::json!({}));
     let names: Vec<&str> = tools["result"]["tools"]
         .as_array()
@@ -209,7 +413,80 @@ fn start_then_mcp_then_board_from_one_binary() {
         .iter()
         .filter_map(|t| t["name"].as_str())
         .collect();
-    assert!(names.contains(&"operation_start"), "{names:?}");
+    for tool in [
+        "run",
+        "read_file",
+        "list_directory",
+        "write_file",
+        "edit_file",
+        "operation_start",
+        "operation_list",
+    ] {
+        assert!(names.contains(&tool), "{tool} missing from {names:?}");
+    }
+
+    // What an AI does first with Desktop Commander, one call each: a shell line, then a
+    // file written, edited, read and listed. A first start runs commands as the person's
+    // own account, so a file outside the workspace is in reach too.
+    assert_eq!(config["exec_policy"], "account", "{config}");
+    let mut id = 2;
+    let mut tool = |name: &str, arguments: serde_json::Value| -> serde_json::Value {
+        id += 1;
+        let reply = rpc(
+            id,
+            "tools/call",
+            serde_json::json!({ "name": name, "arguments": arguments }),
+        );
+        assert_ne!(reply["result"]["isError"], true, "{name}: {reply}");
+        reply["result"]["structuredContent"].clone()
+    };
+    let ran = tool(
+        "run",
+        serde_json::json!({ "command": "echo devagotchi-ran && pwd" }),
+    );
+    assert_eq!(ran["state"], "succeeded", "{ran}");
+    assert_eq!(ran["exit_code"], 0, "{ran}");
+    let output = ran["output"].as_str().unwrap();
+    assert!(output.contains("devagotchi-ran"), "{ran}");
+    assert!(
+        output.contains(std::fs::canonicalize(home.path()).unwrap().to_str().unwrap()),
+        "run starts in the workspace: {ran}"
+    );
+    let notes = home.path().join("notes").join("today.md");
+    let written = tool(
+        "write_file",
+        serde_json::json!({ "path": notes, "text": "first line\n", "create_dirs": true }),
+    );
+    assert_eq!(written["created"], true, "{written}");
+    let edited = tool(
+        "edit_file",
+        serde_json::json!({ "path": notes, "old_text": "first", "new_text": "edited" }),
+    );
+    assert_eq!(edited["replacements"], 1, "{edited}");
+    let read = tool("read_file", serde_json::json!({ "path": notes }));
+    assert_eq!(read["text"], "edited line\n", "{read}");
+    let listed = tool(
+        "list_directory",
+        serde_json::json!({ "path": home.path().join("notes") }),
+    );
+    assert_eq!(listed["entries"][0]["path"], "today.md", "{listed}");
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("elsewhere.txt"), "outside the workspace").unwrap();
+    let read = tool(
+        "read_file",
+        serde_json::json!({ "path": outside.path().join("elsewhere.txt") }),
+    );
+    assert_eq!(read["text"], "outside the workspace", "{read}");
+    let listed = tool("operation_list", serde_json::json!({}));
+    assert!(
+        listed["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|op| op["operation_id"] == ran["operation_id"]),
+        "{listed}"
+    );
+    drop(tool);
     drop(rpc);
     drop(stdin);
     let _ = adapter.wait();
@@ -394,4 +671,91 @@ fn connect_wires_every_client_and_checks_the_server_answers() {
 
     let _ = broker.kill();
     let _ = broker.wait();
+}
+
+/// `devagotchi setup` where none of the three clients it knows is installed (Cursor alone,
+/// say): it fails, but first prints the absolute command any other MCP client needs.
+#[cfg(target_os = "linux")]
+#[test]
+fn setup_with_no_known_client_still_says_what_to_give_another() {
+    let home = tempfile::tempdir().unwrap();
+    let out = devagotchi()
+        .args(["setup", "--no-check"])
+        .env("HOME", home.path())
+        .env("CODEX_HOME", home.path().join("no-codex"))
+        .env("XDG_CONFIG_HOME", home.path().join("xdg"))
+        .env("PATH", home.path().join("empty"))
+        .env("DEVAGOTCHI_CONFIG_DIR", home.path().join("config"))
+        .output()
+        .unwrap();
+    let (stdout, stderr) = (
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert_eq!(out.status.code(), Some(1), "{stdout}{stderr}");
+    let exe = std::fs::canonicalize(env!("CARGO_BIN_EXE_devagotchi")).unwrap();
+    assert!(
+        stdout.contains(&format!("Devagotchi MCP server: {} mcp", exe.display())),
+        "the absolute command another MCP client needs: {stdout}{stderr}"
+    );
+    assert!(stderr.contains("any other MCP client"), "{stderr}");
+}
+
+/// `devagotchi setup` as an AI runs it on a fresh machine: no account, no broker running,
+/// every client found is set up and the check starts the broker and lists its tools.
+#[cfg(target_os = "linux")]
+#[test]
+fn setup_needs_no_account_and_leaves_every_client_working() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let home = tempfile::tempdir().unwrap();
+    let state = home.path().join("state");
+    let codex = home.path().join("codex");
+    let xdg = home.path().join("xdg");
+    let bin = home.path().join("bin");
+    let calls = home.path().join("claude-calls");
+    for dir in [&codex, &xdg.join("Claude"), &bin] {
+        std::fs::create_dir_all(dir).unwrap();
+    }
+    std::fs::write(
+        bin.join("claude"),
+        format!("#!/bin/sh\necho \"$*\" >> {}\n", calls.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let env = [
+        ("DEVAGOTCHI_STATE_DIR", state.as_os_str().to_owned()),
+        ("DEVAGOTCHI_CONFIG_DIR", home.path().join("config").into_os_string()),
+        ("HOME", home.path().as_os_str().to_owned()),
+        ("CODEX_HOME", codex.as_os_str().to_owned()),
+        ("XDG_CONFIG_HOME", xdg.as_os_str().to_owned()),
+        ("PATH", bin.as_os_str().to_owned()),
+    ];
+    let stop = Broker(state.clone());
+
+    let out = devagotchi().arg("setup").envs(env.iter().cloned()).output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{text}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("Claude Code: added") && text.contains("Codex: ") && text.contains("Claude Desktop: "),
+        "{text}"
+    );
+    assert!(text.contains("Devagotchi answered with ") && text.contains("operation_start"), "{text}");
+    let exe = std::fs::canonicalize(env!("CARGO_BIN_EXE_devagotchi")).unwrap();
+    let desktop: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(xdg.join("Claude").join("claude_desktop_config.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        desktop["mcpServers"]["devagotchi"],
+        serde_json::json!({"command": exe, "args": ["mcp"]}),
+        "this machine's broker, since no account is on file"
+    );
+    // The broker the check started is still there for the clients.
+    assert!(state.join("endpoint").is_file());
+    drop(stop);
 }

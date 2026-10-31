@@ -17,6 +17,8 @@ use devagotchi_contracts::{
 
 use crate::broker::ExecPolicy;
 
+mod lines;
+mod manage;
 mod write;
 
 const MAX_ENTRIES: u32 = 1000;
@@ -57,11 +59,11 @@ fn display(path: &Path) -> BridgeResult<String> {
 }
 
 /// Text an AI can read as is: UTF-8 with no control characters but tab, newline, carriage
-/// return and form feed.
+/// return, form feed and escape (a coloured log's ANSI codes).
 fn readable(text: &str) -> bool {
     !text
         .chars()
-        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r' | '\u{c}'))
+        .any(|c| c.is_control() && !matches!(c, '\t' | '\n' | '\r' | '\u{c}' | '\u{1b}'))
 }
 
 /// How many leading bytes of `bytes` are readable text: all of them, or all but a
@@ -112,6 +114,31 @@ impl Scope<'_> {
             ));
         }
         let size = metadata.len();
+        if let Some(start_line) = input.start_line {
+            let ask = lines::Ask {
+                start_line,
+                line_count: input.line_count,
+                max_bytes: input.max_bytes,
+                offset: input.offset,
+            };
+            let lines = lines::read_lines(&mut file, size, ask)?;
+            return Ok(FileContent {
+                path: shown,
+                size,
+                offset: lines.offset,
+                text: Some(lines.text),
+                bytes_base64: None,
+                next_offset: lines.next_offset,
+                eof: lines.eof,
+                modified_ms: modified_ms(&metadata),
+                start_line: lines.start_line,
+                next_line: lines.next_line,
+                total_lines: lines.total_lines,
+            });
+        }
+        if input.line_count.is_some() {
+            return Err(invalid("line_count goes with start_line"));
+        }
         let mut start = if input.offset < 0 {
             size.saturating_sub(input.offset.unsigned_abs())
         } else {
@@ -161,6 +188,9 @@ impl Scope<'_> {
             next_offset,
             eof: next_offset >= size,
             modified_ms: modified_ms(&metadata),
+            start_line: None,
+            next_line: None,
+            total_lines: None,
         })
     }
 
@@ -276,6 +306,8 @@ mod tests {
                 path: path.display().to_string(),
                 offset,
                 max_bytes,
+                start_line: None,
+                line_count: None,
             })
             .unwrap()
     }
@@ -325,6 +357,8 @@ mod tests {
             path: outside.display().to_string(),
             offset: 0,
             max_bytes: 1024,
+            start_line: None,
+            line_count: None,
         };
         let refused = scope(&workspace, ExecPolicy::Granted)
             .read(input.clone())
@@ -337,6 +371,8 @@ mod tests {
                 path: workspace.join("nope").display().to_string(),
                 offset: 0,
                 max_bytes: 1024,
+                start_line: None,
+                line_count: None,
             })
             .unwrap_err();
         assert_eq!(missing.code, "path_not_found");

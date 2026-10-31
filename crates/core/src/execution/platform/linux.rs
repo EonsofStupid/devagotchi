@@ -398,3 +398,124 @@ mod tests {
         child.wait().await.unwrap();
     }
 }
+
+/// A process started by [`spawn_detached`].
+pub(crate) struct DetachedChild(std::process::Child);
+
+impl DetachedChild {
+    pub(crate) fn try_wait(&mut self) -> std::io::Result<Option<i32>> {
+        use std::os::unix::process::ExitStatusExt;
+        Ok(self
+            .0
+            .try_wait()?
+            .map(|status| status.code().unwrap_or(128 + status.signal().unwrap_or(0))))
+    }
+}
+
+/// Start a process in a session of its own, with only its stdin (the null device) and its
+/// log open: every other descriptor the caller had, an AI client's pipes among them, is
+/// closed when it starts (`detached.rs`).
+pub(crate) fn spawn_detached(
+    spec: &crate::execution::detached::DetachedSpec<'_>,
+) -> std::io::Result<DetachedChild> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let log = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(spec.log)?;
+    // An existing log keeps its mode on open; it is the user's alone either way.
+    log.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    let mut command = std::process::Command::new(spec.program);
+    command
+        .args(spec.args)
+        .env_clear()
+        .envs(spec.env.iter().map(|(k, v)| (k, v)))
+        .current_dir(spec.cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(log.try_clone()?)
+        .stderr(log);
+    // SAFETY: between fork and exec this calls only async-signal-safe functions
+    // (setsid, syscall, sysconf, fcntl) and allocates nothing.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // Everything above stderr closes on exec. CLOSE_RANGE_CLOEXEC (Linux 5.11+)
+            // marks them in one call; older kernels get the same, one descriptor at a time.
+            let marked = libc::syscall(
+                libc::SYS_close_range,
+                3u32,
+                u32::MAX,
+                libc::CLOSE_RANGE_CLOEXEC as u32,
+            );
+            if marked != 0 {
+                let max = match libc::sysconf(libc::_SC_OPEN_MAX) {
+                    n if n > 0 => n.min(65_536) as libc::c_int,
+                    _ => 4096,
+                };
+                for fd in 3..max {
+                    libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC);
+                }
+            }
+            Ok(())
+        });
+    }
+    command.spawn().map(DetachedChild)
+}
+
+#[cfg(test)]
+mod detached_tests {
+    use super::*;
+    use crate::execution::detached::DetachedSpec;
+    use std::{ffi::OsString, os::fd::AsRawFd};
+
+    #[test]
+    fn a_detached_process_holds_nothing_of_its_callers_and_has_a_session_of_its_own() {
+        let dir = tempfile::tempdir().unwrap();
+        // A descriptor the caller left inheritable, as an AI client's pipe to it may be.
+        let extra = std::fs::File::open("/dev/null").unwrap();
+        let fd = extra.as_raw_fd();
+        // SAFETY: clears close-on-exec on a descriptor this test owns.
+        assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFD, 0) }, 0);
+        let log = dir.path().join("log");
+        let script = format!(
+            "[ -e /proc/self/fd/{fd} ] && echo leaked || echo closed; cut -d' ' -f6 /proc/$$/stat; echo \"secret=${{SECRET:-none}}\"; pwd"
+        );
+        let env = vec![(
+            OsString::from("PATH"),
+            std::env::var_os("PATH").unwrap_or_default(),
+        )];
+        let args = [OsString::from("-c"), OsString::from(script)];
+        let mut child = spawn_detached(&DetachedSpec {
+            program: Path::new("/bin/sh"),
+            args: &args,
+            env: &env,
+            cwd: dir.path(),
+            log: &log,
+        })
+        .unwrap();
+        let began = std::time::Instant::now();
+        while child.try_wait().unwrap().is_none() {
+            assert!(began.elapsed() < Duration::from_secs(10), "never exited");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let out = std::fs::read_to_string(&log).unwrap();
+        let lines: Vec<&str> = out.lines().map(str::trim).collect();
+        assert_eq!(lines.len(), 4, "{out}");
+        assert_eq!(lines[0], "closed", "the caller's descriptor reached it: {out}");
+        // SAFETY: getsid(0) reads this process's own session id.
+        let ours = unsafe { libc::getsid(0) };
+        assert_ne!(lines[1], ours.to_string(), "it shares the caller's session: {out}");
+        assert_eq!(lines[2], "secret=none", "only the given environment: {out}");
+        assert_eq!(
+            lines[3],
+            std::fs::canonicalize(dir.path()).unwrap().to_str().unwrap()
+        );
+        let mode = std::fs::metadata(&log).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+        drop(extra);
+    }
+}

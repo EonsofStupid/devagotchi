@@ -17,6 +17,12 @@ pub struct HubConfig {
     /// identifier (RFC 9728) and the `resource` hosted clients send.
     pub public_url: String,
     pub auth: AuthConfig,
+    /// More OpenID Connect issuers whose signed JWTs the hub accepts next to `auth`, such
+    /// as the devagotchi.com site's sign-in, so a person signed in there reaches their own
+    /// machines with that same token. A token goes to the issuer its `iss` names; any other
+    /// token goes to `auth`. Grants and ownership still key on the token's `sub`.
+    #[serde(default)]
+    pub trusted_issuers: Vec<TrustedIssuer>,
     /// The account ID (`sub`) of the person who owns this hub. The owner reaches every
     /// broker without a grant, and nothing at runtime can take that away: only editing
     /// this file changes it. Required with Nomen sign-in, so a hub can never be set up
@@ -88,6 +94,16 @@ pub struct WebConfig {
     /// with PKCE and no secret, redirect URI `<public_url>/auth/callback`. It must also be
     /// in `auth.clients`: the hub checks the tokens it gets like any other token.
     pub client_id: String,
+}
+
+/// One more OpenID Connect issuer the hub trusts (`trusted_issuers`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TrustedIssuer {
+    /// Issuer URL exactly as the provider states it (`iss` claim). https only.
+    pub issuer: String,
+    /// Accepted `aud` values for this issuer's tokens.
+    pub audiences: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -240,13 +256,51 @@ impl HubConfig {
                 }
             }
         }
+        let mut seen: Vec<&str> = Vec::new();
+        for trusted in &self.trusted_issuers {
+            let issuer = trusted.issuer.trim_end_matches('/');
+            if !trusted.issuer.starts_with("https://") {
+                return Err(invalid(format!(
+                    "trusted_issuers: {} must be an https URL",
+                    trusted.issuer
+                )));
+            }
+            if trusted.audiences.is_empty() || trusted.audiences.iter().any(|a| a.trim().is_empty())
+            {
+                return Err(invalid(format!(
+                    "trusted_issuers: {} must name at least one audience",
+                    trusted.issuer
+                )));
+            }
+            if matches!(&self.auth, AuthConfig::Dev { .. }) {
+                return Err(invalid(
+                    "trusted_issuers needs auth mode nomen or oidc: dev tokens are for tests"
+                        .into(),
+                ));
+            }
+            let primary = match &self.auth {
+                AuthConfig::Oidc { issuer, .. } | AuthConfig::Nomen { issuer, .. } => {
+                    Some(issuer.trim_end_matches('/'))
+                }
+                AuthConfig::Dev { .. } => None,
+            };
+            if primary == Some(issuer) || seen.contains(&issuer) {
+                return Err(invalid(format!(
+                    "trusted_issuers: {} is listed twice (or is auth.issuer)",
+                    trusted.issuer
+                )));
+            }
+            seen.push(issuer);
+        }
         if let Some(owner) = &self.owner {
             valid_subject(owner).map_err(|why| invalid(format!("owner {why}")))?;
         }
         if let Some(dir) = &self.downloads
             && !std::path::Path::new(dir).is_absolute()
         {
-            return Err(invalid(format!("downloads {dir:?} must be an absolute path")));
+            return Err(invalid(format!(
+                "downloads {dir:?} must be an absolute path"
+            )));
         }
         if let Some(web) = &self.web {
             let AuthConfig::Nomen { clients, .. } = &self.auth else {
@@ -637,6 +691,34 @@ mod tests {
             .unwrap()
             .push(serde_json::json!({ "name": "gold-host", "link": true }));
         config
+    }
+
+    #[test]
+    fn trusted_issuers_must_be_https_distinct_and_never_beside_dev_tokens() {
+        let site = serde_json::json!({
+            "issuer": "https://site.example/auth/v1", "audiences": ["authenticated"] });
+        let mut config = nomen();
+        config["trusted_issuers"] = serde_json::json!([site.clone()]);
+        assert_eq!(parse(&config).unwrap().trusted_issuers.len(), 1);
+
+        config["trusted_issuers"] = serde_json::json!([site.clone(), site.clone()]);
+        assert!(parse(&config).unwrap_err().message.contains("listed twice"));
+
+        config["trusted_issuers"] = serde_json::json!([{
+            "issuer": "https://id.shippin.cloud", "audiences": ["x"] }]);
+        assert!(parse(&config).unwrap_err().message.contains("listed twice"));
+
+        config["trusted_issuers"] = serde_json::json!([{
+            "issuer": "http://site.example", "audiences": ["authenticated"] }]);
+        assert!(parse(&config).unwrap_err().message.contains("https"));
+
+        config["trusted_issuers"] = serde_json::json!([{
+            "issuer": "https://site.example", "audiences": [] }]);
+        assert!(parse(&config).unwrap_err().message.contains("audience"));
+
+        let mut dev = good();
+        dev["trusted_issuers"] = serde_json::json!([site]);
+        assert!(parse(&dev).unwrap_err().message.contains("dev tokens"));
     }
 
     #[test]
