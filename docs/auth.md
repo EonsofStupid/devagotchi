@@ -99,12 +99,26 @@ The join line from `machine_add` is the whole install. The new account owns what
 
 ### Limits
 
-Eight provisional accounts per IP per hour. Five hundred unclaimed accounts on the hub. Unclaimed accounts last `auth.provisional_hours` (default 168) and then their tokens stop. Each AI client is a seat on `/account/identities` and can be revoked. Create, claim, merge, and enroll are audited.
+Eight provisional accounts per IP per hour. Five hundred unclaimed accounts on the hub. Unclaimed accounts last 14 days and then their tokens stop. `whoami` carries `provisional_until`. When the time left is under one seventh of the live lifetime (at least an hour), `whoami` also sets `provisional_warning`. That warning follows the current setting, not the lifetime the account was created with. A claimed account does not expire.
+
+`auth.provisional` in `hub.json` is the starting value (`ttl_days` 1..=90, default 14; `starts_per_hour` 1..=10000, default 8; `unclaimed_cap` 1..=1000000, default 500). It applies only until an operator saves a row.
+
+The Shippin control plane changes the live values without a restart:
+
+```
+GET /api/v1/admin/settings
+PUT /api/v1/admin/settings
+{"provisional": {"ttl_days": 14, "starts_per_hour": 8, "unclaimed_cap": 500}}
+```
+
+Bearer token of the hub `owner`, or of a grant with `"operator": true`. Anyone else is 403. A missing or bad token is 401. `ttl_days` outside 1..=90, or the other two fields outside the ranges above, is 400 and the previous value stays. A field left out of `provisional` keeps its current value. The next account uses the new lifetime immediately. Accounts already opened keep the `provisional_until` they were given. The saved row is in the hub state directory and wins over `hub.json` on the next start. Denied calls and every change are on the hash-chained audit as `admin.settings`.
+
+Each AI client is a seat on `/account/identities` and can be revoked. Create, claim, merge, and enroll are audited.
 
 ## What Jesse sets on app.devagotchi.com
 
 1. Install a build whose commit is on `main` (see [deploy.md](deploy.md)). Do not hand-edit project ids into `auth.audiences`.
-2. `auth.mode` `devagotchi`. `public_url` `https://app.devagotchi.com`.
+2. `auth.mode` `devagotchi`. `public_url` `https://app.devagotchi.com`. Optional `auth.provisional` overrides the 14-day / 8-per-hour / 500-unclaimed defaults until the first `PUT /api/v1/admin/settings`. After that, the control plane's saved row is what restarts use. Give the control plane's account a grant with `"operator": true`, or call as `owner`.
 3. `legacy.issuer` `https://id.shippin.cloud` if `owner` and grants are still Nomen subs. Or replace `owner` with `https://id.shippin.cloud|<sub>` or with the `dg_` id `whoami` prints after the first sign-in.
 4. Optional: one `upstream` entry for Nomen (or Google, or anything with a discovery document), public client, scopes including `email`.
 5. Leave `local.deliver` off on the public URL until mail exists, unless journal delivery is an accepted alpha.

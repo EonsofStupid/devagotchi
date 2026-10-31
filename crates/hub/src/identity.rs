@@ -1296,38 +1296,106 @@ fn migrate(connection: &Connection) -> BridgeResult<()> {
             |row| row.get(0),
         )
         .map_err(store_error)?;
-    if version >= 2 {
+    if version < 2 {
+        connection
+            .execute_batch(
+                "ALTER TABLE accounts ADD COLUMN provisional_until INTEGER;
+                 ALTER TABLE accounts ADD COLUMN merged_into TEXT;
+                 CREATE TABLE IF NOT EXISTS agents (
+                   account_id TEXT NOT NULL,
+                   name TEXT NOT NULL,
+                   client_id TEXT,
+                   created_at INTEGER NOT NULL,
+                   revoked_at INTEGER,
+                   PRIMARY KEY (account_id, name)
+                 );
+                 CREATE TABLE IF NOT EXISTS claim_codes (
+                   code_hash BLOB PRIMARY KEY,
+                   account_id TEXT NOT NULL,
+                   display TEXT NOT NULL,
+                   expires_at INTEGER NOT NULL,
+                   used INTEGER NOT NULL
+                 );
+                 INSERT INTO schema_migrations (version, applied_at) VALUES (2, 0);",
+            )
+            .map_err(store_error)?;
+        connection
+            .execute(
+                "UPDATE schema_migrations SET applied_at = ?1 WHERE version = 2",
+                params![now_secs() as i64],
+            )
+            .map_err(store_error)?;
+    }
+    if version >= 3 {
         return Ok(());
     }
     connection
         .execute_batch(
-            "ALTER TABLE accounts ADD COLUMN provisional_until INTEGER;
-             ALTER TABLE accounts ADD COLUMN merged_into TEXT;
-             CREATE TABLE IF NOT EXISTS agents (
-               account_id TEXT NOT NULL,
-               name TEXT NOT NULL,
-               client_id TEXT,
-               created_at INTEGER NOT NULL,
-               revoked_at INTEGER,
-               PRIMARY KEY (account_id, name)
-             );
-             CREATE TABLE IF NOT EXISTS claim_codes (
-               code_hash BLOB PRIMARY KEY,
-               account_id TEXT NOT NULL,
-               display TEXT NOT NULL,
-               expires_at INTEGER NOT NULL,
-               used INTEGER NOT NULL
-             );
-             INSERT INTO schema_migrations (version, applied_at) VALUES (2, 0);",
+            "CREATE TABLE IF NOT EXISTS operator_limits (
+               id INTEGER PRIMARY KEY CHECK (id = 1),
+               ttl_secs INTEGER NOT NULL,
+               starts_per_hour INTEGER NOT NULL,
+               unclaimed_cap INTEGER NOT NULL,
+               updated_at INTEGER NOT NULL
+             );",
         )
         .map_err(store_error)?;
     connection
         .execute(
-            "UPDATE schema_migrations SET applied_at = ?1 WHERE version = 2",
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?1)",
             params![now_secs() as i64],
         )
         .map_err(store_error)?;
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperatorLimits {
+    pub ttl_secs: u64,
+    pub starts_per_hour: u32,
+    pub unclaimed_cap: u32,
+}
+
+impl Store {
+    pub fn load_limits(&self) -> BridgeResult<Option<OperatorLimits>> {
+        let connection = self.connection.lock().expect("identity lock");
+        connection
+            .query_row(
+                "SELECT ttl_secs, starts_per_hour, unclaimed_cap FROM operator_limits WHERE id = 1",
+                [],
+                |row| {
+                    Ok(OperatorLimits {
+                        ttl_secs: row.get::<_, i64>(0)? as u64,
+                        starts_per_hour: row.get::<_, i64>(1)? as u32,
+                        unclaimed_cap: row.get::<_, i64>(2)? as u32,
+                    })
+                },
+            )
+            .optional()
+            .map_err(store_error)
+    }
+
+    pub fn save_limits(&self, limits: &OperatorLimits) -> BridgeResult<()> {
+        let connection = self.connection.lock().expect("identity lock");
+        connection
+            .execute(
+                "INSERT INTO operator_limits (id, ttl_secs, starts_per_hour, unclaimed_cap, updated_at)
+                 VALUES (1, ?1, ?2, ?3, ?4)
+                 ON CONFLICT(id) DO UPDATE SET
+                   ttl_secs = excluded.ttl_secs,
+                   starts_per_hour = excluded.starts_per_hour,
+                   unclaimed_cap = excluded.unclaimed_cap,
+                   updated_at = excluded.updated_at",
+                params![
+                    limits.ttl_secs as i64,
+                    limits.starts_per_hour as i64,
+                    limits.unclaimed_cap as i64,
+                    now_secs() as i64
+                ],
+            )
+            .map_err(store_error)?;
+        Ok(())
+    }
 }
 
 fn record(

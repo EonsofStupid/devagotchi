@@ -79,6 +79,7 @@ impl SignIns {
                         provisional_until: None,
                         agent: None,
                         claim_code: None,
+                        provisional_warning: false,
                     },
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,

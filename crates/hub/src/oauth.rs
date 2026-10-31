@@ -15,7 +15,7 @@ use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use devagotchi_contracts::{BridgeError, BridgeResult};
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, jwk::Jwk};
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -34,6 +34,7 @@ const SESSION_TTL: u64 = 12 * 3600;
 /// Rotate the signing key after this long. The previous public key keeps verifying
 /// until access tokens signed with it have expired.
 const KEY_LIFE: u64 = 90 * 24 * 3600;
+const DAY: u64 = 24 * 3600;
 
 const SCHEMA: &str = "
 PRAGMA journal_mode = WAL;
@@ -97,10 +98,42 @@ pub struct Authority {
     discovery: Mutex<std::collections::HashMap<String, Discovery>>,
     http: reqwest::Client,
     starts: Mutex<std::collections::HashMap<String, Vec<u64>>>,
-    provisional_cap: usize,
-    starts_per_hour: usize,
-    provisional_ttl: u64,
+    limits: Mutex<LiveLimits>,
     merges: Mutex<Vec<(String, String)>>,
+}
+
+struct LiveLimits {
+    ttl_secs: u64,
+    starts_per_hour: usize,
+    unclaimed_cap: usize,
+    /// A row in `operator_limits`. `hub.json` does not override it.
+    persisted: bool,
+}
+
+/// What `GET /api/v1/admin/settings` returns. Days, not seconds: the control plane
+/// sets `ttl_days` and the hub stores `ttl_days * 86400`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct OperatorSettings {
+    pub provisional: ProvisionalNumbers,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ProvisionalNumbers {
+    pub ttl_days: u32,
+    pub starts_per_hour: u32,
+    pub unclaimed_cap: u32,
+}
+
+/// A partial update. Omitted fields keep the live value.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProvisionalPatch {
+    #[serde(default)]
+    pub ttl_days: Option<u32>,
+    #[serde(default)]
+    pub starts_per_hour: Option<u32>,
+    #[serde(default)]
+    pub unclaimed_cap: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -299,6 +332,21 @@ impl Authority {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|error| BridgeError::new("oauth", error.to_string()))?;
+        let identity = crate::identity::Store::open(&state_dir.join("identities.sqlite3"))?;
+        let limits = match identity.load_limits()? {
+            Some(row) => LiveLimits {
+                ttl_secs: row.ttl_secs,
+                starts_per_hour: row.starts_per_hour as usize,
+                unclaimed_cap: row.unclaimed_cap as usize,
+                persisted: true,
+            },
+            None => LiveLimits {
+                ttl_secs: u64::from(crate::config::PROVISIONAL_TTL_DAYS_DEFAULT) * DAY,
+                starts_per_hour: crate::config::PROVISIONAL_STARTS_PER_HOUR_DEFAULT as usize,
+                unclaimed_cap: crate::config::PROVISIONAL_UNCLAIMED_CAP_DEFAULT as usize,
+                persisted: false,
+            },
+        };
         let authority = Self {
             public_url,
             keys: Mutex::new(keys),
@@ -307,13 +355,11 @@ impl Authority {
             upstream: Vec::new(),
             local: crate::config::LocalLogin::default(),
             outbox: state_dir.join("login-outbox"),
-            identity: crate::identity::Store::open(&state_dir.join("identities.sqlite3"))?,
+            identity,
             discovery: Mutex::new(std::collections::HashMap::new()),
             http,
             starts: Mutex::new(std::collections::HashMap::new()),
-            provisional_cap: 500,
-            starts_per_hour: 8,
-            provisional_ttl: 7 * 24 * 3600,
+            limits: Mutex::new(limits),
             merges: Mutex::new(Vec::new()),
         };
         authority.seed_cli_client()?;
@@ -331,6 +377,79 @@ impl Authority {
     ) {
         self.upstream = upstream;
         self.local = local;
+    }
+
+    /// Apply `hub.json` only when the operator has not saved a row yet.
+    pub fn apply_config_limits(&self, policy: &crate::config::ProvisionalPolicy) {
+        let mut limits = self.limits.lock().expect("limits");
+        if limits.persisted {
+            return;
+        }
+        limits.ttl_secs = u64::from(policy.ttl_days) * DAY;
+        limits.starts_per_hour = policy.starts_per_hour as usize;
+        limits.unclaimed_cap = policy.unclaimed_cap as usize;
+    }
+
+    fn limit_snapshot(&self) -> (u64, usize, usize) {
+        let limits = self.limits.lock().expect("limits");
+        (
+            limits.ttl_secs,
+            limits.starts_per_hour,
+            limits.unclaimed_cap,
+        )
+    }
+
+    pub(crate) fn operator_settings(&self) -> OperatorSettings {
+        let (ttl, starts, cap) = self.limit_snapshot();
+        OperatorSettings {
+            provisional: ProvisionalNumbers {
+                ttl_days: (ttl / DAY) as u32,
+                starts_per_hour: starts as u32,
+                unclaimed_cap: cap as u32,
+            },
+        }
+    }
+
+    /// Persist and apply immediately. Already-issued `provisional_until` values stay
+    /// where they are; the next account and the expiry warning use the new ttl.
+    pub(crate) fn update_operator_settings(
+        &self,
+        patch: &ProvisionalPatch,
+    ) -> BridgeResult<OperatorSettings> {
+        if patch.ttl_days.is_none()
+            && patch.starts_per_hour.is_none()
+            && patch.unclaimed_cap.is_none()
+        {
+            return Err(oauth_error(
+                "invalid_settings",
+                "provisional needs ttl_days, starts_per_hour, or unclaimed_cap",
+            ));
+        }
+        let current = self.operator_settings();
+        let ttl_days = patch.ttl_days.unwrap_or(current.provisional.ttl_days);
+        let starts = patch
+            .starts_per_hour
+            .unwrap_or(current.provisional.starts_per_hour);
+        let cap = patch
+            .unclaimed_cap
+            .unwrap_or(current.provisional.unclaimed_cap);
+        if let Err(why) = crate::config::check_provisional_bounds(ttl_days, starts, cap) {
+            return Err(oauth_error("invalid_settings", &why));
+        }
+        let stored = crate::identity::OperatorLimits {
+            ttl_secs: u64::from(ttl_days) * DAY,
+            starts_per_hour: starts,
+            unclaimed_cap: cap,
+        };
+        self.identity.save_limits(&stored)?;
+        {
+            let mut limits = self.limits.lock().expect("limits");
+            limits.ttl_secs = stored.ttl_secs;
+            limits.starts_per_hour = starts as usize;
+            limits.unclaimed_cap = cap as usize;
+            limits.persisted = true;
+        }
+        Ok(self.operator_settings())
     }
 
     pub fn providers(&self) -> &[crate::config::UpstreamProvider] {
@@ -1102,6 +1221,11 @@ impl Authority {
             provisional_until,
             agent: claims.agent,
             claim_code,
+            provisional_warning: provisional_until.is_some_and(|until| {
+                let left = until.saturating_sub(now());
+                let ttl = self.limit_snapshot().0;
+                left < (ttl / 7).max(3600)
+            }),
         })
     }
 
@@ -1121,16 +1245,15 @@ impl Authority {
             "agent".to_string()
         };
         self.allow_start(ip)?;
-        let created = self.identity.create_provisional(self.provisional_ttl)?;
+        let ttl = self.limit_snapshot().0;
+        let created = self.identity.create_provisional(ttl)?;
         self.identity
             .register_agent(&created.account_id, &agent, client_id)?;
-        let claim_code = self
-            .identity
-            .issue_claim_code(&created.account_id, self.provisional_ttl)?;
+        let claim_code = self.identity.issue_claim_code(&created.account_id, ttl)?;
         let until = self
             .identity
             .provisional_until(&created.account_id)?
-            .unwrap_or(now() + self.provisional_ttl);
+            .unwrap_or(now() + ttl);
         let mut connection = self.connection.lock().expect("oauth lock");
         let tx = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
@@ -1178,10 +1301,11 @@ impl Authority {
     }
 
     #[cfg(test)]
-    pub fn testing_limits(&mut self, cap: usize, per_hour: usize) {
-        self.provisional_cap = cap;
-        self.starts_per_hour = per_hour;
-        self.provisional_ttl = 2;
+    pub fn testing_limits(&self, cap: usize, per_hour: usize) {
+        let mut limits = self.limits.lock().expect("limits");
+        limits.unclaimed_cap = cap;
+        limits.starts_per_hour = per_hour;
+        limits.ttl_secs = 2;
     }
 
     pub fn drain_merges(&self) -> Vec<(String, String)> {
@@ -1189,7 +1313,8 @@ impl Authority {
     }
 
     fn allow_start(&self, ip: &str) -> BridgeResult<()> {
-        if self.identity.provisional_count()? >= self.provisional_cap as u64 {
+        let (_, per_hour, cap) = self.limit_snapshot();
+        if self.identity.provisional_count()? >= cap as u64 {
             return Err(oauth_error(
                 "provisional_quota",
                 "this hub is not opening more unclaimed accounts right now",
@@ -1199,7 +1324,7 @@ impl Authority {
         let now = now();
         let window = starts.entry(ip.to_string()).or_default();
         window.retain(|seen| now.saturating_sub(*seen) < 3600);
-        if window.len() >= self.starts_per_hour {
+        if window.len() >= per_hour {
             return Err(oauth_error(
                 "rate_limited",
                 "too many new accounts from this address; try again later",
@@ -2744,7 +2869,7 @@ mod tests {
     #[test]
     fn a_provisional_account_expires() {
         let dir = tempfile::tempdir().unwrap();
-        let mut auth = Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
+        let auth = Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
         auth.testing_limits(10, 8);
         let session = auth
             .agent_start("devagotchi-cli", "claude", "203.0.113.8")
@@ -2754,9 +2879,71 @@ mod tests {
     }
 
     #[test]
+    fn saved_limits_win_over_hub_json_and_warnings_follow_the_live_ttl() {
+        let dir = tempfile::tempdir().unwrap();
+        let auth = Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
+        assert_eq!(auth.operator_settings().provisional.ttl_days, 14);
+        auth.apply_config_limits(&crate::config::ProvisionalPolicy {
+            ttl_days: 30,
+            starts_per_hour: 4,
+            unclaimed_cap: 9,
+        });
+        assert_eq!(
+            auth.operator_settings().provisional,
+            ProvisionalNumbers {
+                ttl_days: 30,
+                starts_per_hour: 4,
+                unclaimed_cap: 9,
+            }
+        );
+        let rejected = auth
+            .update_operator_settings(&ProvisionalPatch {
+                ttl_days: Some(0),
+                ..ProvisionalPatch::default()
+            })
+            .unwrap_err();
+        assert_eq!(rejected.code, "invalid_settings");
+        assert_eq!(auth.operator_settings().provisional.ttl_days, 30);
+
+        auth.update_operator_settings(&ProvisionalPatch {
+            ttl_days: Some(1),
+            starts_per_hour: Some(8),
+            unclaimed_cap: Some(500),
+        })
+        .unwrap();
+        let session = auth
+            .agent_start("devagotchi-cli", "claude", "203.0.113.20")
+            .unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let left = session.provisional_until.saturating_sub(now);
+        assert!((86_390..=86_400).contains(&left), "left={left}");
+        let quiet = auth.verify_access(&session.access_token).unwrap();
+        assert!(!quiet.provisional_warning);
+        let until = quiet.provisional_until;
+
+        auth.update_operator_settings(&ProvisionalPatch {
+            ttl_days: Some(90),
+            ..ProvisionalPatch::default()
+        })
+        .unwrap();
+        let warned = auth.verify_access(&session.access_token).unwrap();
+        assert!(warned.provisional_warning);
+        assert_eq!(warned.provisional_until, until);
+
+        let again = Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
+        assert_eq!(again.operator_settings().provisional.ttl_days, 90);
+        again.apply_config_limits(&crate::config::ProvisionalPolicy::default());
+        assert_eq!(again.operator_settings().provisional.ttl_days, 90);
+        assert_eq!(again.operator_settings().provisional.starts_per_hour, 8);
+    }
+
+    #[test]
     fn an_agent_opens_an_account_and_a_claim_keeps_or_merges_it() {
         let dir = tempfile::tempdir().unwrap();
-        let mut auth = Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
+        let auth = Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
         auth.testing_limits(10, 2);
         let session = auth
             .agent_start("devagotchi-cli", "claude", "203.0.113.5")

@@ -32,6 +32,13 @@ heading. Agents draft the fragments below; they never tag.
   join line; the enrolled machine belongs to that account. A later claim attaches
   a sign-in to the same account, or merges it when the verified email already
   belongs to one. Unclaimed accounts expire. Creation is rate limited.
+- Unclaimed accounts last 14 days by default (`auth.provisional` in `hub.json`).
+  The owner, or a grant with `operator: true`, can change that lifetime, the
+  per-IP rate, and the unclaimed cap at runtime with `GET`/`PUT
+  /api/v1/admin/settings`. The saved row wins over `hub.json` on the next start.
+  `whoami` warns from the live lifetime. Denied calls and changes are audited.
+  Nothing in this change deploys. Staging for the promote script is a second
+  instance on the Texas host, beside CT 110.
 
 ## 0.1.0 - 2026-10-30
 

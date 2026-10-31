@@ -31,9 +31,9 @@ use std::{
 };
 
 use axum::{
-    Router,
+    Json, Router,
     extract::{ConnectInfo, Request, State, ws::WebSocketUpgrade},
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
@@ -42,6 +42,7 @@ use devagotchi_contracts::{BridgeError, BridgeResult};
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
+use serde::Deserialize;
 
 use crate::{
     audit::Audit,
@@ -510,7 +511,134 @@ fn app(state: AppState) -> Router {
         )
         .merge(web::router().layer(middleware::from_fn_with_state(state.clone(), web::bar)))
         .merge(oauth_routes(state.verifier.authority()))
+        .route(
+            "/api/v1/admin/settings",
+            get(admin_settings_get).put(admin_settings_put),
+        )
         .with_state(state)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdminSettingsBody {
+    provisional: oauth::ProvisionalPatch,
+}
+
+fn settings_error(status: StatusCode, error: &str, description: &str) -> Response {
+    (
+        status,
+        Json(serde_json::json!({
+            "error": error,
+            "error_description": description,
+        })),
+    )
+        .into_response()
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+        })
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+}
+
+fn audit_settings(state: &AppState, subject: &auth::Subject, outcome: &str) {
+    let _ = state.hub.audit.record(&audit::AuditEntry {
+        subject: &subject.id,
+        via: subject.via,
+        tool: "admin.settings",
+        broker: "",
+        operation_id: "",
+        outcome,
+    });
+}
+
+async fn require_operator(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<auth::Subject, Response> {
+    let Some(token) = bearer_token(headers) else {
+        return Err(settings_error(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "bearer token required",
+        ));
+    };
+    let subject = match state.verifier.verify(&token).await {
+        Ok(subject) => subject,
+        Err(_) => {
+            return Err(settings_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_token",
+                "bearer token was refused",
+            ));
+        }
+    };
+    if !state.hub.config.is_operator(&subject.id) {
+        audit_settings(state, &subject, "denied");
+        return Err(settings_error(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "owner or an operator grant is required",
+        ));
+    }
+    Ok(subject)
+}
+
+async fn admin_settings_get(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = require_operator(&state, &headers).await {
+        return response;
+    }
+    let Some(authority) = state.verifier.authority() else {
+        return settings_error(
+            StatusCode::NOT_FOUND,
+            "not_available",
+            "admin settings require auth.mode devagotchi",
+        );
+    };
+    Json(authority.operator_settings()).into_response()
+}
+
+async fn admin_settings_put(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AdminSettingsBody>,
+) -> Response {
+    let subject = match require_operator(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(response) => return response,
+    };
+    let Some(authority) = state.verifier.authority() else {
+        return settings_error(
+            StatusCode::NOT_FOUND,
+            "not_available",
+            "admin settings require auth.mode devagotchi",
+        );
+    };
+    match authority.update_operator_settings(&body.provisional) {
+        Ok(settings) => {
+            let outcome = format!(
+                "ok ttl_days={} starts_per_hour={} unclaimed_cap={}",
+                settings.provisional.ttl_days,
+                settings.provisional.starts_per_hour,
+                settings.provisional.unclaimed_cap
+            );
+            audit_settings(&state, &subject, &outcome);
+            Json(settings).into_response()
+        }
+        Err(error) => {
+            let outcome = format!("rejected {}", error.message);
+            audit_settings(&state, &subject, &outcome);
+            settings_error(StatusCode::BAD_REQUEST, &error.code, &error.message)
+        }
+    }
 }
 
 fn oauth_routes(authority: Option<std::sync::Arc<oauth::Authority>>) -> Router<AppState> {
@@ -907,6 +1035,245 @@ mod tests {
                 .map(OsString::from)
             )
             .is_err()
+        );
+    }
+
+    fn dg(nibble: char) -> String {
+        format!("dg_{}", nibble.to_string().repeat(32))
+    }
+
+    fn access_for(authority: &oauth::Authority, account: &str) -> String {
+        let started = authority.start_device("devagotchi-cli").unwrap();
+        authority
+            .approve_device(started["user_code"].as_str().unwrap(), account)
+            .unwrap();
+        authority
+            .token(&oauth::TokenRequest {
+                grant_type: "urn:ietf:params:oauth:grant-type:device_code".into(),
+                code: None,
+                redirect_uri: None,
+                client_id: Some("devagotchi-cli".into()),
+                code_verifier: None,
+                refresh_token: None,
+                device_code: Some(started["device_code"].as_str().unwrap().into()),
+            })
+            .unwrap()
+            .access_token
+    }
+
+    /// Owner and an operator grant can read and change provisional limits. A stranger
+    /// cannot. Out-of-range values are refused. A saved value is what the next account
+    /// and the expiry warning use, and it survives a new open of the state directory.
+    #[tokio::test]
+    async fn admin_settings_are_authorized_bounded_audited_and_live() {
+        let owner = dg('a');
+        let operator = dg('b');
+        let stranger = dg('c');
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let socket = "/tmp/devagotchi-admin-settings.sock";
+        #[cfg(windows)]
+        let socket = r"\\.\pipe\devagotchi-admin-settings";
+        let config = Arc::new(
+            config::HubConfig::parse(
+                &serde_json::json!({
+                    "listen": "127.0.0.1:1",
+                    "public_url": "http://127.0.0.1:9",
+                    "auth": { "mode": "devagotchi" },
+                    "owner": owner,
+                    "brokers": [{ "name": "lab", "socket": socket }],
+                    "grants": [{ "subject": operator, "operator": true }]
+                })
+                .to_string(),
+            )
+            .unwrap(),
+        );
+        let devices =
+            Arc::new(devices::Devices::open(&dir.path().join("devices.sqlite3")).unwrap());
+        let audit = Arc::new(Audit::open(&dir.path().join("audit.sqlite3")).unwrap());
+        let links = Arc::new(link::Links::new(config.clone(), devices, audit.clone()));
+        let authority = Arc::new(oauth::Authority::open(dir.path(), "http://127.0.0.1:9").unwrap());
+        let owner_token = access_for(&authority, &owner);
+        let operator_token = access_for(&authority, &operator);
+        let stranger_token = access_for(&authority, &stranger);
+        let state = AppState {
+            verifier: Arc::new(auth::Verifier::Devagotchi(authority.clone())),
+            hub: hub::Hub {
+                boards: Arc::new(board::mcp::Boards::from_config(&config, dir.path())),
+                config,
+                audit: audit.clone(),
+                links,
+                push: None,
+                downloads: None,
+            },
+            web: None,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/api/v1/admin/settings",
+            listener.local_addr().unwrap()
+        );
+        let app = Router::new()
+            .route(
+                "/api/v1/admin/settings",
+                get(admin_settings_get).put(admin_settings_put),
+            )
+            .with_state(state);
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let http = reqwest::Client::new();
+
+        let call =
+            |method: reqwest::Method, token: Option<&str>, body: Option<serde_json::Value>| {
+                let http = http.clone();
+                let url = url.clone();
+                let token = token.map(str::to_string);
+                async move {
+                    let mut request = http.request(method, &url);
+                    if let Some(token) = token {
+                        request = request.bearer_auth(token);
+                    }
+                    if let Some(body) = body {
+                        request = request.json(&body);
+                    }
+                    let response = request.send().await.unwrap();
+                    let status = response.status().as_u16();
+                    let json: serde_json::Value =
+                        response.json().await.unwrap_or(serde_json::Value::Null);
+                    (status, json)
+                }
+            };
+
+        let (status, _) = call(reqwest::Method::GET, None, None).await;
+        assert_eq!(status, 401);
+        let (status, _) = call(reqwest::Method::GET, Some("not-a-token"), None).await;
+        assert_eq!(status, 401);
+        let (status, body) = call(reqwest::Method::GET, Some(&stranger_token), None).await;
+        assert_eq!(status, 403, "{body}");
+        let (status, body) = call(reqwest::Method::GET, Some(&owner_token), None).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["provisional"]["ttl_days"], 14);
+        assert_eq!(body["provisional"]["starts_per_hour"], 8);
+        assert_eq!(body["provisional"]["unclaimed_cap"], 500);
+
+        for (field, value) in [
+            ("ttl_days", 0),
+            ("ttl_days", 91),
+            ("starts_per_hour", 0),
+            ("unclaimed_cap", 1_000_001),
+        ] {
+            let (status, body) = call(
+                reqwest::Method::PUT,
+                Some(&owner_token),
+                Some(serde_json::json!({ "provisional": { field: value } })),
+            )
+            .await;
+            assert_eq!(status, 400, "{field}={value}: {body}");
+            assert_eq!(body["error"], "invalid_settings");
+        }
+        let (status, _) = call(
+            reqwest::Method::PUT,
+            Some(&owner_token),
+            Some(serde_json::json!({ "provisional": {} })),
+        )
+        .await;
+        assert_eq!(status, 400);
+        let (status, body) = call(reqwest::Method::GET, Some(&operator_token), None).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            body["provisional"]["ttl_days"], 14,
+            "a rejected write leaves the live value"
+        );
+
+        let (status, body) = call(
+            reqwest::Method::PUT,
+            Some(&operator_token),
+            Some(serde_json::json!({
+                "provisional": { "ttl_days": 1, "starts_per_hour": 2, "unclaimed_cap": 10 }
+            })),
+        )
+        .await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["provisional"]["ttl_days"], 1);
+
+        let first = authority
+            .agent_start("devagotchi-cli", "claude", "203.0.113.40")
+            .unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let left = first.provisional_until.saturating_sub(now);
+        assert!((86_390..=86_400).contains(&left), "left={left}");
+        authority
+            .agent_start("devagotchi-cli", "claude", "203.0.113.40")
+            .unwrap();
+        assert_eq!(
+            authority
+                .agent_start("devagotchi-cli", "claude", "203.0.113.40")
+                .unwrap_err()
+                .code,
+            "rate_limited"
+        );
+        let (status, _) = call(
+            reqwest::Method::PUT,
+            Some(&operator_token),
+            Some(serde_json::json!({ "provisional": { "unclaimed_cap": 2 } })),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            authority
+                .agent_start("devagotchi-cli", "claude", "203.0.113.41")
+                .unwrap_err()
+                .code,
+            "provisional_quota"
+        );
+        let before = authority.verify_access(&first.access_token).unwrap();
+        assert!(!before.provisional_warning);
+        let (status, _) = call(
+            reqwest::Method::PUT,
+            Some(&operator_token),
+            Some(serde_json::json!({ "provisional": { "ttl_days": 90 } })),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let after = authority.verify_access(&first.access_token).unwrap();
+        assert!(after.provisional_warning);
+        assert_eq!(after.provisional_until, before.provisional_until);
+
+        let rows = audit.recorded();
+        assert!(
+            rows.iter().any(|(subject, tool, outcome)| {
+                subject == &stranger && tool == "admin.settings" && outcome == "denied"
+            }),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|(_, tool, outcome)| tool == "admin.settings"
+                    && outcome.starts_with("rejected")),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter().any(|(_, tool, outcome)| {
+                tool == "admin.settings"
+                    && outcome.contains("ttl_days=1")
+                    && outcome.contains("starts_per_hour=2")
+                    && outcome.contains("unclaimed_cap=10")
+            }),
+            "{rows:?}"
+        );
+        assert!(audit.verify().unwrap().ok);
+
+        let reloaded = oauth::Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
+        assert_eq!(reloaded.operator_settings().provisional.ttl_days, 90);
+        assert_eq!(reloaded.operator_settings().provisional.starts_per_hour, 2);
+        assert_eq!(reloaded.operator_settings().provisional.unclaimed_cap, 2);
+        reloaded.apply_config_limits(&config::ProvisionalPolicy::default());
+        assert_eq!(
+            reloaded.operator_settings().provisional.ttl_days,
+            90,
+            "a saved row wins over hub.json"
         );
     }
 }

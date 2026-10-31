@@ -1877,6 +1877,7 @@ mod tests {
             provisional_until: None,
             agent: None,
             claim_code: None,
+            provisional_warning: false,
         };
         let (alice, bob) = (
             member("300000000000000011", Some("395263680805142530")),

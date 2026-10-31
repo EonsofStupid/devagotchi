@@ -155,7 +155,86 @@ pub enum AuthConfig {
         /// `grants` (the Nomen subject the file was keyed by).
         #[serde(default)]
         legacy: Option<LegacyIssuer>,
+        /// Initial provisional-account limits. Used only until an operator saves
+        /// `/api/v1/admin/settings`; that saved row then wins across restarts.
+        #[serde(default)]
+        provisional: ProvisionalPolicy,
     },
+}
+
+/// Days an unclaimed account lives, and how many an address or the hub may open.
+/// `hub.json` supplies the first value. The control plane replaces it at runtime.
+pub(crate) const PROVISIONAL_TTL_DAYS_DEFAULT: u32 = 14;
+pub(crate) const PROVISIONAL_TTL_DAYS_MIN: u32 = 1;
+pub(crate) const PROVISIONAL_TTL_DAYS_MAX: u32 = 90;
+pub(crate) const PROVISIONAL_STARTS_PER_HOUR_DEFAULT: u32 = 8;
+pub(crate) const PROVISIONAL_STARTS_PER_HOUR_MIN: u32 = 1;
+pub(crate) const PROVISIONAL_STARTS_PER_HOUR_MAX: u32 = 10_000;
+pub(crate) const PROVISIONAL_UNCLAIMED_CAP_DEFAULT: u32 = 500;
+pub(crate) const PROVISIONAL_UNCLAIMED_CAP_MIN: u32 = 1;
+pub(crate) const PROVISIONAL_UNCLAIMED_CAP_MAX: u32 = 1_000_000;
+
+/// Bounds shared by `hub.json` and `PUT /api/v1/admin/settings`.
+pub(crate) fn check_provisional_bounds(
+    ttl_days: u32,
+    starts_per_hour: u32,
+    unclaimed_cap: u32,
+) -> Result<(), String> {
+    if !(PROVISIONAL_TTL_DAYS_MIN..=PROVISIONAL_TTL_DAYS_MAX).contains(&ttl_days) {
+        return Err(format!(
+            "ttl_days must be {PROVISIONAL_TTL_DAYS_MIN}..={PROVISIONAL_TTL_DAYS_MAX}"
+        ));
+    }
+    if !(PROVISIONAL_STARTS_PER_HOUR_MIN..=PROVISIONAL_STARTS_PER_HOUR_MAX)
+        .contains(&starts_per_hour)
+    {
+        return Err(format!(
+            "starts_per_hour must be {PROVISIONAL_STARTS_PER_HOUR_MIN}..={PROVISIONAL_STARTS_PER_HOUR_MAX}"
+        ));
+    }
+    if !(PROVISIONAL_UNCLAIMED_CAP_MIN..=PROVISIONAL_UNCLAIMED_CAP_MAX).contains(&unclaimed_cap) {
+        return Err(format!(
+            "unclaimed_cap must be {PROVISIONAL_UNCLAIMED_CAP_MIN}..={PROVISIONAL_UNCLAIMED_CAP_MAX}"
+        ));
+    }
+    Ok(())
+}
+
+/// Starting limits for unclaimed accounts when the hub state has no saved row.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProvisionalPolicy {
+    /// Days until an unclaimed account's tokens stop. 1..=90. Default 14.
+    #[serde(default = "default_ttl_days")]
+    pub ttl_days: u32,
+    /// New provisional accounts one IP may open per hour. Default 8.
+    #[serde(default = "default_starts_per_hour")]
+    pub starts_per_hour: u32,
+    /// Live unclaimed accounts the hub will hold. Default 500.
+    #[serde(default = "default_unclaimed_cap")]
+    pub unclaimed_cap: u32,
+}
+
+impl Default for ProvisionalPolicy {
+    fn default() -> Self {
+        Self {
+            ttl_days: default_ttl_days(),
+            starts_per_hour: default_starts_per_hour(),
+            unclaimed_cap: default_unclaimed_cap(),
+        }
+    }
+}
+
+fn default_ttl_days() -> u32 {
+    PROVISIONAL_TTL_DAYS_DEFAULT
+}
+
+fn default_starts_per_hour() -> u32 {
+    PROVISIONAL_STARTS_PER_HOUR_DEFAULT
+}
+
+fn default_unclaimed_cap() -> u32 {
+    PROVISIONAL_UNCLAIMED_CAP_DEFAULT
 }
 
 /// One optional OpenID Connect provider on the hub's own sign-in page.
@@ -237,6 +316,10 @@ pub struct Grant {
     /// and move one by hand. The owner is always a person; agents never are.
     #[serde(default)]
     pub human: bool,
+    /// This subject may read and change hub operator settings (`/api/v1/admin/settings`).
+    /// The owner can always do that; this flag is how a control-plane account can too.
+    #[serde(default)]
+    pub operator: bool,
 }
 
 impl HubConfig {
@@ -306,6 +389,7 @@ impl HubConfig {
                 upstream,
                 local,
                 legacy,
+                provisional,
             } => {
                 let mut names = BTreeSet::new();
                 let mut issuers = BTreeSet::new();
@@ -377,6 +461,12 @@ impl HubConfig {
                         ));
                     }
                 }
+                check_provisional_bounds(
+                    provisional.ttl_days,
+                    provisional.starts_per_hour,
+                    provisional.unclaimed_cap,
+                )
+                .map_err(|why| invalid(format!("auth.provisional {why}")))?;
             }
             AuthConfig::Dev { tokens_file } => {
                 if !Path::new(tokens_file).is_absolute() {
@@ -570,6 +660,15 @@ impl HubConfig {
     /// Whether this subject is the hub's configured owner.
     pub fn is_owner(&self, subject: &str) -> bool {
         self.owner.as_deref() == Some(subject)
+    }
+
+    /// Owner, or a grant marked `operator`. Those accounts may call the admin settings API.
+    pub fn is_operator(&self, subject: &str) -> bool {
+        self.is_owner(subject)
+            || self
+                .grants
+                .iter()
+                .any(|g| g.subject == subject && g.operator)
     }
 
     /// The people who decide approvals on `project`: the owner and every grant that is
@@ -1068,5 +1167,60 @@ mod tests {
         config["trusted_issuers"] = serde_json::json!([]);
         config["auth"]["upstream"][0]["issuer"] = serde_json::json!("http://idp.example");
         assert_eq!(parse(&config).unwrap_err().code, "invalid_config");
+    }
+
+    #[test]
+    fn provisional_defaults_to_fourteen_days_and_operator_is_a_grant_flag() {
+        let mut config = good();
+        config["auth"] = serde_json::json!({ "mode": "devagotchi" });
+        let parsed = parse(&config).unwrap();
+        match &parsed.auth {
+            AuthConfig::Devagotchi { provisional, .. } => {
+                assert_eq!(provisional.ttl_days, 14);
+                assert_eq!(provisional.starts_per_hour, 8);
+                assert_eq!(provisional.unclaimed_cap, 500);
+            }
+            _ => panic!("devagotchi mode"),
+        }
+        assert!(!parsed.is_operator("jesse"));
+
+        let owner = format!("dg_{}", "a".repeat(32));
+        let operator = format!("dg_{}", "b".repeat(32));
+        config["owner"] = serde_json::json!(owner);
+        config["grants"] = serde_json::json!([{ "subject": operator, "operator": true }]);
+        config["auth"]["provisional"] = serde_json::json!({
+            "ttl_days": 30,
+            "starts_per_hour": 4,
+            "unclaimed_cap": 9
+        });
+        let parsed = parse(&config).unwrap();
+        assert!(parsed.is_operator(&owner));
+        assert!(parsed.is_operator(&operator));
+        assert!(!parsed.is_operator(&format!("dg_{}", "c".repeat(32))));
+        match &parsed.auth {
+            AuthConfig::Devagotchi { provisional, .. } => assert_eq!(provisional.ttl_days, 30),
+            _ => panic!("devagotchi mode"),
+        }
+
+        config["auth"]["provisional"]["ttl_days"] = serde_json::json!(0);
+        assert!(parse(&config).unwrap_err().message.contains("ttl_days"));
+        config["auth"]["provisional"]["ttl_days"] = serde_json::json!(91);
+        assert!(parse(&config).unwrap_err().message.contains("ttl_days"));
+        config["auth"]["provisional"]["ttl_days"] = serde_json::json!(14);
+        config["auth"]["provisional"]["starts_per_hour"] = serde_json::json!(0);
+        assert!(
+            parse(&config)
+                .unwrap_err()
+                .message
+                .contains("starts_per_hour")
+        );
+        config["auth"]["provisional"]["starts_per_hour"] = serde_json::json!(8);
+        config["auth"]["provisional"]["unclaimed_cap"] = serde_json::json!(1_000_001);
+        assert!(
+            parse(&config)
+                .unwrap_err()
+                .message
+                .contains("unclaimed_cap")
+        );
     }
 }

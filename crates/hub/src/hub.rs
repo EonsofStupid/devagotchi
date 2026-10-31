@@ -131,6 +131,9 @@ pub struct WhoAmI {
     /// Code the person uses to claim this account. Shown while it is provisional.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claim_code: Option<String>,
+    /// Time left is under a seventh of the live provisional ttl (at least an hour).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub provisional_warning: bool,
     /// `{public_url}/claim?code=…` while the account is provisional.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claim_url: Option<String>,
@@ -394,6 +397,7 @@ impl Hub {
             provisional_until: subject.provisional_until,
             agent: subject.agent.clone(),
             claim_code: subject.claim_code.clone(),
+            provisional_warning: subject.provisional_warning,
             claim_url: subject.claim_code.as_ref().map(|code| {
                 format!(
                     "{}/claim?code={code}",

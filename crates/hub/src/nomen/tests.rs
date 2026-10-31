@@ -174,6 +174,7 @@ async fn a_live_token_for_this_hub_signs_in_and_is_remembered() {
                 provisional_until: None,
                 agent: None,
                 claim_code: None,
+                provisional_warning: false,
             }
         );
     }
@@ -577,6 +578,7 @@ fn a_full_cache_never_evicts_a_confirmed_sign_in_and_late_answers_never_win() {
             provisional_until: None,
             agent: None,
             claim_code: None,
+            provisional_warning: false,
         })
     };
     let digest = |i: usize| -> [u8; 32] { Sha256::digest(i.to_le_bytes()).into() };

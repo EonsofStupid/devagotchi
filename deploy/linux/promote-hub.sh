@@ -2,6 +2,19 @@
 # Promote one main-branch hub build: staging, smoke, production, rollback.
 # Refuses to run without --confirm and the environment variables below.
 # Does not deploy from a pull request commit. See docs/deploy.md.
+#
+# Production is the hub on Texas (tx-infra-prod, public 23.156.136.173),
+# Proxmox CT 110, https://app.devagotchi.com behind Cloudflare.
+# Staging is a second container on that same host, its own state directory
+# and port, https://staging.app.devagotchi.com. Set the variables. This script
+# has no host, key, or container id of its own.
+#
+#   DEVAGOTCHI_STAGING_HOST   user@23.156.136.173   (Proxmox SSH)
+#   DEVAGOTCHI_STAGING_LXC    staging container id  (not 110)
+#   DEVAGOTCHI_STAGING_URL    https://staging.app.devagotchi.com
+#   DEVAGOTCHI_PROD_HOST      user@23.156.136.173
+#   DEVAGOTCHI_PROD_LXC       110
+#   DEVAGOTCHI_PROD_URL       https://app.devagotchi.com
 set -eu
 
 confirm=0
@@ -24,6 +37,8 @@ fi
 : "${DEVAGOTCHI_PROD_HOST:?user@production-host}"
 version=${DEVAGOTCHI_VERSION:-$DEVAGOTCHI_SHA}
 previous=${DEVAGOTCHI_PREVIOUS_VERSION:?version to roll back to}
+staging_lxc=${DEVAGOTCHI_STAGING_LXC:-}
+prod_lxc=${DEVAGOTCHI_PROD_LXC:-}
 
 git rev-parse --verify "${DEVAGOTCHI_SHA}^{commit}" >/dev/null
 if ! git merge-base --is-ancestor "$DEVAGOTCHI_SHA" origin/main; then
@@ -31,11 +46,13 @@ if ! git merge-base --is-ancestor "$DEVAGOTCHI_SHA" origin/main; then
     exit 1
 fi
 
+# host, container id (empty when SSH already lands in the guest), then the command.
 remote() {
     host=$1
-    shift
-    if [ -n "${PROMOTE_LXC:-}" ]; then
-        ssh "$host" pct exec "$PROMOTE_LXC" -- "$@"
+    lxc=$2
+    shift 2
+    if [ -n "$lxc" ]; then
+        ssh "$host" pct exec "$lxc" -- "$@"
     else
         ssh "$host" "$@"
     fi
@@ -52,32 +69,32 @@ smoke() {
 
 install_on() {
     host=$1
-    ver=$2
-    remote "$host" install-devagotchi.sh --role hub --version "$ver"
+    lxc=$2
+    ver=$3
+    remote "$host" "$lxc" install-devagotchi.sh --role hub --version "$ver"
 }
 
 echo "staging $version from $DEVAGOTCHI_SHA"
-if ! install_on "$DEVAGOTCHI_STAGING_HOST" "$version"; then
+if ! install_on "$DEVAGOTCHI_STAGING_HOST" "$staging_lxc" "$version"; then
     echo "staging install failed; rolling back to $previous" >&2
-    install_on "$DEVAGOTCHI_STAGING_HOST" "$previous"
+    install_on "$DEVAGOTCHI_STAGING_HOST" "$staging_lxc" "$previous"
     exit 1
 fi
-if ! SMOKE_BASE=${DEVAGOTCHI_STAGING_URL:?staging https URL} smoke "$DEVAGOTCHI_STAGING_URL"; then
+if ! smoke "${DEVAGOTCHI_STAGING_URL:?staging https URL}"; then
     echo "staging smoke failed; rolling back to $previous" >&2
-    install_on "$DEVAGOTCHI_STAGING_HOST" "$previous"
+    install_on "$DEVAGOTCHI_STAGING_HOST" "$staging_lxc" "$previous"
     exit 1
 fi
 
 echo "production $version"
-export PROMOTE_LXC=${DEVAGOTCHI_PROD_LXC:-}
-if ! install_on "$DEVAGOTCHI_PROD_HOST" "$version"; then
+if ! install_on "$DEVAGOTCHI_PROD_HOST" "$prod_lxc" "$version"; then
     echo "production install failed; rolling back to $previous" >&2
-    install_on "$DEVAGOTCHI_PROD_HOST" "$previous"
+    install_on "$DEVAGOTCHI_PROD_HOST" "$prod_lxc" "$previous"
     exit 1
 fi
 if ! smoke "${DEVAGOTCHI_PROD_URL:?production https URL}"; then
     echo "production smoke failed; rolling back to $previous" >&2
-    install_on "$DEVAGOTCHI_PROD_HOST" "$previous"
+    install_on "$DEVAGOTCHI_PROD_HOST" "$prod_lxc" "$previous"
     exit 1
 fi
 echo "promoted $version"
