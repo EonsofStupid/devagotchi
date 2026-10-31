@@ -82,15 +82,16 @@ pub async fn subscribe(
     headers: HeaderMap,
     Json(sub): Json<Subscription>,
 ) -> Response {
-    let (Some(web), Some(push)) = (state.web.clone(), state.hub.push.clone()) else {
+    let Some(push) = state.hub.push.clone() else {
         return plain(StatusCode::NOT_FOUND, "push_not_set_up");
     };
     if !same_origin(&headers, &state.hub.config.public_url) {
         return plain(StatusCode::FORBIDDEN, "not_same_origin");
     }
-    let subject = match who(&state, &web, &headers).await {
+    let subject = match who(&state, &headers).await {
         Who::Person(subject) => subject,
         Who::SignedOut => return plain(StatusCode::UNAUTHORIZED, "signed_out"),
+        Who::NotSetUp => return plain(StatusCode::NOT_FOUND, "push_not_set_up"),
         Who::Unavailable => return plain(StatusCode::SERVICE_UNAVAILABLE, "issuer_unavailable"),
     };
     if !state.hub.config.is_human(&subject.id) {

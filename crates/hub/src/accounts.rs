@@ -12,6 +12,7 @@
 #![allow(dead_code)]
 
 pub mod passkey;
+pub mod sessions;
 
 use std::{path::Path, sync::Mutex};
 
@@ -232,7 +233,16 @@ impl Accounts {
                    backup_eligible INTEGER NOT NULL,
                    created_at INTEGER NOT NULL,
                    last_used_at INTEGER
-                 );",
+                 );
+                 CREATE TABLE IF NOT EXISTS sessions (
+                   hash TEXT PRIMARY KEY,
+                   account TEXT NOT NULL REFERENCES accounts (id),
+                   passkey BLOB REFERENCES passkeys (id) ON DELETE CASCADE,
+                   created_at INTEGER NOT NULL,
+                   last_seen INTEGER NOT NULL,
+                   expires_at INTEGER NOT NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS sessions_by_account ON sessions (account);",
             )
             .map_err(store_error)?;
         connection
@@ -307,6 +317,33 @@ impl Accounts {
             owner,
             disabled_at: None,
         })
+    }
+
+    /// The hub's owner, made if there is none yet. `configured` is the config's `owner`, a
+    /// subject from an earlier identity provider: the owner keeps it as the account id, so
+    /// every board, machine and audit row keyed by it stays theirs. Without one, a new id.
+    pub fn ensure_owner(
+        &self,
+        configured: Option<&str>,
+        name: &str,
+        random: [u8; 16],
+    ) -> BridgeResult<Account> {
+        if let Some(owner) = self.owner()? {
+            return match configured {
+                Some(id) if id != owner.id => Err(BridgeError::new(
+                    "owner_mismatch",
+                    format!(
+                        "this hub's owner account is {}, not the config's owner {id}",
+                        owner.id
+                    ),
+                )),
+                _ => Ok(owner),
+            };
+        }
+        let id = configured
+            .map(str::to_string)
+            .unwrap_or_else(|| new_account_id(random));
+        self.create(&id, name, true)
     }
 
     pub fn get(&self, id: &str) -> BridgeResult<Option<Account>> {
@@ -478,6 +515,11 @@ impl Accounts {
                     "UPDATE links SET used_at = ?1 WHERE hash = ?2",
                     params![now, hash(token)],
                 )
+                .map_err(store_error)?;
+            // A link spent ends the account's other sessions: whoever had them, the passkey
+            // registered now is how the account signs in from here.
+            transaction
+                .execute("DELETE FROM sessions WHERE account = ?1", params![account])
                 .map_err(store_error)?;
         }
         let taken = transaction

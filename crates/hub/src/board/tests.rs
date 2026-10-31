@@ -1282,6 +1282,7 @@ mod bound {
                 links,
             },
             web: None,
+            passkeys: None,
         };
         let app = crate::app(state);
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });

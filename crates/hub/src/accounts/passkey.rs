@@ -346,4 +346,6 @@ struct ClientData {
 }
 
 #[cfg(test)]
+pub(crate) mod soft;
+#[cfg(test)]
 mod tests;
