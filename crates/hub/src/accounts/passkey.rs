@@ -83,15 +83,44 @@ pub struct Registration<'a> {
     pub alg: i64,
 }
 
-/// A credential that passed registration, ready to store.
+/// A credential that passed registration, ready to store. Only `verify_registration`
+/// makes one outside the store, so the store is handed exactly what was checked: this
+/// credential, its key, and the challenge it answered.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewCredential {
-    pub id: Vec<u8>,
-    pub public_key: Vec<u8>,
-    pub alg: Alg,
-    pub sign_count: u32,
+    pub(in crate::accounts) id: Vec<u8>,
+    pub(in crate::accounts) public_key: Vec<u8>,
+    pub(in crate::accounts) alg: Alg,
+    pub(in crate::accounts) sign_count: u32,
     /// The authenticator may sync this passkey to the person's other devices.
-    pub backup_eligible: bool,
+    pub(in crate::accounts) backup_eligible: bool,
+    /// The challenge the registration answered; the store checks and spends this one.
+    pub(in crate::accounts) challenge: Vec<u8>,
+}
+
+impl NewCredential {
+    pub fn id(&self) -> &[u8] {
+        &self.id
+    }
+}
+
+/// A sign-in that passed every check, as `check_sign_in` returns it: which passkey, by its
+/// id and the key that verified the signature; the authenticator's counter and user
+/// handle; and the challenge the assertion answered. Only `check_sign_in` makes one outside
+/// the store, which takes nothing else.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Asserted {
+    pub(in crate::accounts) id: Vec<u8>,
+    pub(in crate::accounts) public_key: Vec<u8>,
+    pub(in crate::accounts) sign_count: u32,
+    pub(in crate::accounts) user_handle: Vec<u8>,
+    pub(in crate::accounts) challenge: Vec<u8>,
+}
+
+impl Asserted {
+    pub fn id(&self) -> &[u8] {
+        &self.id
+    }
 }
 
 /// What the browser sends back from `navigator.credentials.get()`.
@@ -170,12 +199,48 @@ pub fn verify_registration(
         alg,
         sign_count: sign_count(data),
         backup_eligible: flags & FLAG_BE != 0,
+        challenge: challenge.to_vec(),
+    })
+}
+
+/// Check a sign-in: the assertion made for `challenge` against `passkey`, the stored row
+/// its credential id names, with the user handle the authenticator returned. Every
+/// passkey here is discoverable and found without naming an account first, so the handle
+/// must be there (WebAuthn §7.2 step 6); the store checks it is the passkey's account.
+pub fn check_sign_in(
+    relying: Relying<'_>,
+    challenge: &[u8],
+    passkey: &super::Passkey,
+    assertion: Assertion<'_>,
+    user_handle: Option<&[u8]>,
+) -> Result<Asserted, Refusal> {
+    let sign_count = verify_assertion(
+        relying,
+        challenge,
+        Stored {
+            id: &passkey.id,
+            public_key: &passkey.public_key,
+            alg: passkey.alg,
+            sign_count: passkey.sign_count,
+            backup_eligible: passkey.backup_eligible,
+        },
+        assertion,
+    )?;
+    let user_handle = user_handle
+        .filter(|handle| !handle.is_empty())
+        .ok_or(Refusal("user handle"))?;
+    Ok(Asserted {
+        id: passkey.id.clone(),
+        public_key: passkey.public_key.clone(),
+        sign_count,
+        user_handle: user_handle.to_vec(),
+        challenge: challenge.to_vec(),
     })
 }
 
 /// Check an assertion made for `challenge` against the stored credential; returns the
 /// authenticator's new signature counter to store.
-pub fn verify_assertion(
+pub(in crate::accounts) fn verify_assertion(
     relying: Relying<'_>,
     challenge: &[u8],
     stored: Stored<'_>,

@@ -395,6 +395,102 @@ fn rsa_keys_must_be_2048_to_8192_bits_when_registered() {
     // A 2048-bit key is the smallest accepted.
     let rsa = Authenticator::new(Alg::Rs256);
     assert!(verify_registration(RP, &challenge, rsa.register(&challenge).registration()).is_ok());
+    // 8200 bits: over the largest accepted.
+    sent.public_key = rsa_spki(8200);
+    assert_eq!(
+        verify_registration(RP, &challenge, sent.registration()),
+        Err(Refusal("rsa key size"))
+    );
+}
+
+/// An RSA public key of `bits` bits as SubjectPublicKeyInfo: an odd modulus with its top
+/// bit set, exponent 65537. Built by hand, since no library here makes keys over 8192 bits.
+fn rsa_spki(bits: usize) -> Vec<u8> {
+    fn der(tag: u8, body: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        let length = body.len();
+        if length < 0x80 {
+            out.push(length as u8);
+        } else {
+            let bytes: Vec<u8> = length
+                .to_be_bytes()
+                .into_iter()
+                .skip_while(|b| *b == 0)
+                .collect();
+            out.push(0x80 | bytes.len() as u8);
+            out.extend(bytes);
+        }
+        out.extend_from_slice(body);
+        out
+    }
+    let mut modulus = vec![0u8; bits / 8];
+    modulus[0] = 0x80;
+    *modulus.last_mut().unwrap() = 0x01;
+    let mut n = vec![0u8]; // a leading zero keeps the INTEGER positive
+    n.extend(modulus);
+    let key = der(
+        0x30,
+        &[der(0x02, &n), der(0x02, &[0x01, 0x00, 0x01])].concat(),
+    );
+    let algorithm = der(
+        0x30,
+        &[
+            der(
+                0x06,
+                &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01],
+            ),
+            vec![0x05, 0x00],
+        ]
+        .concat(),
+    );
+    let mut bit_string = vec![0u8];
+    bit_string.extend(key);
+    der(0x30, &[algorithm, der(0x03, &bit_string)].concat())
+}
+
+#[test]
+fn a_checked_sign_in_carries_what_was_verified_and_needs_the_user_handle() {
+    let mut phone = Authenticator::new(Alg::Es256);
+    let challenge = [8u8; 32];
+    let credential =
+        verify_registration(RP, &challenge, phone.register(&challenge).registration()).unwrap();
+    assert_eq!(
+        credential.challenge, challenge,
+        "registered against this challenge"
+    );
+    let row = crate::accounts::Passkey {
+        id: credential.id.clone(),
+        account: "acct_aaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+        label: "phone".into(),
+        public_key: credential.public_key.clone(),
+        alg: credential.alg,
+        sign_count: 0,
+        backup_eligible: credential.backup_eligible,
+    };
+    let sent = phone.assert(&challenge);
+    let handle = b"acct_aaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let checked = check_sign_in(RP, &challenge, &row, sent.assertion(), Some(handle)).unwrap();
+    assert_eq!(checked.id, row.id);
+    assert_eq!(
+        checked.public_key, row.public_key,
+        "the key that verified it"
+    );
+    assert_eq!(checked.sign_count, 1);
+    assert_eq!(checked.user_handle, handle);
+    assert_eq!(checked.challenge, challenge);
+    // Every sign-in here is with a discoverable passkey, which always returns its handle.
+    assert_eq!(
+        check_sign_in(RP, &challenge, &row, sent.assertion(), None).unwrap_err(),
+        Refusal("user handle")
+    );
+    // Another passkey's assertion is refused before anything is returned.
+    let other = Authenticator::new(Alg::Es256);
+    let mut theirs = row.clone();
+    theirs.public_key = other.spki();
+    assert_eq!(
+        check_sign_in(RP, &challenge, &theirs, sent.assertion(), Some(handle)).unwrap_err(),
+        Refusal("signature")
+    );
 }
 
 #[test]

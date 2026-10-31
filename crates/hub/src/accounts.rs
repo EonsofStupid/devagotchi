@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 
 use crate::devices::now_secs;
 
-pub use passkey::{Alg, NewCredential};
+pub use passkey::{Alg, Asserted, NewCredential};
 
 /// How long a one-time link (the owner's, later invites and resets) stays valid.
 pub const LINK_TTL_SECS: u64 = 15 * 60;
@@ -99,6 +99,13 @@ impl Ceremony {
     }
 }
 
+/// What lets a passkey be added to an account: a live one-time link for it. (A signed-in
+/// session of the account joins this with the account page.)
+#[derive(Debug, Clone, Copy)]
+pub enum Authority<'a> {
+    Link(LinkPurpose, &'a str),
+}
+
 fn invalid_ceremony() -> BridgeError {
     BridgeError::new("invalid_ceremony", "sign-in timed out; start again")
 }
@@ -163,12 +170,14 @@ const ACCOUNT_COLUMNS: &str = "id, name, owner, disabled_at";
 const PASSKEY_COLUMNS: &str = "id, account, label, public_key, alg, sign_count, backup_eligible";
 
 impl Accounts {
-    /// Open the store at `path`, made 0600 on first use: it holds the challenge key.
+    /// Open the store at `path`. It holds the challenge key, so it and its -wal and -shm
+    /// files are the hub's alone (0600), whether made here or found.
     pub fn open(path: &Path) -> BridgeResult<Self> {
         if !path.exists() {
             // SQLite gives its -wal and -shm files the main file's mode, so all three are 0600.
             crate::push::write_private(path, &[])?;
         }
+        make_private(path)?;
         let connection = Connection::open(path).map_err(store_error)?;
         connection
             .execute_batch(
@@ -227,6 +236,13 @@ impl Accounts {
                 |row| row.get(0),
             )
             .map_err(store_error)?;
+        if key.len() != 32 {
+            return Err(BridgeError::new(
+                "account_store",
+                "the challenge key in accounts.sqlite3 is not 32 bytes; restore the store from a backup",
+            ));
+        }
+        make_private(path)?;
         Ok(Self {
             connection: Mutex::new(connection),
             challenge_key: hmac::Key::new(hmac::HMAC_SHA256, &key),
@@ -319,18 +335,14 @@ impl Accounts {
             .map_err(store_error)
     }
 
-    /// Issue a one-time link for `account`. Only its SHA-256 is kept; a new link of the
-    /// same purpose supersedes the account's unused one.
-    pub fn issue_link(
-        &self,
-        purpose: LinkPurpose,
-        account: &str,
-        random: [u8; 32],
-    ) -> BridgeResult<String> {
-        self.issue_link_at(purpose, account, random, now_secs())
+    /// Issue a one-time link for `account`: 256 random bits the store draws itself. Only
+    /// its SHA-256 is kept; a new link of the same purpose supersedes the account's unused
+    /// one.
+    pub fn issue_link(&self, purpose: LinkPurpose, account: &str) -> BridgeResult<String> {
+        self.issue_link_at(purpose, account, crate::link::random::<32>(), now_secs())
     }
 
-    pub(crate) fn issue_link_at(
+    fn issue_link_at(
         &self,
         purpose: LinkPurpose,
         account: &str,
@@ -389,31 +401,43 @@ impl Accounts {
         live_link(&connection, purpose, token, now)
     }
 
-    /// Store a passkey for `account`, registered against `challenge` (one this hub made to
-    /// register a passkey on this account). With a link, the link must still be live and for
-    /// this account. The challenge and the link are spent in the same transaction as the
-    /// passkey is stored: all of it happens or none does.
+    /// Store a passkey for `account`, as `verify_registration` returned it, on the
+    /// `authority` of a live link for this account. The challenge it answered must be one
+    /// this hub made to register a passkey on this account. The challenge and the link are
+    /// spent in the same transaction as the passkey is stored: all of it happens or none
+    /// does.
     pub fn add_passkey(
         &self,
         account: &str,
         credential: &NewCredential,
         label: &str,
-        link: Option<(LinkPurpose, &str)>,
-        challenge: &[u8],
+        authority: Authority<'_>,
     ) -> BridgeResult<()> {
-        self.add_passkey_at(account, credential, label, link, challenge, now_secs())
+        let Authority::Link(purpose, token) = authority;
+        self.store_passkey(
+            account,
+            credential,
+            label,
+            Some((purpose, token)),
+            now_secs(),
+        )
     }
 
-    pub(crate) fn add_passkey_at(
+    /// `add_passkey`, with the authority optional: for this module and its tests only.
+    fn store_passkey(
         &self,
         account: &str,
         credential: &NewCredential,
         label: &str,
         link: Option<(LinkPurpose, &str)>,
-        challenge: &[u8],
         now: u64,
     ) -> BridgeResult<()> {
-        let mac = self.check_challenge(Ceremony::Register, Some(account), challenge, now)?;
+        let (mac, issued) = self.check_challenge(
+            Ceremony::Register,
+            Some(account),
+            &credential.challenge,
+            now,
+        )?;
         let label = label.trim();
         if label.is_empty() || label.len() > 64 || label.chars().any(char::is_control) {
             return Err(BridgeError::new(
@@ -425,7 +449,7 @@ impl Accounts {
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(store_error)?;
-        spend_challenge(&transaction, &mac, now)?;
+        spend_challenge(&transaction, &mac, issued, now)?;
         let holder = transaction
             .query_row(
                 &format!("SELECT {ACCOUNT_COLUMNS} FROM accounts WHERE id = ?1"),
@@ -512,14 +536,15 @@ impl Accounts {
     }
 
     /// Check that `challenge` is this hub's, for `purpose` (and `account`), and unexpired;
-    /// returns its MAC, the key it is spent under. Whether it is spent is checked when it is.
+    /// returns its MAC, the key it is spent under, and when it was issued. Whether it is
+    /// spent is checked when it is.
     fn check_challenge(
         &self,
         purpose: Ceremony,
         account: Option<&str>,
         challenge: &[u8],
         now: u64,
-    ) -> BridgeResult<Vec<u8>> {
+    ) -> BridgeResult<(Vec<u8>, u64)> {
         if challenge.len() != CHALLENGE_LEN || challenge[0] != CHALLENGE_FORMAT {
             return Err(invalid_ceremony());
         }
@@ -534,7 +559,7 @@ impl Accounts {
         if issued > now || now >= issued.saturating_add(CHALLENGE_TTL_SECS) {
             return Err(invalid_ceremony());
         }
-        Ok(tag.to_vec())
+        Ok((tag.to_vec(), issued))
     }
 
     pub fn passkey(&self, id: &[u8]) -> BridgeResult<Option<Passkey>> {
@@ -563,47 +588,37 @@ impl Accounts {
         rows.collect::<Result<_, _>>().map_err(store_error)
     }
 
-    /// Record a sign-in with passkey `id`, whose assertion was verified for `challenge` and
-    /// carried `sign_count` and (when the authenticator returned one) `user_handle`. In one
-    /// transaction: the challenge is a live sign-in challenge of this hub's and is spent,
-    /// the passkey and its account exist and the account is not disabled, the user handle
-    /// is that account's, and the counter moves forward from what is stored now, so two
-    /// sign-ins racing with one cloned key cannot both count. Returns the account.
-    pub fn sign_in(
-        &self,
-        id: &[u8],
-        sign_count: u32,
-        user_handle: Option<&[u8]>,
-        challenge: &[u8],
-    ) -> BridgeResult<Account> {
-        self.sign_in_at(id, sign_count, user_handle, challenge, now_secs())
+    /// Record a sign-in, as `check_sign_in` returned it. In one transaction: the challenge
+    /// is a live sign-in challenge of this hub's and is spent; the passkey exists with the
+    /// key that verified the signature; its account exists and is not disabled; the user
+    /// handle is that account's; and the counter moves forward from what is stored now, so
+    /// two sign-ins racing with one copied key cannot both count. Returns the account.
+    pub fn sign_in(&self, asserted: &Asserted) -> BridgeResult<Account> {
+        self.sign_in_at(asserted, now_secs())
     }
 
-    pub(crate) fn sign_in_at(
-        &self,
-        id: &[u8],
-        sign_count: u32,
-        user_handle: Option<&[u8]>,
-        challenge: &[u8],
-        now: u64,
-    ) -> BridgeResult<Account> {
-        let mac = self.check_challenge(Ceremony::SignIn, None, challenge, now)?;
+    fn sign_in_at(&self, asserted: &Asserted, now: u64) -> BridgeResult<Account> {
+        let (mac, issued) =
+            self.check_challenge(Ceremony::SignIn, None, &asserted.challenge, now)?;
         let mut connection = self.connection.lock().expect("accounts");
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(store_error)?;
-        spend_challenge(&transaction, &mac, now)?;
+        spend_challenge(&transaction, &mac, issued, now)?;
+        let not_here =
+            || BridgeError::new("invalid_passkey", "this passkey is not registered here");
         let passkey = transaction
             .query_row(
                 &format!("SELECT {PASSKEY_COLUMNS} FROM passkeys WHERE id = ?1"),
-                params![id],
+                params![asserted.id],
                 passkey_row,
             )
             .optional()
             .map_err(store_error)?
-            .ok_or_else(|| {
-                BridgeError::new("invalid_passkey", "this passkey is not registered here")
-            })?;
+            .ok_or_else(not_here)?;
+        if passkey.public_key != asserted.public_key {
+            return Err(not_here());
+        }
         let account = transaction
             .query_row(
                 &format!("SELECT {ACCOUNT_COLUMNS} FROM accounts WHERE id = ?1"),
@@ -614,14 +629,15 @@ impl Accounts {
         if account.disabled_at.is_some() {
             return Err(account_disabled(&account.id));
         }
-        if user_handle.is_some_and(|handle| handle != account.id.as_bytes()) {
+        if asserted.user_handle != account.id.as_bytes() {
             return Err(BridgeError::new(
                 "user_handle",
                 "the passkey answered for another account",
             ));
         }
         // Authenticators that keep no counter (most synced passkeys) report 0 every time.
-        if (sign_count != 0 || passkey.sign_count != 0) && sign_count <= passkey.sign_count {
+        let count = asserted.sign_count;
+        if (count != 0 || passkey.sign_count != 0) && count <= passkey.sign_count {
             return Err(BridgeError::new(
                 "signature_counter",
                 "this passkey's counter went backwards: it may have been copied",
@@ -630,25 +646,53 @@ impl Accounts {
         transaction
             .execute(
                 "UPDATE passkeys SET sign_count = ?1, last_used_at = ?2 WHERE id = ?3",
-                params![sign_count, now, id],
+                params![count, now, asserted.id],
             )
             .map_err(store_error)?;
         transaction.commit().map_err(store_error)?;
         Ok(account)
     }
 
-    /// Remove one of `account`'s passkeys; false when it has no such passkey.
+    /// Remove one of `account`'s passkeys; false when it has no such passkey. Its last one
+    /// stays: removing it would lock the account out.
     pub fn remove_passkey(&self, account: &str, id: &[u8]) -> BridgeResult<bool> {
-        let removed = self
-            .connection
-            .lock()
-            .expect("accounts")
+        let mut connection = self.connection.lock().expect("accounts");
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        let held: i64 = transaction
+            .query_row(
+                "SELECT COUNT(*) FROM passkeys WHERE account = ?1",
+                params![account],
+                |row| row.get(0),
+            )
+            .map_err(store_error)?;
+        let theirs = transaction
+            .query_row(
+                "SELECT 1 FROM passkeys WHERE id = ?1 AND account = ?2",
+                params![id, account],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(store_error)?
+            .is_some();
+        if !theirs {
+            return Ok(false);
+        }
+        if held <= 1 {
+            return Err(BridgeError::new(
+                "last_passkey",
+                "this is the account's only passkey; add another before removing it",
+            ));
+        }
+        transaction
             .execute(
                 "DELETE FROM passkeys WHERE id = ?1 AND account = ?2",
                 params![id, account],
             )
             .map_err(store_error)?;
-        Ok(removed == 1)
+        transaction.commit().map_err(store_error)?;
+        Ok(true)
     }
 }
 
@@ -668,19 +712,52 @@ fn challenge_message(signed: &[u8], purpose: Ceremony, account: Option<&str>) ->
     message
 }
 
-/// Spend a challenge once, inside the ceremony's transaction; spent challenges are kept
-/// only until they would have expired anyway.
-fn spend_challenge(connection: &Connection, mac: &[u8], now: u64) -> BridgeResult<()> {
-    connection
-        .execute(
-            "DELETE FROM spent_challenges WHERE expires_at <= ?1",
+/// Spend a challenge once, inside the ceremony's transaction. A record is kept until the
+/// challenge expires (`issued` + five minutes). Clearing out expired records moves a
+/// horizon forward to the latest expiry cleared, and a challenge expiring at or before it is
+/// refused from then on: if the clock jumps ahead and back, a challenge whose record was
+/// cleared while it looked expired cannot be used again.
+fn spend_challenge(connection: &Connection, mac: &[u8], issued: u64, now: u64) -> BridgeResult<()> {
+    let expires = issued.saturating_add(CHALLENGE_TTL_SECS);
+    let horizon: u64 = connection
+        .query_row(
+            "SELECT value FROM secrets WHERE name = 'spent_horizon'",
+            [],
+            |row| row.get::<_, Vec<u8>>(0),
+        )
+        .optional()
+        .map_err(store_error)?
+        .and_then(|bytes| bytes.try_into().ok().map(u64::from_be_bytes))
+        .unwrap_or(0);
+    if expires <= horizon {
+        return Err(invalid_ceremony());
+    }
+    let cleared: Option<u64> = connection
+        .query_row(
+            "SELECT MAX(expires_at) FROM spent_challenges WHERE expires_at <= ?1",
             params![now],
+            |row| row.get(0),
         )
         .map_err(store_error)?;
+    if let Some(cleared) = cleared.filter(|cleared| *cleared > horizon) {
+        connection
+            .execute(
+                "INSERT INTO secrets (name, value) VALUES ('spent_horizon', ?1)
+                 ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+                params![cleared.to_be_bytes().to_vec()],
+            )
+            .map_err(store_error)?;
+        connection
+            .execute(
+                "DELETE FROM spent_challenges WHERE expires_at <= ?1",
+                params![cleared],
+            )
+            .map_err(store_error)?;
+    }
     let fresh = connection
         .execute(
             "INSERT OR IGNORE INTO spent_challenges (mac, expires_at) VALUES (?1, ?2)",
-            params![mac, now + CHALLENGE_TTL_SECS],
+            params![mac, expires],
         )
         .map_err(store_error)?;
     if fresh == 1 {
@@ -688,6 +765,32 @@ fn spend_challenge(connection: &Connection, mac: &[u8], now: u64) -> BridgeResul
     } else {
         Err(invalid_ceremony())
     }
+}
+
+/// The store and its -wal and -shm files, when present, readable by the hub alone.
+fn make_private(path: &Path) -> BridgeResult<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let name = path.as_os_str().to_owned();
+        for suffix in ["", "-wal", "-shm"] {
+            let mut file = name.clone();
+            file.push(suffix);
+            match std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(BridgeError::new(
+                        "account_store",
+                        format!("{}: {error}", Path::new(&file).display()),
+                    ));
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 fn live_link(

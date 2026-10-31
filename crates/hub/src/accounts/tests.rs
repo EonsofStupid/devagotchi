@@ -9,22 +9,44 @@ fn store() -> (tempfile::TempDir, Accounts) {
 const A: &str = "acct_aaaaaaaaaaaaaaaaaaaaaaaaaa";
 const B: &str = "acct_bbbbbbbbbbbbbbbbbbbbbbbbbb";
 
-/// A challenge for registering a passkey on `account`, made now.
-fn register(accounts: &Accounts, account: &str) -> Vec<u8> {
-    accounts.challenge(Ceremony::Register, Some(account))
-}
-
-fn sign_in(accounts: &Accounts) -> Vec<u8> {
-    accounts.challenge(Ceremony::SignIn, None)
-}
-
-fn credential(id: u8) -> NewCredential {
+/// A credential as `verify_registration` returns it, registered against `challenge`.
+fn verified(id: u8, challenge: Vec<u8>) -> NewCredential {
     NewCredential {
         id: vec![id; 16],
         public_key: vec![0x30, id],
         alg: Alg::Es256,
         sign_count: 0,
         backup_eligible: true,
+        challenge,
+    }
+}
+
+/// Credential `id`, verified against a registration challenge for `account` made now.
+fn credential(accounts: &Accounts, account: &str, id: u8) -> NewCredential {
+    verified(id, accounts.challenge(Ceremony::Register, Some(account)))
+}
+
+/// Store a passkey with no link: what a test needs to set up, never a way in. (The public
+/// `add_passkey` always takes an authority.)
+fn seed(accounts: &Accounts, account: &str, id: u8, label: &str) -> BridgeResult<()> {
+    accounts.store_passkey(
+        account,
+        &credential(accounts, account, id),
+        label,
+        None,
+        now_secs(),
+    )
+}
+
+/// A sign-in as `check_sign_in` returns it: passkey `id` (its key, as `verified` makes
+/// it), counter `count`, user handle `handle`, for a sign-in challenge made now.
+fn asserted(accounts: &Accounts, id: u8, count: u32, handle: &str) -> Asserted {
+    Asserted {
+        id: vec![id; 16],
+        public_key: vec![0x30, id],
+        sign_count: count,
+        user_handle: handle.as_bytes().to_vec(),
+        challenge: accounts.challenge(Ceremony::SignIn, None),
     }
 }
 
@@ -99,10 +121,11 @@ fn owner_link_is_one_time_and_stored_only_as_a_hash() {
     let path = dir.path().join("accounts.sqlite3");
     let accounts = Accounts::open(&path).unwrap();
     let owner = accounts.create(A, "Jesse", true).unwrap();
-    let token = accounts
-        .issue_link(LinkPurpose::Owner, &owner.id, [7; 32])
-        .unwrap();
-    assert!(token.starts_with("dgl_"));
+    let token = accounts.issue_link(LinkPurpose::Owner, &owner.id).unwrap();
+    assert!(
+        token.starts_with("dgl_") && token.len() == 4 + 43,
+        "{token}"
+    );
     // Checking does not spend it, so a link preview cannot burn it.
     assert_eq!(
         accounts.check_link(LinkPurpose::Owner, &token).unwrap(),
@@ -128,10 +151,9 @@ fn owner_link_is_one_time_and_stored_only_as_a_hash() {
     accounts
         .add_passkey(
             &owner.id,
-            &credential(1),
+            &credential(&accounts, A, 1),
             "phone",
-            Some((LinkPurpose::Owner, &token)),
-            &register(&accounts, &owner.id),
+            Authority::Link(LinkPurpose::Owner, &token),
         )
         .unwrap();
     assert_eq!(
@@ -145,17 +167,16 @@ fn owner_link_is_one_time_and_stored_only_as_a_hash() {
         accounts
             .add_passkey(
                 &owner.id,
-                &credential(2),
+                &credential(&accounts, A, 2),
                 "again",
-                Some((LinkPurpose::Owner, &token)),
-                &register(&accounts, &owner.id),
+                Authority::Link(LinkPurpose::Owner, &token),
             )
             .unwrap_err()
             .code,
         "invalid_link"
     );
     assert!(
-        accounts.passkey(&credential(2).id).unwrap().is_none(),
+        accounts.passkey(&[2; 16]).unwrap().is_none(),
         "nothing added on refusal"
     );
 }
@@ -167,7 +188,7 @@ fn owner_links_expire_and_supersede() {
     let plain = accounts.create(B, "Friend", false).unwrap();
     assert_eq!(
         accounts
-            .issue_link(LinkPurpose::Owner, &plain.id, [1; 32])
+            .issue_link(LinkPurpose::Owner, &plain.id)
             .unwrap_err()
             .code,
         "not_owner"
@@ -217,27 +238,16 @@ fn owner_links_expire_and_supersede() {
 fn a_refused_passkey_leaves_the_link_unspent() {
     let (_dir, accounts) = store();
     let owner = accounts.create(A, "Jesse", true).unwrap();
-    let friend = accounts.create(B, "Friend", false).unwrap();
-    accounts
-        .add_passkey(
-            &friend.id,
-            &credential(1),
-            "theirs",
-            None,
-            &register(&accounts, B),
-        )
-        .unwrap();
-    let link = accounts
-        .issue_link(LinkPurpose::Owner, &owner.id, [3; 32])
-        .unwrap();
+    accounts.create(B, "Friend", false).unwrap();
+    seed(&accounts, B, 1, "theirs").unwrap();
+    let link = accounts.issue_link(LinkPurpose::Owner, &owner.id).unwrap();
     let with_link = |account: &str, id: u8| {
         accounts
             .add_passkey(
                 account,
-                &credential(id),
+                &credential(&accounts, account, id),
                 "phone",
-                Some((LinkPurpose::Owner, &link)),
-                &register(&accounts, account),
+                Authority::Link(LinkPurpose::Owner, &link),
             )
             .map_err(|error| error.code)
     };
@@ -256,12 +266,11 @@ fn a_refused_passkey_leaves_the_link_unspent() {
         accounts.challenge_at(Ceremony::Register, Some(A), [4; 16], 1_000 + LINK_TTL_SECS);
     assert_eq!(
         accounts
-            .add_passkey_at(
+            .store_passkey(
                 A,
-                &credential(4),
+                &verified(4, challenge),
                 "phone",
                 Some((LinkPurpose::Owner, &late)),
-                &challenge,
                 1_000 + LINK_TTL_SECS,
             )
             .unwrap_err()
@@ -272,12 +281,18 @@ fn a_refused_passkey_leaves_the_link_unspent() {
 
 #[test]
 fn challenges_are_the_hubs_own_bound_to_their_purpose_and_spent_once() {
-    let (dir, accounts) = store();
+    let (_dir, accounts) = store();
     accounts.create(A, "Jesse", true).unwrap();
     accounts.create(B, "Friend", false).unwrap();
     let add = |account: &str, id: u8, challenge: &[u8], now: u64| {
         accounts
-            .add_passkey_at(account, &credential(id), "phone", None, challenge, now)
+            .store_passkey(
+                account,
+                &verified(id, challenge.to_vec()),
+                "phone",
+                None,
+                now,
+            )
             .map_err(|error| error.code)
     };
     let refused = Err("invalid_ceremony".to_string());
@@ -286,12 +301,13 @@ fn challenges_are_the_hubs_own_bound_to_their_purpose_and_spent_once() {
     assert!(challenge.len() >= 32, "at least as long as WebAuthn asks");
     assert_eq!(add(A, 1, &challenge, 101), Ok(()));
     assert_eq!(add(A, 2, &challenge, 102), refused, "used once");
-    // For another account, for signing in, or after five minutes: refused.
+    // For another account, for signing in, before it was made, or after five minutes.
     let challenge = accounts.challenge_at(Ceremony::Register, Some(A), [2; 16], 100);
     assert_eq!(add(B, 3, &challenge, 101), refused);
     let sign_in = accounts.challenge_at(Ceremony::SignIn, None, [3; 16], 100);
     assert_eq!(add(A, 4, &sign_in, 101), refused);
     assert_eq!(add(A, 5, &challenge, 100 + CHALLENGE_TTL_SECS), refused);
+    assert_eq!(add(A, 11, &challenge, 99), refused, "issued in the future");
     // Made up, altered, or made by another hub: refused.
     let mut altered = challenge.clone();
     let last = altered.len() - 1;
@@ -302,26 +318,48 @@ fn challenges_are_the_hubs_own_bound_to_their_purpose_and_spent_once() {
     let (_other_dir, other) = store();
     let foreign = other.challenge_at(Ceremony::Register, Some(A), [2; 16], 100);
     assert_eq!(add(A, 9, &foreign, 101), refused);
-    assert_eq!(
-        add(A, 10, &challenge, 101),
-        Ok(()),
-        "still good after all that"
-    );
+    // Its last valid second, after all that.
+    assert_eq!(add(A, 10, &challenge, 100 + CHALLENGE_TTL_SECS - 1), Ok(()));
 
     // Asking for challenges writes nothing: a flood of unanswered sign-ins costs no storage
-    // and blocks nobody.
-    let before = std::fs::metadata(dir.path().join("accounts.sqlite3-wal"))
-        .map(|m| m.len())
-        .unwrap_or(0);
+    // and blocks nobody. Only the two ceremonies that succeeded left a record.
     for i in 0..1_000u16 {
         let mut nonce = [0u8; 16];
         nonce[..2].copy_from_slice(&i.to_be_bytes());
         accounts.challenge_at(Ceremony::SignIn, None, nonce, 100);
     }
-    let after = std::fs::metadata(dir.path().join("accounts.sqlite3-wal"))
-        .map(|m| m.len())
-        .unwrap_or(0);
-    assert_eq!(before, after);
+    let spent: i64 = accounts
+        .connection
+        .lock()
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM spent_challenges", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(spent, 2);
+}
+
+#[test]
+fn a_spent_challenge_stays_spent_across_a_clock_step() {
+    let (_dir, accounts) = store();
+    accounts.create(A, "Jesse", true).unwrap();
+    seed(&accounts, A, 1, "synced").unwrap();
+    let at = |nonce: u8, issued: u64| {
+        let mut sign_in = asserted(&accounts, 1, 0, A);
+        sign_in.challenge = accounts.challenge_at(Ceremony::SignIn, None, [nonce; 16], issued);
+        sign_in
+    };
+    let c = at(1, 1_000);
+    accounts.sign_in_at(&c, 1_010).unwrap();
+    // The clock jumps ahead and another sign-in clears out old records, c's among them.
+    accounts.sign_in_at(&at(2, 5_000), 5_000).unwrap();
+    // Set back: c would be inside its five minutes again, but it was spent.
+    assert_eq!(
+        accounts.sign_in_at(&c, 1_020).unwrap_err().code,
+        "invalid_ceremony"
+    );
+    // A challenge made after the step back still works.
+    assert_eq!(accounts.sign_in_at(&at(3, 1_100), 1_101).unwrap().id, A);
 }
 
 #[test]
@@ -329,35 +367,18 @@ fn passkeys_belong_to_one_account() {
     let (_dir, accounts) = store();
     let jesse = accounts.create(A, "Jesse", true).unwrap();
     let friend = accounts.create(B, "Friend", false).unwrap();
-    let add = |account: &str, id: u8, label: &str| {
-        accounts.add_passkey(
-            account,
-            &credential(id),
-            label,
-            None,
-            &register(&accounts, account),
-        )
-    };
-    add(&jesse.id, 1, "phone").unwrap();
-    add(&jesse.id, 2, "laptop").unwrap();
+    seed(&accounts, A, 1, "phone").unwrap();
+    seed(&accounts, A, 2, "laptop").unwrap();
     assert_eq!(
-        add(&friend.id, 1, "stolen").unwrap_err().code,
+        seed(&accounts, B, 1, "stolen").unwrap_err().code,
         "passkey_exists"
     );
+    let nobody = "acct_cccccccccccccccccccccccccc";
     assert_eq!(
-        accounts
-            .add_passkey(
-                "acct_cccccccccccccccccccccccccc",
-                &credential(3),
-                "x",
-                None,
-                &register(&accounts, "acct_cccccccccccccccccccccccccc"),
-            )
-            .unwrap_err()
-            .code,
+        seed(&accounts, nobody, 3, "x").unwrap_err().code,
         "no_account"
     );
-    let found = accounts.passkey(&credential(1).id).unwrap().unwrap();
+    let found = accounts.passkey(&[1; 16]).unwrap().unwrap();
     assert_eq!(
         (found.account.as_str(), found.label.as_str()),
         (jesse.id.as_str(), "phone")
@@ -365,17 +386,20 @@ fn passkeys_belong_to_one_account() {
     assert_eq!(found.alg, Alg::Es256);
     assert_eq!(accounts.passkeys_of(&jesse.id).unwrap().len(), 2);
     assert!(
-        !accounts
-            .remove_passkey(&friend.id, &credential(2).id)
-            .unwrap(),
+        !accounts.remove_passkey(&friend.id, &[2; 16]).unwrap(),
         "not the friend's"
     );
-    assert!(
-        accounts
-            .remove_passkey(&jesse.id, &credential(2).id)
-            .unwrap()
-    );
+    assert!(accounts.remove_passkey(&jesse.id, &[2; 16]).unwrap());
     assert_eq!(accounts.passkeys_of(&jesse.id).unwrap().len(), 1);
+    // The last one stays: removing it would lock the account out.
+    assert_eq!(
+        accounts
+            .remove_passkey(&jesse.id, &[1; 16])
+            .unwrap_err()
+            .code,
+        "last_passkey"
+    );
+    assert!(accounts.passkey(&[1; 16]).unwrap().is_some());
 }
 
 #[test]
@@ -383,88 +407,88 @@ fn signing_in_moves_the_counter_forward_once_and_only_for_a_live_account() {
     let (_dir, accounts) = store();
     accounts.create(A, "Jesse", true).unwrap();
     accounts.create(B, "Friend", false).unwrap();
-    let mut counted = credential(1);
+    let mut counted = credential(&accounts, A, 1);
     counted.backup_eligible = false;
     accounts
-        .add_passkey(A, &counted, "key", None, &register(&accounts, A))
+        .store_passkey(A, &counted, "key", None, now_secs())
         .unwrap();
-    accounts
-        .add_passkey(A, &credential(2), "synced", None, &register(&accounts, A))
-        .unwrap();
-    let go = |id: u8, count: u32, handle: Option<&[u8]>| {
+    seed(&accounts, A, 2, "synced").unwrap();
+    seed(&accounts, A, 3, "spare").unwrap();
+    let go = |id: u8, count: u32, handle: &str| {
         accounts
-            .sign_in(&credential(id).id, count, handle, &sign_in(&accounts))
+            .sign_in(&asserted(&accounts, id, count, handle))
             .map(|account| account.id)
             .map_err(|error| error.code)
     };
 
-    assert_eq!(go(1, 7, Some(A.as_bytes())), Ok(A.to_string()));
-    assert_eq!(
-        accounts
-            .passkey(&credential(1).id)
-            .unwrap()
-            .unwrap()
-            .sign_count,
-        7
-    );
+    assert_eq!(go(1, 7, A), Ok(A.to_string()));
+    assert_eq!(accounts.passkey(&[1; 16]).unwrap().unwrap().sign_count, 7);
     // Two sign-ins that both read 7: the second to store finds the counter moved.
-    assert_eq!(go(1, 7, None), Err("signature_counter".into()));
-    assert_eq!(go(1, 6, None), Err("signature_counter".into()));
-    assert_eq!(go(1, 8, None), Ok(A.to_string()));
+    assert_eq!(go(1, 7, A), Err("signature_counter".into()));
+    assert_eq!(go(1, 6, A), Err("signature_counter".into()));
+    assert_eq!(go(1, 8, A), Ok(A.to_string()));
     // A passkey that keeps no counter signs in with 0 every time.
-    assert_eq!(go(2, 0, None), Ok(A.to_string()));
-    assert_eq!(go(2, 0, None), Ok(A.to_string()));
+    assert_eq!(go(2, 0, A), Ok(A.to_string()));
+    assert_eq!(go(2, 0, A), Ok(A.to_string()));
     // The user handle the authenticator returns must be the passkey's own account.
-    assert_eq!(go(2, 0, Some(B.as_bytes())), Err("user_handle".into()));
+    assert_eq!(go(2, 0, B), Err("user_handle".into()));
+    assert_eq!(go(2, 0, ""), Err("user_handle".into()));
     // One challenge, one sign-in; a registration challenge is not a sign-in one.
-    let challenge = sign_in(&accounts);
-    accounts
-        .sign_in(&credential(2).id, 0, None, &challenge)
-        .unwrap();
+    let once = asserted(&accounts, 2, 0, A);
+    accounts.sign_in(&once).unwrap();
     assert_eq!(
-        accounts
-            .sign_in(&credential(2).id, 0, None, &challenge)
-            .unwrap_err()
-            .code,
+        accounts.sign_in(&once).unwrap_err().code,
         "invalid_ceremony"
     );
+    let mut registering = asserted(&accounts, 2, 0, A);
+    registering.challenge = accounts.challenge(Ceremony::Register, Some(A));
     assert_eq!(
-        accounts
-            .sign_in(&credential(2).id, 0, None, &register(&accounts, A))
-            .unwrap_err()
-            .code,
+        accounts.sign_in(&registering).unwrap_err().code,
         "invalid_ceremony"
     );
     // A disabled account, a removed passkey, or one never registered: no sign-in.
-    accounts
-        .connection
-        .lock()
-        .unwrap()
-        .execute(
-            "UPDATE accounts SET disabled_at = 1 WHERE id = ?1",
-            rusqlite::params![A],
-        )
-        .unwrap();
-    assert_eq!(go(2, 0, None), Err("account_disabled".into()));
-    assert_eq!(
+    let disable = |at: Option<u64>| {
         accounts
-            .add_passkey(A, &credential(5), "new", None, &register(&accounts, A))
-            .unwrap_err()
-            .code,
+            .connection
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE accounts SET disabled_at = ?1 WHERE id = ?2",
+                rusqlite::params![at, A],
+            )
+            .unwrap();
+    };
+    disable(Some(1));
+    assert_eq!(go(2, 0, A), Err("account_disabled".into()));
+    assert_eq!(
+        seed(&accounts, A, 5, "new").unwrap_err().code,
         "account_disabled"
     );
-    accounts
-        .connection
-        .lock()
-        .unwrap()
-        .execute(
-            "UPDATE accounts SET disabled_at = NULL WHERE id = ?1",
-            rusqlite::params![A],
-        )
-        .unwrap();
-    assert!(accounts.remove_passkey(A, &credential(2).id).unwrap());
-    assert_eq!(go(2, 0, None), Err("invalid_passkey".into()));
-    assert_eq!(go(9, 1, None), Err("invalid_passkey".into()));
+    disable(None);
+    assert!(accounts.remove_passkey(A, &[2; 16]).unwrap());
+    assert_eq!(go(2, 0, A), Err("invalid_passkey".into()));
+    assert_eq!(go(9, 1, A), Err("invalid_passkey".into()));
+}
+
+#[test]
+fn the_store_signs_in_only_the_passkey_that_was_verified() {
+    // A page that verified Mallory's own assertion, with her own key, but named Jesse's
+    // passkey to the store: the store checks the key it was verified with is that passkey's.
+    let (_dir, accounts) = store();
+    accounts.create(A, "Jesse", true).unwrap();
+    accounts.create(B, "Mallory", false).unwrap();
+    seed(&accounts, A, 1, "jesse").unwrap();
+    seed(&accounts, B, 2, "mallory").unwrap();
+    let mut swapped = asserted(&accounts, 1, 0, A);
+    swapped.public_key = vec![0x30, 2];
+    assert_eq!(
+        accounts.sign_in(&swapped).unwrap_err().code,
+        "invalid_passkey"
+    );
+    assert_eq!(
+        accounts.sign_in(&asserted(&accounts, 1, 0, A)).unwrap().id,
+        A
+    );
 }
 
 #[test]
@@ -473,33 +497,72 @@ fn the_store_and_its_challenges_survive_a_reopen() {
     let path = dir.path().join("accounts.sqlite3");
     let pending = {
         let accounts = Accounts::open(&path).unwrap();
-        let owner = accounts.create(A, "Jesse", true).unwrap();
-        accounts
-            .add_passkey(
-                &owner.id,
-                &credential(1),
-                "phone",
-                None,
-                &register(&accounts, A),
-            )
-            .unwrap();
-        sign_in(&accounts)
+        accounts.create(A, "Jesse", true).unwrap();
+        seed(&accounts, A, 1, "phone").unwrap();
+        asserted(&accounts, 1, 1, A)
     };
     let accounts = Accounts::open(&path).unwrap();
     assert_eq!(accounts.owner().unwrap().unwrap().name, "Jesse");
-    assert!(accounts.passkey(&credential(1).id).unwrap().is_some());
+    assert!(accounts.passkey(&[1; 16]).unwrap().is_some());
     // A sign-in begun before a restart finishes after it.
-    assert_eq!(
-        accounts
-            .sign_in(&credential(1).id, 1, None, &pending)
-            .unwrap()
-            .id,
-        A
-    );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600, "accounts.sqlite3 is the hub's alone");
+    assert_eq!(accounts.sign_in(&pending).unwrap().id, A);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_store_is_the_hubs_alone_new_or_found() {
+    use std::os::unix::fs::PermissionsExt;
+    let names = [
+        "accounts.sqlite3",
+        "accounts.sqlite3-wal",
+        "accounts.sqlite3-shm",
+    ];
+    let modes = |dir: &Path| -> Vec<(String, u32)> {
+        names
+            .iter()
+            .filter_map(|name| {
+                let meta = std::fs::metadata(dir.join(name)).ok()?;
+                Some((name.to_string(), meta.permissions().mode() & 0o777))
+            })
+            .collect()
+    };
+    // Made here.
+    let (dir, accounts) = store();
+    accounts.create(A, "Jesse", true).unwrap();
+    let made = modes(dir.path());
+    assert_eq!(made.len(), 3, "{made:?}");
+    assert!(made.iter().all(|(_, mode)| *mode == 0o600), "{made:?}");
+    drop(accounts);
+    // Found readable by others (a restored backup, a store made by hand, a write-ahead
+    // log left behind): made private.
+    for name in names {
+        let path = dir.path().join(name);
+        if !path.exists() {
+            std::fs::write(&path, b"").unwrap();
+        }
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
     }
+    let _accounts = Accounts::open(&dir.path().join("accounts.sqlite3")).unwrap();
+    let found = modes(dir.path());
+    assert!(found.iter().all(|(_, mode)| *mode == 0o600), "{found:?}");
+}
+
+#[test]
+fn a_challenge_key_that_is_not_32_bytes_stops_the_store() {
+    let (dir, accounts) = store();
+    accounts
+        .connection
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE secrets SET value = x'' WHERE name = 'challenge_key'",
+            [],
+        )
+        .unwrap();
+    drop(accounts);
+    let opened = Accounts::open(&dir.path().join("accounts.sqlite3"));
+    assert_eq!(
+        opened.err().map(|e| e.code),
+        Some("account_store".to_string())
+    );
 }
