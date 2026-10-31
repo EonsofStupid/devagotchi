@@ -30,6 +30,7 @@ parser.add_argument("--devagotchi", required=True)
 parser.add_argument("--work", required=True, type=Path)
 args = parser.parse_args()
 failures = 0
+LAST_WHOAMI = ""
 
 
 def check(name, ok, detail=""):
@@ -171,8 +172,8 @@ def connect(opener, base, provider_name):
     })
     status, _, raw = request(opener, "GET", base + "/authorize?" + query)
     text = raw.decode()
-    check("authorize asks for sign-in", status == 401 and "/login?resume=" in text, f"HTTP {status}")
-    resume = text.split("/login?resume=")[1].split('"')[0]
+    check("authorize offers one tap", status == 200 and "/authorize/provisional" in text, f"HTTP {status} {text[:120]}")
+    resume = text.split('name="request" value="')[1].split('"')[0]
     # Do not follow the provider redirect automatically: we want the code on our redirect.
     class NoRedirect(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, *_args, **_kwargs):
@@ -221,6 +222,28 @@ def connect(opener, base, provider_name):
     return token
 
 
+def claim_via(base, provider, code):
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, *_args, **_kwargs):
+            return None
+    jar = urllib.request.HTTPCookieProcessor()
+    manual = urllib.request.build_opener(NoRedirect, jar)
+    status, headers, _ = request(
+        manual, "GET", f"{base}/login/upstream/{provider}?resume=claim:{urllib.parse.quote(code)}",
+    )
+    location = headers.get("Location") or headers.get("location")
+    check("claim starts upstream", status in (302, 303) and location, f"HTTP {status}")
+    if not location:
+        return
+    status, headers, _ = request(manual, "GET", location)
+    location = headers.get("Location") or headers.get("location")
+    if not location:
+        check("claim provider redirected", False, f"HTTP {status}")
+        return
+    status, headers, _ = request(manual, "GET", location)
+    check("claim finished", status in (200, 302, 303), f"HTTP {status}")
+
+
 def whoami_subject(opener, base, token):
     status, raw, session = mcp(opener, base, token, "initialize", {
         "protocolVersion": "2025-06-18",
@@ -232,6 +255,8 @@ def whoami_subject(opener, base, token):
         opener, base, token, "tools/call", {"name": "whoami", "arguments": {}}, rid=2, session=session,
     )
     text = raw.decode()
+    global LAST_WHOAMI
+    LAST_WHOAMI = text
     check("whoami", status == 200 and "dg_" in text, text[:240])
     start = text.find("dg_")
     if start < 0:
@@ -293,8 +318,67 @@ try:
     CLIENT = json.loads(raw).get("client_id") if status == 201 else None
     check("dynamic registration", status == 201 and CLIENT, f"HTTP {status} {raw[:160]}")
 
+    status, _, raw = request(
+        opener, "POST", base + "/auth/agent/start",
+        urllib.parse.urlencode({"client_id": "devagotchi-cli", "agent": "claude"}).encode(),
+        {"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    started = json.loads(raw) if status == 200 else {}
+    agent_token = started.get("access_token")
+    claim_code = started.get("claim_code")
+    check("agent opens an account with no human", status == 200 and agent_token and claim_code, f"HTTP {status} {raw[:180]}")
+    agent_id = whoami_subject(opener, base, agent_token) if agent_token else ""
+    check(
+        "whoami is provisional and shows the claim code",
+        agent_id.startswith("dg_") and claim_code and claim_code in LAST_WHOAMI and "provisional_until" in LAST_WHOAMI,
+        LAST_WHOAMI[:240],
+    )
+    status, _, session = mcp(opener, base, agent_token, "initialize", {
+        "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "oauth-probe", "version": "0"},
+    })
+    status, added, _session = mcp(
+        opener, base, agent_token, "tools/call",
+        {"name": "machine_add", "arguments": {"name": "laptop"}}, rid=3, session=session,
+    )
+    added_text = added.decode()
+    check("machine_add returns the join line", status == 200 and "/join/" in added_text and "laptop" in added_text, added_text[:240])
+    code = ""
+    if '"code":"' in added_text:
+        code = added_text.split('"code":"')[1].split('"')[0]
+    elif '\\"code\\":\\"' in added_text:
+        code = added_text.split('\\"code\\":\\"')[1].split('\\"')[0]
+    status, _, enroll_raw = request(
+        opener, "POST", base + "/enroll",
+        json.dumps({"name": "laptop", "code": code, "public_key": "aa"}).encode(),
+        {"Content-Type": "application/json"},
+    )
+    check("enroll binds the machine", status == 201, f"HTTP {status} {enroll_raw[:160]}")
+    status, op_raw, _ = mcp(
+        opener, base, agent_token, "tools/call",
+        {"name": "operation_get", "arguments": {"broker": "laptop", "input": {"operation_id": "x"}}},
+        rid=4, session=session,
+    )
+    op_text = op_raw.decode()
+    check("owned machine is routed", "not_granted" not in op_text and "unknown_broker" not in op_text, op_text[:240])
+
+    saved = (one.sub, one.email, one.verified)
+    one.sub, one.email, one.verified = "claimer", "fresh@example.com", True
+    claim_via(base, "one", claim_code or "")
+    claimed_id = whoami_subject(opener, base, agent_token) if agent_token else ""
+    check("claim keeps the account", claimed_id == agent_id and "provisional_until" not in LAST_WHOAMI, LAST_WHOAMI[:240])
+    one.sub, one.email, one.verified = saved
+
     first = connect(opener, base, "one")
     first_id = whoami_subject(opener, base, first) if first else ""
+    status, _, raw = request(
+        opener, "POST", base + "/auth/agent/start",
+        urllib.parse.urlencode({"client_id": "devagotchi-cli", "agent": "codex"}).encode(),
+        {"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    extra = json.loads(raw) if status == 200 else {}
+    claim_via(base, "one", extra.get("claim_code") or "")
+    merged_id = whoami_subject(opener, base, extra.get("access_token") or "") if extra.get("access_token") else ""
+    check("claim with an existing verified email merges", merged_id == first_id and merged_id.startswith("dg_"), f"{merged_id} {first_id}")
     opener2 = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
     again = connect(opener2, base, "one")
     again_id = whoami_subject(opener2, base, again) if again else ""

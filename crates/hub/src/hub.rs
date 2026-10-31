@@ -93,6 +93,21 @@ pub struct ReadRouted {
     pub input: ReadInput,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MachineAdd {
+    /// Short name for the machine, `[a-z0-9][a-z0-9-]{0,62}`.
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MachineAdded {
+    pub name: String,
+    pub code: String,
+    pub expires_at: u64,
+    pub linux: String,
+    pub windows: String,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct WhoAmI {
     /// The account ID (`sub`) the identity provider proved, never a caller-supplied name.
@@ -107,6 +122,18 @@ pub struct WhoAmI {
     /// bound by any member belong to it and every member works them (B13).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub org: Option<String>,
+    /// Unix seconds until an agent-opened account must be claimed. Absent once claimed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provisional_until: Option<u64>,
+    /// The agent seat on this token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Code the person uses to claim this account. Shown while it is provisional.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_code: Option<String>,
+    /// `{public_url}/claim?code=…` while the account is provisional.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_url: Option<String>,
     /// Whether this is the hub's configured owner, who reaches every broker and board.
     pub owner: bool,
     /// Whether this subject acts as a person on boards (force-release, moving tickets by
@@ -364,6 +391,47 @@ impl Hub {
             via: subject.via.to_string(),
             name: subject.name,
             org: subject.org,
+            provisional_until: subject.provisional_until,
+            agent: subject.agent.clone(),
+            claim_code: subject.claim_code.clone(),
+            claim_url: subject.claim_code.as_ref().map(|code| {
+                format!(
+                    "{}/claim?code={code}",
+                    self.config.public_url.trim_end_matches('/')
+                )
+            }),
+        }))
+    }
+
+    #[tool(
+        name = "machine_add",
+        description = "Add one of the user's own machines to this account. Returns a one-time code and the one-line install command for Linux and Windows. The machine that enrolls with the code belongs to this account; no hub config change is required. Do not use a name the hub operator already configured. Run the command on that machine, or hand it to the user.",
+        title = "Add a machine",
+        annotations(
+            title = "Add a machine",
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn machine_add(
+        &self,
+        Parameters(input): Parameters<MachineAdd>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<MachineAdded>, Json<BridgeError>> {
+        let subject = self.subject(&context)?;
+        let name = input.name.trim().to_ascii_lowercase();
+        let code = self
+            .links
+            .issue_owned_code(&subject.id, &name)
+            .map_err(Json)?;
+        let hub = self.config.public_url.trim_end_matches('/');
+        Ok(Json(MachineAdded {
+            name,
+            code: code.clone(),
+            expires_at: crate::devices::now_secs() + crate::devices::CODE_TTL_SECS,
+            linux: format!("curl -fsSL {hub}/join/{code} | sudo sh"),
+            windows: format!("irm {hub}/join/{code}.ps1 | iex"),
         }))
     }
 

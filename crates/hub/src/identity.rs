@@ -13,6 +13,7 @@ use std::{
 
 use devagotchi_contracts::{BridgeError, BridgeResult};
 use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use sha2::{Digest, Sha256};
 
 use crate::config::valid_subject;
 
@@ -87,6 +88,14 @@ pub struct Resolved {
     pub account_id: String,
     pub workspace_id: String,
     pub outcome: Outcome,
+}
+
+/// A claim code landed on `account_id`. `merged_from` is the provisional id when that
+/// account was folded into an existing one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Claimed {
+    pub account_id: String,
+    pub merged_from: Option<String>,
 }
 
 /// What an upstream provider, or a local sign-in, proved.
@@ -250,6 +259,7 @@ impl Store {
                 params![now_secs() as i64],
             )
             .map_err(store_error)?;
+        migrate(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
         })
@@ -268,6 +278,272 @@ impl Store {
             "constraint",
             "identity resolve lost a race",
         ))
+    }
+
+    /// An account an agent opens before any person has signed in. `ttl_secs` is how long
+    /// it lives unclaimed.
+    pub fn create_provisional(&self, ttl_secs: u64) -> BridgeResult<Resolved> {
+        let mut connection = self.connection.lock().expect("identity lock");
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        let account_id = new_id("dg_");
+        let until = now_secs().saturating_add(ttl_secs);
+        insert_account(&tx, &account_id, None, None)?;
+        tx.execute(
+            "UPDATE accounts SET provisional_until = ?1 WHERE id = ?2",
+            params![until as i64, account_id],
+        )
+        .map_err(store_error)?;
+        record(
+            &tx,
+            "provisional_create",
+            &account_id,
+            None,
+            None,
+            "agent opened an account",
+        )?;
+        let workspace_id = personal_workspace(&tx, &account_id)?;
+        tx.commit().map_err(store_error)?;
+        Ok(Resolved {
+            account_id,
+            workspace_id,
+            outcome: Outcome::Created,
+        })
+    }
+
+    pub fn provisional_count(&self) -> BridgeResult<u64> {
+        let connection = self.connection.lock().expect("identity lock");
+        let now = now_secs() as i64;
+        connection
+            .query_row(
+                "SELECT COUNT(*) FROM accounts
+                 WHERE provisional_until IS NOT NULL AND provisional_until > ?1 AND merged_into IS NULL",
+                params![now],
+                |row| row.get(0),
+            )
+            .map_err(store_error)
+    }
+
+    /// The account id tokens should use. Follows a merge.
+    pub fn canonical(&self, id: &str) -> BridgeResult<String> {
+        let connection = self.connection.lock().expect("identity lock");
+        let mut current = id.to_string();
+        for _ in 0..4 {
+            let next: Option<String> = connection
+                .query_row(
+                    "SELECT merged_into FROM accounts WHERE id = ?1",
+                    params![current],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(store_error)?
+                .flatten();
+            match next {
+                Some(next) if next != current => current = next,
+                _ => return Ok(current),
+            }
+        }
+        Ok(current)
+    }
+
+    /// `Some(until)` while the account is still an unclaimed provisional. `None` if it
+    /// was claimed, merged, or never provisional. `Err` is not used for expiry; callers
+    /// compare `until` with now.
+    pub fn provisional_until(&self, id: &str) -> BridgeResult<Option<u64>> {
+        let id = self.canonical(id)?;
+        let connection = self.connection.lock().expect("identity lock");
+        let until: Option<i64> = connection
+            .query_row(
+                "SELECT provisional_until FROM accounts WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(store_error)?
+            .flatten();
+        Ok(until.map(|until| until as u64))
+    }
+
+    pub fn register_agent(
+        &self,
+        account_id: &str,
+        name: &str,
+        client_id: &str,
+    ) -> BridgeResult<()> {
+        if !crate::config::valid_name(name) {
+            return Err(BridgeError::new(
+                "invalid_identity",
+                "an agent name is [a-z0-9][a-z0-9-]{0,62}",
+            ));
+        }
+        let connection = self.connection.lock().expect("identity lock");
+        connection
+            .execute(
+                "INSERT INTO agents (account_id, name, client_id, created_at, revoked_at)
+                 VALUES (?1, ?2, ?3, ?4, NULL)
+                 ON CONFLICT(account_id, name) DO UPDATE SET
+                   revoked_at = NULL, client_id = excluded.client_id",
+                params![account_id, name, client_id, now_secs() as i64],
+            )
+            .map_err(store_error)?;
+        Ok(())
+    }
+
+    pub fn revoke_agent(&self, account_id: &str, name: &str) -> BridgeResult<()> {
+        let connection = self.connection.lock().expect("identity lock");
+        let updated = connection
+            .execute(
+                "UPDATE agents SET revoked_at = ?1
+                 WHERE account_id = ?2 AND name = ?3 AND revoked_at IS NULL",
+                params![now_secs() as i64, account_id, name],
+            )
+            .map_err(store_error)?;
+        if updated == 0 {
+            return Err(BridgeError::new("not_linked", "that agent is not active"));
+        }
+        Ok(())
+    }
+
+    pub fn agent_revoked(&self, account_id: &str, name: &str) -> BridgeResult<bool> {
+        let account_id = self.canonical(account_id)?;
+        let connection = self.connection.lock().expect("identity lock");
+        connection
+            .query_row(
+                "SELECT revoked_at FROM agents WHERE account_id = ?1 AND name = ?2",
+                params![account_id, name],
+                |row| row.get::<_, Option<i64>>(0),
+            )
+            .optional()
+            .map_err(store_error)
+            .map(|row| matches!(row, Some(Some(_))))
+    }
+
+    pub fn agents(&self, account_id: &str) -> BridgeResult<Vec<(String, bool)>> {
+        let connection = self.connection.lock().expect("identity lock");
+        let mut statement = connection
+            .prepare("SELECT name, revoked_at FROM agents WHERE account_id = ?1 ORDER BY name")
+            .map_err(store_error)?;
+        let rows = statement
+            .query_map(params![account_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<i64>>(1)?.is_some(),
+                ))
+            })
+            .map_err(store_error)?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(store_error)
+    }
+
+    pub fn issue_claim_code(&self, account_id: &str, ttl_secs: u64) -> BridgeResult<String> {
+        let code = format!(
+            "{}-{}",
+            &hex::encode(crate::link::random::<2>()).to_ascii_uppercase(),
+            &hex::encode(crate::link::random::<2>()).to_ascii_uppercase()
+        );
+        let connection = self.connection.lock().expect("identity lock");
+        connection
+            .execute(
+                "INSERT INTO claim_codes (code_hash, account_id, display, expires_at, used)
+                 VALUES (?1, ?2, ?3, ?4, 0)",
+                params![
+                    claim_hash(&code).as_slice(),
+                    account_id,
+                    code,
+                    now_secs().saturating_add(ttl_secs) as i64
+                ],
+            )
+            .map_err(store_error)?;
+        Ok(code)
+    }
+
+    pub fn claim_code_for(&self, account_id: &str) -> BridgeResult<Option<String>> {
+        let account_id = self.canonical(account_id)?;
+        let connection = self.connection.lock().expect("identity lock");
+        connection
+            .query_row(
+                "SELECT display FROM claim_codes
+                 WHERE account_id = ?1 AND used = 0 AND expires_at > ?2
+                 ORDER BY expires_at DESC LIMIT 1",
+                params![account_id, now_secs() as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(store_error)
+    }
+
+    /// How claiming `code` with this proved identity lands.
+    pub fn claim(&self, code: &str, proved: &Claim) -> BridgeResult<Claimed> {
+        let proved = normalize(proved)?;
+        let mut connection = self.connection.lock().expect("identity lock");
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        let row: Option<(String, i64, i64)> = tx
+            .query_row(
+                "SELECT account_id, expires_at, used FROM claim_codes WHERE code_hash = ?1",
+                params![claim_hash(code).as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(store_error)?;
+        let Some((provisional_id, exp, used)) = row else {
+            return Err(BridgeError::new("invalid_grant", "unknown claim code"));
+        };
+        if used != 0 || (exp as u64) <= now_secs() {
+            return Err(BridgeError::new(
+                "invalid_grant",
+                "this claim code is no longer valid",
+            ));
+        }
+        let provisional = provisional_id;
+        let survivor = if proved.email_verified
+            && let Some(email) = &proved.email
+            && let Some(owner) = email_owner(&tx, email)?
+            && owner != provisional
+        {
+            merge_tx(&tx, &provisional, &owner)?;
+            if linked_account(&tx, &proved.issuer, &proved.sub)?.is_none() {
+                insert_identity(&tx, &proved, &owner)?;
+            }
+            owner
+        } else {
+            insert_identity(&tx, &proved, &provisional)?;
+            if proved.email_verified
+                && let Some(email) = &proved.email
+                && email_owner(&tx, email)?.is_none()
+            {
+                tx.execute(
+                    "INSERT INTO verified_emails (email, account_id) VALUES (?1, ?2)",
+                    params![email, provisional],
+                )
+                .map_err(store_error)?;
+            }
+            tx.execute(
+                "UPDATE accounts SET provisional_until = NULL WHERE id = ?1",
+                params![provisional],
+            )
+            .map_err(store_error)?;
+            record(
+                &tx,
+                "claim",
+                &provisional,
+                Some(&proved.issuer),
+                Some(&proved.sub),
+                "claimed",
+            )?;
+            provisional.clone()
+        };
+        tx.execute(
+            "UPDATE claim_codes SET used = 1, display = '' WHERE code_hash = ?1",
+            params![claim_hash(code).as_slice()],
+        )
+        .map_err(store_error)?;
+        tx.commit().map_err(store_error)?;
+        Ok(Claimed {
+            account_id: survivor.clone(),
+            merged_from: (survivor != provisional).then_some(provisional),
+        })
     }
 
     /// An account id named by config. Created, with a personal workspace, when absent.
@@ -957,6 +1233,101 @@ pub fn rename_account_dir(root: &Path, from: &str, to: &str) -> BridgeResult<boo
         )
     })?;
     Ok(true)
+}
+
+fn claim_hash(code: &str) -> [u8; 32] {
+    Sha256::digest(code.as_bytes()).into()
+}
+
+fn merge_tx(tx: &Transaction<'_>, from: &str, into: &str) -> BridgeResult<()> {
+    tx.execute(
+        "DELETE FROM agents WHERE account_id = ?1 AND name IN
+         (SELECT name FROM agents WHERE account_id = ?2)",
+        params![from, into],
+    )
+    .map_err(store_error)?;
+    tx.execute(
+        "UPDATE agents SET account_id = ?1 WHERE account_id = ?2",
+        params![into, from],
+    )
+    .map_err(store_error)?;
+    tx.execute(
+        "DELETE FROM verified_emails WHERE account_id = ?1 AND email IN
+         (SELECT email FROM verified_emails WHERE account_id = ?2)",
+        params![from, into],
+    )
+    .map_err(store_error)?;
+    tx.execute(
+        "UPDATE verified_emails SET account_id = ?1 WHERE account_id = ?2",
+        params![into, from],
+    )
+    .map_err(store_error)?;
+    tx.execute(
+        "UPDATE linked_identities SET account_id = ?1 WHERE account_id = ?2",
+        params![into, from],
+    )
+    .map_err(store_error)?;
+    tx.execute(
+        "UPDATE claim_codes SET account_id = ?1 WHERE account_id = ?2",
+        params![into, from],
+    )
+    .map_err(store_error)?;
+    tx.execute(
+        "UPDATE accounts SET merged_into = ?1, provisional_until = NULL WHERE id = ?2",
+        params![into, from],
+    )
+    .map_err(store_error)?;
+    record(
+        tx,
+        "merge",
+        into,
+        None,
+        None,
+        &format!("absorbed provisional {from}"),
+    )?;
+    Ok(())
+}
+
+fn migrate(connection: &Connection) -> BridgeResult<()> {
+    let version: i64 = connection
+        .query_row(
+            "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(store_error)?;
+    if version >= 2 {
+        return Ok(());
+    }
+    connection
+        .execute_batch(
+            "ALTER TABLE accounts ADD COLUMN provisional_until INTEGER;
+             ALTER TABLE accounts ADD COLUMN merged_into TEXT;
+             CREATE TABLE IF NOT EXISTS agents (
+               account_id TEXT NOT NULL,
+               name TEXT NOT NULL,
+               client_id TEXT,
+               created_at INTEGER NOT NULL,
+               revoked_at INTEGER,
+               PRIMARY KEY (account_id, name)
+             );
+             CREATE TABLE IF NOT EXISTS claim_codes (
+               code_hash BLOB PRIMARY KEY,
+               account_id TEXT NOT NULL,
+               display TEXT NOT NULL,
+               expires_at INTEGER NOT NULL,
+               used INTEGER NOT NULL
+             );
+             INSERT INTO schema_migrations (version, applied_at) VALUES (2, 0);",
+        )
+        .map_err(store_error)?;
+    connection
+        .execute(
+            "UPDATE schema_migrations SET applied_at = ?1 WHERE version = 2",
+            params![now_secs() as i64],
+        )
+        .map_err(store_error)?;
+    Ok(())
 }
 
 fn record(

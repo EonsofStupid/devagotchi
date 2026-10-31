@@ -633,6 +633,40 @@ async fn hub_device_login(hub: &str, tell: &mut dyn Write) -> Result<Account, Re
         .build()
         .map_err(|error| Refusal::Unavailable(error.to_string()))?;
     let started: serde_json::Value = http
+        .post(format!("{hub}/auth/agent/start"))
+        .form(&[("client_id", "devagotchi-cli"), ("agent", "cli")])
+        .send()
+        .await
+        .map_err(|error| Refusal::Unavailable(format!("hub agent start: {error}")))?
+        .json()
+        .await
+        .map_err(|_| Refusal::Unavailable("hub agent start was not JSON".into()))?;
+    if started.get("access_token").is_some() {
+        let access = started["access_token"]
+            .as_str()
+            .ok_or_else(|| Refusal::Unavailable("hub sent no access token".into()))?
+            .to_string();
+        let subject = jwt_sub(&access)
+            .ok_or_else(|| Refusal::Unavailable("hub access token has no subject".into()))?;
+        let claim = started["claim_code"].as_str().unwrap_or("");
+        let url = started["claim_url"].as_str().unwrap_or("");
+        let _ = writeln!(
+            tell,
+            "Signed in. To keep this account, open {url}\nCode: {claim}"
+        );
+        return Ok(Account {
+            issuer: hub.to_string(),
+            client_id: "devagotchi-cli".into(),
+            subject,
+            username: None,
+            email: None,
+            access_token: access,
+            refresh_token: started["refresh_token"].as_str().map(str::to_string),
+            expires_at: unix_now() + started["expires_in"].as_u64().unwrap_or(3600),
+            signed_in_at: unix_now(),
+        });
+    }
+    let started: serde_json::Value = http
         .post(format!("{hub}/device"))
         .form(&[("client_id", "devagotchi-cli")])
         .send()

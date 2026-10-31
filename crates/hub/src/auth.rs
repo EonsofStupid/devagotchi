@@ -33,6 +33,13 @@ pub struct Subject {
     /// every member works them (B13). `None` when the token carries no org; the account's
     /// own boards are then its own.
     pub org: Option<String>,
+    /// Set when the account was opened by an agent and has not been claimed yet.
+    /// Unix seconds. `None` once a person has claimed it, or when this token is not provisional.
+    pub provisional_until: Option<u64>,
+    /// The agent seat that presented this token (`claude`, `cli`, …). Revocable on the account.
+    pub agent: Option<String>,
+    /// Claim code the agent can show the person, while the account is still provisional.
+    pub claim_code: Option<String>,
 }
 
 /// The scopes a client asks Nomen for when it signs in to this hub: who the person is,
@@ -158,6 +165,9 @@ impl Verifier {
                         via: "dev",
                         name: None,
                         org,
+                        provisional_until: None,
+                        agent: None,
+                        claim_code: None,
                     }
                 })
                 .ok_or(AuthError::Invalid("unknown token")),
@@ -371,6 +381,9 @@ impl OidcVerifier {
             via: "oidc",
             name: None,
             org: data.claims.org.filter(|org| valid_org(org)),
+            provisional_until: None,
+            agent: None,
+            claim_code: None,
         })
     }
 
@@ -434,6 +447,9 @@ mod tests {
                 via: "dev",
                 name: None,
                 org: None,
+                provisional_until: None,
+                agent: None,
+                claim_code: None,
             }
         );
         assert!(matches!(

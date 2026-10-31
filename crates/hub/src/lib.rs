@@ -488,6 +488,7 @@ fn app(state: AppState) -> Router {
     };
     Router::new()
         .route("/healthz", get(healthz))
+        .route("/enroll", axum::routing::post(enroll_with_code))
         .route("/link", get(link_upgrade))
         .merge(join::routes())
         .route(
@@ -524,6 +525,11 @@ async fn require_bearer(
     mut request: Request,
     next: Next,
 ) -> Response {
+    if let Some(authority) = state.verifier.authority() {
+        for (from, into) in authority.drain_merges() {
+            let _ = state.hub.links.reassign_owner(&from, &into);
+        }
+    }
     let origin = state.hub.config.public_url.trim_end_matches('/');
     let (metadata_url, scope) = if state.verifier.authority().is_some() {
         (
@@ -690,6 +696,39 @@ async fn link_upgrade(
         .max_message_size(devagotchi_contracts::MAX_LINK_MESSAGE_BYTES)
         .max_frame_size(devagotchi_contracts::MAX_LINK_MESSAGE_BYTES)
         .on_upgrade(move |socket| links.serve(socket, peer, permit))
+}
+
+#[derive(serde::Deserialize)]
+struct EnrollBody {
+    name: String,
+    code: String,
+    public_key: String,
+}
+
+/// Bind a machine key to a one-time code from `machine_add`. The code is the secret.
+async fn enroll_with_code(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<EnrollBody>,
+) -> Response {
+    match state
+        .hub
+        .links
+        .enroll_owned(&body.name, &body.code, &body.public_key)
+    {
+        Ok(device) => (
+            StatusCode::CREATED,
+            axum::Json(serde_json::json!({
+                "name": device.name,
+                "owner": device.owner,
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({ "error": error.code, "message": error.message })),
+        )
+            .into_response(),
+    }
 }
 
 async fn healthz(State(state): State<AppState>) -> Response {

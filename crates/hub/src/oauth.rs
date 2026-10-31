@@ -96,6 +96,11 @@ pub struct Authority {
     identity: crate::identity::Store,
     discovery: Mutex<std::collections::HashMap<String, Discovery>>,
     http: reqwest::Client,
+    starts: Mutex<std::collections::HashMap<String, Vec<u64>>>,
+    provisional_cap: usize,
+    starts_per_hour: usize,
+    provisional_ttl: u64,
+    merges: Mutex<Vec<(String, String)>>,
 }
 
 #[derive(Clone)]
@@ -305,6 +310,11 @@ impl Authority {
             identity: crate::identity::Store::open(&state_dir.join("identities.sqlite3"))?,
             discovery: Mutex::new(std::collections::HashMap::new()),
             http,
+            starts: Mutex::new(std::collections::HashMap::new()),
+            provisional_cap: 500,
+            starts_per_hour: 8,
+            provisional_ttl: 7 * 24 * 3600,
+            merges: Mutex::new(Vec::new()),
         };
         authority.seed_cli_client()?;
         Ok(authority)
@@ -545,12 +555,16 @@ impl Authority {
         let email = info["email"].as_str().map(str::to_string);
         let verified = info["email_verified"].as_bool().unwrap_or(false);
         let claim = crate::identity::Claim {
-            issuer: discovery.issuer,
+            issuer: discovery.issuer.clone(),
             sub: sub.to_string(),
             email,
             email_verified: verified,
             name: info["name"].as_str().map(str::to_string),
         };
+        if let Some(code) = resume.strip_prefix("claim:") {
+            let claimed = self.claim_with(code, &claim)?;
+            return Ok((claimed.account_id, String::new()));
+        }
         let resolved = if let Some(account) = signed_in {
             self.identity.link_to(account, &claim)?
         } else {
@@ -860,6 +874,19 @@ impl Authority {
         Ok(id)
     }
 
+    pub fn pending_client(&self, id: &str) -> BridgeResult<String> {
+        let connection = self.connection.lock().expect("oauth lock");
+        connection
+            .query_row(
+                "SELECT client_id FROM pending_auth WHERE id = ?1 AND expires_at > ?2",
+                params![id, now() as i64],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(store_error)?
+            .ok_or_else(|| oauth_error("invalid_request", "this sign-in has expired"))
+    }
+
     pub fn pending(&self, id: &str) -> BridgeResult<Option<(String, String)>> {
         let connection = self.connection.lock().expect("oauth lock");
         let row: Option<(String, String, i64)> = connection
@@ -1051,12 +1078,135 @@ impl Authority {
         if self.jti_revoked(&claims.jti) {
             return Err(AuthError::Invalid("token was revoked"));
         }
+        let id = self
+            .identity
+            .canonical(&claims.sub)
+            .unwrap_or(claims.sub.clone());
+        let provisional_until = self.identity.provisional_until(&id).ok().flatten();
+        if provisional_until.is_some_and(|until| until <= now()) {
+            return Err(AuthError::Invalid("this provisional account has expired"));
+        }
+        if let Some(agent) = &claims.agent
+            && self.identity.agent_revoked(&id, agent).unwrap_or(false)
+        {
+            return Err(AuthError::Invalid("this agent was revoked"));
+        }
+        let claim_code = provisional_until
+            .as_ref()
+            .and_then(|_| self.identity.claim_code_for(&id).ok().flatten());
         Ok(Subject {
-            id: claims.sub,
+            id,
             via: "devagotchi",
             name: None,
             org: None,
+            provisional_until,
+            agent: claims.agent,
+            claim_code,
         })
+    }
+
+    /// Open an account for an agent and hand it tokens immediately. `ip` is the
+    /// rate-limit key. The claim code is how a person later attaches a sign-in
+    /// to this same account.
+    pub fn agent_start(
+        &self,
+        client_id: &str,
+        agent: &str,
+        ip: &str,
+    ) -> BridgeResult<AgentSession> {
+        let _ = self.client(client_id)?;
+        let agent = if crate::config::valid_name(agent) {
+            agent.to_string()
+        } else {
+            "agent".to_string()
+        };
+        self.allow_start(ip)?;
+        let created = self.identity.create_provisional(self.provisional_ttl)?;
+        self.identity
+            .register_agent(&created.account_id, &agent, client_id)?;
+        let claim_code = self
+            .identity
+            .issue_claim_code(&created.account_id, self.provisional_ttl)?;
+        let until = self
+            .identity
+            .provisional_until(&created.account_id)?
+            .unwrap_or(now() + self.provisional_ttl);
+        let mut connection = self.connection.lock().expect("oauth lock");
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        let tokens = issue_agent_tokens(
+            &tx,
+            &self.public_url,
+            &self.keys,
+            client_id,
+            &created.account_id,
+            "openid mcp",
+            &agent,
+        )?;
+        tx.commit().map_err(store_error)?;
+        Ok(AgentSession {
+            account_id: created.account_id,
+            access_token: tokens.access_token,
+            refresh_token: tokens.refresh_token,
+            expires_in: tokens.expires_in,
+            claim_code,
+            provisional_until: until,
+        })
+    }
+
+    pub fn claim_with(
+        &self,
+        code: &str,
+        proved: &crate::identity::Claim,
+    ) -> BridgeResult<crate::identity::Claimed> {
+        let claimed = self.identity.claim(code, proved)?;
+        if let Some(from) = &claimed.merged_from {
+            self.merges
+                .lock()
+                .expect("merge lock")
+                .push((from.clone(), claimed.account_id.clone()));
+            let connection = self.connection.lock().expect("oauth lock");
+            connection
+                .execute(
+                    "UPDATE refresh_tokens SET account_id = ?1 WHERE account_id = ?2",
+                    params![claimed.account_id, from],
+                )
+                .map_err(store_error)?;
+        }
+        Ok(claimed)
+    }
+
+    #[cfg(test)]
+    pub fn testing_limits(&mut self, cap: usize, per_hour: usize) {
+        self.provisional_cap = cap;
+        self.starts_per_hour = per_hour;
+        self.provisional_ttl = 2;
+    }
+
+    pub fn drain_merges(&self) -> Vec<(String, String)> {
+        std::mem::take(&mut *self.merges.lock().expect("merge lock"))
+    }
+
+    fn allow_start(&self, ip: &str) -> BridgeResult<()> {
+        if self.identity.provisional_count()? >= self.provisional_cap as u64 {
+            return Err(oauth_error(
+                "provisional_quota",
+                "this hub is not opening more unclaimed accounts right now",
+            ));
+        }
+        let mut starts = self.starts.lock().expect("rate lock");
+        let now = now();
+        let window = starts.entry(ip.to_string()).or_default();
+        window.retain(|seen| now.saturating_sub(*seen) < 3600);
+        if window.len() >= self.starts_per_hour {
+            return Err(oauth_error(
+                "rate_limited",
+                "too many new accounts from this address; try again later",
+            ));
+        }
+        window.push(now);
+        Ok(())
     }
 
     fn access_claims(&self, token: &str) -> Result<AccessClaims, AuthError> {
@@ -1427,6 +1577,54 @@ struct AccessClaims {
     sub: String,
     exp: u64,
     jti: String,
+    #[serde(default)]
+    agent: Option<String>,
+    #[serde(default)]
+    provisional: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentSession {
+    pub account_id: String,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_in: u64,
+    pub claim_code: String,
+    pub provisional_until: u64,
+}
+
+fn issue_agent_tokens(
+    tx: &rusqlite::Transaction<'_>,
+    issuer: &str,
+    keys: &Mutex<KeyRing>,
+    client_id: &str,
+    account: &str,
+    scope: &str,
+    agent: &str,
+) -> BridgeResult<TokenResponse> {
+    let family = random_token();
+    let refresh = random_token();
+    tx.execute(
+        "INSERT INTO refresh_tokens
+         (token_hash, family, client_id, account_id, scope, expires_at, used)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0)",
+        params![
+            digest(&refresh).as_slice(),
+            family,
+            client_id,
+            account,
+            scope,
+            (now() + REFRESH_TTL) as i64
+        ],
+    )
+    .map_err(store_error)?;
+    let access = sign_access(issuer, keys, account, client_id, scope, Some(agent), true)?;
+    Ok(TokenResponse {
+        access_token: access,
+        refresh_token: refresh,
+        expires_in: ACCESS_TTL,
+        scope: scope.to_string(),
+    })
 }
 
 fn issue_tokens(
@@ -1465,7 +1663,7 @@ fn issue_tokens_in_family(
         ],
     )
     .map_err(store_error)?;
-    let access = sign_access(issuer, keys, account, client_id, scope)?;
+    let access = sign_access(issuer, keys, account, client_id, scope, None, false)?;
     Ok(TokenResponse {
         access_token: access,
         refresh_token: refresh,
@@ -1480,12 +1678,14 @@ fn sign_access(
     account: &str,
     client_id: &str,
     scope: &str,
+    agent: Option<&str>,
+    provisional: bool,
 ) -> BridgeResult<String> {
     let keys = keys.lock().expect("oauth key lock");
     let mut header = Header::new(Algorithm::ES256);
     header.kid = Some(keys.current.kid.clone());
     let issued = now();
-    let claims = json!({
+    let mut claims = json!({
         "iss": issuer,
         "sub": account,
         "aud": format!("{issuer}/mcp"),
@@ -1495,6 +1695,12 @@ fn sign_access(
         "client_id": client_id,
         "scope": scope,
     });
+    if let Some(agent) = agent {
+        claims["agent"] = json!(agent);
+    }
+    if provisional {
+        claims["provisional"] = json!(true);
+    }
     let encoding = EncodingKey::from_ec_der(&keys.current.pkcs8);
     jsonwebtoken::encode(&header, &claims, &encoding)
         .map_err(|_| BridgeError::new("oauth", "could not sign an access token"))
@@ -1680,7 +1886,7 @@ where
 {
     use axum::{
         Json,
-        extract::{Form, Path, Query},
+        extract::{ConnectInfo, Form, Path, Query},
         response::IntoResponse,
         routing::{get, post},
     };
@@ -1718,7 +1924,10 @@ where
     let revoke_auth = auth.clone();
     let resume_auth = auth.clone();
     let account_auth = auth.clone();
+    let revoke_agent_auth = auth.clone();
     let unlink_auth = auth.clone();
+    let provisional_auth = auth.clone();
+    let agent_auth = auth.clone();
     let device_auth = auth.clone();
     let login_auth = auth.clone();
     let magic_auth = auth.clone();
@@ -1782,11 +1991,17 @@ where
                     };
                     let Some(account) = cookie_value(&headers, "dg_as").and_then(|cookie| auth.browser_account(&cookie)) else {
                         return (
-                            axum::http::StatusCode::UNAUTHORIZED,
+                            axum::http::StatusCode::OK,
                             [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
                             format!(
-                                "<!doctype html><title>Sign in</title><p>Sign in to Devagotchi to continue.</p>\
-                                 <p><a href=\"/login?resume={}\">Sign in</a></p>",
+                                "<!doctype html><title>Allow</title>\
+                                 <h1>Allow this app</h1>\
+                                 <p>This opens a Devagotchi account for you. You can claim it later.</p>\
+                                 <form method=\"post\" action=\"/authorize/provisional\">\
+                                 <input type=\"hidden\" name=\"request\" value=\"{}\">\
+                                 <button type=\"submit\">Allow</button></form>\
+                                 <p><a href=\"/login?resume={}\">I already have an account</a></p>",
+                                escape(&pending),
                                 escape(&pending)
                             ),
                         )
@@ -1917,6 +2132,17 @@ where
                             escape(&identity.sub),
                         ));
                     }
+                    let mut agents = String::new();
+                    for (name, revoked) in auth.identity().agents(&account).unwrap_or_default() {
+                        let state = if revoked { "revoked" } else { "active" };
+                        agents.push_str(&format!(
+                            "<li>{} ({state}) <form method=\"post\" action=\"/account/agents/revoke\">\
+                             <input type=\"hidden\" name=\"name\" value=\"{}\">\
+                             <button type=\"submit\">Revoke</button></form></li>",
+                            escape(&name),
+                            escape(&name),
+                        ));
+                    }
                     let mut links = String::new();
                     for provider in auth.providers() {
                         links.push_str(&format!(
@@ -1929,11 +2155,33 @@ where
                         [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
                         format!(
                             "<!doctype html><title>Sign-ins</title><h1>Sign-ins</h1>\
-                             <p>Account {}</p><ul>{rows}</ul>{links}",
+                             <p>Account {}</p><ul>{rows}</ul><h2>Agents</h2><ul>{agents}</ul>{links}",
                             escape(&account)
                         ),
                     )
                         .into_response()
+                }
+            }),
+        )
+        .route(
+            "/account/agents/revoke",
+            post(move |headers: axum::http::HeaderMap, Form(form): Form<AgentRevokeForm>| {
+                let auth = revoke_agent_auth.clone();
+                async move {
+                    let Some(account) = cookie_value(&headers, "dg_as")
+                        .and_then(|cookie| auth.browser_account(&cookie))
+                    else {
+                        return (axum::http::StatusCode::UNAUTHORIZED, "sign in required")
+                            .into_response();
+                    };
+                    match auth.identity().revoke_agent(&account, &form.name) {
+                        Ok(()) => {
+                            axum::response::Redirect::to("/account/identities").into_response()
+                        }
+                        Err(error) => {
+                            (axum::http::StatusCode::BAD_REQUEST, error.message).into_response()
+                        }
+                    }
                 }
             }),
         )
@@ -1958,6 +2206,90 @@ where
                     }
                 }
             }),
+        )
+        .route(
+            "/authorize/provisional",
+            post(
+                move |ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+                      Form(form): Form<ResumeRequest>| {
+                    let auth = provisional_auth.clone();
+                    async move {
+                        let pending = match auth.pending(&form.request) {
+                            Ok(Some(_)) => form.request.clone(),
+                            _ => {
+                                return (
+                                    axum::http::StatusCode::BAD_REQUEST,
+                                    "this sign-in has expired",
+                                )
+                                    .into_response();
+                            }
+                        };
+                        let client_id = match auth.pending_client(&pending) {
+                            Ok(id) => id,
+                            Err(error) => return oauth_http_error(&error),
+                        };
+                        let session = match auth.agent_start(&client_id, "connector", &peer.ip().to_string())
+                        {
+                            Ok(session) => session,
+                            Err(error) => return oauth_http_error(&error),
+                        };
+                        let location = match auth.consent(&pending, &session.account_id, true) {
+                            Ok(location) => location,
+                            Err(error) => return oauth_http_error(&error),
+                        };
+                        let cookie = match auth.open_browser_session(&session.account_id) {
+                            Ok(cookie) => cookie,
+                            Err(error) => return oauth_http_error(&error),
+                        };
+                        let secure = if auth.issuer().starts_with("https://") {
+                            "; Secure"
+                        } else {
+                            ""
+                        };
+                        (
+                            axum::http::StatusCode::SEE_OTHER,
+                            [
+                                (
+                                    axum::http::header::SET_COOKIE,
+                                    format!("dg_as={cookie}; HttpOnly; SameSite=Lax; Path=/{secure}"),
+                                ),
+                                (axum::http::header::LOCATION, location),
+                            ],
+                        )
+                            .into_response()
+                    }
+                },
+            ),
+        )
+        .route(
+            "/auth/agent/start",
+            post(
+                move |ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
+                      Form(form): Form<AgentForm>| {
+                    let auth = agent_auth.clone();
+                    async move {
+                        let agent = if form.agent.is_empty() {
+                            "agent"
+                        } else {
+                            form.agent.as_str()
+                        };
+                        match auth.agent_start(&form.client_id, agent, &peer.ip().to_string()) {
+                            Ok(session) => axum::Json(json!({
+                                "account_id": session.account_id,
+                                "access_token": session.access_token,
+                                "refresh_token": session.refresh_token,
+                                "expires_in": session.expires_in,
+                                "token_type": "Bearer",
+                                "claim_code": session.claim_code,
+                                "claim_url": format!("{}/claim?code={}", auth.issuer(), session.claim_code),
+                                "provisional_until": session.provisional_until,
+                            }))
+                            .into_response(),
+                            Err(error) => oauth_http_error(&error),
+                        }
+                    }
+                },
+            ),
         )
         .route(
             "/device",
@@ -2080,6 +2412,16 @@ where
         )
 }
 
+#[derive(Deserialize)]
+struct AgentRevokeForm {
+    name: String,
+}
+#[derive(Deserialize)]
+struct AgentForm {
+    client_id: String,
+    #[serde(default)]
+    agent: String,
+}
 #[derive(Deserialize)]
 struct UnlinkForm {
     issuer: String,
@@ -2397,6 +2739,99 @@ mod tests {
         assert_eq!(down["signing_key"], true);
         let text = down["degraded"][0].as_str().unwrap();
         assert!(text.contains("gone"), "{text}");
+    }
+
+    #[test]
+    fn a_provisional_account_expires() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut auth = Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
+        auth.testing_limits(10, 8);
+        let session = auth
+            .agent_start("devagotchi-cli", "claude", "203.0.113.8")
+            .unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        assert!(auth.verify_access(&session.access_token).is_err());
+    }
+
+    #[test]
+    fn an_agent_opens_an_account_and_a_claim_keeps_or_merges_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut auth = Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
+        auth.testing_limits(10, 2);
+        let session = auth
+            .agent_start("devagotchi-cli", "claude", "203.0.113.5")
+            .unwrap();
+        let subject = auth.verify_access(&session.access_token).unwrap();
+        assert_eq!(subject.id, session.account_id);
+        assert!(subject.provisional_until.is_some());
+        assert_eq!(subject.agent.as_deref(), Some("claude"));
+        assert_eq!(
+            subject.claim_code.as_deref(),
+            Some(session.claim_code.as_str())
+        );
+        auth.agent_start("devagotchi-cli", "claude", "203.0.113.5")
+            .unwrap();
+        assert_eq!(
+            auth.agent_start("devagotchi-cli", "claude", "203.0.113.5")
+                .unwrap_err()
+                .code,
+            "rate_limited"
+        );
+        let kept = auth
+            .claim_with(
+                &session.claim_code,
+                &crate::identity::Claim {
+                    issuer: "https://idp.example".into(),
+                    sub: "person-new".into(),
+                    email: Some("new@example.com".into()),
+                    email_verified: true,
+                    name: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(kept.account_id, session.account_id);
+        assert!(kept.merged_from.is_none());
+        let after = auth.verify_access(&session.access_token).unwrap();
+        assert_eq!(after.id, session.account_id);
+        assert!(after.provisional_until.is_none());
+        assert!(after.claim_code.is_none());
+
+        let existing = auth
+            .identity()
+            .resolve(&crate::identity::Claim {
+                issuer: "https://idp.example".into(),
+                sub: "person-old".into(),
+                email: Some("ada@example.com".into()),
+                email_verified: true,
+                name: None,
+            })
+            .unwrap();
+        let provisional = auth
+            .agent_start("devagotchi-cli", "claude", "203.0.113.9")
+            .unwrap();
+        let merged = auth
+            .claim_with(
+                &provisional.claim_code,
+                &crate::identity::Claim {
+                    issuer: "https://other.example".into(),
+                    sub: "person-other".into(),
+                    email: Some("ada@example.com".into()),
+                    email_verified: true,
+                    name: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(merged.account_id, existing.account_id);
+        assert_eq!(
+            merged.merged_from.as_deref(),
+            Some(provisional.account_id.as_str())
+        );
+        let followed = auth.verify_access(&provisional.access_token).unwrap();
+        assert_eq!(followed.id, existing.account_id);
+        auth.identity()
+            .revoke_agent(&existing.account_id, "claude")
+            .unwrap();
+        assert!(auth.verify_access(&provisional.access_token).is_err());
     }
 
     #[test]

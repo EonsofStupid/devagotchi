@@ -1351,6 +1351,9 @@ async fn a_person_adds_a_machine_of_their_own_and_revokes_it() {
         via: "dev",
         name: None,
         org: None,
+        provisional_until: None,
+        agent: None,
+        claim_code: None,
     };
     assert!(matches!(
         w.hub.route(&subject(OTHER), "platinum"),

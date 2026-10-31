@@ -75,6 +75,32 @@ A down provider does not by itself fail the process. A missing signing key does.
 
 devagotchi.com profiles are a separate table, keyed today by a ChatGPT user id, with a unique email. They become the same Devagotchi account when someone signs in through this hub and the token's verified email matches the profile. See `apps/website/lib/hub-account.ts`. An unverified or different address does not link. An account id already stored on the profile is kept.
 
+## Agent-first onboarding
+
+An AI can open the account and reach the person's own machine before anyone finishes a sign-in. Securing the account is a later claim, one code, same account id.
+
+### Remote connector (claude.ai, ChatGPT, Cursor)
+
+1. `GET /.well-known/oauth-protected-resource/mcp` names this hub.
+2. `POST /register` returns `client_id`.
+3. `GET /authorize` shows one Allow button. `POST /authorize/provisional` creates a provisional account and returns the authorization code. No upstream and no magic link.
+4. `POST /token` returns a hub JWT.
+5. `machine_add` `{ "name": "laptop" }` returns `curl -fsSL {hub}/join/{code} | sudo sh` and the Windows line. The AI runs it or hands it over.
+6. The machine enrolls to that account. `operation_start` with `broker` set to that name is routed. Operator brokers in `hub.json` still need a grant.
+7. `whoami` includes `claim_url` and `provisional_until`. The person opens it and signs in. The identity attaches to this account. A verified email that already belongs to an account merges this provisional one into that account; machines and the old token follow.
+
+### Local agent (Claude Code, Codex, `devagotchi mcp`)
+
+`devagotchi login` calls `POST /auth/agent/start` and stores tokens immediately. The terminal prints the claim code. The agent then calls `machine_add` and can run the join line itself. `--issuer` is the old device flow and is not this path.
+
+### A fresh machine
+
+The join line from `machine_add` is the whole install. The new account owns what it enrolls. Nobody edits grants for that machine.
+
+### Limits
+
+Eight provisional accounts per IP per hour. Five hundred unclaimed accounts on the hub. Unclaimed accounts last `auth.provisional_hours` (default 168) and then their tokens stop. Each AI client is a seat on `/account/identities` and can be revoked. Create, claim, merge, and enroll are audited.
+
 ## What Jesse sets on app.devagotchi.com
 
 1. Install a build whose commit is on `main` (see [deploy.md](deploy.md)). Do not hand-edit project ids into `auth.audiences`.

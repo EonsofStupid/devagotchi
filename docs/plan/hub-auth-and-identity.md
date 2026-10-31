@@ -235,6 +235,53 @@ Each phase is one commit, tests green before the next. Nomen-mode tests stay gre
 8. `tests/oauth_probe.py` wired from CI: DCR, authorize through a fake upstream, token, MCP `initialize`, `whoami`, for a new user, a returning user, and a second issuer with the same verified email. `docs/deploy.md` and the promote script. No deploy.
 9. Hub README, `docs/auth.md` if not already enough, `CHANGELOG.md`, `docs/security-baseline.md` rows 16-17 and 21 so they match the code.
 
+## Agent-first onboarding
+
+The product goal is that an AI can open an account for the person and keep going. A human may tap once. They do not create an account, paste a client id, or edit `hub.json` before the first machine works.
+
+What already existed, and what was missing:
+
+- A machine enrolled with an account's own code is reachable by that account with no grant (`hub.rs` `route`: configured brokers use `brokers_for`; any other name is allowed when `device.owner` is that account). Operator brokers stay grant-only.
+- `POST /api/v1/machines` already mints that code, but only for a bearer that already exists (`web/machines.rs`).
+- OAuth and device login both waited for a human to finish an upstream or magic-link sign-in before any token existed. That is the dead end.
+
+### (a) claude.ai, ChatGPT, Cursor
+
+1. The client fetches `GET /.well-known/oauth-protected-resource/mcp`. `resource` is `{public_url}/mcp`. `authorization_servers` is this hub.
+2. `POST /register` with the client's redirect URI. Response is `client_id`. No secret.
+3. The client sends the person to `GET /authorize` with `response_type=code`, PKCE `S256`, `state`, and that `redirect_uri`.
+4. The page is one button, Allow. `POST /authorize/provisional` creates a provisional Devagotchi account and a personal workspace, records the client as an agent seat, consents, and redirects back with `code` and `state`. No upstream login and no magic link on this path.
+5. `POST /token` with the verifier. The access token is a hub JWT. `sub` is the new account id. `agent` is the client name. `whoami` includes `provisional_until` and `claim_url`.
+6. `tools/call machine_add` `{ "name": "laptop" }` returns the one-line join command (`curl … | sudo sh` or the Windows `irm` line) and a code that expires in 15 minutes. The AI shows it or runs it.
+7. The machine enrolls with that code. It is `devices.owner` = the account. `operation_start` on that name is routed. It is not a grant. A name that is already an operator broker is refused.
+8. Later, the person opens `claim_url` (also printed by `whoami`) and signs in with any configured provider or a magic link. That identity is attached to this same account. If the verified email already belongs to another Devagotchi account, the provisional account is merged into that one: machines, agents, and tokens follow (`merged_into`), and `whoami` on the old token returns the surviving id.
+
+### (b) Claude Code, Codex, `devagotchi mcp`
+
+1. `devagotchi login` (no flags) calls `POST /auth/agent/start` with `client_id=devagotchi-cli` and `agent` from the environment or `cli`. The hub returns tokens immediately and a claim code. Nothing is polled and nothing is approved in a browser first.
+2. The tokens land in `account.json` as they do today. `devagotchi mcp --hub` sends the access token.
+3. The agent calls `machine_add` and runs the join line in the local shell. The machine comes online as this account's.
+4. The claim code is on the terminal and in `whoami`. The person uses it when they want the account to survive.
+
+`--issuer` is unchanged: it still waits on an upstream device code. That path is for `connect-nomen`, not for an agent opening an account.
+
+### (c) An agent on a fresh machine
+
+The agent already holds a token from (a) or (b), or it calls `/auth/agent/start` itself. `machine_add` is the whole setup. The join script installs the broker and the link and enrolls with the code. No operator edits `grants`. The free owned-machine cap (16, unless the account is the hub owner) still applies.
+
+### How others do it
+
+Desktop Commander's local MCP does not have an account: the OS user is the principal, and the agent talks to a process on that machine. Its remote device client still stops until a person finishes OAuth in a browser and a device session file exists (`reference/DesktopCommanderMCP/src/remote-device/README.md`). Smithery and the usual "connect this MCP" screens stop at the same place: the client cannot call tools until a human completes OAuth or pastes a key. Those flows are right for a shared hosted tool. They are a dead end when the point is the person's own machine and the AI is the one sitting at the keyboard. The provisional account is that difference: the token exists before the identity provider does, the machine enrolls to it, and the human's later sign-in claims the same id instead of starting over.
+
+### Abuse and limits
+
+- Provisional creation is limited to 8 per IP per hour, and to 500 live unclaimed accounts on the hub. Both are refused with `rate_limited` or `provisional_quota`.
+- An unclaimed account expires after `auth.provisional_hours` (default 168). `whoami` carries `provisional_until`. A token for an expired provisional account is `invalid_token`. Claimed accounts do not expire.
+- The claim code is single-use, stored hashed, and shown to the agent so it can hand it to the person. It is not a second account.
+- Each client name is an agent seat on the account, listed on `/account/identities`, revocable there. A revoked seat's tokens fail verify. Seats are not people and are not grants.
+- Owned machines stop at 16 per account. Operator-configured brokers are unchanged: no grant, no route.
+- Every create, claim, merge, and enroll is an identity event. Enroll and `machine_add` also hit the hash-chained audit.
+
 ## Open questions
 
 1. For the live hub, is the configured `owner` still the same Nomen `sub` as before the project restore? `legacy.issuer` links that string. If the person's Nomen `sub` changed, the grant will not follow until someone links the new `sub` to that account (verified email does that on their next sign-in, once `email` is in the upstream scope).
