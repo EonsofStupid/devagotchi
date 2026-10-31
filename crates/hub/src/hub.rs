@@ -538,20 +538,7 @@ impl Hub {
 }
 
 pub(crate) fn unexpected_response(expected: &str, actual: &ResponseBody) -> Json<BridgeError> {
-    let actual = match actual {
-        ResponseBody::Start(_) => "start",
-        ResponseBody::Operation(_) => "operation",
-        ResponseBody::Output(_) => "output",
-        ResponseBody::Operations(_) => "operations",
-        ResponseBody::File(_) => "file",
-        ResponseBody::Listing(_) => "listing",
-        ResponseBody::Written(_) => "written",
-        ResponseBody::Revision(_) => "revision",
-    };
-    Json(BridgeError::new(
-        "unexpected_broker_response",
-        format!("expected broker response kind {expected}, received {actual}"),
-    ))
+    Json(devagotchi_mcp::unexpected(expected, actual))
 }
 
 #[tool_handler(

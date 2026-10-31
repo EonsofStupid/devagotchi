@@ -39,6 +39,18 @@ TOOL_SCHEMAS = {
     ),
     "operation_cancel": ({"operation_id"}, {"operation_id", "state", "detail"}),
     "operation_wait": ({"operation_id", "output_after", "timeout_ms"}, {"operation_id", "state", "detail"}),
+    "operation_list": ({"offset", "limit"}, {"operations"}),
+    "run": (
+        {"command", "cwd", "wait_seconds", "timeout_seconds"},
+        {"operation_id", "state", "exit_code", "output", "truncated"},
+    ),
+    "read_file": ({"path", "offset", "max_bytes"}, {"path", "size", "offset", "next_offset", "eof"}),
+    "list_directory": ({"path", "depth", "max_entries"}, {"path", "entries", "truncated"}),
+    "write_file": (
+        {"path", "text", "bytes_base64", "mode", "expected_sha256", "create_dirs"},
+        {"path", "size", "sha256", "created"},
+    ),
+    "edit_file": ({"path", "old_text", "new_text", "expected_replacements"}, {"path", "size", "sha256", "created"}),
 }
 
 

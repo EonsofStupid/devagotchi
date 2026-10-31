@@ -18,6 +18,8 @@ path = "src/lib.rs"
 [dependencies]
 devagotchi-contracts = { workspace = true }
 devagotchi-ipc = { workspace = true }
+# The tool surface shared with the local adapter (`run`'s composition); no network in it.
+devagotchi-mcp = { path = "../mcp" }
 rmcp = { workspace = true, features = ["transport-streamable-http-server"] }
 schemars = { workspace = true }
 serde = { workspace = true }

@@ -5,6 +5,28 @@ Releases are the operator's act: a tag `vX.Y.Z` on `main` runs `.github/workflow
 The version in `Cargo.toml` is bumped by the operator in the same commit as this file's next
 heading. Agents draft the fragments below; they never tag.
 
+## Unreleased
+
+### The local server has the hub's tools, and runs as you (increment 34a)
+- `devagotchi mcp` serves `run`, `read_file`, `list_directory`, `write_file` and `edit_file`
+  (the hub's tools, names and inputs, without the machine's name) and `operation_list`
+  beside the operation tools. An AI runs a command, or reads, writes or edits a file, in one
+  call. The server is named `devagotchi` (was `desktop-bridge`), its instructions steer an AI
+  to `run` and the file tools, and every tool has a title and read-only/destructive hints.
+- A first `devagotchi start` (and so `setup` and an AI's first `devagotchi mcp`) writes
+  `exec_policy: account`: the broker runs what the person's account can, shell lines included,
+  as Desktop Commander does (trust by default, ruled 30 Oct 2026). An existing `broker.json`
+  is kept; `"exec_policy": "granted"` narrows it again. Server installers keep their own default.
+- `run`'s composition (start, one held wait, read) lives in `devagotchi-mcp` and serves both
+  the local server and the hub. On the way, for both:
+  - the cursor `run` gives for a command still running points past the output it already
+    returned (it named the start of the last page, so following it repeated that page);
+  - it reads only the output written by its first read, so a command still writing fast is
+    not chased past the wait it was given, and stopping the call stops the reading too;
+  - a broker that runs only granted programs refuses `run` with what works instead
+    (`operation_start` with an executable, or `exec_policy` `account`), not with a field
+    `run` does not have.
+
 ## 0.1.0 - 2026-10-30
 
 The first release, tagged at the operator's word (30 Oct 2026).
