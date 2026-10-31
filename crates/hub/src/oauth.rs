@@ -1717,6 +1717,8 @@ where
     let token_auth = auth.clone();
     let revoke_auth = auth.clone();
     let resume_auth = auth.clone();
+    let account_auth = auth.clone();
+    let unlink_auth = auth.clone();
     let device_auth = auth.clone();
     let login_auth = auth.clone();
     let magic_auth = auth.clone();
@@ -1891,6 +1893,73 @@ where
             }),
         )
         .route(
+            "/account/identities",
+            get(move |headers: axum::http::HeaderMap| {
+                let auth = account_auth.clone();
+                async move {
+                    let Some(account) = cookie_value(&headers, "dg_as")
+                        .and_then(|cookie| auth.browser_account(&cookie))
+                    else {
+                        return (axum::http::StatusCode::UNAUTHORIZED, "sign in required")
+                            .into_response();
+                    };
+                    let identities = auth.identity().identities(&account).unwrap_or_default();
+                    let mut rows = String::new();
+                    for identity in identities {
+                        rows.push_str(&format!(
+                            "<li>{} {} <form method=\"post\" action=\"/account/identities/unlink\">\
+                             <input type=\"hidden\" name=\"issuer\" value=\"{}\">\
+                             <input type=\"hidden\" name=\"sub\" value=\"{}\">\
+                             <button type=\"submit\">Unlink</button></form></li>",
+                            escape(&identity.issuer),
+                            escape(&identity.sub),
+                            escape(&identity.issuer),
+                            escape(&identity.sub),
+                        ));
+                    }
+                    let mut links = String::new();
+                    for provider in auth.providers() {
+                        links.push_str(&format!(
+                            "<p><a href=\"/login/upstream/{}?resume=\">Link {}</a></p>",
+                            escape(&provider.name),
+                            escape(&provider.name),
+                        ));
+                    }
+                    (
+                        [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                        format!(
+                            "<!doctype html><title>Sign-ins</title><h1>Sign-ins</h1>\
+                             <p>Account {}</p><ul>{rows}</ul>{links}",
+                            escape(&account)
+                        ),
+                    )
+                        .into_response()
+                }
+            }),
+        )
+        .route(
+            "/account/identities/unlink",
+            post(move |headers: axum::http::HeaderMap, Form(form): Form<UnlinkForm>| {
+                let auth = unlink_auth.clone();
+                async move {
+                    let Some(account) = cookie_value(&headers, "dg_as")
+                        .and_then(|cookie| auth.browser_account(&cookie))
+                    else {
+                        return (axum::http::StatusCode::UNAUTHORIZED, "sign in required")
+                            .into_response();
+                    };
+                    match auth.identity().unlink(&account, &form.issuer, &form.sub) {
+                        Ok(()) => axum::response::Redirect::to("/account/identities").into_response(),
+                        Err(error) => (
+                            axum::http::StatusCode::BAD_REQUEST,
+                            error.message,
+                        )
+                            .into_response(),
+                    }
+                }
+            }),
+        )
+        .route(
             "/device",
             post(move |Form(form): Form<DeviceForm>| {
                 let auth = device_auth.clone();
@@ -2011,6 +2080,11 @@ where
         )
 }
 
+#[derive(Deserialize)]
+struct UnlinkForm {
+    issuer: String,
+    sub: String,
+}
 #[derive(Deserialize)]
 struct DeviceForm {
     client_id: String,
