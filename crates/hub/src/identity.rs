@@ -749,6 +749,127 @@ fn email_still_held(tx: &Transaction<'_>, account_id: &str, email: &str) -> Brid
     Ok(local.as_deref() == Some(email))
 }
 
+/// Map `owner` and every grant subject onto a Devagotchi account id.
+///
+/// The file on disk is not written. `dg_` ids are ensured. `issuer|sub` links
+/// that pair. Any other subject is linked under `auth.legacy.issuer`, or
+/// `urn:devagotchi:legacy` when the file does not name one. Calling this again
+/// returns the same ids.
+pub fn rekey_config(
+    store: &Store,
+    config: &mut crate::config::HubConfig,
+) -> BridgeResult<Vec<(String, String)>> {
+    let legacy = match &config.auth {
+        crate::config::AuthConfig::Devagotchi { legacy, .. } => {
+            legacy.as_ref().map(|legacy| legacy.issuer.clone())
+        }
+        _ => {
+            return Err(BridgeError::new(
+                "invalid_config",
+                "rekey is for auth.mode devagotchi",
+            ));
+        }
+    };
+    let mut seen: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let subjects: Vec<String> = config
+        .owner
+        .clone()
+        .into_iter()
+        .chain(config.grants.iter().map(|grant| grant.subject.clone()))
+        .collect();
+    for subject in subjects {
+        if seen.contains_key(&subject) {
+            continue;
+        }
+        let account = map_subject(store, legacy.as_deref(), &subject)?;
+        seen.insert(subject, account);
+    }
+    let mut pairs = Vec::new();
+    if let Some(owner) = &config.owner
+        && let Some(account) = seen.get(owner)
+    {
+        if owner != account {
+            pairs.push((owner.clone(), account.clone()));
+        }
+        config.owner = Some(account.clone());
+    }
+    for grant in &mut config.grants {
+        if let Some(account) = seen.get(&grant.subject) {
+            if grant.subject != *account && !pairs.iter().any(|(from, _)| from == &grant.subject) {
+                pairs.push((grant.subject.clone(), account.clone()));
+            }
+            grant.subject.clone_from(account);
+        }
+    }
+    Ok(pairs)
+}
+
+fn map_subject(store: &Store, legacy_issuer: Option<&str>, subject: &str) -> BridgeResult<String> {
+    if is_account_id(subject) {
+        return store.ensure_account(subject);
+    }
+    if let Some((issuer, sub)) = subject.split_once('|')
+        && (issuer.contains("://") || issuer.starts_with("urn:"))
+    {
+        return Ok(store
+            .resolve(&Claim {
+                issuer: issuer.to_string(),
+                sub: sub.to_string(),
+                email: None,
+                email_verified: false,
+                name: None,
+            })?
+            .account_id);
+    }
+    let issuer = legacy_issuer.unwrap_or("urn:devagotchi:legacy");
+    Ok(store
+        .resolve(&Claim {
+            issuer: issuer.to_string(),
+            sub: subject.to_string(),
+            email: None,
+            email_verified: false,
+            name: None,
+        })?
+        .account_id)
+}
+
+/// Rename an account-board directory from an old subject to its account id.
+/// A missing source is not an error. Both names existing is.
+pub fn rename_account_dir(root: &Path, from: &str, to: &str) -> BridgeResult<bool> {
+    if from == to
+        || from.is_empty()
+        || to.is_empty()
+        || from.contains(['/', '\\'])
+        || to.contains(['/', '\\'])
+        || from == "."
+        || from == ".."
+    {
+        return Ok(false);
+    }
+    let src = root.join(from);
+    if !src.is_dir() {
+        return Ok(false);
+    }
+    let dst = root.join(to);
+    if dst.exists() {
+        return Err(BridgeError::new(
+            "identity_store",
+            format!(
+                "account board directory {} already exists; not renaming {}",
+                dst.display(),
+                src.display()
+            ),
+        ));
+    }
+    std::fs::rename(&src, &dst).map_err(|error| {
+        BridgeError::new(
+            "identity_store",
+            format!("renaming {} to {}: {error}", src.display(), dst.display()),
+        )
+    })?;
+    Ok(true)
+}
+
 fn record(
     tx: &Transaction<'_>,
     action: &str,
@@ -987,6 +1108,55 @@ mod tests {
         assert_eq!(store.ensure_account(&id).unwrap(), id);
         assert!(store.ensure_account("not-an-id").is_err());
         assert!(store.ensure_account("dg_ABC").is_err());
+    }
+
+    #[test]
+    fn config_subjects_rekey_to_stable_account_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("identities.sqlite3");
+        let store = Store::open(&path).unwrap();
+        let text = r#"{
+            "listen": "127.0.0.1:9",
+            "public_url": "http://127.0.0.1:9",
+            "auth": {
+                "mode": "devagotchi",
+                "legacy": { "issuer": "https://id.shippin.cloud" }
+            },
+            "owner": "300000000000000001",
+            "brokers": [{ "name": "gus", "link": true }],
+            "grants": [{ "subject": "300000000000000002", "brokers": ["gus"] }]
+        }"#;
+        let mut config = crate::config::HubConfig::parse(text).unwrap();
+        let pairs = rekey_config(&store, &mut config).unwrap();
+        assert_eq!(pairs.len(), 2);
+        let owner = config.owner.clone().unwrap();
+        let grant = config.grants[0].subject.clone();
+        assert!(is_account_id(&owner));
+        assert!(is_account_id(&grant));
+        assert_ne!(owner, grant);
+        assert!(config.is_owner(&owner));
+        assert_eq!(config.brokers_for(&owner).len(), 1);
+        assert_eq!(config.brokers_for(&grant).len(), 1);
+        let boards = dir.path().join("boards");
+        std::fs::create_dir_all(boards.join("300000000000000002")).unwrap();
+        assert!(rename_account_dir(&boards, "300000000000000002", &grant).unwrap());
+        assert!(boards.join(&grant).is_dir());
+        drop(store);
+        let store = Store::open(&path).unwrap();
+        let mut again = crate::config::HubConfig::parse(text).unwrap();
+        rekey_config(&store, &mut again).unwrap();
+        assert_eq!(again.owner.as_deref(), Some(owner.as_str()));
+        assert_eq!(again.grants[0].subject, grant);
+        let linked = store
+            .resolve(&claim(
+                "https://id.shippin.cloud",
+                "300000000000000001",
+                Some("ada@example.com"),
+                true,
+            ))
+            .unwrap();
+        assert_eq!(linked.outcome, Outcome::Existing);
+        assert_eq!(linked.account_id, owner);
     }
 
     #[test]

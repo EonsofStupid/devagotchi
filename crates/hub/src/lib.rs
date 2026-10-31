@@ -326,8 +326,29 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             format!("{}: {error}", config_path.display()),
         )
     })?;
-    let config = Arc::new(HubConfig::parse(&text)?);
+    let mut config = HubConfig::parse(&text)?;
+    // Old owner and grant subjects (identity-provider subs) become Devagotchi
+    // account ids in memory. The file is left as the operator wrote it.
+    let rekey = if matches!(config.auth, config::AuthConfig::Devagotchi { .. }) {
+        let store = identity::Store::open(&state_dir.join("identities.sqlite3"))?;
+        let pairs = identity::rekey_config(&store, &mut config)?;
+        Some(pairs)
+    } else {
+        None
+    };
+    let config = Arc::new(config);
     let devices = Arc::new(devices_at(&state_dir)?);
+    if let Some(pairs) = &rekey {
+        let boards = config
+            .account_boards
+            .as_ref()
+            .and_then(|accounts| accounts.dir.as_deref().map(std::path::PathBuf::from))
+            .unwrap_or_else(|| state_dir.join("account-boards"));
+        for (from, to) in pairs {
+            devices.reassign_owner(from, to)?;
+            identity::rename_account_dir(&boards, from, to)?;
+        }
+    }
     let audit = Arc::new(Audit::open(&state_dir.join("audit.sqlite3"))?);
     let push = match &config.web {
         Some(_) => Some(Arc::new(push::Push::open(
@@ -420,6 +441,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             config::AuthConfig::Nomen { issuer, .. } => format!("nomen {issuer}"),
             config::AuthConfig::Oidc { issuer, .. } => format!("oidc {issuer}"),
             config::AuthConfig::Dev { .. } => "dev tokens".to_string(),
+            config::AuthConfig::Devagotchi { .. } => "devagotchi".to_string(),
         }
     );
     axum::serve(

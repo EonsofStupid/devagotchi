@@ -144,6 +144,67 @@ pub enum AuthConfig {
         /// Absolute path to a JSON object `{ "<token>": "<subject>" }`.
         tokens_file: String,
     },
+    /// Devagotchi is the authorization server. Upstream providers are optional
+    /// "sign in with" buttons. The hub serves with `upstream` empty.
+    Devagotchi {
+        #[serde(default)]
+        upstream: Vec<UpstreamProvider>,
+        #[serde(default)]
+        local: LocalLogin,
+        /// Issuer used to adopt bare `sub` values already written in `owner` and
+        /// `grants` (the Nomen subject the file was keyed by).
+        #[serde(default)]
+        legacy: Option<LegacyIssuer>,
+    },
+}
+
+/// One optional OpenID Connect provider on the hub's own sign-in page.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UpstreamProvider {
+    /// Short name used in `/auth/upstream/<name>`. `[a-z][a-z0-9-]{0,31}`.
+    pub name: String,
+    /// Issuer URL exactly as the provider states it.
+    pub issuer: String,
+    /// The hub's client id at that provider. A public client (PKCE, no secret) leaves
+    /// `client_secret_file` unset.
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret_file: Option<String>,
+    #[serde(default)]
+    pub scopes: Option<String>,
+}
+
+/// Local sign-in, so the hub works with no upstream provider.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LocalLogin {
+    /// Email magic link. Default on.
+    #[serde(default = "default_true")]
+    pub magic_link: bool,
+    /// `off` or `log`. Absent: `log` on loopback http, `off` on a public URL.
+    #[serde(default)]
+    pub deliver: Option<String>,
+}
+
+impl Default for LocalLogin {
+    fn default() -> Self {
+        Self {
+            magic_link: true,
+            deliver: None,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// The issuer a bare subject in an old config belongs to.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LegacyIssuer {
+    pub issuer: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -241,6 +302,82 @@ impl HubConfig {
                     ));
                 }
             }
+            AuthConfig::Devagotchi {
+                upstream,
+                local,
+                legacy,
+            } => {
+                let mut names = BTreeSet::new();
+                let mut issuers = BTreeSet::new();
+                for provider in upstream {
+                    if !valid_name(&provider.name) {
+                        return Err(invalid(format!(
+                            "auth.upstream name {:?} is not [a-z0-9][a-z0-9-]{{0,62}}",
+                            provider.name
+                        )));
+                    }
+                    if !names.insert(provider.name.as_str()) {
+                        return Err(invalid(format!(
+                            "auth.upstream name {:?} is listed twice",
+                            provider.name
+                        )));
+                    }
+                    if !provider.issuer.starts_with("https://") && !loopback_http(&provider.issuer)
+                    {
+                        return Err(invalid(format!(
+                            "auth.upstream {}: issuer must be https (plain http only on loopback)",
+                            provider.name
+                        )));
+                    }
+                    let issuer = provider.issuer.trim_end_matches('/');
+                    if !issuers.insert(issuer) {
+                        return Err(invalid(format!(
+                            "auth.upstream issuer {issuer} is listed twice"
+                        )));
+                    }
+                    if provider.client_id.trim().is_empty() || provider.client_id.len() > 256 {
+                        return Err(invalid(format!(
+                            "auth.upstream {}: client_id must be 1..=256 characters",
+                            provider.name
+                        )));
+                    }
+                    if let Some(path) = &provider.client_secret_file
+                        && !Path::new(path).is_absolute()
+                    {
+                        return Err(invalid(format!(
+                            "auth.upstream {}: client_secret_file must be an absolute path",
+                            provider.name
+                        )));
+                    }
+                    if let Some(scopes) = &provider.scopes
+                        && (scopes.is_empty() || scopes.len() > 512)
+                    {
+                        return Err(invalid(format!(
+                            "auth.upstream {}: scopes must be 1..=512 characters",
+                            provider.name
+                        )));
+                    }
+                }
+                if let Some(deliver) = &local.deliver
+                    && deliver != "off"
+                    && deliver != "log"
+                {
+                    return Err(invalid(
+                        "auth.local.deliver must be \"off\" or \"log\"".into(),
+                    ));
+                }
+                if let Some(legacy) = legacy {
+                    let ok = legacy.issuer.starts_with("https://")
+                        || loopback_http(&legacy.issuer)
+                        || legacy.issuer.starts_with("urn:");
+                    if !ok {
+                        return Err(invalid(
+                            "auth.legacy.issuer must be https, a loopback http URL, or a urn"
+                                .into(),
+                        ));
+                    }
+                }
+            }
             AuthConfig::Dev { tokens_file } => {
                 if !Path::new(tokens_file).is_absolute() {
                     return Err(invalid("auth.tokens_file must be an absolute path".into()));
@@ -278,11 +415,17 @@ impl HubConfig {
                         .into(),
                 ));
             }
+            if matches!(&self.auth, AuthConfig::Devagotchi { .. }) {
+                return Err(invalid(
+                    "trusted_issuers is not used with auth.mode devagotchi; list providers under auth.upstream"
+                        .into(),
+                ));
+            }
             let primary = match &self.auth {
                 AuthConfig::Oidc { issuer, .. } | AuthConfig::Nomen { issuer, .. } => {
                     Some(issuer.trim_end_matches('/'))
                 }
-                AuthConfig::Dev { .. } => None,
+                AuthConfig::Dev { .. } | AuthConfig::Devagotchi { .. } => None,
             };
             if primary == Some(issuer) || seen.contains(&issuer) {
                 return Err(invalid(format!(
@@ -303,14 +446,22 @@ impl HubConfig {
             )));
         }
         if let Some(web) = &self.web {
-            let AuthConfig::Nomen { clients, .. } = &self.auth else {
-                return Err(invalid("web sign-in needs auth mode nomen".into()));
-            };
-            if web.client_id.trim().is_empty() || !clients.contains(&web.client_id) {
-                return Err(invalid(
-                    "web.client_id must be one of auth.clients, so the tokens it issues are accepted"
-                        .into(),
-                ));
+            match &self.auth {
+                AuthConfig::Nomen { clients, .. } => {
+                    if web.client_id.trim().is_empty() || !clients.contains(&web.client_id) {
+                        return Err(invalid(
+                            "web.client_id must be one of auth.clients, so the tokens it issues are accepted"
+                                .into(),
+                        ));
+                    }
+                }
+                // The hub's own sign-in pages do not use a Nomen client id.
+                AuthConfig::Devagotchi { .. } => {}
+                _ => {
+                    return Err(invalid(
+                        "web sign-in needs auth mode nomen or devagotchi".into(),
+                    ));
+                }
             }
             // Session cookies are Secure: over plain http they would never come back.
             if !self.public_url.starts_with("https://") && !loopback_http(&self.public_url) {
@@ -886,5 +1037,36 @@ mod tests {
             .unwrap()
             .push(serde_json::json!({ "project": "devagotchi", "dir": PROJECT_DIR }));
         assert_eq!(parse(&twice).unwrap_err().code, "invalid_config");
+    }
+
+    #[test]
+    fn devagotchi_mode_needs_no_nomen_ids() {
+        let mut config = good();
+        config["auth"] = serde_json::json!({ "mode": "devagotchi" });
+        let parsed = parse(&config).unwrap();
+        assert!(matches!(parsed.auth, AuthConfig::Devagotchi { .. }));
+        config["auth"] = serde_json::json!({
+            "mode": "devagotchi",
+            "legacy": { "issuer": "https://id.shippin.cloud" },
+            "upstream": [{
+                "name": "nomen",
+                "issuer": "https://id.shippin.cloud",
+                "client_id": "public-client"
+            }],
+            "local": { "magic_link": true, "deliver": "log" }
+        });
+        assert!(parse(&config).is_ok());
+        config["trusted_issuers"] = serde_json::json!([{
+            "issuer": "https://site.example", "audiences": ["authenticated"]
+        }]);
+        assert!(
+            parse(&config)
+                .unwrap_err()
+                .message
+                .contains("auth.upstream")
+        );
+        config["trusted_issuers"] = serde_json::json!([]);
+        config["auth"]["upstream"][0]["issuer"] = serde_json::json!("http://idp.example");
+        assert_eq!(parse(&config).unwrap_err().code, "invalid_config");
     }
 }

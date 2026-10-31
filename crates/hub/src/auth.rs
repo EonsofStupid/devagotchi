@@ -124,6 +124,12 @@ impl Verifier {
                 OidcVerifier::discover(issuer, audiences).await?,
             )),
             AuthConfig::Dev { tokens_file } => Ok(Verifier::Dev(read_dev_tokens(tokens_file)?)),
+            // The authorization server (phase 3) replaces this. Until it does, a
+            // devagotchi hub refuses bearers rather than treating a Nomen token as one.
+            AuthConfig::Devagotchi { .. } => Err(BridgeError::new(
+                "invalid_config",
+                "auth.mode devagotchi is not serving bearers yet",
+            )),
         }
     }
 
