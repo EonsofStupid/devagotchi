@@ -5,6 +5,24 @@ Releases are the operator's act: a tag `vX.Y.Z` on `main` runs `.github/workflow
 The version in `Cargo.toml` is bumped by the operator in the same commit as this file's next
 heading. Agents draft the fragments below; they never tag.
 
+## Unreleased
+
+### The local server has the hub's tools, and runs as you (increment 34a)
+- `devagotchi mcp` serves `run`, `read_file`, `list_directory`, `write_file`, `edit_file` and
+  `operation_list` beside the operation tools: the same tools, names and inputs as the hub,
+  without the machine's name. An AI runs a command, or reads, writes or edits a file, in one
+  call. The server is named `devagotchi` (was `desktop-bridge`), its instructions steer an AI
+  to `run` and the file tools, and every tool has a title and read-only/destructive hints.
+- A first `devagotchi start` (and so `setup` and an AI's first `devagotchi mcp`) writes
+  `exec_policy: account`: the broker runs what the person's account can, shell lines included,
+  as Desktop Commander does (trust by default, ruled 30 Oct 2026). An existing `broker.json`
+  is kept; `"exec_policy": "granted"` narrows it again. Server installers keep their own default.
+- `run`'s composition (start, one held wait, read) lives in `devagotchi-mcp` and serves both
+  the local server and the hub. On the way: the cursor `run` gives for a command still
+  running now points past the output it already returned (it named the start of the last
+  page, so following it repeated that page).
+- The hub serves `operation_list` too.
+
 ## 0.1.0 - 2026-10-30
 
 The first release, tagged at the operator's word (30 Oct 2026).

@@ -121,8 +121,8 @@ unannotated = [t["name"] for t in listed if not t.get("title") or not (
     and (t["annotations"]["readOnlyHint"] or "destructiveHint" in t["annotations"]))]
 check("every tool has a title and annotations", not unannotated, ", ".join(unannotated))
 broker_tools = ["approval_request", "approval_wait", "edit_file", "list_directory", "machines", "operation_cancel",
-                "operation_get", "operation_read", "operation_start", "operation_wait", "read_file", "run", "whoami",
-                "write_file"]
+                "operation_get", "operation_list", "operation_read", "operation_start", "operation_wait", "read_file",
+                "run", "whoami", "write_file"]
 board_tools = [t for t in tools if t.startswith("board_")]
 check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 18,
       ", ".join(tools))
@@ -160,6 +160,10 @@ if args.run_broker:
     check("run hands back a still-running command", not is_error and slow.get("state") in ("accepted", "running")
           and "operation_read" in (slow.get("next") or ""), json.dumps(slow)[:240])
     if not is_error:
+        _, listed = call("operation_list", {"broker": args.run_broker})
+        check("operation_list shows the running command",
+              any(op.get("operation_id") == slow["operation_id"] for op in listed.get("operations", [])),
+              json.dumps(listed)[:240])
         # A waiter is woken by the cancellation itself, not by a timer.
         began = time.monotonic()
         call("operation_cancel", {"broker": args.run_broker, "input": {"operation_id": slow["operation_id"]}})

@@ -3,10 +3,8 @@
 //! underneath, so a command that outlasts the wait keeps running and stays observable with
 //! the operation tools; nothing here owns a job.
 
-use devagotchi_contracts::{
-    BridgeError, MAX_OUTPUT_PAGE_BYTES, OperationState, ReadInput, RequestBody, ResponseBody,
-    StartInput, WaitInput,
-};
+use devagotchi_contracts::{BridgeError, OperationState, StartInput};
+use devagotchi_mcp::run::{self as shared, Failed};
 use rmcp::{
     Json, RoleServer, handler::server::wrapper::Parameters, service::RequestContext, tool,
     tool_router,
@@ -15,16 +13,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::hub::Hub;
-
-/// Default and largest wait for a result. MCP clients give up on a call after about a
-/// minute, so the wait stays under it; the command itself may run longer.
-const DEFAULT_WAIT_S: u64 = 30;
-const MAX_WAIT_S: u64 = 50;
-/// Default and largest run time before the broker stops the command.
-const DEFAULT_TIMEOUT_S: u64 = 300;
-const MAX_TIMEOUT_S: u64 = 300;
-/// Output handed back in one answer: the end of it, which is where results and errors are.
-pub(crate) const OUTPUT_LIMIT: usize = 32 * 1024;
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -63,18 +51,6 @@ pub struct RunOutput {
     pub next: Option<String>,
 }
 
-/// Keep the last `limit` bytes of `text`, cut at a character boundary.
-pub(crate) fn tail(text: String, limit: usize) -> (String, bool) {
-    if text.len() <= limit {
-        return (text, false);
-    }
-    let mut start = text.len() - limit;
-    while !text.is_char_boundary(start) {
-        start += 1;
-    }
-    (text[start..].to_owned(), true)
-}
-
 /// A broker from before waits existed rejects the request it cannot parse; say what to do.
 fn outdated(error: BridgeError, machine: &str) -> BridgeError {
     if error.code == "invalid_request" && error.message.contains("operation_wait") {
@@ -84,16 +60,6 @@ fn outdated(error: BridgeError, machine: &str) -> BridgeError {
         );
     }
     error
-}
-
-fn bounded(value: Option<u64>, default: u64, max: u64, name: &str) -> Result<u64, BridgeError> {
-    match value.unwrap_or(default) {
-        n if (1..=max).contains(&n) => Ok(n),
-        _ => Err(BridgeError::new(
-            "invalid_request",
-            format!("{name} must be 1..={max}"),
-        )),
-    }
 }
 
 #[tool_router(router = run_router, vis = "pub(crate)")]
@@ -116,17 +82,17 @@ impl Hub {
         context: RequestContext<RoleServer>,
     ) -> Result<Json<RunOutput>, Json<BridgeError>> {
         let subject = self.subject(&context)?;
-        let wait = bounded(
+        let wait = shared::bounded(
             input.wait_seconds,
-            DEFAULT_WAIT_S,
-            MAX_WAIT_S,
+            shared::DEFAULT_WAIT_S,
+            shared::MAX_WAIT_S,
             "wait_seconds",
         )
         .map_err(Json)?;
-        let timeout = bounded(
+        let timeout = shared::bounded(
             input.timeout_seconds,
-            DEFAULT_TIMEOUT_S,
-            MAX_TIMEOUT_S,
+            shared::DEFAULT_TIMEOUT_S,
+            shared::MAX_TIMEOUT_S,
             "timeout_seconds",
         )
         .map_err(Json)?;
@@ -139,136 +105,64 @@ impl Hub {
             cwd: input.cwd,
             deadline_ms: timeout * 1000,
         };
-        let started = self.send(&route, RequestBody::OperationStart(start)).await;
-        let operation = match &started {
-            Ok(ResponseBody::Start(output)) => output.operation.clone(),
-            Ok(other) => return Err(crate::hub::unexpected_response("start", other)),
-            Err(error) => {
+        let ran = shared::run(
+            |body| self.send(&route, body),
+            start,
+            wait,
+            context.ct.cancelled(),
+        )
+        .await;
+        let ran = match ran {
+            Ok(ran) => ran,
+            Err(Failed::NotStarted(error)) => {
                 self.record(&subject, "run", &input.machine, "", &error.code)?;
-                return Err(Json(error.clone()));
+                return Err(Json(error));
+            }
+            Err(Failed::Started {
+                operation_id,
+                error,
+            }) => {
+                self.record(&subject, "run", &input.machine, &operation_id, &error.code)?;
+                return Err(Json(outdated(error, &input.machine)));
+            }
+            Err(Failed::Cancelled { operation_id }) => {
+                self.record(
+                    &subject,
+                    "run",
+                    &input.machine,
+                    &operation_id,
+                    "request_cancelled",
+                )?;
+                return Err(Json(BridgeError::new(
+                    "request_cancelled",
+                    format!(
+                        "stopped waiting; operation {operation_id} keeps running on {}",
+                        input.machine
+                    ),
+                )));
             }
         };
-        let id = operation.operation_id.clone();
-        let mut state = operation.state;
-        let mut exit_code = operation.exit_code;
-        if !state.terminal() {
-            // One held request: the broker answers the moment the command finishes, or at
-            // the wait's end with it still running. Nothing asks again in between.
-            let wait = RequestBody::OperationWait(WaitInput {
-                operation_id: id.clone(),
-                output_after: None,
-                timeout_ms: wait * 1000,
-            });
-            let view = tokio::select! {
-                biased;
-                _ = context.ct.cancelled() => {
-                    self.record(&subject, "run", &input.machine, &id, "request_cancelled")?;
-                    return Err(Json(BridgeError::new(
-                        "request_cancelled",
-                        format!("stopped waiting; operation {id} keeps running on {}", input.machine),
-                    )));
-                }
-                view = self.send(&route, wait) => view,
-            };
-            match view {
-                Ok(ResponseBody::Operation(view)) => {
-                    state = view.state;
-                    exit_code = view.exit_code;
-                }
-                Ok(other) => return Err(crate::hub::unexpected_response("operation", &other)),
-                Err(error) => {
-                    self.record(&subject, "run", &input.machine, &id, &error.code)?;
-                    return Err(Json(outdated(error, &input.machine)));
-                }
-            }
-        }
-        let mut text = String::new();
-        let mut gap = false;
-        let mut cursor = 0;
-        loop {
-            let page = self
-                .send(
-                    &route,
-                    RequestBody::OperationRead(ReadInput {
-                        operation_id: id.clone(),
-                        cursor,
-                        max_bytes: MAX_OUTPUT_PAGE_BYTES,
-                    }),
-                )
-                .await;
-            let page = match page {
-                Ok(ResponseBody::Output(page)) => page,
-                Ok(other) => return Err(crate::hub::unexpected_response("output", &other)),
-                Err(error) => {
-                    self.record(&subject, "run", &input.machine, &id, &error.code)?;
-                    return Err(Json(error));
-                }
-            };
-            gap |= page.gap;
-            for frame in &page.frames {
-                text.push_str(&frame.text);
-            }
-            if text.len() > 4 * OUTPUT_LIMIT {
-                text = tail(text, OUTPUT_LIMIT).0;
-                gap = true;
-            }
-            if !page.has_more || page.next_cursor == cursor {
-                break;
-            }
-            cursor = page.next_cursor;
-        }
-        let (output, cut) = tail(text, OUTPUT_LIMIT);
-        let running = !state.terminal();
+        let running = !ran.state.terminal();
         self.record(
             &subject,
             "run",
             &input.machine,
-            &id,
+            &ran.operation_id,
             if running { "running" } else { "ok" },
         )?;
         Ok(Json(RunOutput {
             next: running.then(|| {
                 format!(
-                    "Still running after {wait} s. Follow it with operation_read (broker {}, operation_id {id}, cursor {cursor}) or stop it with operation_cancel.",
-                    input.machine
+                    "Still running after {wait} s. Follow it with operation_read (broker {}, operation_id {}, cursor {}) or stop it with operation_cancel.",
+                    input.machine, ran.operation_id, ran.cursor
                 )
             }),
             machine: input.machine,
-            operation_id: id,
-            state,
-            exit_code,
-            output,
-            truncated: cut || gap,
+            operation_id: ran.operation_id,
+            state: ran.state,
+            exit_code: ran.exit_code,
+            output: ran.output,
+            truncated: ran.truncated,
         }))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn the_tail_keeps_the_end_on_a_character_boundary() {
-        assert_eq!(tail("short".into(), 10), ("short".into(), false));
-        let (kept, cut) = tail("abcdef".into(), 3);
-        assert_eq!((kept.as_str(), cut), ("def", true));
-        // "é" is two bytes: a cut inside it moves forward to the next boundary.
-        let (kept, cut) = tail("aébc".into(), 3);
-        assert!(cut);
-        assert_eq!(kept, "bc");
-    }
-
-    #[test]
-    fn waits_and_timeouts_are_bounded() {
-        assert_eq!(bounded(None, 30, 50, "wait_seconds").unwrap(), 30);
-        assert_eq!(bounded(Some(50), 30, 50, "wait_seconds").unwrap(), 50);
-        assert_eq!(
-            bounded(Some(0), 30, 50, "wait_seconds").unwrap_err().code,
-            "invalid_request"
-        );
-        assert_eq!(
-            bounded(Some(51), 30, 50, "wait_seconds").unwrap_err().code,
-            "invalid_request"
-        );
     }
 }

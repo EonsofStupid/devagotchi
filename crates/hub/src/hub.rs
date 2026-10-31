@@ -5,8 +5,8 @@
 use std::{path::PathBuf, sync::Arc};
 
 use devagotchi_contracts::{
-    BridgeError, GetInput, OperationView, OutputPage, ReadInput, RequestBody, ResponseBody,
-    StartInput, StartOutput, WaitInput,
+    BridgeError, GetInput, ListInput, OperationView, OperationsPage, OutputPage, ReadInput,
+    RequestBody, ResponseBody, StartInput, StartOutput, WaitInput,
 };
 use rmcp::{
     Json, RoleServer, ServerHandler, handler::server::wrapper::Parameters, service::RequestContext,
@@ -91,6 +91,20 @@ pub struct WaitRouted {
 pub struct ReadRouted {
     pub broker: String,
     pub input: ReadInput,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ListRouted {
+    pub broker: String,
+    #[serde(default = "first_page")]
+    pub input: ListInput,
+}
+
+fn first_page() -> ListInput {
+    ListInput {
+        offset: 0,
+        limit: 32,
+    }
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -419,6 +433,35 @@ impl Hub {
     }
 
     #[tool(
+        name = "operation_list",
+        description = "List the named broker's operations, newest first, with their state: what is running there now, and what ran before (also before a restart of the AI client or the machine).",
+        title = "List operations",
+        annotations(
+            title = "List operations",
+            read_only_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn operation_list(
+        &self,
+        Parameters(routed): Parameters<ListRouted>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<OperationsPage>, Json<BridgeError>> {
+        match self
+            .call(
+                "operation_list",
+                &routed.broker,
+                RequestBody::OperationList(routed.input),
+                context,
+            )
+            .await?
+        {
+            ResponseBody::Operations(page) => Ok(Json(page)),
+            other => Err(unexpected_response("operations", &other)),
+        }
+    }
+
+    #[tool(
         name = "operation_get",
         description = "Read the named broker's retained state for an operation. This does not start, resume or cancel execution.",
         title = "Check an operation",
@@ -538,20 +581,7 @@ impl Hub {
 }
 
 pub(crate) fn unexpected_response(expected: &str, actual: &ResponseBody) -> Json<BridgeError> {
-    let actual = match actual {
-        ResponseBody::Start(_) => "start",
-        ResponseBody::Operation(_) => "operation",
-        ResponseBody::Output(_) => "output",
-        ResponseBody::Operations(_) => "operations",
-        ResponseBody::File(_) => "file",
-        ResponseBody::Listing(_) => "listing",
-        ResponseBody::Written(_) => "written",
-        ResponseBody::Revision(_) => "revision",
-    };
-    Json(BridgeError::new(
-        "unexpected_broker_response",
-        format!("expected broker response kind {expected}, received {actual}"),
-    ))
+    Json(devagotchi_mcp::unexpected(expected, actual))
 }
 
 #[tool_handler(
