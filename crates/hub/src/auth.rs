@@ -68,6 +68,9 @@ pub enum Verifier {
         primary: Box<Verifier>,
         trusted: Vec<OidcVerifier>,
     },
+    /// A hub with its own accounts and no Nomen: no bearer token is accepted until the hub
+    /// issues its own to AI clients (increment 32b).
+    Closed,
 }
 
 /// The `iss` a JWT claims, unverified: only for choosing which issuer checks it.
@@ -111,19 +114,17 @@ impl Verifier {
     /// in `state_dir`, so a restart during a Nomen outage signs nobody out.
     async fn primary(config: &AuthConfig, state_dir: &Path) -> BridgeResult<Self> {
         match config {
-            AuthConfig::Nomen {
-                issuer,
-                audiences,
-                clients,
-                key_file,
-            } => Ok(Verifier::Nomen(
-                NomenVerifier::new(issuer, audiences, clients, key_file)?
-                    .remembering(&state_dir.join("signins.sqlite3")),
-            )),
             AuthConfig::Oidc { issuer, audiences } => Ok(Verifier::Oidc(
                 OidcVerifier::discover(issuer, audiences).await?,
             )),
             AuthConfig::Dev { tokens_file } => Ok(Verifier::Dev(read_dev_tokens(tokens_file)?)),
+            AuthConfig::Nomen { .. } | AuthConfig::Hub { .. } => match config.nomen() {
+                Some(nomen) => Ok(Verifier::Nomen(
+                    NomenVerifier::new(nomen.issuer, nomen.audiences, nomen.clients, nomen.key_file)?
+                        .remembering(&state_dir.join("signins.sqlite3")),
+                )),
+                None => Ok(Verifier::Closed),
+            },
         }
     }
 
@@ -163,6 +164,9 @@ impl Verifier {
                     None => Box::pin(primary.verify(bearer)).await,
                 }
             }
+            Verifier::Closed => Err(AuthError::Invalid(
+                "this hub signs people in itself and takes no bearer tokens yet",
+            )),
         }
     }
 
@@ -180,7 +184,7 @@ impl Verifier {
         match self {
             Verifier::Nomen(nomen) => Some(nomen.issuer()),
             Verifier::Oidc(oidc) => Some(&oidc.issuer),
-            Verifier::Dev(_) => None,
+            Verifier::Dev(_) | Verifier::Closed => None,
             Verifier::Federated { primary, .. } => primary.issuer(),
         }
     }

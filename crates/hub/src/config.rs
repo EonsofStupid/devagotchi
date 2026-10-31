@@ -2,7 +2,11 @@
 //!
 //! Unknown fields and unsafe values fail closed, like the broker's own config.
 
-use std::{collections::BTreeSet, path::Path};
+use std::{
+    collections::BTreeSet,
+    path::Path,
+    sync::{Arc, OnceLock},
+};
 
 use devagotchi_contracts::{BridgeError, BridgeResult};
 use serde::Deserialize;
@@ -53,6 +57,10 @@ pub struct HubConfig {
     /// and "Add a machine" shows the installer lines instead.
     #[serde(default)]
     pub downloads: Option<String>,
+    /// The owner every holder of this config sees: `owner` above, or in hub mode the
+    /// one the accounts store names, learned once at start or when it is made.
+    #[serde(skip)]
+    owner_cell: Arc<OnceLock<String>>,
 }
 
 /// The hosted tier's boards: an account binds a project and gets a board of its own on this
@@ -144,6 +152,67 @@ pub enum AuthConfig {
         /// Absolute path to a JSON object `{ "<token>": "<subject>" }`.
         tokens_file: String,
     },
+    /// The hub's own accounts (D25, §14): people sign in on its pages with passkeys, and
+    /// the hub works with nothing else deployed. Its owner is made on the hub's host with
+    /// `devagotchi hub owner`. Nomen is an optional extra way in.
+    Hub {
+        /// The passkeys' relying party: the hub's host (the default) or a parent domain of
+        /// it, so passkeys made here work on its sibling hosts (decision 1:
+        /// `devagotchi.com`). It can never change for passkeys already made.
+        #[serde(default)]
+        rp_id: Option<String>,
+        /// Shippin sign-in as well: Nomen tokens at `/mcp` from accounts it knows.
+        #[serde(default)]
+        nomen: Option<NomenAuth>,
+    },
+}
+
+/// Nomen in hub mode: the same fields, checked the same way, as `auth.mode nomen`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NomenAuth {
+    pub issuer: String,
+    pub audiences: Vec<String>,
+    pub clients: Vec<String>,
+    pub key_file: String,
+}
+
+/// Nomen's settings, from either mode that has them.
+pub struct NomenRef<'a> {
+    pub issuer: &'a str,
+    pub audiences: &'a [String],
+    pub clients: &'a [String],
+    pub key_file: &'a str,
+}
+
+impl AuthConfig {
+    /// Nomen's settings: `auth.mode nomen`, or the `nomen` block of `auth.mode hub`.
+    pub fn nomen(&self) -> Option<NomenRef<'_>> {
+        match self {
+            AuthConfig::Nomen {
+                issuer,
+                audiences,
+                clients,
+                key_file,
+            }
+            | AuthConfig::Hub {
+                nomen:
+                    Some(NomenAuth {
+                        issuer,
+                        audiences,
+                        clients,
+                        key_file,
+                    }),
+                ..
+            } => Some(NomenRef {
+                issuer,
+                audiences,
+                clients,
+                key_file,
+            }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -183,6 +252,9 @@ impl HubConfig {
         let config: HubConfig = serde_json::from_str(text)
             .map_err(|error| BridgeError::new("invalid_config", error.to_string()))?;
         config.validate()?;
+        if let Some(owner) = &config.owner {
+            let _ = config.owner_cell.set(owner.clone());
+        }
         Ok(config)
     }
 
@@ -208,31 +280,9 @@ impl HubConfig {
                     ));
                 }
             }
-            AuthConfig::Nomen {
-                issuer,
-                audiences,
-                clients,
-                key_file,
-            } => {
-                if !issuer.starts_with("https://") && !loopback_http(issuer) {
-                    return Err(invalid(
-                        "auth.issuer must be an https URL (plain http only on this machine's loopback, for tests)"
-                            .into(),
-                    ));
-                }
-                if audiences.is_empty() || audiences.iter().any(|a| a.trim().is_empty()) {
-                    return Err(invalid(
-                        "auth.audiences must name at least one Nomen project id".into(),
-                    ));
-                }
-                if clients.is_empty() || clients.iter().any(|c| c.trim().is_empty()) {
-                    return Err(invalid(
-                        "auth.clients must name the Nomen applications whose sign-ins the hub accepts"
-                            .into(),
-                    ));
-                }
-                if !Path::new(key_file).is_absolute() {
-                    return Err(invalid("auth.key_file must be an absolute path".into()));
+            AuthConfig::Nomen { .. } => {
+                if let Some(nomen) = self.auth.nomen() {
+                    nomen.check("auth").map_err(invalid)?;
                 }
                 if self.owner.is_none() {
                     return Err(invalid(
@@ -252,6 +302,36 @@ impl HubConfig {
                     return Err(invalid(format!(
                         "auth.mode dev is for tests (public_url on loopback http); a hub at {} signs people in with auth.mode nomen or oidc",
                         self.public_url
+                    )));
+                }
+            }
+            AuthConfig::Hub { rp_id, .. } => {
+                // Passkeys work only in a secure context: https, or this machine's loopback.
+                if !self.public_url.starts_with("https://") && !loopback_http(&self.public_url) {
+                    return Err(invalid(
+                        "auth.mode hub needs an https public_url (plain http only on loopback, for tests)"
+                            .into(),
+                    ));
+                }
+                let host = url_host(&self.public_url)
+                    .ok_or_else(|| invalid("public_url has no host".into()))?;
+                if let Some(rp_id) = rp_id {
+                    check_rp_id(rp_id, &host).map_err(invalid)?;
+                }
+                if let Some(nomen) = self.auth.nomen() {
+                    nomen.check("auth.nomen").map_err(invalid)?;
+                }
+                if self.web.is_some() {
+                    return Err(invalid(
+                        "auth.mode hub serves its own sign-in pages; leave out web (its Nomen app is for Sign in with Shippin, which comes later)"
+                            .into(),
+                    ));
+                }
+                if let Some(owner) = &self.owner
+                    && !crate::accounts::valid_account_id(owner)
+                {
+                    return Err(invalid(format!(
+                        "owner {owner:?} is not an account id: acct_ and 26 characters, or the subject an earlier identity provider issued (letters, digits, - and _)"
                     )));
                 }
             }
@@ -278,10 +358,19 @@ impl HubConfig {
                         .into(),
                 ));
             }
+            // A hub with only its own accounts takes no other issuer's tokens: their `sub`
+            // would be compared with the hub's own account ids.
+            if matches!(&self.auth, AuthConfig::Hub { nomen: None, .. }) {
+                return Err(invalid(
+                    "trusted_issuers needs auth.nomen in auth mode hub: until the hub issues its own tokens (32b), another issuer's would name its accounts"
+                        .into(),
+                ));
+            }
             let primary = match &self.auth {
                 AuthConfig::Oidc { issuer, .. } | AuthConfig::Nomen { issuer, .. } => {
                     Some(issuer.trim_end_matches('/'))
                 }
+                AuthConfig::Hub { .. } => self.auth.nomen().map(|n| n.issuer.trim_end_matches('/')),
                 AuthConfig::Dev { .. } => None,
             };
             if primary == Some(issuer) || seen.contains(&issuer) {
@@ -416,15 +505,52 @@ impl HubConfig {
         Ok(())
     }
 
-    /// Whether this subject is the hub's configured owner.
+    /// Whether this subject is the hub's owner.
     pub fn is_owner(&self, subject: &str) -> bool {
-        self.owner.as_deref() == Some(subject)
+        self.owner_id() == Some(subject)
+    }
+
+    /// The hub's owner: the configured one, or the one its accounts store names.
+    pub fn owner_id(&self) -> Option<&str> {
+        self.owner_cell.get().map(String::as_str)
+    }
+
+    /// The owner as every holder of this config sees it, for stores built from it.
+    pub(crate) fn owner_handle(&self) -> Arc<OnceLock<String>> {
+        self.owner_cell.clone()
+    }
+
+    /// Take the owner the accounts store names, for every holder of this config at once.
+    /// There is only ever one: a different id than the one already known is refused.
+    pub fn learn_owner(&self, id: &str) -> Result<(), String> {
+        let known = self.owner_cell.get_or_init(|| id.to_string());
+        if known == id {
+            Ok(())
+        } else {
+            Err(format!(
+                "the hub's owner is {known}, but its accounts name {id}"
+            ))
+        }
+    }
+
+    /// Whether people sign in with the hub's own accounts (`auth.mode hub`).
+    pub fn has_accounts(&self) -> bool {
+        matches!(self.auth, AuthConfig::Hub { .. })
+    }
+
+    /// The passkeys' relying party, in hub mode: `auth.rp_id`, or the hub's own host.
+    pub fn rp_id(&self) -> Option<String> {
+        match &self.auth {
+            AuthConfig::Hub { rp_id: Some(rp_id), .. } => Some(rp_id.clone()),
+            AuthConfig::Hub { rp_id: None, .. } => url_host(&self.public_url),
+            _ => None,
+        }
     }
 
     /// The people who decide approvals on `project`: the owner and every grant that is
     /// marked human and names the board.
     pub fn people_for_board(&self, project: &str) -> Vec<String> {
-        let mut people: Vec<String> = self.owner.iter().cloned().collect();
+        let mut people: Vec<String> = self.owner_id().map(str::to_string).into_iter().collect();
         for grant in &self.grants {
             if grant.human
                 && grant.boards.iter().any(|b| b == project)
@@ -501,6 +627,59 @@ pub(crate) fn valid_subject(subject: &str) -> Result<(), String> {
     Ok(())
 }
 
+impl NomenRef<'_> {
+    /// The checks `auth.mode nomen` has always made, for its fields under `prefix`.
+    fn check(&self, prefix: &str) -> Result<(), String> {
+        if !self.issuer.starts_with("https://") && !loopback_http(self.issuer) {
+            return Err(format!(
+                "{prefix}.issuer must be an https URL (plain http only on this machine's loopback, for tests)"
+            ));
+        }
+        if self.audiences.is_empty() || self.audiences.iter().any(|a| a.trim().is_empty()) {
+            return Err(format!(
+                "{prefix}.audiences must name at least one Nomen project id"
+            ));
+        }
+        if self.clients.is_empty() || self.clients.iter().any(|c| c.trim().is_empty()) {
+            return Err(format!(
+                "{prefix}.clients must name the Nomen applications whose sign-ins the hub accepts"
+            ));
+        }
+        if !Path::new(self.key_file).is_absolute() {
+            return Err(format!("{prefix}.key_file must be an absolute path"));
+        }
+        Ok(())
+    }
+}
+
+/// The host of an absolute URL, lowercased, without port or brackets.
+pub(crate) fn url_host(url: &str) -> Option<String> {
+    let uri = url.parse::<http::Uri>().ok()?;
+    let host = uri.host()?.trim_start_matches('[').trim_end_matches(']');
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+/// A passkey relying party is the hub's host or a parent domain of it (WebAuthn §5.1.3):
+/// lowercase DNS labels, and never a bare top-level domain.
+fn check_rp_id(rp_id: &str, host: &str) -> Result<(), String> {
+    let well_formed = !rp_id.is_empty()
+        && rp_id.len() <= 253
+        && !rp_id.starts_with('.')
+        && !rp_id.ends_with('.')
+        && !rp_id.contains("..")
+        && rp_id
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'.');
+    let covers = host == rp_id || host.ends_with(&format!(".{rp_id}"));
+    if well_formed && covers && (rp_id.contains('.') || rp_id == host) {
+        Ok(())
+    } else {
+        Err(format!(
+            "auth.rp_id {rp_id:?} must be the hub's host {host} or a parent domain of it, in lowercase"
+        ))
+    }
+}
+
 /// `http://` to this machine's loopback only, where no network carries the traffic.
 fn loopback_http(url: &str) -> bool {
     let Ok(uri) = url.parse::<http::Uri>() else {
@@ -523,6 +702,9 @@ pub(crate) fn valid_name(name: &str) -> bool {
             .iter()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || *b == b'-')
 }
+
+#[cfg(test)]
+mod hub_tests;
 
 #[cfg(test)]
 mod tests {

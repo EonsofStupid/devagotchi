@@ -51,7 +51,7 @@ use crate::{
     link::Links,
 };
 
-pub const USAGE: &str = "Usage:\n  devagotchi hub serve --state-dir ABS_PATH --config ABS_JSON\n  devagotchi hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi hub devices --state-dir ABS_PATH\n  devagotchi hub connect-nomen --state-dir ABS_PATH --config ABS_JSON --client-id ID --project ID [--issuer URL]\n  devagotchi board <command> …            the agents' board in this project (board --help)\n\nserve starts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\nrun and operation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' `devagotchi link` connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.\n\nconnect-nomen joins this hub to a Nomen with its owner's approval: it shows a code to confirm\non any device through the devagotchi-cli app (--client-id) of the Devagotchi project (--project),\nthen adds the hub's own apps to that project (the key Nomen makes is written to the state\ndirectory, owner-only, and nowhere else), sets auth, owner and web in the config, and keeps a\ncopy of the old one. Issuer: https://id.shippin.cloud unless --issuer.";
+pub const USAGE: &str = "Usage:\n  devagotchi hub serve --state-dir ABS_PATH --config ABS_JSON\n  devagotchi hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi hub devices --state-dir ABS_PATH\n  devagotchi hub owner --state-dir ABS_PATH --config ABS_JSON [--name NAME] [--replace]\n  devagotchi hub connect-nomen --state-dir ABS_PATH --config ABS_JSON --client-id ID --project ID [--issuer URL]\n  devagotchi board <command> …            the agents' board in this project (board --help)\n\nserve starts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\nrun and operation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' `devagotchi link` connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.\n\nowner (auth.mode hub) prints a one-time link (15 minutes) that makes the owner's passkey:\nthe first time it makes the owner's account, with the config's owner id if it names one;\nagain, it adds a passkey to the owner and ends the owner's other sessions; with --replace the\nlink also removes every other passkey of the owner (to take the account back).\n\nconnect-nomen joins this hub to a Nomen with its owner's approval: it shows a code to confirm\non any device through the devagotchi-cli app (--client-id) of the Devagotchi project (--project),\nthen adds the hub's own apps to that project (the key Nomen makes is written to the state\ndirectory, owner-only, and nowhere else), sets auth, owner and web in the config, and keeps a\ncopy of the old one. Issuer: https://id.shippin.cloud unless --issuer.";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
@@ -60,6 +60,13 @@ enum Command {
     Enroll { state: PathBuf, device: String },
     Revoke { state: PathBuf, device: String },
     Devices { state: PathBuf },
+    Owner {
+        state: PathBuf,
+        config: PathBuf,
+        name: Option<String>,
+        /// The link removes every other passkey of the owner when used.
+        replace: bool,
+    },
     ConnectNomen(connect::Connect),
 }
 
@@ -67,8 +74,10 @@ enum Command {
 struct AppState {
     verifier: Arc<Verifier>,
     hub: Hub,
-    /// Browser sign-in, when the config has a `web` section.
+    /// Browser sign-in through Nomen, when the config has a `web` section.
     web: Option<Arc<web::WebLogin>>,
+    /// Browser sign-in with the hub's own accounts and passkeys (`auth.mode hub`).
+    passkeys: Option<Arc<web::HubSignIn>>,
 }
 
 fn parse_args(args: impl IntoIterator<Item = OsString>) -> BridgeResult<Command> {
@@ -82,6 +91,9 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> BridgeResult<Command>
     }
     if args.first().is_some_and(|a| a == "connect-nomen") {
         return parse_connect(args.split_off(1));
+    }
+    if args.first().is_some_and(|a| a == "owner") {
+        return parse_owner(args.split_off(1));
     }
     let verb = match args.first().and_then(|a| a.to_str()) {
         Some(v @ ("enroll" | "revoke" | "devices")) => {
@@ -158,6 +170,53 @@ fn parse_connect(args: Vec<OsString>) -> BridgeResult<Command> {
             "connect-nomen needs --state-dir ABS_PATH --config ABS_JSON --client-id ID --project ID",
         )),
     }
+}
+
+fn parse_owner(args: Vec<OsString>) -> BridgeResult<Command> {
+    let (mut state, mut config, mut name) = (None, None, None);
+    let mut replace = false;
+    let mut iter = args.into_iter();
+    while let Some(flag) = iter.next() {
+        if flag == "--replace" && !replace {
+            replace = true;
+            continue;
+        }
+        let value = iter
+            .next()
+            .ok_or_else(|| BridgeError::new("invalid_cli", "flag without a value"))?;
+        match flag.to_str() {
+            Some("--state-dir") if state.is_none() => state = Some(PathBuf::from(value)),
+            Some("--config") if config.is_none() => config = Some(PathBuf::from(value)),
+            Some("--name") if name.is_none() => name = Some(value.to_string_lossy().into_owned()),
+            _ => return Err(BridgeError::new("invalid_cli", "unexpected flag")),
+        }
+    }
+    match (state, config) {
+        (Some(state), Some(config)) if state.is_absolute() && config.is_absolute() => {
+            Ok(Command::Owner {
+                state,
+                config,
+                name,
+                replace,
+            })
+        }
+        _ => Err(BridgeError::new(
+            "invalid_cli",
+            "owner needs --state-dir ABS_PATH --config ABS_JSON",
+        )),
+    }
+}
+
+fn read_config(path: &std::path::Path) -> BridgeResult<HubConfig> {
+    let text = std::fs::read_to_string(path).map_err(|error| {
+        BridgeError::new("invalid_config", format!("{}: {error}", path.display()))
+    })?;
+    HubConfig::parse(&text)
+}
+
+fn accounts_at(state_dir: &std::path::Path) -> BridgeResult<accounts::Accounts> {
+    prepare_state_dir(state_dir)?;
+    accounts::Accounts::open(&state_dir.join("accounts.sqlite3"))
 }
 
 fn prepare_state_dir(state_dir: &std::path::Path) -> BridgeResult<()> {
@@ -246,6 +305,45 @@ fn manage(command: Command) -> BridgeResult<()> {
                 serde_json::to_string_pretty(&list).unwrap_or_default()
             );
         }
+        Command::Owner {
+            state,
+            config,
+            name,
+            replace,
+        } => {
+            let config = read_config(&config)?;
+            if !config.has_accounts() {
+                return Err(BridgeError::new(
+                    "invalid_cli",
+                    "owner is for a hub with its own accounts (auth.mode hub)",
+                ));
+            }
+            let accounts = accounts_at(&state)?;
+            let owner = accounts.ensure_owner(
+                config.owner_id(),
+                name.as_deref().unwrap_or("Owner"),
+                link::random::<16>(),
+            )?;
+            let token = if replace {
+                accounts.issue_replacing_link(accounts::LinkPurpose::Owner, &owner.id)?
+            } else {
+                accounts.issue_link(accounts::LinkPurpose::Owner, &owner.id)?
+            };
+            // The link itself is never audited or logged; only that one was issued.
+            operator_event(&state, "account.owner_link", &owner.id, "ok")?;
+            // The link is the one secret this prints; it goes to stdout only, once.
+            println!("{}/owner#{token}", config.public_url.trim_end_matches('/'));
+            eprintln!(
+                "One-time link for the owner ({}), valid {} minutes; any earlier unused one no longer works.\nOpen it on the phone or computer that will hold your passkey. Using it ends the owner's other sessions{}.",
+                owner.id,
+                accounts::LINK_TTL_SECS / 60,
+                if replace {
+                    " and removes every other passkey of the owner"
+                } else {
+                    " (add --replace to also remove the owner's other passkeys)"
+                }
+            );
+        }
         Command::ConnectNomen(connect) => {
             prepare_state_dir(&connect.state)?;
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -320,22 +418,29 @@ pub fn board_cli(args: Vec<OsString>, account_file: Option<PathBuf>) -> ExitCode
 }
 
 async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
-    let text = std::fs::read_to_string(&config_path).map_err(|error| {
-        BridgeError::new(
-            "invalid_config",
-            format!("{}: {error}", config_path.display()),
-        )
-    })?;
-    let config = Arc::new(HubConfig::parse(&text)?);
+    let config = Arc::new(read_config(&config_path)?);
     let devices = Arc::new(devices_at(&state_dir)?);
     let audit = Arc::new(Audit::open(&state_dir.join("audit.sqlite3"))?);
-    let push = match &config.web {
-        Some(_) => Some(Arc::new(push::Push::open(
+    // A hub with its own accounts knows its owner from them, and refuses to start when its
+    // config names someone else.
+    let passkeys = if config.has_accounts() {
+        let accounts = Arc::new(accounts_at(&state_dir)?);
+        if let Some(owner) = accounts.owner()? {
+            config
+                .learn_owner(&owner.id)
+                .map_err(|why| BridgeError::new("invalid_config", why))?;
+        }
+        web::HubSignIn::new(config.clone(), accounts).map(Arc::new)
+    } else {
+        None
+    };
+    let push = match (&config.web, &passkeys) {
+        (None, None) => None,
+        _ => Some(Arc::new(push::Push::open(
             &state_dir,
             &config.public_url,
             devices.clone(),
         )?)),
-        None => None,
     };
     let links = Arc::new(
         Links::new(config.clone(), devices.clone(), audit.clone()).notifying(push.clone()),
@@ -396,6 +501,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             boards,
         },
         web,
+        passkeys,
     };
 
     let app = app(state.clone());
@@ -404,13 +510,25 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         .await
         .map_err(|error| BridgeError::new("listen", format!("{listen}: {error}")))?;
     // Everything worth reading at start comes before the ready line callers wait for.
-    if let Some(owner) = &config.owner {
+    if let Some(owner) = config.owner_id() {
         eprintln!("devagotchi hub owner: {owner} reaches every broker");
     }
-    if state.web.is_some() {
+    if state.web.is_some() || state.passkeys.is_some() {
         eprintln!(
             "devagotchi hub web sign-in: {}/account",
             config.public_url.trim_end_matches('/')
+        );
+    }
+    if state.passkeys.is_some() && !config.public_url.starts_with("https://") {
+        eprintln!(
+            "devagotchi hub: signing people in over plain http on loopback, for tests only: its cookies reach any other service on this host's loopback"
+        );
+    }
+    if state.passkeys.is_some() && config.owner_id().is_none() {
+        eprintln!(
+            "devagotchi hub has no owner yet: on this host, run devagotchi hub owner --state-dir {} --config {}",
+            state_dir.display(),
+            config_path.display()
         );
     }
     eprintln!(
@@ -420,6 +538,10 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             config::AuthConfig::Nomen { issuer, .. } => format!("nomen {issuer}"),
             config::AuthConfig::Oidc { issuer, .. } => format!("oidc {issuer}"),
             config::AuthConfig::Dev { .. } => "dev tokens".to_string(),
+            config::AuthConfig::Hub { .. } => match config.auth.nomen() {
+                Some(nomen) => format!("hub accounts, and nomen {}", nomen.issuer),
+                None => "hub accounts".to_string(),
+            },
         }
     );
     axum::serve(
@@ -493,11 +615,12 @@ async fn require_bearer(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let scope = match &state.hub.config.auth {
-        config::AuthConfig::Nomen { audiences, .. } => {
-            format!(", scope=\"{}\"", crate::auth::sign_in_scopes(audiences))
-        }
-        _ => String::new(),
+    let scope = match state.hub.config.auth.nomen() {
+        Some(nomen) => format!(
+            ", scope=\"{}\"",
+            crate::auth::sign_in_scopes(nomen.audiences)
+        ),
+        None => String::new(),
     };
     let metadata = format!(
         "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"{scope}",
@@ -622,8 +745,8 @@ async fn protected_resource(State(state): State<AppState>) -> Response {
     });
     // MCP clients ask for exactly these (RFC 9728 `scopes_supported`), so the account's org
     // reaches the hub with every call.
-    if let config::AuthConfig::Nomen { audiences, .. } = &state.hub.config.auth {
-        body["scopes_supported"] = crate::auth::sign_in_scopes(audiences)
+    if let Some(nomen) = state.hub.config.auth.nomen() {
+        body["scopes_supported"] = crate::auth::sign_in_scopes(nomen.audiences)
             .split(' ')
             .collect::<Vec<_>>()
             .into();
@@ -765,6 +888,91 @@ mod tests {
             parse_args(["revoke", "--state-dir", STATE, "--config", CONFIG].map(OsString::from))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn owner_takes_a_state_dir_a_config_and_maybe_a_name() {
+        let owner = |extra: &[&str]| {
+            let mut args = vec!["owner", "--state-dir", STATE, "--config", CONFIG];
+            args.extend_from_slice(extra);
+            parse_args(args.into_iter().map(OsString::from))
+        };
+        assert_eq!(
+            owner(&[]).unwrap(),
+            Command::Owner {
+                state: STATE.into(),
+                config: CONFIG.into(),
+                name: None,
+                replace: false
+            }
+        );
+        assert!(matches!(
+            owner(&["--name", "Jesse"]).unwrap(),
+            Command::Owner { name: Some(n), .. } if n == "Jesse"
+        ));
+        assert!(matches!(
+            owner(&["--replace"]).unwrap(),
+            Command::Owner { replace: true, .. }
+        ));
+        assert!(owner(&["--replace", "--replace"]).is_err());
+        assert!(owner(&["--device", "x"]).is_err());
+        assert!(
+            parse_args(["owner", "--state-dir", STATE].map(OsString::from)).is_err(),
+            "the config says where the link points"
+        );
+    }
+
+    #[test]
+    fn the_owner_command_makes_the_owner_once_and_only_in_hub_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = dir.path().join("state");
+        let config = dir.path().join("hub.json");
+        let write = |auth: serde_json::Value, owner: Option<&str>| {
+            let mut value = serde_json::json!({
+                "listen": "127.0.0.1:1",
+                "public_url": "http://127.0.0.1:8787",
+                "auth": auth,
+                "brokers": [],
+                "grants": []
+            });
+            if let Some(owner) = owner {
+                value["owner"] = owner.into();
+            }
+            std::fs::write(&config, value.to_string()).unwrap();
+        };
+        let run = |name: Option<&str>| {
+            manage(Command::Owner {
+                state: state.clone(),
+                config: config.clone(),
+                name: name.map(str::to_string),
+                replace: false,
+            })
+        };
+        let tokens = dir.path().join("tokens.json");
+        std::fs::write(&tokens, "{}").unwrap();
+        write(
+            serde_json::json!({ "mode": "dev", "tokens_file": tokens }),
+            None,
+        );
+        assert_eq!(run(None).unwrap_err().code, "invalid_cli");
+
+        // The Texas case: the config's owner id becomes the owner's account.
+        write(serde_json::json!({ "mode": "hub" }), Some("395290028818825218"));
+        run(Some("Jesse")).unwrap();
+        run(None).unwrap();
+        let accounts = accounts::Accounts::open(&state.join("accounts.sqlite3")).unwrap();
+        let owner = accounts.owner().unwrap().unwrap();
+        assert_eq!((owner.id.as_str(), owner.name.as_str()), ("395290028818825218", "Jesse"));
+        // Each run is on the audit chain, without the link.
+        let audit = Audit::open(&state.join("audit.sqlite3")).unwrap();
+        assert!(audit.verify().unwrap().ok);
+
+        // A config naming someone else than the hub's owner is refused.
+        write(
+            serde_json::json!({ "mode": "hub" }),
+            Some("acct_aaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        );
+        assert_eq!(run(None).unwrap_err().code, "owner_mismatch");
     }
 
     #[test]

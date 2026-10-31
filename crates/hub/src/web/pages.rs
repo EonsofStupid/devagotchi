@@ -1,5 +1,6 @@
-//! The hub's few HTML pages: no script, one stylesheet from the hub itself, every value
-//! escaped. A strict Content-Security-Policy backs that up.
+//! The hub's few HTML pages: one stylesheet from the hub itself, every value escaped, and
+//! script only where a page needs it (push on the approvals page, passkeys on sign-in),
+//! always the hub's own file. A strict Content-Security-Policy backs that up.
 
 use axum::{
     http::{HeaderValue, StatusCode, header},
@@ -43,24 +44,40 @@ pub struct Viewer<'a> {
     pub subject: &'a str,
     pub name: Option<&'a str>,
     pub owner: bool,
+    /// Signed in with the hub's own account (a passkey), not through Shippin.
+    pub hub_account: bool,
 }
 
 pub fn html(status: StatusCode, title: &str, body: &str) -> Response {
-    render(status, title, body, false)
+    render(status, title, body, Kind::Plain)
 }
 
 /// A page that is also the installable app: the manifest, the icon and the hub's one
 /// script (`/assets/push.js`) may load, from this origin only.
 pub fn app(status: StatusCode, title: &str, body: &str) -> Response {
-    render(status, title, body, true)
+    render(status, title, body, Kind::App)
 }
 
-fn render(status: StatusCode, title: &str, body: &str, app: bool) -> Response {
-    let head = if app {
-        "<link rel=\"manifest\" href=\"/manifest.webmanifest\"><link rel=\"icon\" href=\"/assets/icon.svg\">\
+/// A page that runs one of the hub's own scripts (`/assets/passkey.js`), loaded from this
+/// origin and talking only to it.
+pub fn scripted(status: StatusCode, title: &str, body: &str, script: &'static str) -> Response {
+    render(status, title, body, Kind::Script(script))
+}
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Plain,
+    App,
+    Script(&'static str),
+}
+
+fn render(status: StatusCode, title: &str, body: &str, kind: Kind) -> Response {
+    let head = match kind {
+        Kind::Plain => String::new(),
+        Kind::App => "<link rel=\"manifest\" href=\"/manifest.webmanifest\"><link rel=\"icon\" href=\"/assets/icon.svg\">\
 <meta name=\"theme-color\" content=\"#2f6b4f\"><script src=\"/assets/push.js\" defer></script>"
-    } else {
-        ""
+            .to_string(),
+        Kind::Script(script) => format!("<script src=\"{script}\" defer></script>"),
     };
     let page = format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
@@ -81,11 +98,18 @@ fn render(status: StatusCode, title: &str, body: &str, app: bool) -> Response {
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(if app {
-            "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; worker-src 'self'; \
+        HeaderValue::from_static(match kind {
+            Kind::App => {
+                "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; worker-src 'self'; \
 manifest-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
-        } else {
-            "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+            }
+            Kind::Script(_) => {
+                "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; \
+form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+            }
+            Kind::Plain => {
+                "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+            }
         }),
     );
     headers.insert(
@@ -123,15 +147,22 @@ pub fn message(
 }
 
 /// `/` for someone not signed in: what this is, and one way in.
-pub fn home() -> Response {
+pub fn home(hub_accounts: bool) -> Response {
+    let way_in = if hub_accounts {
+        "<p><a class=\"button primary\" href=\"/auth/login?return_to=/account\">Sign in</a></p>\
+<p class=\"meta\">You sign in with a passkey. <a href=\"/docs\">How it works</a></p>"
+    } else {
+        "<p><a class=\"button primary\" href=\"/auth/login?return_to=/account\">Sign in with Shippin</a></p>\
+<p class=\"meta\">A Shippin account is free. <a href=\"/docs\">How it works</a></p>"
+    };
     html(
         StatusCode::OK,
         "Your AI, on your machines",
-        "<h1>Your AI, on your machines</h1>\
+        &format!(
+            "<h1>Your AI, on your machines</h1>\
 <p>Devagotchi lets Claude, Codex and your other AIs work on your own servers and PCs, and asks \
-you on your phone before anything that needs your say.</p>\
-<p><a class=\"button primary\" href=\"/auth/login?return_to=/account\">Sign in with Shippin</a></p>\
-<p class=\"meta\">A Shippin account is free. <a href=\"/docs\">How it works</a></p>",
+you on your phone before anything that needs your say.</p>{way_in}"
+        ),
     )
 }
 
@@ -184,11 +215,16 @@ autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"
 <p class=\"actions\"><button class=\"approve\" type=\"submit\">Get a one-time code</button></p></form>";
     let body = format!(
         "<h1>Signed in as {}</h1>\
-<p class=\"meta\">Shippin account ID <code>{}</code></p>{owner}\
+<p class=\"meta\">{kind} ID <code>{}</code></p>{owner}\
 <h2>Your machines</h2>{machines}{add}\
 <form method=\"post\" action=\"/auth/logout\"><button type=\"submit\">Sign out</button></form>",
         escape(shown),
         escape(viewer.subject),
+        kind = if viewer.hub_account {
+            "Account"
+        } else {
+            "Shippin account"
+        },
     );
     html(StatusCode::OK, "Your account", &body)
 }

@@ -7,11 +7,11 @@
 //! then its challenge is recorded as spent, in the same transaction as what it did, until
 //! it would have expired anyway. A flood of unanswered sign-ins fills nothing.
 //!
-//! Increment 32a-1 is the store and the passkey verifier on their own; the sign-in pages
-//! that call them come in 32a-2, so until then only the tests do (hence the allow below).
-#![allow(dead_code)]
+//! The hub's pages use it in `web/passkeys.rs`; `devagotchi hub owner` makes the owner and
+//! the one-time link.
 
 pub mod passkey;
+pub mod sessions;
 
 use std::{path::Path, sync::Mutex};
 
@@ -102,6 +102,7 @@ impl Ceremony {
 /// What lets a passkey be added to an account: a live one-time link for it. (A signed-in
 /// session of the account joins this with the account page.)
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // the account page (32a-3) adds passkeys on a session's authority
 pub enum Authority<'a> {
     Link(LinkPurpose, &'a str),
 }
@@ -212,7 +213,8 @@ impl Accounts {
                    purpose TEXT NOT NULL,
                    account TEXT NOT NULL REFERENCES accounts (id),
                    expires_at INTEGER NOT NULL,
-                   used_at INTEGER
+                   used_at INTEGER,
+                   replaces INTEGER NOT NULL DEFAULT 0
                  );
                  CREATE TABLE IF NOT EXISTS secrets (
                    name TEXT PRIMARY KEY,
@@ -232,7 +234,16 @@ impl Accounts {
                    backup_eligible INTEGER NOT NULL,
                    created_at INTEGER NOT NULL,
                    last_used_at INTEGER
-                 );",
+                 );
+                 CREATE TABLE IF NOT EXISTS sessions (
+                   hash TEXT PRIMARY KEY,
+                   account TEXT NOT NULL REFERENCES accounts (id),
+                   passkey BLOB REFERENCES passkeys (id) ON DELETE CASCADE,
+                   created_at INTEGER NOT NULL,
+                   last_seen INTEGER NOT NULL,
+                   expires_at INTEGER NOT NULL
+                 );
+                 CREATE INDEX IF NOT EXISTS sessions_by_account ON sessions (account);",
             )
             .map_err(store_error)?;
         connection
@@ -309,6 +320,33 @@ impl Accounts {
         })
     }
 
+    /// The hub's owner, made if there is none yet. `configured` is the config's `owner`, a
+    /// subject from an earlier identity provider: the owner keeps it as the account id, so
+    /// every board, machine and audit row keyed by it stays theirs. Without one, a new id.
+    pub fn ensure_owner(
+        &self,
+        configured: Option<&str>,
+        name: &str,
+        random: [u8; 16],
+    ) -> BridgeResult<Account> {
+        if let Some(owner) = self.owner()? {
+            return match configured {
+                Some(id) if id != owner.id => Err(BridgeError::new(
+                    "owner_mismatch",
+                    format!(
+                        "this hub's owner account is {}, not the config's owner {id}",
+                        owner.id
+                    ),
+                )),
+                _ => Ok(owner),
+            };
+        }
+        let id = configured
+            .map(str::to_string)
+            .unwrap_or_else(|| new_account_id(random));
+        self.create(&id, name, true)
+    }
+
     pub fn get(&self, id: &str) -> BridgeResult<Option<Account>> {
         self.connection
             .lock()
@@ -342,12 +380,40 @@ impl Accounts {
         self.issue_link_at(purpose, account, crate::link::random::<32>(), now_secs())
     }
 
+    /// Issue a one-time link for `account` whose use also removes every other passkey of the
+    /// account (and so every session they opened): how its holder takes it back from a
+    /// passkey someone else made with a leaked link (`devagotchi hub owner --replace`).
+    pub fn issue_replacing_link(
+        &self,
+        purpose: LinkPurpose,
+        account: &str,
+    ) -> BridgeResult<String> {
+        self.issue(
+            purpose,
+            account,
+            crate::link::random::<32>(),
+            now_secs(),
+            true,
+        )
+    }
+
     fn issue_link_at(
         &self,
         purpose: LinkPurpose,
         account: &str,
         random: [u8; 32],
         now: u64,
+    ) -> BridgeResult<String> {
+        self.issue(purpose, account, random, now, false)
+    }
+
+    fn issue(
+        &self,
+        purpose: LinkPurpose,
+        account: &str,
+        random: [u8; 32],
+        now: u64,
+        replaces: bool,
     ) -> BridgeResult<String> {
         let token = format!("dgl_{}", URL_SAFE_NO_PAD.encode(random));
         let mut connection = self.connection.lock().expect("accounts");
@@ -377,12 +443,30 @@ impl Accounts {
             .map_err(store_error)?;
         transaction
             .execute(
-                "INSERT INTO links (hash, purpose, account, expires_at) VALUES (?1, ?2, ?3, ?4)",
-                params![hash(&token), purpose.as_str(), account, now + LINK_TTL_SECS],
+                "INSERT INTO links (hash, purpose, account, expires_at, replaces)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    hash(&token),
+                    purpose.as_str(),
+                    account,
+                    now + LINK_TTL_SECS,
+                    i64::from(replaces)
+                ],
             )
             .map_err(store_error)?;
         transaction.commit().map_err(store_error)?;
         Ok(token)
+    }
+
+    /// The account a link is for, and whether using it replaces the account's other
+    /// passkeys, when it is unused and unexpired. Checking does not spend it.
+    pub fn check_link_replacing(
+        &self,
+        purpose: LinkPurpose,
+        token: &str,
+    ) -> BridgeResult<(String, bool)> {
+        let connection = self.connection.lock().expect("accounts");
+        live_link(&connection, purpose, token, now_secs()).map(|live| (live.account, live.replaces))
     }
 
     /// The account a link is for, when it is unused and unexpired. Checking does not
@@ -398,7 +482,7 @@ impl Accounts {
         now: u64,
     ) -> BridgeResult<String> {
         let connection = self.connection.lock().expect("accounts");
-        live_link(&connection, purpose, token, now)
+        live_link(&connection, purpose, token, now).map(|live| live.account)
     }
 
     /// Store a passkey for `account`, as `verify_registration` returned it, on the
@@ -406,6 +490,7 @@ impl Accounts {
     /// this hub made to register a passkey on this account. The challenge and the link are
     /// spent in the same transaction as the passkey is stored: all of it happens or none
     /// does.
+    #[allow(dead_code)] // the account page (32a-3)
     pub fn add_passkey(
         &self,
         account: &str,
@@ -432,6 +517,22 @@ impl Accounts {
         link: Option<(LinkPurpose, &str)>,
         now: u64,
     ) -> BridgeResult<()> {
+        self.put_passkey(account, credential, label, link, now, None)
+            .map(|_| ())
+    }
+
+    /// Store a passkey and, with `session`, open the session it signs in to, in the same
+    /// transaction as everything else: the link spent and the passkey stored together with
+    /// the session, or none of it.
+    pub(super) fn put_passkey(
+        &self,
+        account: &str,
+        credential: &NewCredential,
+        label: &str,
+        link: Option<(LinkPurpose, &str)>,
+        now: u64,
+        session: Option<[u8; 32]>,
+    ) -> BridgeResult<Option<String>> {
         let label = label.trim();
         if label.is_empty() || label.len() > 64 || label.chars().any(char::is_control) {
             return Err(BridgeError::new(
@@ -467,17 +568,30 @@ impl Accounts {
             return Err(account_disabled(account));
         }
         if let Some((purpose, token)) = link {
-            if live_link(&transaction, purpose, token, now)? != account {
+            let live = live_link(&transaction, purpose, token, now)?;
+            if live.account != account {
                 return Err(BridgeError::new(
                     "invalid_link",
                     "this link is for another account",
                 ));
+            }
+            // A replacing link takes the account back: every other passkey goes, and with
+            // them every session they opened.
+            if live.replaces {
+                transaction
+                    .execute("DELETE FROM passkeys WHERE account = ?1", params![account])
+                    .map_err(store_error)?;
             }
             transaction
                 .execute(
                     "UPDATE links SET used_at = ?1 WHERE hash = ?2",
                     params![now, hash(token)],
                 )
+                .map_err(store_error)?;
+            // A link spent ends the account's other sessions: whoever had them, the passkey
+            // registered now is how the account signs in from here.
+            transaction
+                .execute("DELETE FROM sessions WHERE account = ?1", params![account])
                 .map_err(store_error)?;
         }
         let taken = transaction
@@ -511,7 +625,18 @@ impl Accounts {
                 ],
             )
             .map_err(store_error)?;
-        transaction.commit().map_err(store_error)
+        let token = match session {
+            Some(random) => Some(sessions::insert_session(
+                &transaction,
+                account,
+                Some(&credential.id),
+                random,
+                now,
+            )?),
+            None => None,
+        };
+        transaction.commit().map_err(store_error)?;
+        Ok(token)
     }
 
     /// A challenge for one ceremony: to register a passkey on `account`, or to sign in
@@ -692,6 +817,16 @@ impl Accounts {
         // Authenticators that keep no counter (most synced passkeys) report 0 every time.
         let count = asserted.sign_count;
         if (count != 0 || passkey.sign_count != 0) && count <= passkey.sign_count {
+            // A copy of the key is about: whoever holds the sessions this passkey opened
+            // may be the copy's holder, so they end. The challenge stays spent, so the same
+            // answer cannot do it again.
+            transaction
+                .execute(
+                    "DELETE FROM sessions WHERE passkey = ?1",
+                    params![asserted.id],
+                )
+                .map_err(store_error)?;
+            transaction.commit().map_err(store_error)?;
             return Err(BridgeError::new(
                 "signature_counter",
                 "this passkey's counter went backwards: it may have been copied",
@@ -709,6 +844,7 @@ impl Accounts {
 
     /// Remove one of `account`'s passkeys; false when it has no such passkey. Its last one
     /// stays: removing it would lock the account out.
+    #[allow(dead_code)] // the account page (32a-3)
     pub fn remove_passkey(&self, account: &str, id: &[u8]) -> BridgeResult<bool> {
         let mut connection = self.connection.lock().expect("accounts");
         let transaction = connection
@@ -878,23 +1014,33 @@ fn make_private(path: &Path) -> BridgeResult<()> {
     Ok(())
 }
 
+/// A link that is unused and unexpired: the account it is for, and whether using it
+/// replaces the account's other passkeys.
+struct LiveLink {
+    account: String,
+    replaces: bool,
+}
+
 fn live_link(
     connection: &Connection,
     purpose: LinkPurpose,
     token: &str,
     now: u64,
-) -> BridgeResult<String> {
+) -> BridgeResult<LiveLink> {
     let invalid = || BridgeError::new("invalid_link", "this link is used, expired or unknown");
-    let row: Option<(String, u64, Option<u64>)> = connection
+    let row: Option<(String, u64, Option<u64>, i64)> = connection
         .query_row(
-            "SELECT account, expires_at, used_at FROM links WHERE hash = ?1 AND purpose = ?2",
+            "SELECT account, expires_at, used_at, replaces FROM links WHERE hash = ?1 AND purpose = ?2",
             params![hash(token), purpose.as_str()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional()
         .map_err(store_error)?;
     match row {
-        Some((account, expires_at, None)) if now < expires_at => Ok(account),
+        Some((account, expires_at, None, replaces)) if now < expires_at => Ok(LiveLink {
+            account,
+            replaces: replaces == 1,
+        }),
         _ => Err(invalid()),
     }
 }

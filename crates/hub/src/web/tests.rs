@@ -228,6 +228,7 @@ async fn world_with(downloads: Option<Arc<crate::downloads::Downloads>>) -> Worl
             links,
         },
         web: Some(Arc::new(web)),
+        passkeys: None,
     };
     let hub = state.hub.clone();
     let app = router()
@@ -707,6 +708,7 @@ async fn names_from_nomen_are_escaped_on_the_page() {
             subject: OWNER,
             name: Some("<img src=x onerror=alert(1)>"),
             owner: false,
+            hub_account: false,
         },
         &[],
     );

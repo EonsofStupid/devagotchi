@@ -677,3 +677,39 @@ fn a_second_process_uses_the_key_the_store_holds_now() {
     // And it takes up the new key for what it makes from here.
     assert_eq!(two.sign_in_at(&at(&two, 4, 1_810), 1_811).unwrap().id, A);
 }
+
+#[test]
+fn the_owner_is_made_once_and_keeps_a_configured_id() {
+    // Texas: the subject every board, machine and audit row is keyed by becomes the
+    // owner's account id, so nothing is rewritten.
+    let (_dir, accounts) = store();
+    let owner = accounts
+        .ensure_owner(Some("395290028818825218"), "Jesse", [1; 16])
+        .unwrap();
+    assert_eq!(
+        (owner.id.as_str(), owner.owner),
+        ("395290028818825218", true)
+    );
+    // Run again, with or without the config's id: the same owner.
+    for configured in [Some("395290028818825218"), None] {
+        assert_eq!(
+            accounts
+                .ensure_owner(configured, "Other", [2; 16])
+                .unwrap()
+                .id,
+            owner.id
+        );
+    }
+    assert_eq!(
+        accounts
+            .ensure_owner(Some(A), "Someone", [2; 16])
+            .unwrap_err()
+            .code,
+        "owner_mismatch"
+    );
+    // A fresh hub with no owner in its config: a new account id.
+    let (_fresh_dir, fresh) = store();
+    let made = fresh.ensure_owner(None, "Owner", [3; 16]).unwrap();
+    assert_eq!(made.id, new_account_id([3; 16]));
+    assert!(made.owner);
+}

@@ -98,12 +98,6 @@ pub struct NewCredential {
     pub(in crate::accounts) challenge: Vec<u8>,
 }
 
-impl NewCredential {
-    pub fn id(&self) -> &[u8] {
-        &self.id
-    }
-}
-
 /// A sign-in that passed every check, as `check_sign_in` returns it: which passkey, by its
 /// id and the key that verified the signature; the authenticator's counter and user
 /// handle; and the challenge the assertion answered. Only `check_sign_in` makes one outside
@@ -141,7 +135,6 @@ pub struct Stored<'a> {
     pub id: &'a [u8],
     pub public_key: &'a [u8],
     pub alg: Alg,
-    pub sign_count: u32,
     /// Whether the credential was backup eligible when it was registered.
     pub backup_eligible: bool,
 }
@@ -217,14 +210,15 @@ pub fn check_sign_in(
     assertion: Assertion<'_>,
     user_handle: Option<&[u8]>,
 ) -> Result<Asserted, Refusal> {
-    let sign_count = verify_assertion(
+    // The counter is left to the store, which compares it with what it holds now in the
+    // transaction that spends the challenge: a copy is dealt with only for a live challenge.
+    let sign_count = check_assertion(
         relying,
         challenge,
         Stored {
             id: &passkey.id,
             public_key: &passkey.public_key,
             alg: passkey.alg,
-            sign_count: passkey.sign_count,
             backup_eligible: passkey.backup_eligible,
         },
         assertion,
@@ -243,9 +237,9 @@ pub fn check_sign_in(
     })
 }
 
-/// Check an assertion made for `challenge` against the stored credential; returns the
-/// authenticator's new signature counter to store.
-pub(in crate::accounts) fn verify_assertion(
+/// Every check of an assertion but the counter's, which the store makes against what it
+/// holds now: returns the counter the authenticator reported.
+pub(in crate::accounts) fn check_assertion(
     relying: Relying<'_>,
     challenge: &[u8],
     stored: Stored<'_>,
@@ -272,13 +266,7 @@ pub(in crate::accounts) fn verify_assertion(
     signature::UnparsedPublicKey::new(stored.alg.verification(), stored.public_key)
         .verify(&message, assertion.signature)
         .map_err(|_| Refusal("signature"))?;
-    // A counter that does not move forward means the key was copied; authenticators that
-    // keep no counter (most synced passkeys) report 0 every time.
-    let count = sign_count(data);
-    if (count != 0 || stored.sign_count != 0) && count <= stored.sign_count {
-        return Err(Refusal("signature counter"));
-    }
-    Ok(count)
+    Ok(sign_count(data))
 }
 
 fn check_client_data(
@@ -345,5 +333,7 @@ struct ClientData {
     top_origin: Option<String>,
 }
 
+#[cfg(test)]
+pub(crate) mod soft;
 #[cfg(test)]
 mod tests;

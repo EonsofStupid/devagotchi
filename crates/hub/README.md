@@ -89,6 +89,7 @@ A linked broker that is not connected answers `broker_offline`; one that never e
 
 | Mode | Bearer token | Who it is for |
 |---|---|---|
+| `hub` | None yet (the hub issues its own to AI clients in 32b); with an optional `nomen` block, Nomen tokens as in `nomen` mode. People sign in on the hub's own pages with passkeys | Any hub that should work with nothing else deployed (D25), devagotchi.com included |
 | `nomen` | Any Nomen access token, opaque or JWT, checked by asking Nomen (introspection) as the hub's own API application | Shippin: your sign-in at console.shippin.cloud, relayed by mcp.shippin.cloud; `shippin-bridge` sessions |
 | `oidc` | A JWT from any OpenID Connect issuer: `iss`, `exp`, `aud`, `sub` required; RS256/384/512 or ES256/384; keys from the issuer's JWKS, refreshed on an unknown `kid` at most once a minute | Self-hosters whose identity provider issues JWT access tokens |
 | `dev` | A static token from a 0600 file `{ "<token>": "<subject>" }` | Tests only (plan D21): accepted when `public_url` is loopback http; a hub at an address people reach refuses to start with it |
@@ -96,6 +97,48 @@ A linked broker that is not connected answers `broker_offline`; one that never e
 Unauthenticated requests get `401` with `WWW-Authenticate: Bearer resource_metadata="<public_url>/.well-known/oauth-protected-resource"`;
 the metadata names the issuer. A bad token adds `error="invalid_token"`. When the identity
 provider cannot be reached the hub answers `503`, never `401`.
+
+## The hub's own accounts (`auth.mode hub`)
+
+```jsonc
+"auth": { "mode": "hub", "rp_id": "devagotchi.com" },   // rp_id: optional, the hub's host by default
+"owner": "395290028818825218"                           // optional: an earlier provider's subject to keep
+```
+
+The hub keeps its accounts in `accounts.sqlite3` (0600) in its state directory and signs
+people in itself with passkeys (WebAuthn, verified on `aws-lc-rs`; ES256, EdDSA and RS256;
+user verification on every ceremony). Nothing else needs to be running. `rp_id` is the
+passkeys' relying party: the hub's host or a parent domain of it, and it can never change
+for passkeys already made. Plain `http` works only on loopback, for tests.
+
+The owner is made on the hub's host, by whoever can write its state directory (the same
+trust as `hub enroll`):
+
+```bash
+devagotchi hub owner --state-dir DIR --config /etc/devagotchi/hub.json [--name Jesse]
+# https://app.devagotchi.com/owner#dgl_…   (stdout only, once; 15 minutes)
+```
+
+Open the link on the device that will hold the passkey and press **Make a passkey**; that
+signs you in. The first run makes the owner's account, with the config's `owner` as its id
+when it names one, so a hub that had a Nomen owner keeps every board, machine and audit row
+keyed by it. Run it again to add a passkey: using the new link ends the owner's other
+sessions. With `--replace`, using it also removes every other passkey of the owner: the way
+to take the account back if someone else used a leaked link first. The config the command
+reads must name the same owner as the hub's, or the link is refused before it is spent.
+After that, `/auth/login` signs in with the passkey. Sessions last 30 days unused and 90 at
+most, end when their passkey is removed, when a copy of it is seen (its counter going back),
+or when the account is disabled, and are kept only as hashes. Signing out takes the hub's
+own page.
+
+Until the hub issues its own tokens (32b), a hub with no `nomen` block takes no bearer token
+at `/mcp`, and refuses `trusted_issuers`. Plain `http` on loopback is for tests: its cookies
+reach any other service on the same host's loopback.
+
+Challenges are signed by the hub and stored only once used, so unanswered sign-ins cost the
+hub nothing; each also rides in a `__Host-` cookie, so another site cannot sign a browser in
+to an account of its choosing. The passkey pages run one script, the hub's own, under a
+strict Content-Security-Policy.
 
 ## Shippin sign-in (Nomen)
 
