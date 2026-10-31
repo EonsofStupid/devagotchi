@@ -125,6 +125,16 @@ if args.account:
         raise SystemExit("write_file, edit_file and read_file did not round-trip")
     if "local-tools.txt" not in [entry["path"] for entry in listing["entries"]]:
         raise SystemExit("list_directory did not list the written file")
+    # By lines, as Desktop Commander reads: a line from a number, then the last line.
+    numbered = os.path.join(args.cwd, "lines.txt")
+    call("write_file", {"path": numbered, "text": "alpha\nbeta\ngamma\n"})
+    middle = call("read_file", {"path": numbered, "start_line": 2, "line_count": 1})
+    last = call("read_file", {"path": numbered, "start_line": -1})
+    print("lines:", repr(middle.get("text")), middle.get("next_line"), repr(last.get("text")), last.get("start_line"))
+    if middle.get("text") != "beta\n" or middle.get("next_line") != 3 or middle.get("total_lines") != 3:
+        raise SystemExit("read_file by lines did not read line 2")
+    if last.get("text") != "gamma\n" or last.get("start_line") != 3:
+        raise SystemExit("read_file did not read the last line")
     # The rest of Desktop Commander's file tools: a directory, a move, info, several files.
     made = call("create_directory", {"path": os.path.join(args.cwd, "made", "deeper")})
     moved = call("move_file", {"source": path, "destination": os.path.join(args.cwd, "made", "moved.txt")})

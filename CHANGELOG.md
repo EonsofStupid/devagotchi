@@ -7,6 +7,16 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Read by lines (increment 34b-2)
+- `read_file` reads by lines, as Desktop Commander's does: `start_line` (1-based, or negative
+  for the last lines) and `line_count` (default 1000, at most 5000; never more than the page's
+  bytes). The answer says `start_line`, `next_line` and `total_lines` (exact for files up to
+  8 MiB, and for any file once its end is read). A line longer than the page goes on by bytes.
+  The broker finds the start by scanning in 64 KiB chunks, forward or backward, so memory stays
+  bounded for any file; a file that is not UTF-8 text is refused with `not_text`. Local server
+  and hub. Contracts: `FileReadInput.start_line`/`line_count`, `FileContent.start_line`/
+  `next_line`/`total_lines`; a broker from before this refuses them with `invalid_request`.
+
 ### The rest of Desktop Commander's file tools (increment 34b)
 - `read_multiple_files` (up to 20 files in one call, each answered or its error reported),
   `get_file_info` (kind, size, modified and created times, read-only, Unix mode, a link's
