@@ -1679,7 +1679,7 @@ where
     S: Clone + Send + Sync + 'static,
 {
     use axum::{
-        Json, Router,
+        Json,
         extract::{Form, Path, Query},
         response::IntoResponse,
         routing::{get, post},

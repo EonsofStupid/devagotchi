@@ -63,6 +63,9 @@ jobs:
         with:
           python-version: "3.13"
       - run: cargo build --locked --bins
+      # e2e.py also runs tests/oauth_probe.py: DCR, PKCE through a fake upstream,
+      # MCP initialize and whoami for a new account, a returning subject, and a
+      # second provider with the same verified email.
       - run: python tests/e2e.py --bin-dir target/debug
       # The Windows installer, as a user would run it: install from the build, start the
       # broker, register with a Claude Desktop config that already has Desktop Commander,
