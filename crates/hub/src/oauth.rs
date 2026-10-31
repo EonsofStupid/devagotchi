@@ -160,6 +160,8 @@ pub struct TokenRequest {
     pub code_verifier: Option<String>,
     #[serde(default)]
     pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub device_code: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -263,6 +265,14 @@ impl Authority {
                    resume TEXT NOT NULL,
                    expires_at INTEGER NOT NULL,
                    used INTEGER NOT NULL
+                 );
+                 CREATE TABLE IF NOT EXISTS device_grants (
+                   device_hash TEXT PRIMARY KEY,
+                   user_code TEXT NOT NULL UNIQUE,
+                   client_id TEXT NOT NULL,
+                   scope TEXT NOT NULL,
+                   expires_at INTEGER NOT NULL,
+                   account_id TEXT
                  );
                  CREATE TABLE IF NOT EXISTS upstream_tx (
                    state TEXT PRIMARY KEY,
@@ -641,7 +651,8 @@ impl Authority {
             "revocation_endpoint": format!("{base}/revoke"),
             "jwks_uri": format!("{base}/.well-known/jwks.json"),
             "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "grant_types_supported": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code"],
+            "device_authorization_endpoint": format!("{base}/device"),
             "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["none"],
             "scopes_supported": ["openid", "email", "profile", "offline_access", "mcp"],
@@ -892,10 +903,63 @@ impl Authority {
         ))
     }
 
+    pub fn start_device(&self, client_id: &str) -> BridgeResult<Value> {
+        let _ = self.client(client_id)?;
+        let device_code = random_token();
+        let user_code = format!(
+            "{}-{}",
+            &hex::encode(crate::link::random::<2>()).to_uppercase(),
+            &hex::encode(crate::link::random::<2>()).to_uppercase()
+        );
+        let connection = self.connection.lock().expect("oauth lock");
+        connection
+            .execute(
+                "INSERT INTO device_grants
+                 (device_hash, user_code, client_id, scope, expires_at, account_id)
+                 VALUES (?1, ?2, ?3, 'openid mcp', ?4, NULL)",
+                params![
+                    digest(&device_code).as_slice(),
+                    user_code,
+                    client_id,
+                    (now() + CODE_TTL) as i64
+                ],
+            )
+            .map_err(store_error)?;
+        Ok(json!({
+            "device_code": device_code,
+            "user_code": user_code,
+            "verification_uri": format!("{}/device", self.public_url),
+            "expires_in": CODE_TTL,
+            "interval": 1,
+        }))
+    }
+
+    pub fn approve_device(&self, user_code: &str, account_id: &str) -> BridgeResult<()> {
+        if !is_account_id(account_id) {
+            return Err(oauth_error("invalid_request", "unknown account"));
+        }
+        let connection = self.connection.lock().expect("oauth lock");
+        let updated = connection
+            .execute(
+                "UPDATE device_grants SET account_id = ?1
+                 WHERE user_code = ?2 AND account_id IS NULL AND expires_at > ?3",
+                params![account_id, user_code, now() as i64],
+            )
+            .map_err(store_error)?;
+        if updated == 0 {
+            return Err(oauth_error(
+                "invalid_grant",
+                "unknown or expired device code",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn token(&self, request: &TokenRequest) -> BridgeResult<TokenResponse> {
         match request.grant_type.as_str() {
             "authorization_code" => self.exchange_code(request),
             "refresh_token" => self.exchange_refresh(request),
+            "urn:ietf:params:oauth:grant-type:device_code" => self.exchange_device(request),
             _ => Err(oauth_error(
                 "unsupported_grant_type",
                 "unsupported grant_type",
@@ -1141,6 +1205,57 @@ impl Authority {
         tx.execute(
             "UPDATE auth_codes SET used = 1 WHERE code_hash = ?1",
             params![digest(code).as_slice()],
+        )
+        .map_err(store_error)?;
+        let response = issue_tokens(
+            &tx,
+            &self.public_url,
+            &self.keys,
+            client_id,
+            &account,
+            &scope,
+        )?;
+        tx.commit().map_err(store_error)?;
+        Ok(response)
+    }
+
+    fn exchange_device(&self, request: &TokenRequest) -> BridgeResult<TokenResponse> {
+        let device = request
+            .device_code
+            .as_deref()
+            .filter(|code| !code.is_empty())
+            .ok_or_else(|| oauth_error("invalid_request", "device_code is required"))?;
+        let client_id = request
+            .client_id
+            .as_deref()
+            .ok_or_else(|| oauth_error("invalid_client", "client_id is required"))?;
+        let mut connection = self.connection.lock().expect("oauth lock");
+        let tx = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        let row: Option<(String, String, Option<String>, i64)> = tx
+            .query_row(
+                "SELECT client_id, scope, account_id, expires_at FROM device_grants WHERE device_hash = ?1",
+                params![digest(device).as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(store_error)?;
+        let Some((bound, scope, account, exp)) = row else {
+            return Err(oauth_error("invalid_grant", "unknown device code"));
+        };
+        if bound != client_id || (exp as u64) <= now() {
+            return Err(oauth_error("invalid_grant", "device code is not valid"));
+        }
+        let Some(account) = account else {
+            return Err(oauth_error(
+                "authorization_pending",
+                "waiting for the person",
+            ));
+        };
+        tx.execute(
+            "DELETE FROM device_grants WHERE device_hash = ?1",
+            params![digest(device).as_slice()],
         )
         .map_err(store_error)?;
         let response = issue_tokens(
@@ -1559,6 +1674,7 @@ where
     let token_auth = auth.clone();
     let revoke_auth = auth.clone();
     let resume_auth = auth.clone();
+    let device_auth = auth.clone();
     let login_auth = auth.clone();
     let magic_auth = auth.clone();
     let redeem_auth = auth.clone();
@@ -1732,6 +1848,18 @@ where
             }),
         )
         .route(
+            "/device",
+            post(move |Form(form): Form<DeviceForm>| {
+                let auth = device_auth.clone();
+                async move {
+                    match auth.start_device(&form.client_id) {
+                        Ok(body) => axum::Json(body).into_response(),
+                        Err(error) => oauth_http_error(&error),
+                    }
+                }
+            }),
+        )
+        .route(
             "/login",
             get(move |Query(query): Query<ResumeQuery>| {
                 let auth = login_auth.clone();
@@ -1840,6 +1968,10 @@ where
         )
 }
 
+#[derive(Deserialize)]
+struct DeviceForm {
+    client_id: String,
+}
 #[derive(Deserialize)]
 struct ResumeRequest {
     #[serde(default)]
@@ -1971,6 +2103,7 @@ mod tests {
             client_id: Some(client.clone()),
             code_verifier: Some("b".repeat(43)),
             refresh_token: None,
+            device_code: None,
         });
         assert_eq!(mismatch.unwrap_err().code, "invalid_grant");
         // The failed verifier did not burn the code (the challenge check is before used=1
@@ -1984,6 +2117,7 @@ mod tests {
                 client_id: Some(client.clone()),
                 code_verifier: Some(verifier),
                 refresh_token: None,
+                device_code: None,
             })
             .unwrap();
         let subject = auth.verify_access(&tokens.access_token).unwrap();
@@ -1997,6 +2131,7 @@ mod tests {
                 client_id: Some(client.clone()),
                 code_verifier: None,
                 refresh_token: Some(tokens.refresh_token.clone()),
+                device_code: None,
             })
             .unwrap();
         assert_ne!(next.refresh_token, tokens.refresh_token);
@@ -2008,6 +2143,7 @@ mod tests {
             client_id: Some(client),
             code_verifier: None,
             refresh_token: Some(tokens.refresh_token),
+            device_code: None,
         });
         assert_eq!(reused.unwrap_err().code, "invalid_grant");
         let family_dead = auth.token(&TokenRequest {
@@ -2017,6 +2153,7 @@ mod tests {
             client_id: Some("ignored".into()),
             code_verifier: None,
             refresh_token: Some(next.refresh_token),
+            device_code: None,
         });
         assert!(family_dead.is_err());
     }
@@ -2061,6 +2198,7 @@ mod tests {
                 client_id: Some(client.clone()),
                 code_verifier: Some("a".repeat(43)),
                 refresh_token: None,
+                device_code: None,
             })
             .unwrap();
         let still_valid = auth
@@ -2071,6 +2209,7 @@ mod tests {
                 client_id: Some(client),
                 code_verifier: None,
                 refresh_token: Some(tokens.refresh_token),
+                device_code: None,
             })
             .unwrap();
         auth.rotate().unwrap();
@@ -2116,6 +2255,41 @@ mod tests {
             .unwrap_err();
         assert_eq!(err.code, "redirect");
         assert!(err.message.contains("error=invalid_request"));
+    }
+
+    #[test]
+    fn a_device_code_waits_until_the_person_approves() {
+        let (_dir, auth) = authority();
+        let started = auth.start_device("devagotchi-cli").unwrap();
+        let device = started["device_code"].as_str().unwrap();
+        let user = started["user_code"].as_str().unwrap();
+        let pending = auth.token(&TokenRequest {
+            grant_type: "urn:ietf:params:oauth:grant-type:device_code".into(),
+            code: None,
+            redirect_uri: None,
+            client_id: Some("devagotchi-cli".into()),
+            code_verifier: None,
+            refresh_token: None,
+            device_code: Some(device.into()),
+        });
+        assert_eq!(pending.unwrap_err().code, "authorization_pending");
+        let account = format!("dg_{}", "22".repeat(16));
+        auth.approve_device(user, &account).unwrap();
+        let tokens = auth
+            .token(&TokenRequest {
+                grant_type: "urn:ietf:params:oauth:grant-type:device_code".into(),
+                code: None,
+                redirect_uri: None,
+                client_id: Some("devagotchi-cli".into()),
+                code_verifier: None,
+                refresh_token: None,
+                device_code: Some(device.into()),
+            })
+            .unwrap();
+        assert_eq!(
+            auth.verify_access(&tokens.access_token).unwrap().id,
+            account
+        );
     }
 
     #[tokio::test]
