@@ -54,10 +54,10 @@ clients above, after printing that line.
   `~/.config/devagotchi` and `~/.local/state/devagotchi` (Windows `%APPDATA%\devagotchi` and
   `%LOCALAPPDATA%\devagotchi`). It runs what your account can, as Desktop Commander does:
   shell commands, any program, and files anywhere you can reach, starting in your home
-  directory. So an AI client with Devagotchi can do whatever your account can: install it as
-  yourself, not as root or from an elevated (Run as administrator) window, or the AI gets
-  those rights too. To narrow it to the developer tools it found on your `PATH`, inside your
-  home directory, set `"exec_policy": "granted"` in `broker.json`.
+  directory. So an AI client with Devagotchi can do whatever your account can, including root
+  or administrator rights when you install it as root or from an elevated (Run as
+  administrator) window. To narrow it to the developer tools it found on your `PATH`, inside
+  your home directory, set `"exec_policy": "granted"` in `broker.json`.
 
 `setup` ends with `Check: Devagotchi answered with N tools` when it works;
 `devagotchi setup --help` lists the choices (one client, `--local` or `--hub`).
