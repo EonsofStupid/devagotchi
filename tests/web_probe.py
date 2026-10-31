@@ -81,7 +81,7 @@ class Browser:
         ok = (status == 303 and to.startswith(nomen.issuer + "/oauth/v2/authorize?")
               and params.get("client_id") == WEB and params.get("code_challenge_method") == "S256"
               and params.get("redirect_uri") == redirect_uri
-              and f"urn:zitadel:iam:org:project:id:{HUB_PROJECT}:aud" in params.get("scope", "")
+              and f"urn:nomen:iam:org:project:id:{HUB_PROJECT}:aud" in params.get("scope", "")
               and "dg_login" in self.cookies)
         check("login sends the browser to Nomen with PKCE", ok, f"HTTP {status} {to[:120]}")
         code = nomen.issue_code(params.get("code_challenge", ""), token, WEB, redirect_uri)

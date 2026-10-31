@@ -29,7 +29,7 @@ pub struct Subject {
     /// accounts apart. Never used for grants: two accounts can share a name.
     pub name: Option<String>,
     /// The organization (tenant) the account belongs to, as the identity provider proved
-    /// it (Nomen's `urn:zitadel:iam:user:resourceowner:id`). Project boards belong to it:
+    /// it (Nomen's `urn:nomen:iam:user:resourceowner:id`). Project boards belong to it:
     /// every member works them (B13). `None` when the token carries no org; the account's
     /// own boards are then its own.
     pub org: Option<String>,
@@ -39,10 +39,9 @@ pub struct Subject {
 /// a refresh token, the org they belong to (so project boards are the org's), and the
 /// hub's projects in the token's audience. Nothing broader.
 pub fn sign_in_scopes(audiences: &[String]) -> String {
-    let mut scope =
-        String::from("openid profile offline_access urn:zitadel:iam:user:resourceowner");
+    let mut scope = String::from("openid profile offline_access urn:nomen:iam:user:resourceowner");
     for audience in audiences {
-        scope.push_str(&format!(" urn:zitadel:iam:org:project:id:{audience}:aud"));
+        scope.push_str(&format!(" urn:nomen:iam:org:project:id:{audience}:aud"));
     }
     scope
 }
@@ -248,7 +247,7 @@ struct Discovery {
 #[derive(Debug, Deserialize)]
 struct Claims {
     sub: String,
-    #[serde(default, rename = "urn:zitadel:iam:user:resourceowner:id")]
+    #[serde(default, rename = "urn:nomen:iam:user:resourceowner:id")]
     org: Option<String>,
 }
 

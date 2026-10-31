@@ -125,6 +125,16 @@ The first release, tagged at the operator's word (30 Oct 2026).
 - Verified: `cargo test -p devagotchi-hub` (121, including ES256 routing, a forged-key token
   refused, config rules, bearer-only issuing and the code joining for that account only).
 
+### The hub speaks Nomen's own names (increment 31)
+- Every scope the hub and `devagotchi` ask Nomen for, and the org claim the hub reads, use
+  Nomen's spelling: `urn:nomen:iam:user:resourceowner` (claim
+  `urn:nomen:iam:user:resourceowner:id`), `urn:nomen:iam:org:project:id:<project>:aud`, and
+  `urn:nomen:iam:org:project:id:nomen:aud` for Nomen's own APIs in `connect-nomen`. RFC 9728
+  `scopes_supported` follows, so MCP clients ask in the same spelling. The upstream
+  `urn:zitadel:` names were accepted only through Nomen's compatibility layer; the hub no
+  longer depends on it, and no longer reads the org from an identity provider that sends
+  only the upstream claim.
+
 ### The hub connects itself to a Nomen (increment 30)
 - `devagotchi hub connect-nomen --state-dir … --config … --client-id ID --project ID
   [--issuer URL]` joins the hub to a Nomen with its owner's approval and nothing else: it

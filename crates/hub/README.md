@@ -121,7 +121,7 @@ Set up once in Nomen (a Gold change, through gold-policy):
    private directory. Its errors never print the key.
 3. Put that project's id in `auth.audiences`. The applications whose tokens should reach
    the hub (mcp.shippin.cloud's, shippin-bridge's) must be in the same project, or request
-   the scope `urn:zitadel:iam:org:project:id:<project id>:aud`; list their client ids in
+   the scope `urn:nomen:iam:org:project:id:<project id>:aud`; list their client ids in
    `auth.clients`.
 4. Set `owner` to your account ID. Sign in and call `whoami` once if you are not sure which it is.
    On a server, `install-devagotchi.sh --role hub --auth-config FILE` takes the `auth` object
@@ -227,12 +227,12 @@ broker gets `not_granted`; an unknown name gets `unknown_broker`; the broker's o
 The `board_*` tools are the agents' board (`docs/agent-board.md` §6): the `boards` the config
 names, shared by grant, and — with an `account_boards` section — each org's own, made by
 `board_bind` (B13: the org the identity provider proves the account belongs to, Nomen's
-`urn:zitadel:iam:user:resourceowner:id`; every member of the org finds the board, another
+`urn:nomen:iam:user:resourceowner:id`; every member of the org finds the board, another
 org never does; an account with no org gets boards of its own). One project per free org or
 account, `plan_limit` beyond; the owner and the account or org IDs in
 `account_boards.unlimited` have no limit. The sign-in pages, `devagotchi login` and the
 protected-resource metadata (`scopes_supported`, and `scope` in the 401 challenge) ask Nomen
-for exactly `openid profile offline_access urn:zitadel:iam:user:resourceowner` and the hub's
+for exactly `openid profile offline_access urn:nomen:iam:user:resourceowner` and the hub's
 audience. A caller names its seat on a board with `X-Devagotchi-Seat: <name>`: the account's
 own agent, the actor on the account's board and `<account>/<seat>` on an org's or a shared one.
 
