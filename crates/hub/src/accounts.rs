@@ -1,6 +1,12 @@
 //! The hub's own accounts (D25, §14): people sign in with passkeys on the hub itself, so a
 //! hub works with nothing else deployed. Nomen ("Sign in with Shippin") is an extra way in.
 //!
+//! Passkey challenges are the hub's own and cost nothing to hand out: each is a time, a
+//! random nonce and an HMAC over them, the ceremony's purpose and (to register) the
+//! account, under a key kept in the store. Nothing is written until a ceremony succeeds;
+//! then its challenge is recorded as spent, in the same transaction as what it did, until
+//! it would have expired anyway. A flood of unanswered sign-ins fills nothing.
+//!
 //! Increment 32a-1 is the store and the passkey verifier on their own; the sign-in pages
 //! that call them come in 32a-2, so until then only the tests do (hence the allow below).
 #![allow(dead_code)]
@@ -9,6 +15,7 @@ pub mod passkey;
 
 use std::{path::Path, sync::Mutex};
 
+use aws_lc_rs::hmac;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use devagotchi_contracts::{BridgeError, BridgeResult};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -21,9 +28,10 @@ pub use passkey::{Alg, NewCredential};
 /// How long a one-time link (the owner's, later invites and resets) stays valid.
 pub const LINK_TTL_SECS: u64 = 15 * 60;
 /// How long a passkey ceremony may take between its challenge and its answer.
-pub const CEREMONY_TTL_SECS: u64 = 5 * 60;
-/// Unanswered ceremonies kept at once; more are refused until some expire.
-pub const MAX_CEREMONIES: i64 = 10_000;
+pub const CHALLENGE_TTL_SECS: u64 = 5 * 60;
+/// A challenge: format (1), issued at (8, big endian), nonce (16), HMAC-SHA-256 (32).
+const CHALLENGE_LEN: usize = 57;
+const CHALLENGE_FORMAT: u8 = 1;
 
 /// A new account's id: `acct_` and 26 lowercase base32 characters (128 random bits),
 /// safe as a directory name wherever an account's files live.
@@ -91,6 +99,10 @@ impl Ceremony {
     }
 }
 
+fn invalid_ceremony() -> BridgeError {
+    BridgeError::new("invalid_ceremony", "sign-in timed out; start again")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Account {
     pub id: String,
@@ -112,6 +124,8 @@ pub struct Passkey {
 
 pub struct Accounts {
     connection: Mutex<Connection>,
+    /// Signs this hub's passkey challenges.
+    challenge_key: hmac::Key,
 }
 
 fn store_error(error: rusqlite::Error) -> BridgeError {
@@ -149,7 +163,12 @@ const ACCOUNT_COLUMNS: &str = "id, name, owner, disabled_at";
 const PASSKEY_COLUMNS: &str = "id, account, label, public_key, alg, sign_count, backup_eligible";
 
 impl Accounts {
+    /// Open the store at `path`, made 0600 on first use: it holds the challenge key.
     pub fn open(path: &Path) -> BridgeResult<Self> {
+        if !path.exists() {
+            // SQLite gives its -wal and -shm files the main file's mode, so all three are 0600.
+            crate::push::write_private(path, &[])?;
+        }
         let connection = Connection::open(path).map_err(store_error)?;
         connection
             .execute_batch(
@@ -174,11 +193,12 @@ impl Accounts {
                    expires_at INTEGER NOT NULL,
                    used_at INTEGER
                  );
-                 CREATE TABLE IF NOT EXISTS ceremonies (
-                   hash TEXT PRIMARY KEY,
-                   purpose TEXT NOT NULL,
-                   account TEXT,
-                   challenge BLOB NOT NULL,
+                 CREATE TABLE IF NOT EXISTS secrets (
+                   name TEXT PRIMARY KEY,
+                   value BLOB NOT NULL
+                 );
+                 CREATE TABLE IF NOT EXISTS spent_challenges (
+                   mac BLOB PRIMARY KEY,
                    expires_at INTEGER NOT NULL
                  );
                  CREATE TABLE IF NOT EXISTS passkeys (
@@ -194,8 +214,22 @@ impl Accounts {
                  );",
             )
             .map_err(store_error)?;
+        connection
+            .execute(
+                "INSERT OR IGNORE INTO secrets (name, value) VALUES ('challenge_key', ?1)",
+                params![crate::link::random::<32>().to_vec()],
+            )
+            .map_err(store_error)?;
+        let key: Vec<u8> = connection
+            .query_row(
+                "SELECT value FROM secrets WHERE name = 'challenge_key'",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(store_error)?;
         Ok(Self {
             connection: Mutex::new(connection),
+            challenge_key: hmac::Key::new(hmac::HMAC_SHA256, &key),
         })
     }
 
@@ -355,16 +389,31 @@ impl Accounts {
         live_link(&connection, purpose, token, now)
     }
 
-    /// Store a passkey for `account`. With a link, the link must still be live and for this
-    /// account, and it is spent in the same transaction: both happen or neither does.
+    /// Store a passkey for `account`, registered against `challenge` (one this hub made to
+    /// register a passkey on this account). With a link, the link must still be live and for
+    /// this account. The challenge and the link are spent in the same transaction as the
+    /// passkey is stored: all of it happens or none does.
     pub fn add_passkey(
         &self,
         account: &str,
         credential: &NewCredential,
         label: &str,
         link: Option<(LinkPurpose, &str)>,
+        challenge: &[u8],
     ) -> BridgeResult<()> {
-        let now = now_secs();
+        self.add_passkey_at(account, credential, label, link, challenge, now_secs())
+    }
+
+    pub(crate) fn add_passkey_at(
+        &self,
+        account: &str,
+        credential: &NewCredential,
+        label: &str,
+        link: Option<(LinkPurpose, &str)>,
+        challenge: &[u8],
+        now: u64,
+    ) -> BridgeResult<()> {
+        let mac = self.check_challenge(Ceremony::Register, Some(account), challenge, now)?;
         let label = label.trim();
         if label.is_empty() || label.len() > 64 || label.chars().any(char::is_control) {
             return Err(BridgeError::new(
@@ -376,20 +425,18 @@ impl Accounts {
         let transaction = connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
             .map_err(store_error)?;
-        let exists = transaction
+        spend_challenge(&transaction, &mac, now)?;
+        let holder = transaction
             .query_row(
-                "SELECT 1 FROM accounts WHERE id = ?1",
+                &format!("SELECT {ACCOUNT_COLUMNS} FROM accounts WHERE id = ?1"),
                 params![account],
-                |_| Ok(()),
+                account_row,
             )
             .optional()
             .map_err(store_error)?
-            .is_some();
-        if !exists {
-            return Err(BridgeError::new(
-                "no_account",
-                format!("no account {account}"),
-            ));
+            .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
+        if holder.disabled_at.is_some() {
+            return Err(account_disabled(account));
         }
         if let Some((purpose, token)) = link {
             if live_link(&transaction, purpose, token, now)? != account {
@@ -439,97 +486,55 @@ impl Accounts {
         transaction.commit().map_err(store_error)
     }
 
-    /// Start a ceremony: remember its challenge under the SHA-256 of a fresh id, which the
-    /// browser carries back. Expired ceremonies are dropped on the way.
-    pub fn begin_ceremony(
+    /// A challenge for one ceremony: to register a passkey on `account`, or to sign in
+    /// (`None`). Making one stores nothing.
+    pub fn challenge(&self, purpose: Ceremony, account: Option<&str>) -> Vec<u8> {
+        self.challenge_at(purpose, account, crate::link::random::<16>(), now_secs())
+    }
+
+    pub(crate) fn challenge_at(
         &self,
         purpose: Ceremony,
         account: Option<&str>,
-        id_random: [u8; 16],
-        challenge: [u8; 32],
-    ) -> BridgeResult<String> {
-        self.begin_ceremony_at(purpose, account, id_random, challenge, now_secs())
+        nonce: [u8; 16],
+        now: u64,
+    ) -> Vec<u8> {
+        let mut challenge = Vec::with_capacity(CHALLENGE_LEN);
+        challenge.push(CHALLENGE_FORMAT);
+        challenge.extend_from_slice(&now.to_be_bytes());
+        challenge.extend_from_slice(&nonce);
+        let tag = hmac::sign(
+            &self.challenge_key,
+            &challenge_message(&challenge, purpose, account),
+        );
+        challenge.extend_from_slice(tag.as_ref());
+        challenge
     }
 
-    pub(crate) fn begin_ceremony_at(
+    /// Check that `challenge` is this hub's, for `purpose` (and `account`), and unexpired;
+    /// returns its MAC, the key it is spent under. Whether it is spent is checked when it is.
+    fn check_challenge(
         &self,
         purpose: Ceremony,
         account: Option<&str>,
-        id_random: [u8; 16],
-        challenge: [u8; 32],
+        challenge: &[u8],
         now: u64,
-    ) -> BridgeResult<String> {
-        let id = URL_SAFE_NO_PAD.encode(id_random);
-        let connection = self.connection.lock().expect("accounts");
-        connection
-            .execute(
-                "DELETE FROM ceremonies WHERE expires_at <= ?1",
-                params![now],
-            )
-            .map_err(store_error)?;
-        let open: i64 = connection
-            .query_row("SELECT COUNT(*) FROM ceremonies", [], |row| row.get(0))
-            .map_err(store_error)?;
-        if open >= MAX_CEREMONIES {
-            return Err(BridgeError::new(
-                "busy",
-                "too many sign-ins at once; try again shortly",
-            ));
+    ) -> BridgeResult<Vec<u8>> {
+        if challenge.len() != CHALLENGE_LEN || challenge[0] != CHALLENGE_FORMAT {
+            return Err(invalid_ceremony());
         }
-        connection
-            .execute(
-                "INSERT INTO ceremonies (hash, purpose, account, challenge, expires_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![
-                    hash(&id),
-                    purpose.as_str(),
-                    account,
-                    challenge.to_vec(),
-                    now + CEREMONY_TTL_SECS
-                ],
-            )
-            .map_err(store_error)?;
-        Ok(id)
-    }
-
-    /// Finish a ceremony, once: its account (if it was for one) and its challenge.
-    pub fn finish_ceremony(
-        &self,
-        purpose: Ceremony,
-        id: &str,
-    ) -> BridgeResult<(Option<String>, [u8; 32])> {
-        self.finish_ceremony_at(purpose, id, now_secs())
-    }
-
-    pub(crate) fn finish_ceremony_at(
-        &self,
-        purpose: Ceremony,
-        id: &str,
-        now: u64,
-    ) -> BridgeResult<(Option<String>, [u8; 32])> {
-        let invalid = || BridgeError::new("invalid_ceremony", "sign-in timed out; start again");
-        let mut connection = self.connection.lock().expect("accounts");
-        let transaction = connection
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-            .map_err(store_error)?;
-        let row: Option<(Option<String>, Vec<u8>, u64)> = transaction
-            .query_row(
-                "SELECT account, challenge, expires_at FROM ceremonies WHERE hash = ?1 AND purpose = ?2",
-                params![hash(id), purpose.as_str()],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()
-            .map_err(store_error)?;
-        let (account, challenge, expires_at) = row.ok_or_else(invalid)?;
-        transaction
-            .execute("DELETE FROM ceremonies WHERE hash = ?1", params![hash(id)])
-            .map_err(store_error)?;
-        transaction.commit().map_err(store_error)?;
-        if now >= expires_at {
-            return Err(invalid());
+        let (signed, tag) = challenge.split_at(CHALLENGE_LEN - 32);
+        hmac::verify(
+            &self.challenge_key,
+            &challenge_message(signed, purpose, account),
+            tag,
+        )
+        .map_err(|_| invalid_ceremony())?;
+        let issued = u64::from_be_bytes(signed[1..9].try_into().expect("8 bytes"));
+        if issued > now || now >= issued.saturating_add(CHALLENGE_TTL_SECS) {
+            return Err(invalid_ceremony());
         }
-        let challenge: [u8; 32] = challenge.try_into().map_err(|_| invalid())?;
-        Ok((account, challenge))
+        Ok(tag.to_vec())
     }
 
     pub fn passkey(&self, id: &[u8]) -> BridgeResult<Option<Passkey>> {
@@ -558,17 +563,78 @@ impl Accounts {
         rows.collect::<Result<_, _>>().map_err(store_error)
     }
 
-    /// Record a sign-in with a passkey: its new signature counter and when.
-    pub fn used_passkey(&self, id: &[u8], sign_count: u32) -> BridgeResult<()> {
-        self.connection
-            .lock()
-            .expect("accounts")
-            .execute(
-                "UPDATE passkeys SET sign_count = ?1, last_used_at = ?2 WHERE id = ?3",
-                params![sign_count, now_secs(), id],
+    /// Record a sign-in with passkey `id`, whose assertion was verified for `challenge` and
+    /// carried `sign_count` and (when the authenticator returned one) `user_handle`. In one
+    /// transaction: the challenge is a live sign-in challenge of this hub's and is spent,
+    /// the passkey and its account exist and the account is not disabled, the user handle
+    /// is that account's, and the counter moves forward from what is stored now, so two
+    /// sign-ins racing with one cloned key cannot both count. Returns the account.
+    pub fn sign_in(
+        &self,
+        id: &[u8],
+        sign_count: u32,
+        user_handle: Option<&[u8]>,
+        challenge: &[u8],
+    ) -> BridgeResult<Account> {
+        self.sign_in_at(id, sign_count, user_handle, challenge, now_secs())
+    }
+
+    pub(crate) fn sign_in_at(
+        &self,
+        id: &[u8],
+        sign_count: u32,
+        user_handle: Option<&[u8]>,
+        challenge: &[u8],
+        now: u64,
+    ) -> BridgeResult<Account> {
+        let mac = self.check_challenge(Ceremony::SignIn, None, challenge, now)?;
+        let mut connection = self.connection.lock().expect("accounts");
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        spend_challenge(&transaction, &mac, now)?;
+        let passkey = transaction
+            .query_row(
+                &format!("SELECT {PASSKEY_COLUMNS} FROM passkeys WHERE id = ?1"),
+                params![id],
+                passkey_row,
+            )
+            .optional()
+            .map_err(store_error)?
+            .ok_or_else(|| {
+                BridgeError::new("invalid_passkey", "this passkey is not registered here")
+            })?;
+        let account = transaction
+            .query_row(
+                &format!("SELECT {ACCOUNT_COLUMNS} FROM accounts WHERE id = ?1"),
+                params![passkey.account],
+                account_row,
             )
             .map_err(store_error)?;
-        Ok(())
+        if account.disabled_at.is_some() {
+            return Err(account_disabled(&account.id));
+        }
+        if user_handle.is_some_and(|handle| handle != account.id.as_bytes()) {
+            return Err(BridgeError::new(
+                "user_handle",
+                "the passkey answered for another account",
+            ));
+        }
+        // Authenticators that keep no counter (most synced passkeys) report 0 every time.
+        if (sign_count != 0 || passkey.sign_count != 0) && sign_count <= passkey.sign_count {
+            return Err(BridgeError::new(
+                "signature_counter",
+                "this passkey's counter went backwards: it may have been copied",
+            ));
+        }
+        transaction
+            .execute(
+                "UPDATE passkeys SET sign_count = ?1, last_used_at = ?2 WHERE id = ?3",
+                params![sign_count, now, id],
+            )
+            .map_err(store_error)?;
+        transaction.commit().map_err(store_error)?;
+        Ok(account)
     }
 
     /// Remove one of `account`'s passkeys; false when it has no such passkey.
@@ -583,6 +649,44 @@ impl Accounts {
             )
             .map_err(store_error)?;
         Ok(removed == 1)
+    }
+}
+
+fn account_disabled(account: &str) -> BridgeError {
+    BridgeError::new("account_disabled", format!("{account} is disabled"))
+}
+
+/// What a challenge's HMAC covers: its own bytes, the purpose, and the account.
+fn challenge_message(signed: &[u8], purpose: Ceremony, account: Option<&str>) -> Vec<u8> {
+    let account = account.unwrap_or("");
+    let mut message = Vec::with_capacity(64 + signed.len() + account.len());
+    message.extend_from_slice(b"devagotchi passkey challenge\0");
+    message.extend_from_slice(signed);
+    message.extend_from_slice(purpose.as_str().as_bytes());
+    message.push(0);
+    message.extend_from_slice(account.as_bytes());
+    message
+}
+
+/// Spend a challenge once, inside the ceremony's transaction; spent challenges are kept
+/// only until they would have expired anyway.
+fn spend_challenge(connection: &Connection, mac: &[u8], now: u64) -> BridgeResult<()> {
+    connection
+        .execute(
+            "DELETE FROM spent_challenges WHERE expires_at <= ?1",
+            params![now],
+        )
+        .map_err(store_error)?;
+    let fresh = connection
+        .execute(
+            "INSERT OR IGNORE INTO spent_challenges (mac, expires_at) VALUES (?1, ?2)",
+            params![mac, now + CHALLENGE_TTL_SECS],
+        )
+        .map_err(store_error)?;
+    if fresh == 1 {
+        Ok(())
+    } else {
+        Err(invalid_ceremony())
     }
 }
 

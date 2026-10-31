@@ -185,6 +185,7 @@ fn stored<'a>(credential: &'a NewCredential, count: u32) -> Stored<'a> {
         public_key: &credential.public_key,
         alg: credential.alg,
         sign_count: count,
+        backup_eligible: credential.backup_eligible,
     }
 }
 
@@ -335,8 +336,10 @@ fn authenticators_that_keep_no_counter_still_sign_in() {
     // Synced passkeys report 0 every time; 0 after 0 is not a clone.
     let mut phone = Authenticator::new(Alg::Es256);
     let challenge = [3u8; 32];
-    let credential =
-        verify_registration(RP, &challenge, phone.register(&challenge).registration()).unwrap();
+    let mut registered = phone.register(&challenge);
+    registered.authenticator_data =
+        phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV | FLAG_AT | FLAG_BE, true);
+    let credential = verify_registration(RP, &challenge, registered.registration()).unwrap();
     phone.count = 0;
     let client = client_data("webauthn.get", &challenge, RP.origin, None);
     let data = phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV | FLAG_BE, false);
@@ -345,7 +348,10 @@ fn authenticators_that_keep_no_counter_still_sign_in() {
         verify_assertion(RP, &challenge, stored(&credential, 0), sent.assertion()),
         Ok(0)
     );
-    assert!(verify_assertion(RP, &challenge, stored(&credential, 3), sent.assertion()).is_err());
+    assert_eq!(
+        verify_assertion(RP, &challenge, stored(&credential, 3), sent.assertion()),
+        Err(Refusal("signature counter"))
+    );
 }
 
 #[test]
@@ -366,4 +372,170 @@ fn backup_eligibility_is_recorded() {
             .unwrap()
             .backup_eligible
     );
+}
+
+/// A 1024-bit RSA public key (SubjectPublicKeyInfo), made once with OpenSSL: too small to
+/// accept, and refused when it is registered rather than at every sign-in after.
+const RSA_1024_SPKI: &str = "30819f300d06092a864886f70d010101050003818d0030818902818100bcd52027e8f0772a3aaeed709aa9c3f53dc8d3\
+fb632fc6ad40ecb3b47f375ba4bd2a3719c9e4800d0cfbf5c0f44a701f5341ab4d6ea1eabdd40c3d8f59a0b2dcdede5c\
+bf958c8148c6fb5ee20ba188b959b09653e2c5237dcae4c3899e8d1cb8b188e8c50bd8965c0807e466ff8cea34de074e\
+cc4d1221c95d4c4ed1b811b7d10203010001";
+
+#[test]
+fn rsa_keys_must_be_2048_to_8192_bits_when_registered() {
+    let phone = Authenticator::new(Alg::Es256);
+    let challenge = [6u8; 32];
+    let mut sent = phone.register(&challenge);
+    sent.alg = Alg::Rs256.cose();
+    sent.public_key = hex::decode(RSA_1024_SPKI).unwrap();
+    assert_eq!(
+        verify_registration(RP, &challenge, sent.registration()),
+        Err(Refusal("rsa key size"))
+    );
+    // A 2048-bit key is the smallest accepted.
+    let rsa = Authenticator::new(Alg::Rs256);
+    assert!(verify_registration(RP, &challenge, rsa.register(&challenge).registration()).is_ok());
+}
+
+#[test]
+fn malformed_authenticator_data_is_refused_without_reading_past_it() {
+    let phone = Authenticator::new(Alg::Es256);
+    let challenge = [2u8; 32];
+    let good = phone.register(&challenge);
+    let refused = |data: Vec<u8>| {
+        let mut sent = good.clone();
+        sent.authenticator_data = data;
+        verify_registration(RP, &challenge, sent.registration()).unwrap_err()
+    };
+    let header = |length: u16| {
+        let mut data = phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV | FLAG_AT, false);
+        data.extend_from_slice(&[0u8; 16]);
+        data.extend_from_slice(&length.to_be_bytes());
+        data
+    };
+    assert_eq!(
+        refused(good.authenticator_data[..36].to_vec()).0,
+        "authenticator data"
+    );
+    assert_eq!(refused(Vec::new()).0, "authenticator data");
+    // A credential id of length 0, over 1023, or running one byte past the data.
+    assert_eq!(refused(header(0)).0, "authenticator data");
+    let mut long = header(1024);
+    long.extend_from_slice(&[1u8; 1024]);
+    assert_eq!(refused(long).0, "authenticator data");
+    let mut short = header(phone.id.len() as u16 + 1);
+    short.extend_from_slice(&phone.id);
+    assert_eq!(refused(short).0, "authenticator data");
+}
+
+#[test]
+fn backup_state_needs_eligibility_and_eligibility_never_changes() {
+    let mut phone = Authenticator::new(Alg::Es256);
+    let challenge = [4u8; 32];
+    // Backed up (BS) but not eligible (BE) is a contradiction the spec says to refuse.
+    let mut sent = phone.register(&challenge);
+    sent.authenticator_data =
+        phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV | FLAG_AT | FLAG_BS, true);
+    assert_eq!(
+        verify_registration(RP, &challenge, sent.registration()),
+        Err(Refusal("backup state"))
+    );
+
+    let single =
+        verify_registration(RP, &challenge, phone.register(&challenge).registration()).unwrap();
+    assert!(!single.backup_eligible);
+    let bs_only = phone.signed(
+        client_data("webauthn.get", &challenge, RP.origin, None),
+        phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV | FLAG_BS, false),
+    );
+    assert_eq!(
+        verify_assertion(RP, &challenge, stored(&single, 0), bs_only.assertion()),
+        Err(Refusal("backup state"))
+    );
+    // Eligibility is fixed when a credential is made: a change means another credential.
+    phone.count = 1;
+    let now_eligible = phone.signed(
+        client_data("webauthn.get", &challenge, RP.origin, None),
+        phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV | FLAG_BE | FLAG_BS, false),
+    );
+    assert_eq!(
+        verify_assertion(RP, &challenge, stored(&single, 0), now_eligible.assertion()),
+        Err(Refusal("backup eligibility"))
+    );
+    let mut synced = single.clone();
+    synced.backup_eligible = true;
+    let not_eligible = phone.signed(
+        client_data("webauthn.get", &challenge, RP.origin, None),
+        phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV, false),
+    );
+    assert_eq!(
+        verify_assertion(RP, &challenge, stored(&synced, 0), not_eligible.assertion()),
+        Err(Refusal("backup eligibility"))
+    );
+    assert_eq!(
+        verify_assertion(RP, &challenge, stored(&synced, 0), now_eligible.assertion()),
+        Ok(1)
+    );
+}
+
+#[test]
+fn embedded_and_padded_client_data_is_refused() {
+    let mut phone = Authenticator::new(Alg::Es256);
+    let challenge = [1u8; 32];
+    let credential =
+        verify_registration(RP, &challenge, phone.register(&challenge).registration()).unwrap();
+    // A page framed in another site carries topOrigin; the hub's pages are never framed.
+    let mut framed: serde_json::Value =
+        serde_json::from_slice(&client_data("webauthn.create", &challenge, RP.origin, None))
+            .unwrap();
+    framed["topOrigin"] = "https://evil.example".into();
+    let mut sent = phone.register(&challenge);
+    sent.client_data_json = serde_json::to_vec(&framed).unwrap();
+    assert_eq!(
+        verify_registration(RP, &challenge, sent.registration()),
+        Err(Refusal("cross-origin"))
+    );
+    // The challenge is compared exactly: base64url without padding, as browsers send it.
+    let mut padded: serde_json::Value =
+        serde_json::from_slice(&client_data("webauthn.create", &challenge, RP.origin, None))
+            .unwrap();
+    padded["challenge"] = format!("{}=", URL_SAFE_NO_PAD.encode(challenge)).into();
+    let mut sent = phone.register(&challenge);
+    sent.client_data_json = serde_json::to_vec(&padded).unwrap();
+    assert_eq!(
+        verify_registration(RP, &challenge, sent.registration()),
+        Err(Refusal("challenge"))
+    );
+
+    // The same checks on the sign-in side, each under a valid signature.
+    let refused = |sent: &Sent| {
+        verify_assertion(RP, &challenge, stored(&credential, 0), sent.assertion()).unwrap_err()
+    };
+    phone.count = 1;
+    framed["type"] = "webauthn.get".into();
+    let framed = phone.signed(
+        serde_json::to_vec(&framed).unwrap(),
+        phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV, false),
+    );
+    assert_eq!(refused(&framed).0, "cross-origin");
+    let cross = phone.signed(
+        client_data("webauthn.get", &challenge, RP.origin, Some(true)),
+        phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV, false),
+    );
+    assert_eq!(refused(&cross).0, "cross-origin");
+    let absent = phone.signed(
+        client_data("webauthn.get", &challenge, RP.origin, None),
+        phone.auth_data(RP.rp_id, FLAG_UV, false),
+    );
+    assert_eq!(refused(&absent).0, "user not present");
+    let short = phone.signed(
+        client_data("webauthn.get", &challenge, RP.origin, None),
+        phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV, false)[..36].to_vec(),
+    );
+    assert_eq!(refused(&short).0, "authenticator data");
+    let garbled = phone.signed(
+        b"{\"type\":".to_vec(),
+        phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV, false),
+    );
+    assert_eq!(refused(&garbled).0, "client data");
 }

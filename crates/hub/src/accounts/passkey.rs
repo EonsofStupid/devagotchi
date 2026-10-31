@@ -110,6 +110,8 @@ pub struct Stored<'a> {
     pub public_key: &'a [u8],
     pub alg: Alg,
     pub sign_count: u32,
+    /// Whether the credential was backup eligible when it was registered.
+    pub backup_eligible: bool,
 }
 
 /// The longest credential id WebAuthn allows.
@@ -119,6 +121,7 @@ const AUTH_DATA_HEADER: usize = 37;
 const FLAG_UP: u8 = 0x01;
 const FLAG_UV: u8 = 0x04;
 const FLAG_BE: u8 = 0x08;
+const FLAG_BS: u8 = 0x10;
 const FLAG_AT: u8 = 0x40;
 
 /// Check a registration made for `challenge` and return the credential to store.
@@ -155,6 +158,12 @@ pub fn verify_registration(
     let alg = Alg::from_cose(registration.alg).ok_or(Refusal("algorithm"))?;
     signature::ParsedPublicKey::new(alg.verification(), registration.public_key)
         .map_err(|_| Refusal("public key"))?;
+    // RSA keys are judged when they are registered, not at every sign-in after: 2048 to
+    // 8192 bits, as the verification algorithm will demand.
+    if alg == Alg::Rs256 {
+        aws_lc_rs::rsa::PublicEncryptingKey::from_der(registration.public_key)
+            .map_err(|_| Refusal("rsa key size"))?;
+    }
     Ok(NewCredential {
         id: id.to_vec(),
         public_key: registration.public_key.to_vec(),
@@ -182,7 +191,11 @@ pub fn verify_assertion(
         relying,
     )?;
     let data = assertion.authenticator_data;
-    check_authenticator_data(data, relying)?;
+    let flags = check_authenticator_data(data, relying)?;
+    // Backup eligibility is fixed when a credential is made; a change means another one.
+    if (flags & FLAG_BE != 0) != stored.backup_eligible {
+        return Err(Refusal("backup eligibility"));
+    }
     let mut message = Vec::with_capacity(data.len() + 32);
     message.extend_from_slice(data);
     message.extend_from_slice(digest::digest(&digest::SHA256, assertion.client_data_json).as_ref());
@@ -208,13 +221,16 @@ fn check_client_data(
     if data.kind != kind {
         return Err(Refusal("client data type"));
     }
-    if data.challenge.trim_end_matches('=') != URL_SAFE_NO_PAD.encode(challenge) {
+    // Browsers send the challenge as base64url without padding; it is compared exactly.
+    if data.challenge != URL_SAFE_NO_PAD.encode(challenge) {
         return Err(Refusal("challenge"));
     }
     if data.origin != relying.origin {
         return Err(Refusal("origin"));
     }
-    if data.cross_origin == Some(true) {
+    // The hub's pages are never framed: a ceremony run inside another site's page carries
+    // `crossOrigin` or `topOrigin`.
+    if data.cross_origin == Some(true) || data.top_origin.is_some() {
         return Err(Refusal("cross-origin"));
     }
     Ok(())
@@ -236,6 +252,10 @@ fn check_authenticator_data(data: &[u8], relying: Relying<'_>) -> Result<u8, Ref
     if flags & FLAG_UV == 0 {
         return Err(Refusal("user not verified"));
     }
+    // Backed up but not eligible for backup is a contradiction (WebAuthn §6.1.3).
+    if flags & FLAG_BS != 0 && flags & FLAG_BE == 0 {
+        return Err(Refusal("backup state"));
+    }
     Ok(flags)
 }
 
@@ -251,6 +271,8 @@ struct ClientData {
     origin: String,
     #[serde(default, rename = "crossOrigin")]
     cross_origin: Option<bool>,
+    #[serde(default, rename = "topOrigin")]
+    top_origin: Option<String>,
 }
 
 #[cfg(test)]
