@@ -39,6 +39,24 @@ TOOL_SCHEMAS = {
     ),
     "operation_cancel": ({"operation_id"}, {"operation_id", "state", "detail"}),
     "operation_wait": ({"operation_id", "output_after", "timeout_ms"}, {"operation_id", "state", "detail"}),
+    "operation_list": ({"offset", "limit"}, {"operations"}),
+    "run": (
+        {"command", "cwd", "wait_seconds", "timeout_seconds"},
+        {"operation_id", "state", "exit_code", "output", "truncated"},
+    ),
+    "read_file": ({"path", "offset", "max_bytes", "start_line", "line_count"}, {"path", "size", "offset", "next_offset", "eof"}),
+    "list_directory": ({"path", "depth", "max_entries"}, {"path", "entries", "truncated"}),
+    "write_file": (
+        {"path", "text", "bytes_base64", "mode", "expected_sha256", "create_dirs"},
+        {"path", "size", "sha256", "created"},
+    ),
+    "edit_file": ({"path", "old_text", "new_text", "expected_replacements"}, {"path", "size", "sha256", "created"}),
+    "read_multiple_files": ({"paths", "max_bytes_each"}, {"files"}),
+    "get_file_info": ({"path"}, {"path", "kind", "size", "readonly"}),
+    "create_directory": ({"path"}, {"path", "kind", "size", "readonly"}),
+    "move_file": ({"source", "destination", "overwrite"}, {"path", "kind", "size", "readonly"}),
+    # An image answers with an image block, so it declares no structured output.
+    "read_image": ({"path"}, None),
 }
 
 
@@ -177,13 +195,17 @@ def validate_catalog(response):
     for tool in tools:
         name = tool["name"]
         input_schema, output_schema = tool.get("inputSchema"), tool.get("outputSchema")
-        for label, schema in [("inputSchema", input_schema), ("outputSchema", output_schema)]:
-            require(isinstance(schema, dict) and schema.get("type") == "object", f"{name}: missing object {label}")
         expected_input, expected_output = TOOL_SCHEMAS[name]
+        require(isinstance(input_schema, dict) and input_schema.get("type") == "object", f"{name}: missing object inputSchema")
         require(set(input_schema.get("properties", {})) == expected_input, f"{name}: unexpected input properties")
         require(input_schema.get("additionalProperties") is False, f"{name}: input schema permits unknown fields")
+        if expected_output is None:
+            require(output_schema is None, f"{name}: an image tool declares no structured output")
+            continue
+        require(isinstance(output_schema, dict) and output_schema.get("type") == "object", f"{name}: missing object outputSchema")
         require(expected_output <= set(output_schema.get("properties", {})), f"{name}: missing output properties")
-    return {"tools": sorted(names), "object_output_schemas": len(names), "input_schemas_reject_unknown_fields": True}
+    structured = sum(1 for spec in TOOL_SCHEMAS.values() if spec[1] is not None)
+    return {"tools": sorted(names), "object_output_schemas": structured, "input_schemas_reject_unknown_fields": True}
 
 
 def error_code(response, expected):

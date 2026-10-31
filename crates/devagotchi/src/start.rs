@@ -13,18 +13,23 @@ use std::{
 use crate::paths;
 
 pub const USAGE: &str =
-    "Usage: devagotchi start [--workspace DIR] [--grant PATH]... [--state-dir DIR] [--config FILE]
+    "Usage: devagotchi start [--background] [--workspace DIR] [--grant PATH]... [--state-dir DIR] [--config FILE]
 
-Runs your broker in the foreground (Ctrl+C stops it; jobs are settled first). The first run
-writes the broker's config with the workspace (default: your home directory) and the
-toolchains found on PATH (git, rg, python3/python, node, npm, npx, cargo, rustup, go, uv), plus
-any --grant; later runs keep the file. Then point your agent at `devagotchi mcp`. A grant
-must be what the broker runs directly: an executable file (Windows: an .exe or .com image;
-npm and npx are .cmd scripts there, so they stay out).
+Runs your broker in the foreground (Ctrl+C stops it; jobs are settled first). With --background
+it starts the broker detached, writing to <state>/broker.log, and returns once it answers (at
+once when one already does); `devagotchi mcp` does this on its own when no broker answers. The first run
+writes the broker's config: it runs what your account can (shell lines, any program, files
+anywhere you can reach), starting in the workspace (default: your home directory); the
+toolchains found on PATH (git, rg, python3/python, node, npm, npx, cargo, rustup, go, uv) and
+any --grant are listed too, for a config set back to `exec_policy` `granted`, which runs
+only those, inside the workspace. Later runs keep the file. Then point your agent at
+`devagotchi mcp`. A grant must be what the broker runs directly: an executable file (Windows:
+an .exe or .com image; npm and npx are .cmd scripts there, so they stay out).
 
 Defaults: state in ~/.local/state/devagotchi (Windows: %LOCALAPPDATA%\\devagotchi\\state),
 config in ~/.config/devagotchi/broker.json (Windows: %APPDATA%\\devagotchi); DEVAGOTCHI_STATE_DIR
-and DEVAGOTCHI_CONFIG_DIR override them.";
+and DEVAGOTCHI_CONFIG_DIR override them, and DEVAGOTCHI_BROKER_CONFIG names the config file
+alone (your sign-in stays in the config directory).";
 
 /// Executables worth granting when they are on PATH, in the order they are listed
 /// (`python` is what Windows installs; a Store alias for both resolves to one grant).
@@ -38,6 +43,7 @@ struct Options {
     config: Option<PathBuf>,
     workspace: Option<PathBuf>,
     grants: Vec<PathBuf>,
+    background: bool,
 }
 
 fn parse(args: Vec<OsString>) -> Result<Options, String> {
@@ -46,6 +52,7 @@ fn parse(args: Vec<OsString>) -> Result<Options, String> {
         config: None,
         workspace: None,
         grants: Vec::new(),
+        background: false,
     };
     let mut iter = args.into_iter();
     while let Some(flag) = iter.next() {
@@ -56,6 +63,7 @@ fn parse(args: Vec<OsString>) -> Result<Options, String> {
                 .ok_or_else(|| format!("{flag} needs a value"))
         };
         match flag.as_str() {
+            "--background" => options.background = true,
             "--state-dir" => options.state = Some(value()?),
             "--config" => options.config = Some(value()?),
             "--workspace" => options.workspace = Some(value()?),
@@ -98,11 +106,7 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
         );
         return ExitCode::from(64);
     };
-    let config = match options
-        .config
-        .map(absolute)
-        .or_else(|| paths::config_dir().map(|d| d.join("broker.json")))
-    {
+    let config = match options.config.map(absolute).or_else(paths::broker_config) {
         Some(config) => config,
         None => {
             eprintln!(
@@ -111,14 +115,22 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
             return ExitCode::from(64);
         }
     };
+    if options.background {
+        return background(&state, &config, options.workspace, &options.grants);
+    }
     // Where no native execution provider exists there is nothing to prepare: the broker
     // answers `unsupported_platform` itself, before any config is written.
     #[cfg(any(target_os = "linux", windows))]
     {
-        if let Err(error) = private_dir(&state) {
+        // The broker makes the state directory itself (owner-only, through the IPC layer
+        // that checks it); only its parent is made here. On Windows a directory made here
+        // by an administrator would be owned by the Administrators group and refused.
+        if let Some(parent) = state.parent()
+            && let Err(error) = std::fs::create_dir_all(parent)
+        {
             eprintln!(
                 "devagotchi start: cannot create {}: {error}",
-                state.display()
+                parent.display()
             );
             return ExitCode::FAILURE;
         }
@@ -156,14 +168,68 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
         );
         // D22: the default signs in; the choice not to is recorded, and until one of the
         // two is on file every run says so. Nothing local waits on it.
-        if let Some(parent) = config.parent() {
-            account_line(&parent.join(devagotchi_hub::account::FILE_NAME));
+        // The sign-in lives in the config directory, wherever the broker's config is.
+        if let Some(dir) = paths::config_dir().or_else(|| config.parent().map(Path::to_path_buf)) {
+            account_line(&dir.join(devagotchi_hub::account::FILE_NAME));
         }
     }
     match devagotchi_broker::serve_blocking(state, config) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("devagotchi start: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `devagotchi start --background`: the same start, detached, with every path explicit so
+/// the broker it starts is this one whatever its environment; returns once it answers.
+fn background(
+    state: &Path,
+    config: &Path,
+    workspace: Option<PathBuf>,
+    grants: &[PathBuf],
+) -> ExitCode {
+    use devagotchi_broker::background;
+    if let Some(endpoint) = background::answering(state) {
+        eprintln!(
+            "devagotchi: your broker is already running: {}",
+            endpoint.display()
+        );
+        return ExitCode::SUCCESS;
+    }
+    let exe = match env::current_exe() {
+        Ok(exe) => exe,
+        Err(error) => {
+            eprintln!("devagotchi start: cannot find this binary: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let mut args: Vec<OsString> = vec![
+        "start".into(),
+        "--state-dir".into(),
+        state.into(),
+        "--config".into(),
+        config.into(),
+    ];
+    if let Some(workspace) = workspace {
+        args.extend(["--workspace".into(), absolute(workspace).into()]);
+    }
+    for grant in grants {
+        args.extend(["--grant".into(), absolute(grant.clone()).into()]);
+    }
+    let log = state.join(background::LOG_FILE);
+    match background::start_and_wait(&exe, &args, state, background::START_WITHIN) {
+        Ok(endpoint) => {
+            eprintln!(
+                "devagotchi: your broker is running in the background: {} (log {})",
+                endpoint.display(),
+                log.display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(failure) => {
+            eprintln!("devagotchi start: {failure}\n(log {})", log.display());
             ExitCode::FAILURE
         }
     }
@@ -245,15 +311,19 @@ fn write_config(
         }
         push(real);
     }
+    // A person's own broker acts as them, as Desktop Commander does (trust by default,
+    // ruled 30 Oct 2026); the grants stay listed for a config set back to `granted`.
     let config = serde_json::json!({
         "workspace": workspace,
+        "exec_policy": "account",
         "allowed_executables": executables,
         "output_limit_bytes": 262_144,
         "max_operations": 64,
         "max_concurrent": 4,
     });
     let text = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())? + "\n";
-    let tmp = path.with_extension("json.tmp");
+    // A name of this process's own: two first starts racing never share a temporary file.
+    let tmp = path.with_extension(format!("json.tmp-{}", std::process::id()));
     std::fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
     #[cfg(unix)]
     {
@@ -261,23 +331,19 @@ fn write_config(
         let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
     }
     std::fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let listed = executables
+        .iter()
+        .filter_map(|e| e.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(", ");
     Ok(format!(
-        "workspace {}, {} executable grant{}{}",
+        "workspace {}, runs as your account; {}",
         workspace.display(),
-        executables.len(),
-        if executables.len() == 1 { "" } else { "s" },
-        if executables.is_empty() {
-            " (none of the usual toolchains is on PATH; add some with --grant)".to_string()
+        if listed.is_empty() {
+            "no usual toolchain on PATH to list for exec_policy granted".to_string()
         } else {
-            format!(
-                " ({})",
-                executables
-                    .iter()
-                    .filter_map(|e| e.file_name())
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            )
+            format!("listed for exec_policy granted: {listed}")
         }
     ))
 }
@@ -372,6 +438,9 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
         assert_eq!(parsed["max_concurrent"], 4);
+        // A person's own broker runs what their account can, as Desktop Commander does
+        // (trust by default, ruled 30 Oct 2026); an operator's install chooses its own.
+        assert_eq!(parsed["exec_policy"], "account");
         assert!(parsed["allowed_executables"].is_array());
         for grant in parsed["allowed_executables"].as_array().unwrap() {
             assert!(

@@ -20,7 +20,7 @@ Points your AI clients at Devagotchi. Each gets an MCP server named `devagotchi`
 this binary:
   --hub [URL]  (the default once `devagotchi login` has signed you in) the hosted hub, as your
                account: every machine you linked, the boards and approvals
-  --local      this machine's own broker (`devagotchi start` must be running)
+  --local      this machine's own broker (started in the background when it is not running)
 Clients (default: every one found here):
   claude-code     `claude mcp add --scope user devagotchi -- devagotchi mcp …`
   codex           [mcp_servers.devagotchi] in ~/.codex/config.toml (CODEX_HOME honoured)
@@ -29,8 +29,18 @@ Each file is backed up beside itself (.bak-<time>) and written whole. Then the s
 started once and asked for its tools (--no-check skips that). Restart a client that is
 open to pick the server up.";
 
+pub const SETUP_USAGE: &str = "Usage: devagotchi setup [claude-code|codex|claude-desktop|all] [--hub [URL] | --local] [--no-check]
+
+Sets Devagotchi up for every AI client on this machine in one step, with no account needed:
+Claude Code, Codex and Claude Desktop each get an MCP server named `devagotchi`, and the
+server is started once to check it answers (which also starts your broker in the background).
+Signed in (`devagotchi login`), it uses your account's hub; otherwise this machine's own
+broker. The same as `devagotchi connect`, except that it never asks you to sign in first.";
+
 /// How long Devagotchi may hold one tool call (a wait is at most 50 s, then the answer).
 const TOOL_TIMEOUT_SECS: u64 = 120;
+/// How long a client may wait for `devagotchi mcp` to start: it may start the broker first.
+const STARTUP_TIMEOUT_SECS: u64 = 30;
 const CHECK_TIMEOUT: Duration = Duration::from_secs(30);
 /// The line written above Devagotchi's table in Codex's config, replaced with it.
 const CODEX_MARK: &str =
@@ -51,6 +61,8 @@ pub struct Machine {
     pub path: Option<OsString>,
     /// Whether `devagotchi login` has signed this machine in.
     pub signed_in: bool,
+    /// Whether an account is on file at all, signed in or with its sign-in run out.
+    pub account_on_file: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,20 +129,44 @@ fn parse(args: &[OsString]) -> Result<Option<Options>, String> {
 
 /// `devagotchi connect …`
 pub fn cli(args: Vec<OsString>, machine: Machine) -> ExitCode {
+    run(args, machine, false)
+}
+
+/// `devagotchi setup …`: `connect`, with this machine's own broker when no account is on
+/// file, so an AI can set Devagotchi up with one command and no sign-in.
+pub fn setup(args: Vec<OsString>, machine: Machine) -> ExitCode {
+    run(args, machine, true)
+}
+
+fn run(args: Vec<OsString>, machine: Machine, setup: bool) -> ExitCode {
+    let (verb, usage) = if setup {
+        ("setup", SETUP_USAGE)
+    } else {
+        ("connect", USAGE)
+    };
     let options = match parse(&args) {
         Ok(Some(options)) => options,
         Ok(None) => {
-            println!("{USAGE}");
+            println!("{usage}");
             return ExitCode::SUCCESS;
         }
         Err(why) => {
-            eprintln!("devagotchi connect: {why}\n\n{USAGE}");
+            eprintln!("devagotchi {verb}: {why}\n\n{usage}");
             return ExitCode::from(64);
         }
     };
     let target = match options.target {
         Some(target) => target,
         None if machine.signed_in => Target::Hub(None),
+        // No account at all: this machine's own broker. An account whose sign-in ran out
+        // keeps its hub until its person says otherwise.
+        None if setup && !machine.account_on_file => Target::Local,
+        None if setup => {
+            eprintln!(
+                "devagotchi setup: this machine's sign-in has run out. Run `devagotchi login` to renew it (setup then uses your hub), or `devagotchi setup --local` for this machine's broker alone."
+            );
+            return ExitCode::from(64);
+        }
         None => {
             eprintln!(
                 "devagotchi connect: this machine is not signed in. Run `devagotchi login` first (then connect uses the hosted hub), or `devagotchi connect --local` for this machine's broker alone."
@@ -148,14 +184,15 @@ pub fn cli(args: Vec<OsString>, machine: Machine) -> ExitCode {
         Some(clients) => clients,
         None => Client::ALL.into_iter().filter(|c| present(*c, &machine)).collect(),
     };
+    // First, so a person with another MCP client has the absolute command to give it.
+    let shown = format!("{} {}", machine.exe.display(), args.join(" "));
+    println!("Devagotchi MCP server: {shown}");
     if clients.is_empty() {
         eprintln!(
-            "devagotchi connect: found no Claude Code (`claude`), Codex (~/.codex or `codex`) or Claude Desktop here; name one to set it up anyway"
+            "devagotchi {verb}: found no Claude Code (`claude`), Codex (~/.codex or `codex`) or Claude Desktop here; name one to set it up anyway, or give any other MCP client the server above (a stdio server: that command, with its arguments)"
         );
         return ExitCode::from(1);
     }
-    let shown = format!("{} {}", machine.exe.display(), args.join(" "));
-    println!("Devagotchi MCP server: {shown}");
     let mut failed = false;
     for client in clients {
         let done = match client {
@@ -314,7 +351,7 @@ fn codex_config(existing: &str, exe: &Path, args: &[String]) -> String {
     }
     let args = args.iter().map(|a| toml_string(a)).collect::<Vec<_>>().join(", ");
     out.push_str(&format!(
-        "{CODEX_MARK}\n[mcp_servers.devagotchi]\ncommand = {}\nargs = [{args}]\n# Devagotchi holds a wait for up to 50 s before it answers.\ntool_timeout_sec = {TOOL_TIMEOUT_SECS}\n",
+        "{CODEX_MARK}\n[mcp_servers.devagotchi]\ncommand = {}\nargs = [{args}]\n# Devagotchi holds a wait for up to 50 s before it answers.\ntool_timeout_sec = {TOOL_TIMEOUT_SECS}\n# Its first start may also start your broker, which can take longer than the default.\nstartup_timeout_sec = {STARTUP_TIMEOUT_SECS}\n",
         toml_string(&exe.to_string_lossy())
     ));
     out
@@ -389,6 +426,7 @@ fn check(exe: &Path, args: &[String]) -> Result<Vec<String>, String> {
         .map_err(|e| format!("could not start {}: {e}", exe.display()))?;
     let mut stdin = child.stdin.take().ok_or("no stdin")?;
     let stdout = child.stdout.take().ok_or("no stdout")?;
+    let stderr = child.stderr.take().ok_or("no stderr")?;
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -397,8 +435,16 @@ fn check(exe: &Path, args: &[String]) -> Result<Vec<String>, String> {
             }
         }
     });
+    // What the server says on stderr is why it did not answer, when it did not.
+    let (said_tx, said_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let lines: Vec<String> = BufReader::new(stderr).lines().map_while(Result::ok).collect();
+        let _ = said_tx.send(lines);
+    });
     let mut send = |message: serde_json::Value| -> Result<(), String> {
-        writeln!(stdin, "{message}").map_err(|e| format!("could not talk to the server: {e}"))
+        // A pipe that will not take the message means the server has already exited.
+        writeln!(stdin, "{message}")
+            .map_err(|e| format!("it stopped before answering (writing to it: {e})"))
     };
     let result = (|| {
         send(serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
@@ -419,16 +465,27 @@ fn check(exe: &Path, args: &[String]) -> Result<Vec<String>, String> {
     })();
     let _ = child.kill();
     let _ = child.wait();
-    result
+    result.map_err(|why| {
+        let said = said_rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
+        let said = &said[said.len().saturating_sub(10)..];
+        if said.is_empty() {
+            why
+        } else {
+            format!("{why}; it said:\n{}", said.join("\n"))
+        }
+    })
 }
 
 fn answer(rx: &mpsc::Receiver<String>, id: i64) -> Result<serde_json::Value, String> {
     let until = std::time::Instant::now() + CHECK_TIMEOUT;
     loop {
         let left = until.saturating_duration_since(std::time::Instant::now());
-        let line = rx
-            .recv_timeout(left)
-            .map_err(|_| format!("no answer within {} s", CHECK_TIMEOUT.as_secs()))?;
+        let line = rx.recv_timeout(left).map_err(|error| match error {
+            mpsc::RecvTimeoutError::Disconnected => "it stopped before answering".to_string(),
+            mpsc::RecvTimeoutError::Timeout => {
+                format!("no answer within {} s", CHECK_TIMEOUT.as_secs())
+            }
+        })?;
         let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else {
             continue;
         };
@@ -477,7 +534,7 @@ mod tests {
         assert!(out.contains("[profiles.fast]\nmodel = \"o4-mini\""), "{out}");
         assert!(!out.contains("/old/devagotchi") && !out.contains("X = \"1\""), "{out}");
         assert_eq!(out.matches("[mcp_servers.devagotchi]").count(), 1, "{out}");
-        assert!(out.ends_with("[mcp_servers.devagotchi]\ncommand = '/usr/local/bin/devagotchi'\nargs = ['mcp', '--hub']\n# Devagotchi holds a wait for up to 50 s before it answers.\ntool_timeout_sec = 120\n"), "{out}");
+        assert!(out.ends_with("[mcp_servers.devagotchi]\ncommand = '/usr/local/bin/devagotchi'\nargs = ['mcp', '--hub']\n# Devagotchi holds a wait for up to 50 s before it answers.\ntool_timeout_sec = 120\n# Its first start may also start your broker, which can take longer than the default.\nstartup_timeout_sec = 30\n"), "{out}");
         // Running it again changes nothing.
         assert_eq!(codex_config(&out, Path::new("/usr/local/bin/devagotchi"), &hub()), out);
         // A new file holds only the server.
@@ -511,5 +568,23 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&file).unwrap(), "two\n");
         assert_eq!(std::fs::read_to_string(&backup).unwrap(), "one\n");
         assert!(backup.file_name().unwrap().to_string_lossy().starts_with("config.toml.bak-"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_server_that_stops_is_reported_at_once_with_what_it_said() {
+        // Gone before it is written to; and one that answers, then has closed its input by
+        // the time the next message is written, but has not exited yet.
+        let answers_then_closes = r#"read line; exec 0<&-; echo 'ipc_io: path must be shorter than SUN_LEN' >&2; echo '{"jsonrpc":"2.0","id":1,"result":{}}'; sleep 0.3; exit 1"#;
+        for script in [
+            "echo 'ipc_io: path must be shorter than SUN_LEN' >&2; exit 1",
+            answers_then_closes,
+        ] {
+            let begun = std::time::Instant::now();
+            let why = check(Path::new("/bin/sh"), &["-c".into(), script.into()]).unwrap_err();
+            assert!(begun.elapsed() < Duration::from_secs(5), "{:?}", begun.elapsed());
+            assert!(why.contains("stopped"), "{why}");
+            assert!(why.contains("path must be shorter than SUN_LEN"), "{why}");
+        }
     }
 }

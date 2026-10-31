@@ -5,6 +5,7 @@
 //! `devagotchi login`, `logout` and `whoami` (`account`) are how a machine signs in to one.
 
 pub mod account;
+mod accounts;
 mod audit;
 mod auth;
 pub mod board;
@@ -358,7 +359,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         },
         None => None,
     };
-    let verifier = Arc::new(Verifier::from_config(&config.auth, &state_dir).await?);
+    let verifier = Arc::new(Verifier::from_hub_config(&config, &state_dir).await?);
     let web = match (&config.web, &config.auth) {
         (
             Some(web),

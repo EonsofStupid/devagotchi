@@ -768,6 +768,7 @@ dependencies = [
  "devagotchi-core",
  "devagotchi-ipc",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
@@ -823,6 +824,7 @@ dependencies = [
  "base64 0.22.1",
  "devagotchi-contracts",
  "devagotchi-ipc",
+ "devagotchi-mcp",
  "ed25519-dalek",
  "futures-util",
  "getrandom 0.3.4",
@@ -881,9 +883,12 @@ dependencies = [
 name = "devagotchi-mcp"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "devagotchi-contracts",
  "devagotchi-ipc",
  "rmcp",
+ "schemars 1.2.3",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",

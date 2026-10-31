@@ -60,12 +60,55 @@ pub enum Verifier {
     Nomen(NomenVerifier),
     Oidc(OidcVerifier),
     Dev(HashMap<String, String>),
+    /// `auth` plus `trusted_issuers`: a JWT whose `iss` names a trusted issuer is checked
+    /// by that issuer alone; every other token goes to `primary`. The `iss` read to route
+    /// is unverified, and only picks which issuer's keys must then verify the signature.
+    Federated {
+        primary: Box<Verifier>,
+        trusted: Vec<OidcVerifier>,
+    },
+}
+
+/// The `iss` a JWT claims, unverified: only for choosing which issuer checks it.
+fn claimed_issuer(token: &str) -> Option<String> {
+    use base64::Engine;
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    #[derive(Deserialize)]
+    struct Iss {
+        iss: String,
+    }
+    serde_json::from_slice::<Iss>(&bytes)
+        .ok()
+        .map(|claims| claims.iss)
 }
 
 impl Verifier {
-    /// The verifier the config names. A Nomen verifier keeps the sign-ins Nomen confirmed
+    /// The verifier for `auth` and every `trusted_issuers` entry. Discovery for each
+    /// trusted issuer runs at start, like `auth.mode oidc`, so a wrong URL stops the hub.
+    pub async fn from_hub_config(
+        config: &crate::config::HubConfig,
+        state_dir: &Path,
+    ) -> BridgeResult<Self> {
+        let primary = Self::primary(&config.auth, state_dir).await?;
+        if config.trusted_issuers.is_empty() {
+            return Ok(primary);
+        }
+        let mut trusted = Vec::with_capacity(config.trusted_issuers.len());
+        for entry in &config.trusted_issuers {
+            trusted.push(OidcVerifier::discover(&entry.issuer, &entry.audiences).await?);
+        }
+        Ok(Verifier::Federated {
+            primary: Box::new(primary),
+            trusted,
+        })
+    }
+
+    /// The verifier `auth` names. A Nomen verifier keeps the sign-ins Nomen confirmed
     /// in `state_dir`, so a restart during a Nomen outage signs nobody out.
-    pub async fn from_config(config: &AuthConfig, state_dir: &Path) -> BridgeResult<Self> {
+    async fn primary(config: &AuthConfig, state_dir: &Path) -> BridgeResult<Self> {
         match config {
             AuthConfig::Nomen {
                 issuer,
@@ -106,6 +149,19 @@ impl Verifier {
                 .ok_or(AuthError::Invalid("unknown token")),
             Verifier::Nomen(nomen) => nomen.verify(bearer).await,
             Verifier::Oidc(oidc) => oidc.verify(bearer).await,
+            Verifier::Federated { primary, trusted } => {
+                let claimed = claimed_issuer(bearer);
+                let chosen = claimed.as_deref().and_then(|iss| {
+                    let iss = iss.trim_end_matches('/');
+                    trusted
+                        .iter()
+                        .find(|oidc| oidc.issuer.trim_end_matches('/') == iss)
+                });
+                match chosen {
+                    Some(oidc) => oidc.verify(bearer).await,
+                    None => Box::pin(primary.verify(bearer)).await,
+                }
+            }
         }
     }
 
@@ -114,6 +170,7 @@ impl Verifier {
     pub fn issuer_health(&self) -> Option<crate::nomen::IssuerHealth> {
         match self {
             Verifier::Nomen(nomen) => Some(nomen.health()),
+            Verifier::Federated { primary, .. } => primary.issuer_health(),
             _ => None,
         }
     }
@@ -123,6 +180,7 @@ impl Verifier {
             Verifier::Nomen(nomen) => Some(nomen.issuer()),
             Verifier::Oidc(oidc) => Some(&oidc.issuer),
             Verifier::Dev(_) => None,
+            Verifier::Federated { primary, .. } => primary.issuer(),
         }
     }
 }
@@ -375,6 +433,85 @@ mod tests {
         );
         assert!(matches!(
             verifier.verify("").await,
+            Err(AuthError::Invalid(_))
+        ));
+    }
+
+    /// A site token (ES256, like Supabase's) is checked by the trusted issuer its `iss`
+    /// names; a token for any other issuer still goes to the primary verifier; a token
+    /// claiming the trusted issuer but signed by another key is refused.
+    #[tokio::test]
+    async fn federated_routes_by_issuer_and_still_checks_the_signature() {
+        use aws_lc_rs::signature::{ECDSA_P256_SHA256_FIXED_SIGNING, EcdsaKeyPair, KeyPair};
+        use base64::Engine;
+        use jsonwebtoken::{EncodingKey, Header, encode};
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let rng = aws_lc_rs::rand::SystemRandom::new();
+        let fresh = || {
+            let pkcs8 =
+                EcdsaKeyPair::generate_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, &rng).unwrap();
+            let pair =
+                EcdsaKeyPair::from_pkcs8(&ECDSA_P256_SHA256_FIXED_SIGNING, pkcs8.as_ref()).unwrap();
+            (pkcs8.as_ref().to_vec(), pair.public_key().as_ref().to_vec())
+        };
+        let (site_der, site_pub) = fresh();
+        let (other_der, _) = fresh();
+        // Uncompressed point: 0x04 || x || y.
+        let (x, y) = (b64.encode(&site_pub[1..33]), b64.encode(&site_pub[33..65]));
+        let keys: JwkSet = serde_json::from_value(serde_json::json!({
+            "keys": [{"kty": "EC", "crv": "P-256", "kid": "site1", "alg": "ES256", "use": "sig", "x": x, "y": y}]
+        }))
+        .unwrap();
+        let site = OidcVerifier {
+            issuer: "https://site.example/auth/v1".into(),
+            audiences: vec!["authenticated".into()],
+            jwks_uri: "https://site.example/auth/v1/.well-known/jwks.json".into(),
+            http: reqwest::Client::new(),
+            keys: RwLock::new(Arc::new(keys)),
+            last_refresh: Mutex::new(Instant::now()),
+        };
+        let verifier = Verifier::Federated {
+            primary: Box::new(Verifier::Dev(HashMap::from([(
+                "0123456789abcdef-token".to_string(),
+                "300000000000000001".to_string(),
+            )]))),
+            trusted: vec![site],
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let sign = |der: &[u8], iss: &str| {
+            let mut header = Header::new(Algorithm::ES256);
+            header.kid = Some("site1".into());
+            let claims = serde_json::json!({"iss": iss, "aud": "authenticated",
+                "sub": "8d0c6a2e-1f1b-4c55-9a43-1b2f3c4d5e6f", "role": "authenticated", "exp": now + 600});
+            encode(&header, &claims, &EncodingKey::from_ec_der(der)).unwrap()
+        };
+        let person = verifier
+            .verify(&sign(&site_der, "https://site.example/auth/v1"))
+            .await
+            .unwrap();
+        assert_eq!(person.id, "8d0c6a2e-1f1b-4c55-9a43-1b2f3c4d5e6f");
+        assert_eq!(person.via, "oidc");
+        assert!(
+            matches!(
+                verifier
+                    .verify(&sign(&other_der, "https://site.example/auth/v1"))
+                    .await,
+                Err(AuthError::Invalid(_))
+            ),
+            "claiming the trusted issuer is not enough: its key must sign"
+        );
+        assert_eq!(
+            verifier.verify("0123456789abcdef-token").await.unwrap().id,
+            "300000000000000001",
+            "a token for no trusted issuer still reaches the primary verifier"
+        );
+        assert!(matches!(
+            verifier
+                .verify(&sign(&site_der, "https://elsewhere.example"))
+                .await,
             Err(AuthError::Invalid(_))
         ));
     }
