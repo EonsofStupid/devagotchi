@@ -595,3 +595,80 @@ async fn on_https_the_cookies_are_the_hosts_alone() {
     }
     assert!(!set.to_ascii_lowercase().contains("domain"), "{set}");
 }
+
+#[tokio::test]
+async fn a_replacing_link_lets_the_device_that_holds_the_old_passkey_make_the_new_one() {
+    // The owner's usual phone already holds a passkey for this hub: listing it in
+    // excludeCredentials would make the phone refuse to make another.
+    let world = world().await;
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let link = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &owner.id)
+        .unwrap();
+    world.make_passkey(&world.phone(), &link).await;
+    let plain = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &owner.id)
+        .unwrap();
+    let (_, _, options) = world
+        .options("/passkey/register/options", json!({ "link": plain }))
+        .await;
+    assert_eq!(options["excludeCredentials"].as_array().unwrap().len(), 1);
+    let replacing = world
+        .accounts
+        .issue_replacing_link(LinkPurpose::Owner, &owner.id)
+        .unwrap();
+    let (_, _, options) = world
+        .options("/passkey/register/options", json!({ "link": replacing }))
+        .await;
+    assert_eq!(options["excludeCredentials"], json!([]));
+}
+
+#[tokio::test]
+async fn an_old_answer_replayed_signs_nobody_out() {
+    // A captured sign-in from a key that keeps a counter, replayed after the counter has
+    // moved on: refused, and the sessions opened since stay.
+    let world = world().await;
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let link = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &owner.id)
+        .unwrap();
+    let mut phone = world.phone();
+    world.make_passkey(&phone, &link).await;
+    let (challenge, first_jar, _) = world.options("/passkey/sign-in/options", json!({})).await;
+    let first = World::assertion(&mut phone, &challenge, Some(&owner.id));
+    assert_eq!(
+        world
+            .post("/passkey/sign-in", Some(&first_jar), first.clone())
+            .await
+            .status(),
+        200
+    );
+    let (challenge, jar, _) = world.options("/passkey/sign-in/options", json!({})).await;
+    let second = World::assertion(&mut phone, &challenge, Some(&owner.id));
+    let signed_in = world.post("/passkey/sign-in", Some(&jar), second).await;
+    let session = cookie(&signed_in, "dg_session").unwrap();
+    let replayed = world
+        .post("/passkey/sign-in", Some(&first_jar), first)
+        .await;
+    assert_eq!(replayed.status(), 400);
+    assert_eq!(world.get("/account", Some(&session)).await.status(), 200);
+}
+
+#[tokio::test]
+async fn ceremony_bodies_are_json_only() {
+    let world = world().await;
+    let plain = world
+        .http
+        .post(format!("{}/passkey/sign-in/options", world.url))
+        .header(header::ORIGIN, &world.url)
+        .header(header::CONTENT_TYPE, "text/plain")
+        .body("{}")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(plain.status(), 415);
+    assert!(cookie(&plain, "dg_challenge").is_none());
+}

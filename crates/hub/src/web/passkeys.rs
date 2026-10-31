@@ -8,7 +8,8 @@
 //!   set, and the answer is checked against the cookie, so another site cannot sign a
 //!   browser in to an account of its choosing (login CSRF).
 //! - The JSON endpoints answer only this hub's own pages: the `Origin` must be the hub's,
-//!   and a JSON body cannot come from a plain cross-site form.
+//!   and `Sec-Fetch-Site`, when sent, same-origin. Both are checked before the body is
+//!   parsed, and the body must be `application/json`.
 //! - The pages run one script from the hub itself (`/assets/passkey.js`), under a strict
 //!   Content-Security-Policy.
 //! - The owner's link is `/owner#<token>`: the token never reaches a request line or a log.
@@ -252,8 +253,27 @@ fn store_failed(message: &str) -> Response {
     )
 }
 
-/// The request body as `T`, read only after the origin check has passed.
-fn body<T: serde::de::DeserializeOwned>(raw: &[u8]) -> Result<T, Response> {
+/// The ceremonies take JSON only, as the hub's script sends it.
+fn json_only(headers: &HeaderMap) -> Result<(), Response> {
+    let json = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("application/json"));
+    if json {
+        Ok(())
+    } else {
+        Err(refuse(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "not_json",
+            "Use this hub's own sign-in page.",
+        ))
+    }
+}
+
+/// The request body as `T`, parsed only after the origin check has passed.
+fn body<T: serde::de::DeserializeOwned>(headers: &HeaderMap, raw: &[u8]) -> Result<T, Response> {
+    json_only(headers)?;
     serde_json::from_slice(raw).map_err(|_| {
         refuse(
             StatusCode::BAD_REQUEST,
@@ -324,15 +344,21 @@ pub async fn register_options(
     if !hub.from_own_page(&headers) {
         return not_own_page();
     }
-    let input: LinkIn = match body(&raw) {
+    let input: LinkIn = match body(&headers, &raw) {
         Ok(input) => input,
         Err(refused) => return refused,
     };
     let accounts = hub.accounts.clone();
     let found = tokio::task::spawn_blocking(move || {
-        let account = accounts.check_link(LinkPurpose::Owner, &input.link)?;
+        let (account, replaces) = accounts.check_link_replacing(LinkPurpose::Owner, &input.link)?;
         let holder = accounts.get(&account)?;
-        let existing = accounts.passkeys_of(&account)?;
+        // A replacing link removes the account's passkeys, so none is excluded: the device
+        // that holds the old one may make the new one in its place.
+        let existing = if replaces {
+            Vec::new()
+        } else {
+            accounts.passkeys_of(&account)?
+        };
         let challenge = accounts.challenge(Ceremony::Register, Some(&account));
         Ok::<_, devagotchi_contracts::BridgeError>((holder, existing, challenge))
     })
@@ -400,7 +426,7 @@ pub async fn register(
     if !hub.from_own_page(&headers) {
         return not_own_page();
     }
-    let input: RegisterIn = match body(&raw) {
+    let input: RegisterIn = match body(&headers, &raw) {
         Ok(input) => input,
         Err(refused) => return refused,
     };
@@ -499,6 +525,9 @@ pub async fn sign_in_options(State(state): State<AppState>, headers: HeaderMap) 
     if !hub.from_own_page(&headers) {
         return not_own_page();
     }
+    if let Err(refused) = json_only(&headers) {
+        return refused;
+    }
     let challenge = hub.accounts.challenge(Ceremony::SignIn, None);
     hub.with_challenge(
         &challenge,
@@ -537,7 +566,7 @@ pub async fn sign_in(
     if !hub.from_own_page(&headers) {
         return not_own_page();
     }
-    let input: SignInIn = match body(&raw) {
+    let input: SignInIn = match body(&headers, &raw) {
         Ok(input) => input,
         Err(refused) => return refused,
     };
@@ -590,13 +619,6 @@ pub async fn sign_in(
         )
         .map_err(|refusal| {
             eprintln!("devagotchi-hub: refused a passkey sign-in: {refusal}");
-            // A counter that went backwards means a copy of the key: the sessions this
-            // passkey opened end too, whoever holds them.
-            if refusal.0 == "signature counter"
-                && let Err(error) = accounts.end_passkey_sessions(&stored.id)
-            {
-                eprintln!("devagotchi-hub: account store: {}", error.message);
-            }
             devagotchi_contracts::BridgeError::new("refused", refusal.0)
         })?;
         let account = accounts.sign_in(&asserted)?;

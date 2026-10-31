@@ -47,10 +47,17 @@
 
   // The owner's link carries its token after "#": read it once, then take it out of the
   // address bar and the history, so it is not left behind on this device.
+  // A new link opened in the same tab changes only the hash, so it is taken up then too.
   let link = "";
+  function takeLink() {
+    if (location.hash.length > 1) {
+      link = location.hash.slice(1);
+      history.replaceState(null, "", location.pathname);
+    }
+  }
   if (document.getElementById("passkey-register")) {
-    link = location.hash.slice(1);
-    if (location.hash) history.replaceState(null, "", location.pathname);
+    takeLink();
+    window.addEventListener("hashchange", takeLink);
   }
 
   async function register() {

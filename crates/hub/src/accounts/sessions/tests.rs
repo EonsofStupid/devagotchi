@@ -269,10 +269,16 @@ fn a_counter_that_goes_back_ends_the_sessions_that_passkey_opened() {
         challenge: accounts.challenge(Ceremony::SignIn, None),
     };
     accounts.sign_in(&at(5)).unwrap();
+    let copy = at(5);
     assert_eq!(
-        accounts.sign_in(&at(5)).unwrap_err().code,
+        accounts.sign_in(&copy).unwrap_err().code,
         "signature_counter"
     );
     assert_eq!(who(&accounts, &by_key, now_secs()), None);
     assert_eq!(who(&accounts, &by_other, now_secs()), Some(A.to_string()));
+    // Its challenge was spent all the same: replaying it ends nothing more.
+    assert_eq!(
+        accounts.sign_in(&copy).unwrap_err().code,
+        "invalid_ceremony"
+    );
 }

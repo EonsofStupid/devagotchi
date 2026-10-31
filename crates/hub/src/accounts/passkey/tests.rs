@@ -10,12 +10,11 @@ const RP: Relying<'static> = Relying {
     origin: "https://app.devagotchi.com",
 };
 
-fn stored<'a>(credential: &'a NewCredential, count: u32) -> Stored<'a> {
+fn stored(credential: &NewCredential) -> Stored<'_> {
     Stored {
         id: &credential.id,
         public_key: &credential.public_key,
         alg: credential.alg,
-        sign_count: count,
         backup_eligible: credential.backup_eligible,
     }
 }
@@ -33,7 +32,7 @@ fn every_algorithm_registers_and_signs_in() {
         assert_eq!(credential.public_key, phone.spki());
         let challenge = crate::link::random::<32>();
         let sent = phone.assert(&challenge);
-        let count = verify_assertion(RP, &challenge, stored(&credential, 0), sent.assertion())
+        let count = check_assertion(RP, &challenge, stored(&credential), sent.assertion())
             .unwrap_or_else(|refusal| panic!("{alg:?} assertion: {refusal}"));
         assert_eq!(count, 1);
     }
@@ -116,48 +115,47 @@ fn assertion_refusals() {
     let credential =
         verify_registration(RP, &challenge, phone.register(&challenge).registration()).unwrap();
     let good = phone.assert(&challenge);
-    let refused = |sent: &Sent, challenge: &[u8], count: u32| {
-        verify_assertion(RP, challenge, stored(&credential, count), sent.assertion()).unwrap_err()
+    let refused = |sent: &Sent, challenge: &[u8]| {
+        check_assertion(RP, challenge, stored(&credential), sent.assertion()).unwrap_err()
     };
 
-    assert_eq!(refused(&good, &[1u8; 32], 0).0, "challenge");
+    assert_eq!(refused(&good, &[1u8; 32]).0, "challenge");
 
     let mut sent = good.clone();
     sent.signature[10] ^= 0x01;
-    assert_eq!(refused(&sent, &challenge, 0).0, "signature");
+    assert_eq!(refused(&sent, &challenge).0, "signature");
 
     // Valid signatures over the wrong things.
     let wrong_type = phone.signed(
         client_data("webauthn.create", &challenge, RP.origin, None),
         phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV, false),
     );
-    assert_eq!(refused(&wrong_type, &challenge, 0).0, "client data type");
+    assert_eq!(refused(&wrong_type, &challenge).0, "client data type");
     let wrong_origin = phone.signed(
         client_data("webauthn.get", &challenge, "https://evil.example", None),
         phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV, false),
     );
-    assert_eq!(refused(&wrong_origin, &challenge, 0).0, "origin");
+    assert_eq!(refused(&wrong_origin, &challenge).0, "origin");
     let wrong_rp = phone.signed(
         client_data("webauthn.get", &challenge, RP.origin, None),
         phone.auth_data("evil.example", FLAG_UP | FLAG_UV, false),
     );
-    assert_eq!(refused(&wrong_rp, &challenge, 0).0, "rp id");
+    assert_eq!(refused(&wrong_rp, &challenge).0, "rp id");
     let unverified = phone.signed(
         client_data("webauthn.get", &challenge, RP.origin, None),
         phone.auth_data(RP.rp_id, FLAG_UP, false),
     );
-    assert_eq!(refused(&unverified, &challenge, 0).0, "user not verified");
+    assert_eq!(refused(&unverified, &challenge).0, "user not verified");
 
     // Another credential's assertion is not this one's.
     let mut sent = good.clone();
     sent.credential_id = vec![4, 5, 6];
-    assert_eq!(refused(&sent, &challenge, 0).0, "credential id");
+    assert_eq!(refused(&sent, &challenge).0, "credential id");
 
-    // A counter that does not move forward is a cloned authenticator.
-    assert_eq!(refused(&good, &challenge, 1).0, "signature counter");
-    assert_eq!(refused(&good, &challenge, 5).0, "signature counter");
+    // The counter it reports, for the store to compare with what it holds
+    // (`accounts::tests::signing_in_moves_the_counter_forward…`).
     assert_eq!(
-        verify_assertion(RP, &challenge, stored(&credential, 0), good.assertion()),
+        check_assertion(RP, &challenge, stored(&credential), good.assertion()),
         Ok(1)
     );
 }
@@ -175,13 +173,10 @@ fn authenticators_that_keep_no_counter_still_sign_in() {
     let client = client_data("webauthn.get", &challenge, RP.origin, None);
     let data = phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV | FLAG_BE, false);
     let sent = phone.signed(client, data);
+    // 0 is reported as it is; the store takes 0 after 0 and refuses 0 after anything else.
     assert_eq!(
-        verify_assertion(RP, &challenge, stored(&credential, 0), sent.assertion()),
+        check_assertion(RP, &challenge, stored(&credential), sent.assertion()),
         Ok(0)
-    );
-    assert_eq!(
-        verify_assertion(RP, &challenge, stored(&credential, 3), sent.assertion()),
-        Err(Refusal("signature counter"))
     );
 }
 
@@ -376,7 +371,7 @@ fn backup_state_needs_eligibility_and_eligibility_never_changes() {
         phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV | FLAG_BS, false),
     );
     assert_eq!(
-        verify_assertion(RP, &challenge, stored(&single, 0), bs_only.assertion()),
+        check_assertion(RP, &challenge, stored(&single), bs_only.assertion()),
         Err(Refusal("backup state"))
     );
     // Eligibility is fixed when a credential is made: a change means another credential.
@@ -386,7 +381,7 @@ fn backup_state_needs_eligibility_and_eligibility_never_changes() {
         phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV | FLAG_BE | FLAG_BS, false),
     );
     assert_eq!(
-        verify_assertion(RP, &challenge, stored(&single, 0), now_eligible.assertion()),
+        check_assertion(RP, &challenge, stored(&single), now_eligible.assertion()),
         Err(Refusal("backup eligibility"))
     );
     let mut synced = single.clone();
@@ -396,11 +391,11 @@ fn backup_state_needs_eligibility_and_eligibility_never_changes() {
         phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV, false),
     );
     assert_eq!(
-        verify_assertion(RP, &challenge, stored(&synced, 0), not_eligible.assertion()),
+        check_assertion(RP, &challenge, stored(&synced), not_eligible.assertion()),
         Err(Refusal("backup eligibility"))
     );
     assert_eq!(
-        verify_assertion(RP, &challenge, stored(&synced, 0), now_eligible.assertion()),
+        check_assertion(RP, &challenge, stored(&synced), now_eligible.assertion()),
         Ok(1)
     );
 }
@@ -436,7 +431,7 @@ fn embedded_and_padded_client_data_is_refused() {
 
     // The same checks on the sign-in side, each under a valid signature.
     let refused = |sent: &Sent| {
-        verify_assertion(RP, &challenge, stored(&credential, 0), sent.assertion()).unwrap_err()
+        check_assertion(RP, &challenge, stored(&credential), sent.assertion()).unwrap_err()
     };
     phone.count = 1;
     framed["type"] = "webauthn.get".into();
@@ -465,4 +460,30 @@ fn embedded_and_padded_client_data_is_refused() {
         phone.auth_data(RP.rp_id, FLAG_UP | FLAG_UV, false),
     );
     assert_eq!(refused(&garbled).0, "client data");
+}
+
+#[test]
+fn a_checked_sign_in_leaves_the_counter_to_the_store() {
+    // The store compares the counter with what it holds now, inside the transaction that
+    // spends the challenge; a sign-in whose counter went back reaches it, so the copy is
+    // dealt with only for a live challenge of this hub's.
+    let mut phone = Authenticator::new(Alg::Es256);
+    let challenge = [9u8; 32];
+    let credential =
+        verify_registration(RP, &challenge, phone.register(&challenge).registration()).unwrap();
+    let row = crate::accounts::Passkey {
+        id: credential.id.clone(),
+        account: "acct_aaaaaaaaaaaaaaaaaaaaaaaaaa".into(),
+        label: "key".into(),
+        public_key: credential.public_key.clone(),
+        alg: credential.alg,
+        sign_count: 7,
+        backup_eligible: credential.backup_eligible,
+    };
+    let sent = phone.assert(&challenge);
+    let checked = check_sign_in(RP, &challenge, &row, sent.assertion(), Some(b"acct_x")).unwrap();
+    assert_eq!(
+        checked.sign_count, 1,
+        "behind the stored 7, for the store to refuse"
+    );
 }

@@ -7,9 +7,8 @@
 //! then its challenge is recorded as spent, in the same transaction as what it did, until
 //! it would have expired anyway. A flood of unanswered sign-ins fills nothing.
 //!
-//! Increment 32a-1 is the store and the passkey verifier on their own; the sign-in pages
-//! that call them come in 32a-2, so until then only the tests do (hence the allow below).
-#![allow(dead_code)]
+//! The hub's pages use it in `web/passkeys.rs`; `devagotchi hub owner` makes the owner and
+//! the one-time link.
 
 pub mod passkey;
 pub mod sessions;
@@ -103,6 +102,7 @@ impl Ceremony {
 /// What lets a passkey be added to an account: a live one-time link for it. (A signed-in
 /// session of the account joins this with the account page.)
 #[derive(Clone, Copy)]
+#[allow(dead_code)] // the account page (32a-3) adds passkeys on a session's authority
 pub enum Authority<'a> {
     Link(LinkPurpose, &'a str),
 }
@@ -458,6 +458,17 @@ impl Accounts {
         Ok(token)
     }
 
+    /// The account a link is for, and whether using it replaces the account's other
+    /// passkeys, when it is unused and unexpired. Checking does not spend it.
+    pub fn check_link_replacing(
+        &self,
+        purpose: LinkPurpose,
+        token: &str,
+    ) -> BridgeResult<(String, bool)> {
+        let connection = self.connection.lock().expect("accounts");
+        live_link(&connection, purpose, token, now_secs()).map(|live| (live.account, live.replaces))
+    }
+
     /// The account a link is for, when it is unused and unexpired. Checking does not
     /// spend it: a link preview cannot burn it.
     pub fn check_link(&self, purpose: LinkPurpose, token: &str) -> BridgeResult<String> {
@@ -479,6 +490,7 @@ impl Accounts {
     /// this hub made to register a passkey on this account. The challenge and the link are
     /// spent in the same transaction as the passkey is stored: all of it happens or none
     /// does.
+    #[allow(dead_code)] // the account page (32a-3)
     pub fn add_passkey(
         &self,
         account: &str,
@@ -806,14 +818,15 @@ impl Accounts {
         let count = asserted.sign_count;
         if (count != 0 || passkey.sign_count != 0) && count <= passkey.sign_count {
             // A copy of the key is about: whoever holds the sessions this passkey opened
-            // may be the copy's holder, so they end. The challenge stays unspent.
-            transaction.rollback().map_err(store_error)?;
-            connection
+            // may be the copy's holder, so they end. The challenge stays spent, so the same
+            // answer cannot do it again.
+            transaction
                 .execute(
                     "DELETE FROM sessions WHERE passkey = ?1",
                     params![asserted.id],
                 )
                 .map_err(store_error)?;
+            transaction.commit().map_err(store_error)?;
             return Err(BridgeError::new(
                 "signature_counter",
                 "this passkey's counter went backwards: it may have been copied",
@@ -831,6 +844,7 @@ impl Accounts {
 
     /// Remove one of `account`'s passkeys; false when it has no such passkey. Its last one
     /// stays: removing it would lock the account out.
+    #[allow(dead_code)] // the account page (32a-3)
     pub fn remove_passkey(&self, account: &str, id: &[u8]) -> BridgeResult<bool> {
         let mut connection = self.connection.lock().expect("accounts");
         let transaction = connection

@@ -11,6 +11,7 @@ user verification). It checks what the Rust tests cannot: that the hub's own scr
 2. The account page says who is signed in and that they own the hub.
 3. Signing out ends the session; the sign-in page signs back in with the passkey alone.
 4. The spent link no longer works.
+5. `hub owner --replace` works on the device that already holds the owner's passkey.
 
 Needs Python Playwright with its Chromium. Not run in CI (the runners have no Playwright);
 run it before pushing a change to the sign-in pages:
@@ -135,6 +136,26 @@ def main() -> int:
             status = page.inner_text("#passkey-status")
             assert "timed out or was already used" in status, status
             print("PASS the spent link is refused")
+
+            # 5. --replace on the device that already holds the owner's passkey: it makes
+            # the new one in place of the old, and signs in with it.
+            replaced = subprocess.run(
+                [args.devagotchi, "hub", "owner", "--state-dir", str(state), "--config",
+                 str(config), "--replace"],
+                capture_output=True, text=True, check=True,
+            ).stdout.strip()
+            page.goto(replaced)
+            page.click("#passkey-register")
+            try:
+                page.wait_for_url(f"{url}/account", timeout=15_000)
+            except Exception:
+                raise SystemExit("--replace did not sign in: " + page.inner_text("#passkey-status"))
+            page.click("header form button")
+            page.wait_for_url(f"{url}/signed-out")
+            page.goto(f"{url}/auth/login")
+            page.click("#passkey-sign-in")
+            page.wait_for_url(f"{url}/account", timeout=15_000)
+            print("PASS --replace works on the device that held the old passkey")
             browser.close()
     finally:
         hub.terminate()

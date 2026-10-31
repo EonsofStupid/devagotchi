@@ -16,6 +16,7 @@ pub const MAX_SESSIONS_PER_ACCOUNT: usize = 50;
 #[derive(Debug, Clone)]
 pub struct Session {
     pub account: Account,
+    #[allow(dead_code)] // shown on the account page (32a-3)
     pub created_at: u64,
     pub last_seen: u64,
 }
@@ -145,16 +146,8 @@ impl Accounts {
         Ok(removed == 1)
     }
 
-    /// End every session `passkey` opened (a copy of it is about); how many there were.
-    pub fn end_passkey_sessions(&self, passkey: &[u8]) -> BridgeResult<usize> {
-        self.connection
-            .lock()
-            .expect("accounts")
-            .execute("DELETE FROM sessions WHERE passkey = ?1", params![passkey])
-            .map_err(store_error)
-    }
-
     /// End every session of `account`; how many there were.
+    #[allow(dead_code)] // "sign out everywhere" on the account page (32a-3)
     pub fn end_sessions(&self, account: &str) -> BridgeResult<usize> {
         self.connection
             .lock()
