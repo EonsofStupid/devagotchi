@@ -5,6 +5,41 @@ Releases are the operator's act: a tag `vX.Y.Z` on `main` runs `.github/workflow
 The version in `Cargo.toml` is bumped by the operator in the same commit as this file's next
 heading. Agents draft the fragments below; they never tag.
 
+## Unreleased
+
+### Devagotchi accounts, and the hub as the authorization server
+- The hub can be its own OAuth 2.1 authorization server (`auth.mode` `devagotchi`).
+  Accounts, personal workspaces, and linked sign-ins live in the hub state directory.
+  A verified email links a second provider to an existing account. An unverified email
+  does not. Claude, ChatGPT, and Cursor register a public client here (dynamic client
+  registration), use PKCE S256, and receive a JWT the hub signs and checks locally.
+  Nomen is an optional upstream provider, not a requirement. `auth.mode` `nomen` is
+  unchanged.
+- `owner` and grants that still name an identity-provider subject are adopted once
+  (`auth.legacy.issuer`, or `issuer|sub`) and stay stable. Machines enrolled to that
+  subject move with the account. The config file is not rewritten.
+- `devagotchi login` uses device authorization against the hub (`https://app.devagotchi.com`
+  by default). `--issuer` still signs in directly with an upstream issuer.
+- `/healthz` `auth` reports the identity store, the signing key, and each upstream
+  provider's discovery. `docs/auth.md` is the operator page. `docs/deploy.md` and
+  `deploy/linux/promote-hub.sh` describe staging, smoke, production, and rollback.
+  Nothing in this change deploys.
+- A devagotchi.com profile links to a Devagotchi account only when a hub token carries
+  the same verified email (`apps/website/lib/hub-account.ts`).
+- An AI can open a provisional account and add the person's machine before anyone
+  finishes a sign-in. A remote connector's one Allow, or `POST /auth/agent/start`
+  (`devagotchi login`), mints the account and tokens. `machine_add` returns the
+  join line; the enrolled machine belongs to that account. A later claim attaches
+  a sign-in to the same account, or merges it when the verified email already
+  belongs to one. Unclaimed accounts expire. Creation is rate limited.
+- Unclaimed accounts last 14 days by default (`auth.provisional` in `hub.json`).
+  The owner, or a grant with `operator: true`, can change that lifetime, the
+  per-IP rate, and the unclaimed cap at runtime with `GET`/`PUT
+  /api/v1/admin/settings`. The saved row wins over `hub.json` on the next start.
+  `whoami` warns from the live lifetime. Denied calls and changes are audited.
+  Nothing in this change deploys. Staging for the promote script is a second
+  instance on the Texas host, beside CT 110.
+
 ## 0.1.0 - 2026-10-30
 
 The first release, tagged at the operator's word (30 Oct 2026).

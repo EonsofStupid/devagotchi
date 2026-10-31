@@ -365,7 +365,13 @@ impl Boards {
 
     /// The first moment a lease on any open board lapses.
     fn next_lease_expiry(&self) -> Option<i64> {
-        let open: Vec<_> = self.open.lock().expect("boards lock").values().cloned().collect();
+        let open: Vec<_> = self
+            .open
+            .lock()
+            .expect("boards lock")
+            .values()
+            .cloned()
+            .collect();
         open.iter()
             .filter_map(|board| match board.next_lease_expiry() {
                 Ok(at) => at,
@@ -1801,19 +1807,30 @@ mod tests {
     async fn a_lapsed_lease_is_reaped_when_it_lapses() {
         let dir = tempfile::tempdir().unwrap();
         init(dir.path(), "site");
-        let boards = Arc::new(Boards::from_config(&hub_config("site", dir.path()), dir.path()));
+        let boards = Arc::new(Boards::from_config(
+            &hub_config("site", dir.path()),
+            dir.path(),
+        ));
         let board = boards.open("site").unwrap();
         let operator = Actor::human("jesse");
         let mut settings = board.settings().unwrap();
         settings.lease_min_ttl_ms = 100;
         board.put_settings(&operator, &settings).unwrap();
         let id = board
-            .create(&operator, crate::board::NewTicket { title: "lapses".into(), ..Default::default() })
+            .create(
+                &operator,
+                crate::board::NewTicket {
+                    title: "lapses".into(),
+                    ..Default::default()
+                },
+            )
             .unwrap()
             .id;
         tokio::spawn(boards.clone().reap_on_time());
         let began = tokio::time::Instant::now();
-        board.claim(&Actor::agent("claude"), &id, Some(400)).unwrap();
+        board
+            .claim(&Actor::agent("claude"), &id, Some(400))
+            .unwrap();
         let mut changes = board.changes();
         changes.borrow_and_update();
         let reaped = tokio::time::timeout(Duration::from_secs(10), async {
@@ -1857,6 +1874,10 @@ mod tests {
             via: "nomen",
             name: None,
             org: org.map(str::to_string),
+            provisional_until: None,
+            agent: None,
+            claim_code: None,
+            provisional_warning: false,
         };
         let (alice, bob) = (
             member("300000000000000011", Some("395263680805142530")),

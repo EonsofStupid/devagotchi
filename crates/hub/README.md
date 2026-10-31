@@ -87,6 +87,8 @@ A linked broker that is not connected answers `broker_offline`; one that never e
 
 ## Authentication
 
+`auth.mode` `devagotchi` is the account system: the hub is the authorization server, accounts live in its state directory, and Nomen is an optional "sign in with". Operator detail is [docs/auth.md](../../docs/auth.md). The table below is the legacy `nomen` / `oidc` / `dev` modes, which still behave as written.
+
 | Mode | Bearer token | Who it is for |
 |---|---|---|
 | `nomen` | Any Nomen access token, opaque or JWT, checked by asking Nomen (introspection) as the hub's own API application | Shippin: your sign-in at console.shippin.cloud, relayed by mcp.shippin.cloud; `shippin-bridge` sessions |
@@ -140,7 +142,7 @@ What running Shippin taught, and what the hub does about it:
 |---|---|
 | Two active accounts with the same display name stopped a deploy until one was chosen | Grants and `owner` take the account ID (`sub`) only; an email or a name with spaces is refused at start. `whoami` shows the ID, the login name and whether you are the owner |
 | A devspace created by a machine user locked its owner out, because only the creator could connect | Access comes from `owner` and grants, never from who created something |
-| `tenant_owners` drifted from Nomen and was silently re-created | The hub keeps no copy of who owns what; it asks Nomen on every new token |
+| `tenant_owners` drifted from Nomen and was silently re-created | In `nomen` mode the hub keeps no copy of who owns what; it asks Nomen on every new token. In `devagotchi` mode the account is the hub's own row, and a provider is only a linked sign-in |
 | A failed membership lookup in the console quietly meant "no roles" | Nomen down, slow, or refusing the hub's own key is `503 issuer_unavailable`, never a refusal, and is never remembered |
 | One way in (SSH keys) became a lockout | `owner` reaches every broker and can only be changed by editing this file. The hub starts without Nomen, and `enroll`, `revoke` and `devices` work on the host with Nomen down |
 | Nobody could test as the owner without borrowing a session | `tests/nomen_probe.py` runs the real binary against a fake Nomen; a live check uses a throwaway test identity |

@@ -16,6 +16,8 @@ Product site for the Devagotchi AI-to-workspace bridge. The current site provide
 | `/mcp` | MCP 2026-07-28 reference tools; POST only |
 | `/llms.txt` | Short index for agents |
 
+Profiles on this site (`profiles`, unique email, today filled from a ChatGPT session) are not Devagotchi accounts. Signing in through the hub's authorization server returns a Devagotchi account id in the access token `sub`. `lib/hub-account.ts` links that id onto the profile when the token's email is verified and matches the profile, and refuses an unverified or different address. An id already stored on the profile is kept.
+
 The MCP catalog contains only `devagotchi_get_capabilities` and `devagotchi_get_reference`. Sites owns hosted MCP authentication and viewer access checks. The application independently validates protocol metadata, HTTP headers, Origin, tool arguments, and a bounded request body. Neither reference handler accesses the existing database or object storage.
 
 ## Development and verification

@@ -26,12 +26,14 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::config::valid_subject;
 
 pub const USAGE: &str = "Usage:
-  devagotchi login [--issuer URL] [--client-id ID]     sign in with your Shippin account
+  devagotchi login [--hub URL]                         sign in through the hub (device code)
+  devagotchi login --issuer URL [--client-id ID]       sign in directly with an upstream issuer
   devagotchi login --local                              run without an account on this machine
   devagotchi logout                                     revoke the tokens and forget the account
   devagotchi whoami [--json]                            who this machine is signed in as
@@ -46,6 +48,9 @@ application the operator registers in Nomen with device authorization and refres
 
 pub const DEFAULT_ISSUER: &str = "https://id.shippin.cloud";
 pub const DEFAULT_CLIENT_ID: &str = "devagotchi-cli@shippin";
+/// The hub `devagotchi login` talks to, unless `--hub` or `--issuer` says otherwise.
+pub const DEFAULT_HUB: &str = "https://app.devagotchi.com";
+const DEVICE_GRANT_HUB: &str = "urn:ietf:params:oauth:grant-type:device_code";
 pub const FILE_NAME: &str = "account.json";
 const SCOPE: &str = "openid profile email offline_access urn:zitadel:iam:user:resourceowner";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
@@ -543,18 +548,26 @@ fn usage(message: impl Into<String>) -> (u8, String) {
 }
 
 async fn login(args: &[String], path: &Path) -> Outcome {
-    let mut issuer = DEFAULT_ISSUER.to_string();
+    let mut hub = DEFAULT_HUB.to_string();
+    let mut issuer: Option<String> = None;
     let mut client_id = DEFAULT_CLIENT_ID.to_string();
     let mut local = false;
     let mut iter = args.iter();
     while let Some(flag) = iter.next() {
         match flag.as_str() {
             "--local" => local = true,
-            "--issuer" => {
-                issuer = iter
+            "--hub" => {
+                hub = iter
                     .next()
-                    .ok_or_else(|| usage("--issuer needs a URL"))?
-                    .clone()
+                    .ok_or_else(|| usage("--hub needs a URL"))?
+                    .clone();
+            }
+            "--issuer" => {
+                issuer = Some(
+                    iter.next()
+                        .ok_or_else(|| usage("--issuer needs a URL"))?
+                        .clone(),
+                );
             }
             "--client-id" => {
                 client_id = iter
@@ -588,12 +601,18 @@ async fn login(args: &[String], path: &Path) -> Outcome {
         );
         return Ok(());
     }
-    let nomen = Issuer::new(&issuer, &client_id).map_err(usage)?;
     let mut stderr = std::io::stderr();
-    let account = nomen
-        .login(&mut stderr)
-        .await
-        .map_err(|why| (1, why.to_string()))?;
+    let account = if let Some(issuer) = issuer {
+        let nomen = Issuer::new(&issuer, &client_id).map_err(usage)?;
+        nomen
+            .login(&mut stderr)
+            .await
+            .map_err(|why| (1, why.to_string()))?
+    } else {
+        hub_device_login(&hub, &mut stderr)
+            .await
+            .map_err(|why| (1, why.to_string()))?
+    };
     write(path, &Stored::Account(account.clone())).map_err(|e| (1, e))?;
     eprintln!(
         "devagotchi: signed in as {} at {} (account {}); tokens in {}",
@@ -603,6 +622,173 @@ async fn login(args: &[String], path: &Path) -> Outcome {
         path.display()
     );
     Ok(())
+}
+
+/// Device authorization against the hub's own authorization server.
+async fn hub_device_login(hub: &str, tell: &mut dyn Write) -> Result<Account, Refusal> {
+    let hub = hub.trim_end_matches('/');
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| Refusal::Unavailable(error.to_string()))?;
+    let started: serde_json::Value = http
+        .post(format!("{hub}/auth/agent/start"))
+        .form(&[("client_id", "devagotchi-cli"), ("agent", "cli")])
+        .send()
+        .await
+        .map_err(|error| Refusal::Unavailable(format!("hub agent start: {error}")))?
+        .json()
+        .await
+        .map_err(|_| Refusal::Unavailable("hub agent start was not JSON".into()))?;
+    if started.get("access_token").is_some() {
+        let access = started["access_token"]
+            .as_str()
+            .ok_or_else(|| Refusal::Unavailable("hub sent no access token".into()))?
+            .to_string();
+        let subject = jwt_sub(&access)
+            .ok_or_else(|| Refusal::Unavailable("hub access token has no subject".into()))?;
+        let claim = started["claim_code"].as_str().unwrap_or("");
+        let url = started["claim_url"].as_str().unwrap_or("");
+        let _ = writeln!(
+            tell,
+            "Signed in. To keep this account, open {url}\nCode: {claim}"
+        );
+        return Ok(Account {
+            issuer: hub.to_string(),
+            client_id: "devagotchi-cli".into(),
+            subject,
+            username: None,
+            email: None,
+            access_token: access,
+            refresh_token: started["refresh_token"].as_str().map(str::to_string),
+            expires_at: unix_now() + started["expires_in"].as_u64().unwrap_or(3600),
+            signed_in_at: unix_now(),
+        });
+    }
+    let started: serde_json::Value = http
+        .post(format!("{hub}/device"))
+        .form(&[("client_id", "devagotchi-cli")])
+        .send()
+        .await
+        .map_err(|error| Refusal::Unavailable(format!("hub device: {error}")))?
+        .json()
+        .await
+        .map_err(|_| Refusal::Unavailable("hub device authorization was not JSON".into()))?;
+    let device_code = started["device_code"]
+        .as_str()
+        .ok_or_else(|| Refusal::Unavailable("hub sent no device code".into()))?;
+    let user_code = started["user_code"].as_str().unwrap_or("");
+    let fallback = format!("{hub}/device");
+    let verification = started["verification_uri"].as_str().unwrap_or(&fallback);
+    let _ = writeln!(
+        tell,
+        "Open {verification} and approve this machine.\nCode: {user_code}"
+    );
+    let deadline = unix_now() + MAX_WAIT.as_secs();
+    loop {
+        if unix_now() > deadline {
+            return Err(Refusal::Refused("the sign-in code expired".into()));
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let response = http
+            .post(format!("{hub}/token"))
+            .form(&[
+                ("grant_type", DEVICE_GRANT_HUB),
+                ("device_code", device_code),
+                ("client_id", "devagotchi-cli"),
+            ])
+            .send()
+            .await
+            .map_err(|error| Refusal::Unavailable(format!("hub token: {error}")))?;
+        let status = response.status();
+        let body: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|_| Refusal::Unavailable("hub token was not JSON".into()))?;
+        if status.is_success() {
+            let access = body["access_token"]
+                .as_str()
+                .ok_or_else(|| Refusal::Unavailable("hub sent no access token".into()))?
+                .to_string();
+            let subject = jwt_sub(&access)
+                .ok_or_else(|| Refusal::Unavailable("hub access token has no subject".into()))?;
+            return Ok(Account {
+                issuer: hub.to_string(),
+                client_id: "devagotchi-cli".into(),
+                subject,
+                username: None,
+                email: None,
+                access_token: access,
+                refresh_token: body["refresh_token"].as_str().map(str::to_string),
+                expires_at: unix_now() + body["expires_in"].as_u64().unwrap_or(3600),
+                signed_in_at: unix_now(),
+            });
+        }
+        match body["error"].as_str() {
+            Some("authorization_pending" | "slow_down") => continue,
+            Some(error) => return Err(Refusal::Refused(error.to_string())),
+            None => {
+                return Err(Refusal::Unavailable(format!("hub token answered {status}")));
+            }
+        }
+    }
+}
+
+async fn hub_refresh(account: &Account) -> Result<Account, Refusal> {
+    let Some(refresh) = account.refresh_token.as_deref() else {
+        return Err(Refusal::Refused("no refresh token".into()));
+    };
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|error| Refusal::Unavailable(error.to_string()))?;
+    let body: serde_json::Value = http
+        .post(format!("{}/token", account.issuer.trim_end_matches('/')))
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh),
+            ("client_id", "devagotchi-cli"),
+        ])
+        .send()
+        .await
+        .map_err(|error| Refusal::Unavailable(error.to_string()))?
+        .error_for_status()
+        .map_err(|error| Refusal::Unavailable(error.to_string()))?
+        .json()
+        .await
+        .map_err(|_| Refusal::Unavailable("hub refresh was not JSON".into()))?;
+    let access = body["access_token"]
+        .as_str()
+        .ok_or_else(|| Refusal::Unavailable("hub sent no access token".into()))?
+        .to_string();
+    Ok(Account {
+        issuer: account.issuer.clone(),
+        client_id: account.client_id.clone(),
+        subject: jwt_sub(&access).unwrap_or_else(|| account.subject.clone()),
+        username: account.username.clone(),
+        email: account.email.clone(),
+        access_token: access,
+        refresh_token: body["refresh_token"]
+            .as_str()
+            .map(str::to_string)
+            .or_else(|| account.refresh_token.clone()),
+        expires_at: unix_now() + body["expires_in"].as_u64().unwrap_or(3600),
+        signed_in_at: account.signed_in_at,
+    })
+}
+
+fn jwt_sub(token: &str) -> Option<String> {
+    let payload = token.split('.').nth(1)?;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()?
+        .get("sub")?
+        .as_str()
+        .map(str::to_string)
 }
 
 async fn logout(args: &[String], path: &Path) -> Outcome {
@@ -649,6 +835,13 @@ pub async fn current(path: &Path) -> Result<Option<Stored>, String> {
         account.standing(unix_now()),
         Standing::Fresh | Standing::Expired
     ) {
+        return Ok(stored);
+    }
+    if account.client_id == "devagotchi-cli" {
+        if let Ok(refreshed) = hub_refresh(account).await {
+            write(path, &Stored::Account(refreshed.clone()))?;
+            return Ok(Some(Stored::Account(refreshed)));
+        }
         return Ok(stored);
     }
     let Ok(nomen) = Issuer::new(&account.issuer, &account.client_id) else {
