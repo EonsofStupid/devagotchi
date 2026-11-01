@@ -857,7 +857,7 @@ dependencies = [
 name = "devagotchi-core"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "devagotchi-contracts",
  "devagotchi-ipc",
  "dunce",
@@ -893,7 +893,7 @@ version = "0.1.0"
 dependencies = [
  "aws-lc-rs",
  "axum",
- "base64 0.22.1",
+ "base64 0.23.1",
  "devagotchi-contracts",
  "devagotchi-ipc",
  "devagotchi-mcp",
@@ -957,7 +957,7 @@ dependencies = [
 name = "devagotchi-mcp"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "devagotchi-contracts",
  "devagotchi-ipc",
  "rmcp",
