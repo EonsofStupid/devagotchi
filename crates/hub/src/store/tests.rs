@@ -43,9 +43,11 @@ fn without_a_url_the_store_is_the_state_directorys_sqlite_file() {
 
 #[tokio::test]
 async fn a_sqlite_path_with_spaces_and_url_characters_round_trips() {
-    // Windows paths, spaces, `#`, `?` and `%`: the file opened is the file named.
+    // Spaces, `#`, `%` (and `?` where a file name may hold one): the file opened is the
+    // file named.
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("my state #2 ?100%").join("accounts.sqlite3");
+    let name = if cfg!(windows) { "my state #2 100%" } else { "my state #2 ?100%" };
+    let path = dir.path().join(name).join("accounts.sqlite3");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let url = sqlite_url(&path);
     assert_eq!(sqlite_path(&url), Some(path.clone()));
