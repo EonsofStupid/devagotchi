@@ -181,3 +181,75 @@ fn sqlx_reads_a_windows_path_back_from_its_url() {
         Path::new("C:/Users/runner/AppData/Local/Temp/my state/accounts.sqlite3")
     );
 }
+
+#[test]
+fn schema_names_need_no_quoting_and_are_never_postgress_own() {
+    for good in ["devagotchi_hub", "hub", "t_0123"] {
+        assert!(valid_schema(good), "{good}");
+    }
+    for bad in [
+        "",
+        "Hub",
+        "pg_catalog",
+        "9lives",
+        "hub; drop table accounts",
+        "hub\"",
+        &"a".repeat(64),
+    ] {
+        assert!(!valid_schema(bad), "{bad:?}");
+    }
+}
+
+#[tokio::test]
+async fn on_postgres_the_hubs_tables_live_in_their_own_schema() {
+    // A database something else also uses (a Supabase project): the hub's tables, its
+    // migration record included, go in their own schema, made if missing; `public` stays
+    // as it was.
+    let Some(url) = empty_postgres().await else {
+        return;
+    };
+    let store = Store::open_in(&url, Some("devagotchi_hub")).await.unwrap();
+    let mut placed = std::collections::BTreeMap::<String, Vec<String>>::new();
+    let rows = sqlx::query(
+        "SELECT table_schema::text, table_name::text FROM information_schema.tables
+         WHERE table_schema IN ('public', 'devagotchi_hub') ORDER BY 1, 2",
+    )
+    .fetch_all(&store.pool)
+    .await
+    .unwrap();
+    for row in rows {
+        placed
+            .entry(row.get::<String, _>(0))
+            .or_default()
+            .push(row.get::<String, _>(1));
+    }
+    assert!(!placed.contains_key("public"), "{placed:?}");
+    let hub = &placed["devagotchi_hub"];
+    for table in ["accounts", "passkeys", "sessions", "oauth_tokens", "_sqlx_migrations"] {
+        assert!(hub.iter().any(|t| t == table), "{table} in {hub:?}");
+    }
+    // Opened again, as a second hub instance would: the schema and its tables are found.
+    let again = Store::open_in(&url, Some("devagotchi_hub")).await.unwrap();
+    let accounts = crate::accounts::Accounts::open(again).await.unwrap();
+    accounts
+        .create("acct_aaaaaaaaaaaaaaaaaaaaaaaaaa", "Jesse", true)
+        .await
+        .unwrap();
+    assert!(accounts.owner().await.unwrap().is_some());
+    // A name that is not a plain schema name is refused before anything runs.
+    assert_eq!(
+        Store::open_in(&url, Some("hub; drop schema public"))
+            .await
+            .unwrap_err()
+            .code,
+        "account_store"
+    );
+}
+
+#[tokio::test]
+async fn sqlite_has_no_schemas_and_ignores_one() {
+    let test = sqlite().await;
+    let store = Store::open_in(&test.url, Some("devagotchi_hub")).await.unwrap();
+    let accounts = crate::accounts::Accounts::open(store).await.unwrap();
+    assert!(accounts.owner().await.unwrap().is_none());
+}
