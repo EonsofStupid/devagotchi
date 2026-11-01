@@ -1467,13 +1467,20 @@ async fn the_one_line_joins_once_and_downloads_only_what_the_hub_vouches_for() {
         .unwrap();
     assert!(ps.contains("$device = 'platinum'"), "{ps}");
 
-    // Only what SHA256SUMS lists is served.
+    // Only what SHA256SUMS lists is served, plus the checksum list itself.
     let file = w
         .get("/dist/devagotchi-x86_64-unknown-linux-gnu.tar.xz", None)
         .await;
     assert_eq!(file.status(), StatusCode::OK);
     assert_eq!(file.bytes().await.unwrap().as_ref(), b"linux build");
-    for name in ["not-listed.txt", "SHA256SUMS", "..%2FSHA256SUMS"] {
+    let sums = w.get("/dist/SHA256SUMS", None).await;
+    assert_eq!(sums.status(), StatusCode::OK);
+    let sums = sums.text().await.unwrap();
+    assert!(
+        sums.contains("devagotchi-x86_64-unknown-linux-gnu.tar.xz"),
+        "{sums}"
+    );
+    for name in ["not-listed.txt", "..%2FSHA256SUMS"] {
         assert_eq!(
             w.get(&format!("/dist/{name}"), None).await.status(),
             StatusCode::NOT_FOUND,

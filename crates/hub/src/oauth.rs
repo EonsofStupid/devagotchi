@@ -808,7 +808,7 @@ impl Authority {
                 "<p><a href=\"/login/upstream/{}?resume={}\">Sign in with {}</a></p>",
                 escape(&provider.name),
                 escape(resume),
-                escape(&provider.name)
+                escape(&provider.label())
             ));
         }
         let magic = if self.magic_delivery().is_ok() {
@@ -3006,6 +3006,7 @@ mod tests {
                 client_id: "hub".into(),
                 client_secret_file: None,
                 scopes: None,
+                display_name: None,
             }],
             crate::config::LocalLogin::default(),
         );
@@ -3014,6 +3015,41 @@ mod tests {
         assert_eq!(down["signing_key"], true);
         let text = down["degraded"][0].as_str().unwrap();
         assert!(text.contains("gone"), "{text}");
+    }
+
+    #[test]
+    fn the_sign_in_button_uses_a_display_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut auth = Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
+        auth.configure_login(
+            vec![
+                crate::config::UpstreamProvider {
+                    name: "nomen".into(),
+                    issuer: "https://id.example".into(),
+                    client_id: "hub".into(),
+                    client_secret_file: None,
+                    scopes: None,
+                    display_name: None,
+                },
+                crate::config::UpstreamProvider {
+                    name: "ship".into(),
+                    issuer: "https://ship.example".into(),
+                    client_id: "hub".into(),
+                    client_secret_file: None,
+                    scopes: None,
+                    display_name: Some("Shippin".into()),
+                },
+            ],
+            crate::config::LocalLogin::default(),
+        );
+        let page = auth.login_page("claim:ABCD");
+        assert!(page.contains(">Sign in with Nomen</a>"), "{page}");
+        assert!(
+            page.contains("/login/upstream/nomen?resume=claim:ABCD"),
+            "{page}"
+        );
+        assert!(page.contains(">Sign in with Shippin</a>"), "{page}");
+        assert!(!page.contains("Sign in with nomen"), "{page}");
     }
 
     #[test]
@@ -3220,6 +3256,7 @@ mod tests {
                     client_id: "hub".into(),
                     client_secret_file: None,
                     scopes: None,
+                    display_name: None,
                 },
                 crate::config::UpstreamProvider {
                     name: "two".into(),
@@ -3227,6 +3264,7 @@ mod tests {
                     client_id: "hub".into(),
                     client_secret_file: None,
                     scopes: None,
+                    display_name: None,
                 },
             ],
             crate::config::LocalLogin {
@@ -3269,6 +3307,7 @@ mod tests {
                 client_id: "hub".into(),
                 client_secret_file: None,
                 scopes: None,
+                display_name: None,
             }],
             crate::config::LocalLogin::default(),
         );

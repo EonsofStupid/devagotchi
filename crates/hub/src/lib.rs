@@ -254,6 +254,30 @@ fn parse_setup_code(args: Vec<OsString>) -> BridgeResult<Command> {
     }
 }
 
+/// Lines for `devagotchi hub setup-code`. An owner already on file is reported as
+/// the Devagotchi account id plus `{public_url}/claim`. A new hub gets a code and
+/// that same claim URL. The config file is not rewritten.
+fn setup_code_lines(
+    state: &std::path::Path,
+    config_path: &std::path::Path,
+) -> BridgeResult<Vec<String>> {
+    let mut config = read_config(config_path)?;
+    let store = identity::Store::open(&state.join("identities.sqlite3"))?;
+    let public = config.public_url.trim_end_matches('/').to_string();
+    let claim = format!("{public}/claim");
+    if matches!(config.auth, config::AuthConfig::Devagotchi { .. }) {
+        identity::rekey_config(&store, &mut config)?;
+    }
+    if let Some(owner) = config.owner.clone().or(store.hub_owner()?) {
+        eprintln!(
+            "devagotchi hub setup-code: owner {owner} already exists; no new code was issued"
+        );
+        return Ok(vec![format!("owner {owner}"), format!("claim {claim}")]);
+    }
+    let code = store.issue_setup_code()?;
+    Ok(vec![format!("code {code}"), format!("claim {claim}")])
+}
+
 fn read_config(path: &std::path::Path) -> BridgeResult<HubConfig> {
     let text = std::fs::read_to_string(path).map_err(|error| {
         BridgeError::new("invalid_config", format!("{}: {error}", path.display()))
@@ -353,28 +377,12 @@ fn manage(command: Command) -> BridgeResult<()> {
             );
         }
         Command::SetupCode { state, config } => {
-            let config = read_config(&config)?;
-            if config.owner.is_some() {
-                println!(
-                    "owner already set: {}",
-                    config.owner.as_deref().unwrap_or("")
-                );
-                eprintln!(
-                    "devagotchi hub setup-code: this hub already has an owner; no new code was issued"
-                );
-                return Ok(());
+            for line in setup_code_lines(&state, &config)? {
+                if let Some(code) = line.strip_prefix("code ") {
+                    eprintln!("devagotchi hub setup-code: {code}");
+                }
+                println!("{line}");
             }
-            let store = identity::Store::open(&state.join("identities.sqlite3"))?;
-            if let Some(owner) = store.hub_owner()? {
-                println!("owner already set: {owner}");
-                eprintln!(
-                    "devagotchi hub setup-code: this hub already has an owner; no new code was issued"
-                );
-                return Ok(());
-            }
-            let code = store.issue_setup_code()?;
-            eprintln!("devagotchi hub setup-code: {code}");
-            println!("{code}");
         }
         Command::Owner {
             state,
@@ -1319,6 +1327,44 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn setup_code_reports_the_dg_account_and_the_claim_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("hub.json");
+        let subject = "395290028818825218";
+        std::fs::write(
+            &config_path,
+            serde_json::json!({
+                "listen": "127.0.0.1:9",
+                "public_url": "https://app.devagotchi.com",
+                "auth": {
+                    "mode": "devagotchi",
+                    "legacy": { "issuer": "https://id.shippin.cloud" }
+                },
+                "owner": subject,
+                "brokers": [],
+                "grants": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let lines = setup_code_lines(dir.path(), &config_path).unwrap();
+        let owner = lines
+            .iter()
+            .find_map(|line| line.strip_prefix("owner "))
+            .unwrap();
+        assert!(owner.starts_with("dg_"), "{lines:?}");
+        assert_ne!(owner, subject);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "claim https://app.devagotchi.com/claim"),
+            "{lines:?}"
+        );
+        let again = setup_code_lines(dir.path(), &config_path).unwrap();
+        assert_eq!(again[0], format!("owner {owner}"));
     }
 
     fn dg(nibble: char) -> String {

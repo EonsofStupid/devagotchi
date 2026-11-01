@@ -272,6 +272,25 @@ pub struct UpstreamProvider {
     pub client_secret_file: Option<String>,
     #[serde(default)]
     pub scopes: Option<String>,
+    /// The name on the sign-in button. Absent: `name` with its first letter capitalized.
+    #[serde(default)]
+    pub display_name: Option<String>,
+}
+
+impl UpstreamProvider {
+    /// What the sign-in button says after "Sign in with".
+    pub fn label(&self) -> String {
+        if let Some(label) = self.display_name.as_deref().map(str::trim)
+            && !label.is_empty()
+        {
+            return label.to_string();
+        }
+        let mut chars = self.name.chars();
+        match chars.next() {
+            Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        }
+    }
 }
 
 /// Local sign-in, so the hub works with no upstream provider.

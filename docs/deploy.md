@@ -53,13 +53,19 @@ DEVAGOTCHI_PROD_URL=https://app.devagotchi.com
 deploy/linux/promote-hub.sh --confirm
 ```
 
+`--dry-run` prints the ssh plan and does not connect. `tests/promote_hub_dry_run.py` checks the live plan.
+
 `DEVAGOTCHI_STAGING_HOST` and `DEVAGOTCHI_PROD_HOST` are `user@host` for SSH. They are usually the same Proxmox host. `DEVAGOTCHI_STAGING_LXC` and `DEVAGOTCHI_PROD_LXC` select the container. Leave an `LXC` variable empty only when that SSH target is already the container, not the Proxmox host.
 
 ## One live hub, no staging container
 
-`DEVAGOTCHI_PROMOTE_TARGET=live` installs only on `DEVAGOTCHI_PROD_HOST` / `DEVAGOTCHI_PROD_LXC`. It does not require a staging host, and the commit does not have to be on `main` (a tested pull-request build). Before the install it runs `pct snapshot <ct> devagotchi-pre-<version>` on the Proxmox host. If the install or the smoke fails, it runs `pct rollback` to that snapshot and then installs `DEVAGOTCHI_PREVIOUS_VERSION`.
+`DEVAGOTCHI_PROMOTE_TARGET=live` installs only on `DEVAGOTCHI_PROD_HOST` / `DEVAGOTCHI_PROD_LXC`. It does not require a staging host, and the commit does not have to be on `main` (a tested pull-request build). It does not assume `install-devagotchi.sh` is already on the container, and it does not download a GitHub Release. `--artifact` is a directory, a local tarball, or an `https://` URL of that tarball. The directory must contain `devagotchi-<target>.tar.xz` and `devagotchi-<target>.tar.xz.sha256` (what `install-devagotchi.sh --artifact-dir` reads). The script copies `deploy/linux/install-devagotchi.sh` in beside those files and runs that copy inside the container.
 
-`/join` serves whatever is in the hub's downloads directory. Set `DEVAGOTCHI_DIST_DIR` to a directory of archives and `SHA256SUMS` built for this commit, and `DEVAGOTCHI_DOWNLOADS_DIR` to the directory `hub.json` `downloads` names inside the container. After smoke passes, the script copies that directory in, so `/join` serves this build rather than an older release.
+Before the install it runs `pct snapshot <ct> devagotchi-pre-<version>` on the Proxmox host. If the install or the smoke fails, it runs `pct rollback <ct> <snap> --start`, so the container comes back up. It does not then install another version over that snapshot.
+
+`/join` serves the hub's downloads directory. Set `DEVAGOTCHI_DIST_DIR` to a directory of archives and `SHA256SUMS` for this commit, and `DEVAGOTCHI_DOWNLOADS_DIR` to the directory `hub.json` `downloads` names inside the container. Those files are copied in **before** the installer starts the hub, so the process does not need a second restart to see them. `/dist/SHA256SUMS` is the checksum list the hub checked.
+
+`--ssh-key FILE` and `--ssh-opts WORDS` are passed to `ssh`, as is the `SSH_OPTS` environment variable.
 
 ```bash
 DEVAGOTCHI_PROMOTE_TARGET=live
@@ -71,7 +77,11 @@ DEVAGOTCHI_PROD_LXC=110
 DEVAGOTCHI_PROD_URL=https://app.devagotchi.com
 DEVAGOTCHI_DIST_DIR=/path/to/archives
 DEVAGOTCHI_DOWNLOADS_DIR=/var/lib/devagotchi/downloads
-deploy/linux/promote-hub.sh --confirm
+SSH_OPTS='-o BatchMode=yes'
+deploy/linux/promote-hub.sh --confirm \
+  --artifact /path/to/ci-artifact-or-tarball \
+  --ssh-key ~/.ssh/texas \
+  --ssh-opts '-p 22'
 ```
 
 This script is not run from the pull request.

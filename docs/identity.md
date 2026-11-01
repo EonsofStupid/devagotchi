@@ -123,7 +123,7 @@ Signing in with Nomen while holding `resume=claim:CODE` is a claim, not a new ac
 
 A public URL must not be ownable by whoever loads `/authorize` first.
 
-When the hub has no claimed owner (no `owner` in config, and no account marked owner in the store), the first start generates a setup code: 15 minutes, SHA-256 at rest, one outstanding code, a new call replaces it. `devagotchi hub setup-code --state-dir …` prints it once to the operator's stdout. The same line is written once to the process journal at generation, and not again on later reads. The plaintext is not written into `hub.json` or a world-readable file. Whoever can run that command on the host is the same trust boundary as `devagotchi hub enroll`.
+When the hub has no claimed owner (no `owner` in config, and no account marked owner in the store), `devagotchi hub setup-code` generates a setup code: 15 minutes, SHA-256 at rest, one outstanding code, a new call replaces it. It prints the code once to stdout and logs that same line once. The plaintext is not written into `hub.json` or a world-readable file. Whoever can run that command on the host is the same trust boundary as `devagotchi hub enroll`.
 
 Entering the code on `/claim` or the sign-in page, in the same POST as a new passkey ceremony, makes that account the hub owner and enrolls the passkey. The code is spent in that transaction. A second browser that loaded the page without the code does not become owner.
 
@@ -212,7 +212,9 @@ Put its client id in `auth.upstream` as above. Scopes must include `email` so a 
 After a build of this model is installed, and only then:
 
 ```text
-sudo -u devagotchi devagotchi hub setup-code --state-dir ~/.local/state/devagotchi-hub
+sudo devagotchi hub setup-code \
+  --state-dir /var/lib/devagotchi/.local/state/devagotchi-hub \
+  --config /etc/devagotchi-hub/hub.json
 ```
 
-On this hub the command must report that the owner already exists (`dg_7dae7adce9ba2cc180ed32c1c8bbe7c3`) and print a one-time passkey link for that account, not a code that creates a new owner. He opens it, enrolls a passkey, and from then on `/claim?code=` from an agent can be finished with that passkey or with Nomen. The Nomen button does nothing until the redirect URI above is registered and `hub.json` has the upstream entry. Magic link stays off until mail or `local.deliver` `log` is an accepted choice.
+On this hub the owner is already set. The command prints the Devagotchi account id (the `dg_` id the Nomen subject `395290028818825218` is linked to, `dg_7dae7adce9ba2cc180ed32c1c8bbe7c3`) and `claim https://app.devagotchi.com/claim`. It does not print the Nomen subject and it does not mint a code that would create another owner. Jesse opens that claim URL from an agent's `claim_url` and signs in with Nomen. The Nomen button reads "Sign in with Nomen" when `auth.upstream[].display_name` is unset. It does nothing until the redirect URI above is registered and `hub.json` has the upstream entry. Magic link stays off until mail or `local.deliver` `log` is an accepted choice.

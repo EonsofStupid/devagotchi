@@ -214,6 +214,11 @@ fn compose(state: &AppState, code: &str) -> Response {
 
 /// One file of the build this hub hands out, streamed; only names `SHA256SUMS` lists.
 pub async fn download(State(state): State<AppState>, Path(name): Path<String>) -> Response {
+    if name == "SHA256SUMS"
+        && let Some(downloads) = &state.hub.downloads
+    {
+        return text(StatusCode::OK, downloads.sha256sums_text());
+    }
     let found = state
         .hub
         .downloads

@@ -7,6 +7,15 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+- `promote-hub.sh --artifact` installs a local or CI tarball on the live hub:
+  it copies `install-devagotchi.sh` into the container, stages `/dist` before
+  the hub starts, rolls a snapshot back with `pct rollback --start`, and
+  passes `--ssh-key`, `--ssh-opts`, and `SSH_OPTS`. `--dry-run` prints the plan.
+- `/dist/SHA256SUMS` is the checksum list the hub checked. `devagotchi hub
+  setup-code --config` prints the `dg_` owner id and the claim URL when an
+  owner already exists. An upstream's sign-in button uses `display_name`, or
+  the name with its first letter capitalized.
+
 ### Devagotchi accounts, and the hub as the authorization server
 - The hub can be its own OAuth 2.1 authorization server (`auth.mode` `devagotchi`).
   Accounts, personal workspaces, and linked sign-ins live in the hub state directory.
