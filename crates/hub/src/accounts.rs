@@ -10,6 +10,7 @@
 //! The hub's pages use it in `web/passkeys.rs`; `devagotchi hub owner` makes the owner and
 //! the one-time link.
 
+pub mod oauth;
 pub mod passkey;
 pub mod sessions;
 
@@ -142,6 +143,8 @@ pub struct Passkey {
 
 pub struct Accounts {
     store: Store,
+    /// How long the hub's own AI tokens live (`auth.tokens`).
+    tokens: crate::config::TokenConfig,
     /// Signs the passkey challenges this process makes: the store's key as last read. The
     /// store's copy is the one that counts: every ceremony checks against it, read in its
     /// own transaction, and refreshes this one. It changes only when a clock is found set
@@ -216,8 +219,15 @@ impl Accounts {
             })?;
         Ok(Self {
             store,
+            tokens: crate::config::TokenConfig::default(),
             challenge_key: std::sync::RwLock::new(key),
         })
+    }
+
+    /// These accounts with the config's lifetimes and limits for AI connections.
+    pub fn with_tokens(mut self, tokens: crate::config::TokenConfig) -> Self {
+        self.tokens = tokens;
+        self
     }
 
     /// Make an account. There is at most one owner, and an id is never reused.
@@ -803,7 +813,7 @@ impl Accounts {
     }
 
     /// The store, for the modules that keep their tables beside the accounts.
-    #[allow(dead_code)] // the hub's own AI tokens (32b)
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn store(&self) -> &Store {
         &self.store
     }

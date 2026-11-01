@@ -67,8 +67,17 @@ pub enum Verifier {
         primary: Box<Verifier>,
         trusted: Vec<OidcVerifier>,
     },
-    /// A hub with its own accounts and no Nomen: no bearer token is accepted until the hub
-    /// issues its own to AI clients (increment 32b).
+    /// A hub with its own accounts (`auth.mode hub`): the `dgh_` tokens it issued to AI
+    /// clients itself (32b) are checked against its store; with `auth.nomen`, any other
+    /// token goes to Nomen.
+    Hub {
+        accounts: std::sync::Arc<crate::accounts::Accounts>,
+        /// The hub as an authorization server: its own public URL.
+        issuer: String,
+        nomen: Option<Box<Verifier>>,
+    },
+    /// A hub in `auth.mode hub` whose accounts were not opened (a test harness): takes no
+    /// bearer token at all.
     Closed,
 }
 
@@ -94,8 +103,20 @@ impl Verifier {
     pub async fn from_hub_config(
         config: &crate::config::HubConfig,
         state_dir: &Path,
+        accounts: Option<std::sync::Arc<crate::accounts::Accounts>>,
     ) -> BridgeResult<Self> {
-        let primary = Self::primary(&config.auth, state_dir).await?;
+        let mut primary = Self::primary(&config.auth, state_dir).await?;
+        if let (true, Some(accounts)) = (config.has_accounts(), accounts) {
+            let nomen = match primary {
+                Verifier::Closed => None,
+                other => Some(Box::new(other)),
+            };
+            primary = Verifier::Hub {
+                accounts,
+                issuer: config.public_url.trim_end_matches('/').to_string(),
+                nomen,
+            };
+        }
         if config.trusted_issuers.is_empty() {
             return Ok(primary);
         }
@@ -163,8 +184,33 @@ impl Verifier {
                     None => Box::pin(primary.verify(bearer)).await,
                 }
             }
+            Verifier::Hub {
+                accounts, nomen, ..
+            } => {
+                if bearer.starts_with("dgh_") {
+                    return match accounts.verify_access(bearer).await {
+                        Ok(Some(grant)) => Ok(Subject {
+                            id: grant.account.id,
+                            via: "hub",
+                            name: Some(grant.account.name),
+                            org: None,
+                        }),
+                        Ok(None) => Err(AuthError::Invalid(
+                            "unknown, expired or revoked hub token",
+                        )),
+                        Err(error) => Err(AuthError::Unavailable(format!(
+                            "account store: {}",
+                            error.message
+                        ))),
+                    };
+                }
+                match nomen {
+                    Some(nomen) => Box::pin(nomen.verify(bearer)).await,
+                    None => Err(AuthError::Invalid("not a token this hub issued")),
+                }
+            }
             Verifier::Closed => Err(AuthError::Invalid(
-                "this hub signs people in itself and takes no bearer tokens yet",
+                "this hub signs people in itself and takes no bearer tokens",
             )),
         }
     }
@@ -175,6 +221,9 @@ impl Verifier {
         match self {
             Verifier::Nomen(nomen) => Some(nomen.health()),
             Verifier::Federated { primary, .. } => primary.issuer_health(),
+            Verifier::Hub {
+                nomen: Some(nomen), ..
+            } => nomen.issuer_health(),
             _ => None,
         }
     }
@@ -184,6 +233,7 @@ impl Verifier {
             Verifier::Nomen(nomen) => Some(nomen.issuer()),
             Verifier::Oidc(oidc) => Some(&oidc.issuer),
             Verifier::Dev(_) | Verifier::Closed => None,
+            Verifier::Hub { issuer, .. } => Some(issuer),
             Verifier::Federated { primary, .. } => primary.issuer(),
         }
     }

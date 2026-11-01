@@ -27,6 +27,7 @@
 mod approvals;
 mod machines;
 mod notify;
+pub mod oauth;
 mod pages;
 mod passkeys;
 mod public;
@@ -452,9 +453,10 @@ fn digest(id: &str) -> [u8; 32] {
 
 /// A path on this hub to return to after sign-in; anything else becomes `/account`.
 pub fn safe_return_to(path: &str) -> &str {
+    // Long enough for an OAuth authorization request coming back after sign-in.
     let ok = path.starts_with('/')
         && !path.starts_with("//")
-        && path.len() <= 512
+        && path.len() <= 4096
         && path
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"/-_.~?=&%".contains(&b));

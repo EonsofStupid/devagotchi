@@ -176,7 +176,56 @@ pub enum AuthConfig {
         /// Shippin sign-in as well: Nomen tokens at `/mcp` from accounts it knows.
         #[serde(default)]
         nomen: Option<NomenAuth>,
+        /// The hub's own AI connections (32b): how long their tokens live, how many
+        /// clients it keeps. Each has a default; set only what differs.
+        #[serde(default)]
+        tokens: TokenConfig,
     },
+}
+
+/// Lifetimes and limits of the AI connections a hub in `auth.mode hub` makes itself
+/// (`auth.tokens`). The defaults are the plan's (decision 4: a connection lasts 7 days
+/// unused).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct TokenConfig {
+    /// How long an access token is good for.
+    pub access_secs: u64,
+    /// How long a refresh token lasts unused: how long an AI connection lives without use.
+    pub refresh_secs: u64,
+    /// How long an authorization code may wait to be exchanged.
+    pub code_secs: u64,
+    /// Registered clients kept at once; past it, those never used make room first.
+    pub max_clients: u64,
+}
+
+impl Default for TokenConfig {
+    fn default() -> Self {
+        Self {
+            access_secs: 15 * 60,
+            refresh_secs: 7 * 24 * 3600,
+            code_secs: 2 * 60,
+            max_clients: 10_000,
+        }
+    }
+}
+
+impl TokenConfig {
+    fn check(&self) -> Result<(), String> {
+        if !(60..=24 * 3600).contains(&self.access_secs) {
+            return Err("auth.tokens.access_secs is 60 to 86400".into());
+        }
+        if self.refresh_secs < self.access_secs || self.refresh_secs > 366 * 24 * 3600 {
+            return Err("auth.tokens.refresh_secs is at least access_secs and at most a year".into());
+        }
+        if !(10..=600).contains(&self.code_secs) {
+            return Err("auth.tokens.code_secs is 10 to 600".into());
+        }
+        if self.max_clients == 0 {
+            return Err("auth.tokens.max_clients is at least 1".into());
+        }
+        Ok(())
+    }
 }
 
 /// Nomen in hub mode: the same fields, checked the same way, as `auth.mode nomen`.
@@ -320,7 +369,8 @@ impl HubConfig {
                     )));
                 }
             }
-            AuthConfig::Hub { rp_id, .. } => {
+            AuthConfig::Hub { rp_id, tokens, .. } => {
+                tokens.check().map_err(invalid)?;
                 // Passkeys work only in a secure context: https, or this machine's loopback.
                 if !self.public_url.starts_with("https://") && !loopback_http(&self.public_url) {
                     return Err(invalid(
@@ -556,6 +606,15 @@ impl HubConfig {
     /// Whether people sign in with the hub's own accounts (`auth.mode hub`).
     pub fn has_accounts(&self) -> bool {
         matches!(self.auth, AuthConfig::Hub { .. })
+    }
+
+    /// The lifetimes and limits of the hub's own AI connections (`auth.tokens`), in hub
+    /// mode; the defaults otherwise.
+    pub fn token_config(&self) -> TokenConfig {
+        match &self.auth {
+            AuthConfig::Hub { tokens, .. } => *tokens,
+            _ => TokenConfig::default(),
+        }
     }
 
     /// The passkeys' relying party, in hub mode: `auth.rp_id`, or the hub's own host.

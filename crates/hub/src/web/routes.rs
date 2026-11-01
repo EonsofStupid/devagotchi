@@ -12,7 +12,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::{
-    Exchange, SessionToken, WebLogin, approvals, machines, notify,
+    Exchange, SessionToken, WebLogin, approvals, machines, notify, oauth,
     pages::{self, Viewer},
     passkeys, public,
 };
@@ -38,6 +38,17 @@ pub fn router() -> Router<AppState> {
         .route("/passkey/sign-in/options", post(passkeys::sign_in_options))
         .route("/passkey/sign-in", post(passkeys::sign_in))
         .route("/assets/passkey.js", get(passkeys::script))
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(oauth::metadata).options(oauth::preflight),
+        )
+        .route(
+            "/oauth/register",
+            post(oauth::register).options(oauth::preflight),
+        )
+        .route("/oauth/authorize", get(oauth::authorize).post(oauth::decide))
+        .route("/oauth/token", post(oauth::token).options(oauth::preflight))
+        .route("/oauth/revoke", post(oauth::revoke).options(oauth::preflight))
         .route("/api/v1/me", get(me))
         .route("/api/v1/machines", post(machines::add_json))
         .route("/approvals", get(approvals::list))

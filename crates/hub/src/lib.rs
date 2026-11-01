@@ -223,7 +223,9 @@ async fn accounts_at(
 ) -> BridgeResult<accounts::Accounts> {
     prepare_state_dir(state_dir)?;
     let url = store::url_for(config.storage_url(), state_dir);
-    accounts::Accounts::open(store::Store::open(&url).await?).await
+    Ok(accounts::Accounts::open(store::Store::open(&url).await?)
+        .await?
+        .with_tokens(config.token_config()))
 }
 
 fn prepare_state_dir(state_dir: &std::path::Path) -> BridgeResult<()> {
@@ -443,17 +445,20 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let audit = Arc::new(Audit::open(&state_dir.join("audit.sqlite3"))?);
     // A hub with its own accounts knows its owner from them, and refuses to start when its
     // config names someone else.
-    let passkeys = if config.has_accounts() {
+    let accounts = if config.has_accounts() {
         let accounts = Arc::new(accounts_at(&state_dir, &config).await?);
         if let Some(owner) = accounts.owner().await? {
             config
                 .learn_owner(&owner.id)
                 .map_err(|why| BridgeError::new("invalid_config", why))?;
         }
-        web::HubSignIn::new(config.clone(), accounts).map(Arc::new)
+        Some(accounts)
     } else {
         None
     };
+    let passkeys = accounts
+        .clone()
+        .and_then(|accounts| web::HubSignIn::new(config.clone(), accounts).map(Arc::new));
     let push = match (&config.web, &passkeys) {
         (None, None) => None,
         _ => Some(Arc::new(push::Push::open(
@@ -484,7 +489,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         },
         None => None,
     };
-    let verifier = Arc::new(Verifier::from_hub_config(&config, &state_dir).await?);
+    let verifier = Arc::new(Verifier::from_hub_config(&config, &state_dir, accounts).await?);
     let web = match (&config.web, &config.auth) {
         (
             Some(web),
@@ -615,7 +620,7 @@ fn app(state: AppState) -> Router {
         )
         .route(
             "/.well-known/oauth-protected-resource/mcp",
-            get(protected_resource),
+            get(protected_resource_mcp),
         )
         .nest_service(
             "/mcp",
@@ -636,6 +641,9 @@ async fn require_bearer(
     next: Next,
 ) -> Response {
     let scope = match state.hub.config.auth.nomen() {
+        _ if state.hub.config.has_accounts() => {
+            format!(", scope=\"{}\"", web::oauth::SCOPES.join(" "))
+        }
         Some(nomen) => format!(
             ", scope=\"{}\"",
             crate::auth::sign_in_scopes(nomen.audiences)
@@ -754,24 +762,41 @@ fn challenge(status: StatusCode, metadata: &str, error: Option<&str>) -> Respons
 }
 
 async fn protected_resource(State(state): State<AppState>) -> Response {
+    let resource = state.hub.config.public_url.trim_end_matches('/').to_string();
+    resource_metadata(&state, resource)
+}
+
+/// RFC 9728 §3.1: the metadata at `/.well-known/oauth-protected-resource/mcp` is for the
+/// resource `<public_url>/mcp`, the URL an MCP client was given.
+async fn protected_resource_mcp(State(state): State<AppState>) -> Response {
+    let resource = format!("{}/mcp", state.hub.config.public_url.trim_end_matches('/'));
+    resource_metadata(&state, resource)
+}
+
+fn resource_metadata(state: &AppState, resource: String) -> Response {
     let Some(issuer) = state.verifier.issuer() else {
         return (StatusCode::NOT_FOUND, "no authorization server in dev mode").into_response();
     };
     let mut body = serde_json::json!({
-        "resource": state.hub.config.public_url,
+        "resource": resource,
         "authorization_servers": [issuer],
         "bearer_methods_supported": ["header"],
         "resource_name": "Devagotchi hub",
     });
-    // MCP clients ask for exactly these (RFC 9728 `scopes_supported`), so the account's org
-    // reaches the hub with every call.
-    if let Some(nomen) = state.hub.config.auth.nomen() {
+    if state.hub.config.has_accounts() {
+        // The hub is its own authorization server (32b).
+        body["scopes_supported"] = serde_json::json!(web::oauth::SCOPES);
+    } else if let Some(nomen) = state.hub.config.auth.nomen() {
+        // MCP clients ask for exactly these (RFC 9728 `scopes_supported`), so the account's
+        // org reaches the hub with every call.
         body["scopes_supported"] = crate::auth::sign_in_scopes(nomen.audiences)
             .split(' ')
             .collect::<Vec<_>>()
             .into();
     }
-    axum::Json(body).into_response()
+    let mut response = axum::Json(body).into_response();
+    web::oauth::allow_any_origin(&mut response);
+    response
 }
 
 /// Machines dial in here; the device proves its key inside the socket, not with a bearer.
