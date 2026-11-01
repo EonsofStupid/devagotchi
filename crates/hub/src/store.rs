@@ -186,10 +186,52 @@ pub fn check_configured_url(url: &str) -> Result<(), String> {
     Err("storage.url is postgres://… or sqlite:/absolute/path".to_string())
 }
 
+/// The environment variable that names the Postgres schema the hub's tables live in, over
+/// the config's `storage.schema`.
+pub const STORAGE_SCHEMA_ENV: &str = "DEVAGOTCHI_HUB_STORAGE_SCHEMA";
+
+/// A Postgres schema name the hub accepts: 1 to 63 of `[a-z0-9_]`, not starting with a digit
+/// or `pg_`, so it needs no quoting and is never one of Postgres's own.
+pub fn valid_schema(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 63
+        && !name.starts_with("pg_")
+        && !name.as_bytes()[0].is_ascii_digit()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
+/// The schema a hub's tables live in on Postgres: the environment's, else the config's.
+pub fn schema_for(configured: Option<&str>) -> Option<String> {
+    match std::env::var(STORAGE_SCHEMA_ENV) {
+        Ok(schema) if !schema.trim().is_empty() => Some(schema.trim().to_string()),
+        _ => configured.map(str::to_string),
+    }
+}
+
 impl Store {
     /// Open the store at `url` and bring its schema up to date. A SQLite file is the hub's
     /// alone (0600, with its -wal and -shm files), whether made here or found.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn open(url: &str) -> BridgeResult<Self> {
+        Self::open_in(url, None).await
+    }
+
+    /// `open`, with the hub's tables in their own Postgres `schema`, made if missing: on a
+    /// database other things share (a Supabase project, whose `public` schema its REST API
+    /// serves to anyone with the project's public key), the hub's tables stay out of
+    /// `public`. Every connection sets its `search_path` to it. SQLite has no schemas; it
+    /// ignores this.
+    pub async fn open_in(url: &str, schema: Option<&str>) -> BridgeResult<Self> {
+        if let Some(schema) = schema
+            && !valid_schema(schema)
+        {
+            return Err(BridgeError::new(
+                "account_store",
+                format!("{schema:?} is not a schema name: 1 to 63 of [a-z0-9_], not starting with a digit or pg_"),
+            ));
+        }
         static DRIVERS: Once = Once::new();
         DRIVERS.call_once(install_default_drivers);
         let (backend, file) = if url.starts_with("postgres://") || url.starts_with("postgresql://")
@@ -210,12 +252,20 @@ impl Store {
             }
             make_private(file)?;
         }
+        let schema = match backend {
+            Backend::Postgres => schema.map(str::to_string),
+            Backend::Sqlite => None,
+        };
+        let set_path = schema
+            .as_ref()
+            .map(|schema| format!("SET search_path TO {schema}"));
         let pool = AnyPoolOptions::new()
             .max_connections(match backend {
                 Backend::Sqlite => 4,
                 Backend::Postgres => 16,
             })
             .after_connect(move |connection, _| {
+                let set_path = set_path.clone();
                 Box::pin(async move {
                     if backend == Backend::Sqlite {
                         connection
@@ -227,12 +277,23 @@ impl Store {
                             )
                             .await?;
                     }
+                    if let Some(set_path) = set_path {
+                        // A checked name (`valid_schema`): no quoting, nothing to inject.
+                        connection.execute(sqlx::AssertSqlSafe(set_path)).await?;
+                    }
                     Ok(())
                 })
             })
             .connect(url)
             .await
             .map_err(store_error)?;
+        if let Some(schema) = &schema {
+            pool.execute(sqlx::AssertSqlSafe(format!(
+                "CREATE SCHEMA IF NOT EXISTS {schema}"
+            )))
+            .await
+            .map_err(store_error)?;
+        }
         let migrator = match backend {
             Backend::Sqlite => &SQLITE,
             Backend::Postgres => &POSTGRES,
@@ -372,6 +433,17 @@ pub mod testing {
 
     /// A new, empty database on the test server, or `None` without one.
     pub async fn postgres() -> Option<TestStore> {
+        let url = empty_postgres().await?;
+        Some(TestStore {
+            store: Store::open(&url).await.unwrap(),
+            url,
+            dir: tempfile::tempdir().unwrap(),
+        })
+    }
+
+    /// The URL of a new database on the test server with nothing in it yet, or `None`
+    /// without a server.
+    pub async fn empty_postgres() -> Option<String> {
         let server = std::env::var(POSTGRES_ENV).ok().filter(|u| !u.is_empty())?;
         static DRIVERS: Once = Once::new();
         DRIVERS.call_once(install_default_drivers);
@@ -388,12 +460,7 @@ pub mod testing {
         admin.close().await;
         let base = server.split('?').next().unwrap();
         let (root, _) = base.rsplit_once('/').unwrap();
-        let url = format!("{root}/{name}");
-        Some(TestStore {
-            store: Store::open(&url).await.unwrap(),
-            url,
-            dir: tempfile::tempdir().unwrap(),
-        })
+        Some(format!("{root}/{name}"))
     }
 }
 

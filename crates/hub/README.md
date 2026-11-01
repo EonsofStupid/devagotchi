@@ -111,6 +111,14 @@ both in CI. Where it is, first match wins:
    one in the config is refused), or `"sqlite:/absolute/path"` (`sqlite:C:/…` on Windows).
 3. `accounts.sqlite3` in the state directory, 0600 with its `-wal` and `-shm` files.
 
+On a Postgres something else also uses, give the hub a schema of its own:
+`"storage": { "schema": "devagotchi_hub" }` (or `DEVAGOTCHI_HUB_STORAGE_SCHEMA`). The hub makes
+it if it is missing and every connection works in it, its migration record included. On a
+Supabase project this matters: Supabase's REST API serves the `public` schema to anyone with
+the project's public key, so the hub's tables never go there. Use the project's **session
+pooler** connection string (port 5432): the transaction pooler (6543) does not keep a session,
+and the direct `db.<ref>.supabase.co` host answers on IPv6 only.
+
 The schema is migrated at start (`migrations/<backend>/`, kept in step). On Postgres every
 write runs SERIALIZABLE and runs again when it collided with another instance's; on SQLite
 it takes the write lock up front.

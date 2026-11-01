@@ -58,9 +58,10 @@ pub struct HubConfig {
     #[serde(default)]
     pub downloads: Option<String>,
     /// Where the hub keeps its accounts (`store.rs`): a Postgres URL for a hosted hub, or a
-    /// `sqlite:/absolute/path` (`sqlite:C:/…` on Windows). Absent: `accounts.sqlite3` in the state directory. A
-    /// password never goes here: `DEVAGOTCHI_HUB_STORAGE_URL`, set from the secret store,
-    /// names the store instead and overrides this.
+    /// `sqlite:/absolute/path` (`sqlite:C:/…` on Windows), and on Postgres the schema its
+    /// tables live in. Absent: `accounts.sqlite3` in the state directory. A password never
+    /// goes here: `DEVAGOTCHI_HUB_STORAGE_URL`, set from the secret store, names the store
+    /// instead and overrides this (`DEVAGOTCHI_HUB_STORAGE_SCHEMA` the schema).
     #[serde(default)]
     pub storage: Option<StorageConfig>,
     /// The owner every holder of this config sees: `owner` above, or in hub mode the
@@ -72,7 +73,13 @@ pub struct HubConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StorageConfig {
-    pub url: String,
+    /// A Postgres URL without a password, or `sqlite:/absolute/path`.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// The Postgres schema the hub's tables live in, made if missing; `public` when absent.
+    /// Give one on any database something else also uses.
+    #[serde(default)]
+    pub schema: Option<String>,
 }
 
 /// The hosted tier's boards: an account binds a project and gets a board of its own on this
@@ -331,7 +338,16 @@ impl HubConfig {
             return Err(invalid("public_url must be an absolute http(s) URL".into()));
         }
         if let Some(storage) = &self.storage {
-            crate::store::check_configured_url(&storage.url).map_err(invalid)?;
+            if let Some(url) = &storage.url {
+                crate::store::check_configured_url(url).map_err(invalid)?;
+            }
+            if let Some(schema) = &storage.schema
+                && !crate::store::valid_schema(schema)
+            {
+                return Err(invalid(format!(
+                    "storage.schema {schema:?}: 1 to 63 of [a-z0-9_], not starting with a digit or pg_"
+                )));
+            }
         }
         match &self.auth {
             AuthConfig::Oidc { issuer, audiences } => {
@@ -600,7 +616,13 @@ impl HubConfig {
 
     /// The store the config names, if any (the environment can override it).
     pub fn storage_url(&self) -> Option<&str> {
-        self.storage.as_ref().map(|storage| storage.url.as_str())
+        self.storage.as_ref().and_then(|storage| storage.url.as_deref())
+    }
+
+    /// The Postgres schema the config names for the store, if any (the environment can
+    /// override it).
+    pub fn storage_schema(&self) -> Option<&str> {
+        self.storage.as_ref().and_then(|storage| storage.schema.as_deref())
     }
 
     /// Whether people sign in with the hub's own accounts (`auth.mode hub`).

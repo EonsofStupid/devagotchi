@@ -223,7 +223,8 @@ async fn accounts_at(
 ) -> BridgeResult<accounts::Accounts> {
     prepare_state_dir(state_dir)?;
     let url = store::url_for(config.storage_url(), state_dir);
-    Ok(accounts::Accounts::open(store::Store::open(&url).await?)
+    let schema = store::schema_for(config.storage_schema());
+    Ok(accounts::Accounts::open(store::Store::open_in(&url, schema.as_deref()).await?)
         .await?
         .with_tokens(config.token_config()))
 }
