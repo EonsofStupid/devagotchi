@@ -52,10 +52,12 @@ clients above, after printing that line.
   backed up beside themselves first (`.bak-<time>`), Claude Code's is set with `claude mcp`;
 - your broker, a background process that keeps running, with its config and state in
   `~/.config/devagotchi` and `~/.local/state/devagotchi` (Windows `%APPDATA%\devagotchi` and
-  `%LOCALAPPDATA%\devagotchi`). Its first start lets AI clients run the developer tools it
-  finds on your `PATH` (git, python, node, cargo, go, uv and the like) in your home
-  directory. Those tools can run any program, so an AI client with Devagotchi can do whatever
-  your account can.
+  `%LOCALAPPDATA%\devagotchi`). It runs what your account can, as Desktop Commander does:
+  shell commands, any program, and files anywhere you can reach, starting in your home
+  directory. So an AI client with Devagotchi can do whatever your account can, including root
+  or administrator rights when you install it as root or from an elevated (Run as
+  administrator) window. To narrow it to the developer tools it found on your `PATH`, inside
+  your home directory, set `"exec_policy": "granted"` in `broker.json`.
 
 `setup` ends with `Check: Devagotchi answered with N tools` when it works;
 `devagotchi setup --help` lists the choices (one client, `--local` or `--hub`).
@@ -136,7 +138,7 @@ cargo test --locked --lib
 
 The account (D22): `devagotchi login` signs in with your Shippin account from any terminal — it shows a code and a URL, you confirm on any device, and the tokens land owner-only in `~/.config/devagotchi/account.json` (`whoami` names the account, `logout` revokes). `devagotchi login --local` records the other choice: no account, everything on this machine. `devagotchi start` says which it is until one is on file. An agent reaches the hosted hub as that account with `devagotchi mcp --hub` — the same stdio command, relayed to the hub, the token never in the agent's config. `devagotchi connect` sets that up in Claude Code, Codex and Claude Desktop in one go (each config backed up and written whole), then starts the server once and lists its tools; `--local` points them at this machine's broker instead. A project's board moves to the hub with `devagotchi board bind`: from then on `devagotchi board …` and the hook pack run there as your account, your agents as seats, from every machine you sign in on (`board unbind` goes back).
 
-The quick way: `devagotchi start` runs your broker with no paths to remember — the first run writes `broker.json` (workspace: your home directory, or `--workspace`; grants: the toolchains found on PATH, plus `--grant`) under `~/.config/devagotchi`, keeps its state under `~/.local/state/devagotchi`, and tells `devagotchi mcp` where to find it. The explicit way, with your own config (`config/broker.example.json` as a template; absolute, existing paths; only executables you intend to authorize; the state directory's parent must already exist — the broker creates the state directory with mode `0700` or verifies an existing private directory):
+The quick way: `devagotchi start` runs your broker with no paths to remember — the first run writes `broker.json` (it runs what your account can, `exec_policy` `account`; workspace: your home directory, or `--workspace`; grants, used only if you set `exec_policy` to `granted`: the toolchains found on PATH, plus `--grant`) under `~/.config/devagotchi`, keeps its state under `~/.local/state/devagotchi`, and tells `devagotchi mcp` where to find it. The explicit way, with your own config (`config/broker.example.json` as a template; absolute, existing paths; only executables you intend to authorize; the state directory's parent must already exist — the broker creates the state directory with mode `0700` or verifies an existing private directory):
 
 ```bash
 ./target/debug/devagotchi broker run \
@@ -197,10 +199,24 @@ Those are historical local-adapter results. The separate Site reference MCP targ
 
 | Tool | Effect |
 |---|---|
-| `operation_start` | Admit an explicitly granted executable with exact arguments and a retry key |
+| `run` | Run a command line in one call: start it, wait up to 50 s, return its output and exit code; one still running keeps running and is followed with the operation tools |
+| `read_file` | Read a file (text as text, anything else as base64), 24 KiB a call: by lines (`start_line`, negative for the last lines, `line_count`; it gives `next_line` and `total_lines`) or by bytes (`offset`, negative for a log's end) |
+| `list_directory` | List a directory, up to three levels deep |
+| `write_file` | Overwrite (atomically), create or append; returns the SHA-256 to guard the next write |
+| `edit_file` | Replace exact text an exact number of times, or change nothing |
+| `read_image` | Look at a PNG, JPEG, GIF or WebP up to 3.75 MB and 8000 px a side: it comes back as an image the AI can see (type and size from the file's own header) |
+| `read_multiple_files` | Read up to 20 files in one call; a file that cannot be read is reported beside the rest |
+| `get_file_info` | Kind, size, times, read-only, Unix mode, a link's target, a text file's line count |
+| `create_directory` | Make a directory and its missing parents; an existing one is not an error |
+| `move_file` | Move or rename on the same filesystem; never replaces without `overwrite`, never a directory |
+| `operation_start` | Admit a command line, or an executable with exact arguments, with a retry key |
+| `operation_list` | List the broker's operations, newest first, before and after restarts |
+| `operation_wait` | Wait until an operation finishes or prints, without polling |
 | `operation_get` | Read the job's observed state and exact request |
 | `operation_read` | Read retained output after a caller-owned cursor |
 | `operation_cancel` | Explicitly request cancellation of an admitted job |
+
+The hub serves the same tools for every linked machine, each with the machine's name, except `operation_list`: a broker the hub shares between people would list everyone's jobs, so it waits until the list is filtered to the caller's own.
 
 Stopping an MCP request only stops waiting for that response. Once admission is committed, reuse the same retry key and request to reconcile a lost reply. A different retry key can start new work.
 

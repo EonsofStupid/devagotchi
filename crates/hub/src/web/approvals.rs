@@ -64,13 +64,11 @@ pub async fn list(
     headers: HeaderMap,
     Query(shown): Query<Shown>,
 ) -> Response {
-    let Some(web) = state.web.clone() else {
-        return not_set_up();
-    };
-    let subject = match who(&state, &web, &headers).await {
+    let subject = match who(&state, &headers).await {
         Who::Person(subject) => subject,
         Who::SignedOut => return see_other("/auth/login?return_to=/approvals", &[]),
         Who::Unavailable => return unavailable(),
+        Who::NotSetUp => return not_set_up(),
     };
     if !state.hub.config.is_human(&subject.id) {
         return pages::message(
@@ -113,9 +111,6 @@ pub async fn list(
 /// "Send me a test approval": a harmless approval on the person's first board, pushed to
 /// their own phones only.
 pub async fn test(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let Some(web) = state.web.clone() else {
-        return not_set_up();
-    };
     if !same_origin(&headers, &state.hub.config.public_url) {
         return pages::message(
             StatusCode::FORBIDDEN,
@@ -124,10 +119,11 @@ pub async fn test(State(state): State<AppState>, headers: HeaderMap) -> Response
             Some(("/approvals", "Approvals")),
         );
     }
-    let subject = match who(&state, &web, &headers).await {
+    let subject = match who(&state, &headers).await {
         Who::Person(subject) => subject,
         Who::SignedOut => return see_other("/auth/login?return_to=/approvals", &[]),
         Who::Unavailable => return unavailable(),
+        Who::NotSetUp => return not_set_up(),
     };
     let Some(push) = state.hub.push.clone() else {
         return see_other("/approvals", &[]);
@@ -187,9 +183,6 @@ pub async fn decide(
     headers: HeaderMap,
     Form(form): Form<Decide>,
 ) -> Response {
-    let Some(web) = state.web.clone() else {
-        return not_set_up();
-    };
     if !same_origin(&headers, &state.hub.config.public_url) {
         return pages::message(
             StatusCode::FORBIDDEN,
@@ -198,10 +191,11 @@ pub async fn decide(
             Some(("/approvals", "Approvals")),
         );
     }
-    let subject = match who(&state, &web, &headers).await {
+    let subject = match who(&state, &headers).await {
         Who::Person(subject) => subject,
         Who::SignedOut => return see_other("/auth/login?return_to=/approvals", &[]),
         Who::Unavailable => return unavailable(),
+        Who::NotSetUp => return not_set_up(),
     };
     let human = state.hub.config.is_human(&subject.id);
     let granted = state

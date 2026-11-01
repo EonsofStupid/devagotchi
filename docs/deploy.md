@@ -55,6 +55,27 @@ deploy/linux/promote-hub.sh --confirm
 
 `DEVAGOTCHI_STAGING_HOST` and `DEVAGOTCHI_PROD_HOST` are `user@host` for SSH. They are usually the same Proxmox host. `DEVAGOTCHI_STAGING_LXC` and `DEVAGOTCHI_PROD_LXC` select the container. Leave an `LXC` variable empty only when that SSH target is already the container, not the Proxmox host.
 
+## One live hub, no staging container
+
+`DEVAGOTCHI_PROMOTE_TARGET=live` installs only on `DEVAGOTCHI_PROD_HOST` / `DEVAGOTCHI_PROD_LXC`. It does not require a staging host, and the commit does not have to be on `main` (a tested pull-request build). Before the install it runs `pct snapshot <ct> devagotchi-pre-<version>` on the Proxmox host. If the install or the smoke fails, it runs `pct rollback` to that snapshot and then installs `DEVAGOTCHI_PREVIOUS_VERSION`.
+
+`/join` serves whatever is in the hub's downloads directory. Set `DEVAGOTCHI_DIST_DIR` to a directory of archives and `SHA256SUMS` built for this commit, and `DEVAGOTCHI_DOWNLOADS_DIR` to the directory `hub.json` `downloads` names inside the container. After smoke passes, the script copies that directory in, so `/join` serves this build rather than an older release.
+
+```bash
+DEVAGOTCHI_PROMOTE_TARGET=live
+DEVAGOTCHI_SHA=<tested commit>
+DEVAGOTCHI_VERSION=<version>
+DEVAGOTCHI_PREVIOUS_VERSION=<version now running>
+DEVAGOTCHI_PROD_HOST=<user>@23.156.136.173
+DEVAGOTCHI_PROD_LXC=110
+DEVAGOTCHI_PROD_URL=https://app.devagotchi.com
+DEVAGOTCHI_DIST_DIR=/path/to/archives
+DEVAGOTCHI_DOWNLOADS_DIR=/var/lib/devagotchi/downloads
+deploy/linux/promote-hub.sh --confirm
+```
+
+This script is not run from the pull request.
+
 `homelab-infra-dev` and `wi-infra-dev` are not in this repository. A new Devagotchi account does not receive any configured broker. Grants stay an operator edit, now keyed by the Devagotchi account id.
 
 ## What the script will not do

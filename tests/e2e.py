@@ -136,6 +136,12 @@ try:
         [str(HERE / "adapter_probe.py"), endpoint, "--adapter", *adapter_cmd, "--git", git, "--cwd", str(workspace)],
         "stdio adapter probe",
     )
+    # The same adapter against a broker that runs as its account, as a person's own does.
+    adapter_ok = run_probe(
+        [str(HERE / "adapter_probe.py"), account_endpoint, "--adapter", *adapter_cmd, "--git", git,
+         "--cwd", str(account_workspace), "--account"],
+        "stdio adapter probe (account)",
+    ) and adapter_ok
 
     token = "e2e-dev-token-" + os.urandom(12).hex()
     # The board's subjects: a person, two agents, and one token that holds no board.

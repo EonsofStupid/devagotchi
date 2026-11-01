@@ -277,19 +277,46 @@ impl Broker {
             RequestBody::OperationsChanged(input) => {
                 self.operations_changed(input).await.map(ResponseBody::Revision)
             }
-            RequestBody::FileRead(input) => self.files().read(input).map(ResponseBody::File),
-            RequestBody::FileList(input) => self.files().list(input).map(ResponseBody::Listing),
-            RequestBody::FileWrite(input) => self.files().write(input).map(ResponseBody::Written),
-            RequestBody::FileEdit(input) => self.files().edit(input).map(ResponseBody::Written),
+            RequestBody::FileRead(input) => {
+                self.on_files(move |files| files.read(input).map(ResponseBody::File)).await
+            }
+            RequestBody::FileList(input) => {
+                self.on_files(move |files| files.list(input).map(ResponseBody::Listing)).await
+            }
+            RequestBody::FileWrite(input) => {
+                self.on_files(move |files| files.write(input).map(ResponseBody::Written)).await
+            }
+            RequestBody::FileEdit(input) => {
+                self.on_files(move |files| files.edit(input).map(ResponseBody::Written)).await
+            }
+            RequestBody::FileInfo(input) => {
+                self.on_files(move |files| files.info(input).map(ResponseBody::Info)).await
+            }
+            RequestBody::FileMkdir(input) => {
+                self.on_files(move |files| files.mkdir(input).map(ResponseBody::Info)).await
+            }
+            RequestBody::FileMove(input) => {
+                self.on_files(move |files| files.moved(input).map(ResponseBody::Info)).await
+            }
         }
     }
 
-    /// Where file requests may reach: the same policy as execution.
-    fn files(&self) -> crate::files::Scope<'_> {
-        crate::files::Scope {
-            workspace: &self.shared.workspace,
-            policy: self.shared.config.exec_policy,
-        }
+    /// File work, where file requests may reach (the same policy as execution), on the
+    /// blocking pool: a large file never stalls the broker's jobs, waits or other callers.
+    async fn on_files<F>(&self, work: F) -> BridgeResult<ResponseBody>
+    where
+        F: FnOnce(crate::files::Scope<'_>) -> BridgeResult<ResponseBody> + Send + 'static,
+    {
+        let workspace = self.shared.workspace.clone();
+        let policy = self.shared.config.exec_policy;
+        tokio::task::spawn_blocking(move || {
+            work(crate::files::Scope {
+                workspace: &workspace,
+                policy,
+            })
+        })
+        .await
+        .map_err(|error| BridgeError::new("internal_error", error.to_string()))?
     }
 
     fn normalize(&self, input: &StartInput) -> BridgeResult<(ExecutionSpec, String)> {

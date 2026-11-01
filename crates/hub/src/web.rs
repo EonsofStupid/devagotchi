@@ -1,7 +1,9 @@
-//! People's view of the hub in a browser: sign in with a Shippin account (Nomen) and see
-//! who you are signed in as and the machines you can reach, each online or offline.
+//! People's view of the hub in a browser: sign in, and see who you are signed in as and
+//! the machines you can reach, each online or offline. A hub in `auth.mode hub` signs
+//! people in itself with passkeys (`passkeys.rs`); in `auth.mode nomen` with a `web`
+//! section, through Nomen as below.
 //!
-//! Sign-in is the OAuth 2.0 authorization code flow with PKCE (RFC 7636) against Nomen, as
+//! Nomen sign-in is the OAuth 2.0 authorization code flow with PKCE (RFC 7636) against Nomen, as
 //! a public client: no secret ships with the hub for it. The access token Nomen returns is
 //! checked by the same introspection as every bearer token (accepted clients, audience,
 //! exact account ID), so a browser session is never weaker than an MCP call.
@@ -26,9 +28,12 @@ mod approvals;
 mod machines;
 mod notify;
 mod pages;
+mod passkeys;
 mod public;
 mod routes;
 mod sessions;
+#[cfg(test)]
+mod passkey_tests;
 #[cfg(test)]
 mod tests;
 
@@ -44,6 +49,7 @@ use devagotchi_contracts::{BridgeError, BridgeResult};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+pub use passkeys::HubSignIn;
 pub use routes::router;
 
 /// Every web page's top bar says whether the browser is signed in: the account and a
@@ -53,10 +59,12 @@ pub async fn bar(
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let bar = match &state.web {
-        None => pages::Bar::Plain,
-        Some(web) if web.signed_in(request.headers()) => pages::Bar::SignedIn,
-        Some(_) => pages::Bar::SignedOut {
+    let bar = if state.web.is_none() && state.passkeys.is_none() {
+        pages::Bar::Plain
+    } else if routes::signed_in(&state, request.headers()).await {
+        pages::Bar::SignedIn
+    } else {
+        pages::Bar::SignedOut {
             return_to: safe_return_to(
                 request
                     .uri()
@@ -65,7 +73,7 @@ pub async fn bar(
                     .unwrap_or("/account"),
             )
             .to_string(),
-        },
+        }
     };
     pages::BAR.scope(bar, next.run(request)).await
 }

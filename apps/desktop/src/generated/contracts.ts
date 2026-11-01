@@ -23,10 +23,14 @@ export type OperationState =
 export interface BrokerContracts {
   bridge_error: BridgeError;
   changes_input: ChangesInput;
+  directory_input: DirectoryInput;
   file_content: FileContent;
   file_edit_input: FileEditInput;
+  file_info: FileInfo;
+  file_info_input: FileInfoInput;
   file_list_input: FileListInput;
   file_listing: FileListing;
+  file_move_input: FileMoveInput;
   file_read_input: FileReadInput;
   file_write_input: FileWriteInput;
   file_written: FileWritten;
@@ -61,6 +65,13 @@ export interface ChangesInput {
    */
   timeout_ms: number;
 }
+export interface DirectoryInput {
+  /**
+   * Absolute path of the directory to make; missing parents are made too. An existing
+   * directory is not an error.
+   */
+  path: string;
+}
 export interface FileContent {
   /**
    * The raw bytes, base64, when they are not text.
@@ -71,6 +82,12 @@ export interface FileContent {
    */
   eof: boolean;
   modified_ms?: number | null;
+  /**
+   * Read by lines: the `start_line` to read on from, when lines remain and the number
+   * is known. A single line longer than `max_bytes` is read on by bytes, from
+   * `next_offset`.
+   */
+  next_line?: number | null;
   /**
    * The offset to read on from.
    */
@@ -88,10 +105,20 @@ export interface FileContent {
    */
   size: number;
   /**
+   * Read by lines: the 1-based number of the first line returned, when known (always
+   * for a positive `start_line`; from the end, for files up to 8 MiB).
+   */
+  start_line?: number | null;
+  /**
    * The bytes as text, when they are UTF-8 text. A character split at the end of the
    * page is left for the next read.
    */
   text?: string | null;
+  /**
+   * Read by lines: the file's line count, for files up to 8 MiB, or once a read from a
+   * known line number reaches the end.
+   */
+  total_lines?: number | null;
 }
 export interface FileEditInput {
   /**
@@ -109,6 +136,52 @@ export interface FileEditInput {
   old_text: string;
   /**
    * Absolute path of a UTF-8 text file.
+   */
+  path: string;
+}
+export interface FileInfo {
+  created_ms?: number | null;
+  /**
+   * `file`, `dir`, `symlink` or `other`.
+   */
+  kind: string;
+  /**
+   * For a text file of at most 8 MiB: how many lines it has.
+   */
+  lines?: number | null;
+  /**
+   * Where a symbolic link points, as stored in the link.
+   */
+  link_target?: string | null;
+  /**
+   * After create_directory: whether this call made it (false: it existed already).
+   */
+  made?: boolean | null;
+  /**
+   * Unix permission bits in octal (`0644`); absent on Windows.
+   */
+  mode?: string | null;
+  modified_ms?: number | null;
+  /**
+   * The path, canonical up to its own name (a link is reported as itself).
+   */
+  path: string;
+  /**
+   * Whether its permissions mark it read-only.
+   */
+  readonly: boolean;
+  /**
+   * After move_file: whether a file at the destination was replaced.
+   */
+  replaced?: boolean | null;
+  /**
+   * Size in bytes (for a link, the link's own).
+   */
+  size: number;
+}
+export interface FileInfoInput {
+  /**
+   * Absolute path of a file, directory or symbolic link.
    */
   path: string;
 }
@@ -156,19 +229,47 @@ export interface FileEntry {
   path: string;
   size?: number | null;
 }
+export interface FileMoveInput {
+  /**
+   * Absolute path it moves to, on the same filesystem. Its parent directory must exist.
+   */
+  destination: string;
+  /**
+   * Replace a file already at the destination (never a directory). Default false: an
+   * existing destination refuses the move and changes nothing.
+   */
+  overwrite?: boolean;
+  /**
+   * Absolute path of the file, directory or link to move or rename (a link moves as
+   * itself, never what it points to).
+   */
+  source: string;
+}
 export interface FileReadInput {
+  /**
+   * With `start_line`: how many lines, 1..=5000 (default 1000; from a negative
+   * `start_line`, the lines to the end). Never more than `max_bytes` of text.
+   */
+  line_count?: number | null;
   /**
    * Bytes to read, 1..=24576 (default 24576). Read on from `next_offset` for more.
    */
   max_bytes?: number;
   /**
    * Byte offset to start at; negative counts back from the end (a tail). Default 0.
+   * With a positive `start_line`: the `next_offset` that came with that `next_line`, so
+   * the line is not searched for again.
    */
   offset?: number;
   /**
    * Absolute path of the file.
    */
   path: string;
+  /**
+   * Read by lines instead of bytes: the 1-based line to start at, or negative to count
+   * back from the end (-50: the last 50 lines). `offset` is then not used.
+   */
+  start_line?: number | null;
 }
 export interface FileWriteInput {
   /**

@@ -1,4 +1,4 @@
-//! Against a fake Nomen that plays the device grant and the management API as Zitadel does.
+//! Against a fake Nomen that plays the device grant and the management API as Nomen does.
 
 use std::{
     collections::HashMap,
@@ -58,7 +58,11 @@ async fn device_authorization(
     Form(form): Form<HashMap<String, String>>,
 ) -> Response {
     assert_eq!(form.get("client_id").map(String::as_str), Some(CLI));
-    assert_eq!(form.get("scope").map(String::as_str), Some(API_SCOPE));
+    // Nomen's own APIs, in Nomen's spelling.
+    assert_eq!(
+        form.get("scope").map(String::as_str),
+        Some("openid profile email offline_access urn:nomen:iam:org:project:id:nomen:aud")
+    );
     let issuer = fake.issuer.lock().unwrap().clone();
     Json(json!({
         "device_code": "dc-1", "user_code": "WXYZ-1234",

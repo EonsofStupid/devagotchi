@@ -29,7 +29,7 @@ pub struct Subject {
     /// accounts apart. Never used for grants: two accounts can share a name.
     pub name: Option<String>,
     /// The organization (tenant) the account belongs to, as the identity provider proved
-    /// it (Nomen's `urn:zitadel:iam:user:resourceowner:id`). Project boards belong to it:
+    /// it (Nomen's `urn:nomen:iam:user:resourceowner:id`). Project boards belong to it:
     /// every member works them (B13). `None` when the token carries no org; the account's
     /// own boards are then its own.
     pub org: Option<String>,
@@ -49,10 +49,9 @@ pub struct Subject {
 /// a refresh token, the org they belong to (so project boards are the org's), and the
 /// hub's projects in the token's audience. Nothing broader.
 pub fn sign_in_scopes(audiences: &[String]) -> String {
-    let mut scope =
-        String::from("openid profile offline_access urn:zitadel:iam:user:resourceowner");
+    let mut scope = String::from("openid profile offline_access urn:nomen:iam:user:resourceowner");
     for audience in audiences {
-        scope.push_str(&format!(" urn:zitadel:iam:org:project:id:{audience}:aud"));
+        scope.push_str(&format!(" urn:nomen:iam:org:project:id:{audience}:aud"));
     }
     scope
 }
@@ -80,6 +79,9 @@ pub enum Verifier {
     },
     /// Tokens this hub issued. Checked locally, with the hub's own signing key.
     Devagotchi(std::sync::Arc<crate::oauth::Authority>),
+    /// A hub with its own accounts and no Nomen: no bearer token is accepted until the hub
+    /// issues its own to AI clients (increment 32b).
+    Closed,
 }
 
 /// The `iss` a JWT claims, unverified: only for choosing which issuer checks it.
@@ -127,15 +129,6 @@ impl Verifier {
         public_url: &str,
     ) -> BridgeResult<Self> {
         match config {
-            AuthConfig::Nomen {
-                issuer,
-                audiences,
-                clients,
-                key_file,
-            } => Ok(Verifier::Nomen(
-                NomenVerifier::new(issuer, audiences, clients, key_file)?
-                    .remembering(&state_dir.join("signins.sqlite3")),
-            )),
             AuthConfig::Oidc { issuer, audiences } => Ok(Verifier::Oidc(
                 OidcVerifier::discover(issuer, audiences).await?,
             )),
@@ -151,6 +144,18 @@ impl Verifier {
                 authority.apply_config_limits(provisional);
                 Ok(Verifier::Devagotchi(std::sync::Arc::new(authority)))
             }
+            AuthConfig::Nomen { .. } | AuthConfig::Hub { .. } => match config.nomen() {
+                Some(nomen) => Ok(Verifier::Nomen(
+                    NomenVerifier::new(
+                        nomen.issuer,
+                        nomen.audiences,
+                        nomen.clients,
+                        nomen.key_file,
+                    )?
+                    .remembering(&state_dir.join("signins.sqlite3")),
+                )),
+                None => Ok(Verifier::Closed),
+            },
         }
     }
 
@@ -195,6 +200,9 @@ impl Verifier {
                     None => Box::pin(primary.verify(bearer)).await,
                 }
             }
+            Verifier::Closed => Err(AuthError::Invalid(
+                "this hub signs people in itself and takes no bearer tokens yet",
+            )),
         }
     }
 
@@ -204,7 +212,9 @@ impl Verifier {
         match self {
             Verifier::Nomen(nomen) => Some(nomen.health()),
             Verifier::Federated { primary, .. } => primary.issuer_health(),
-            Verifier::Devagotchi(_) | Verifier::Oidc(_) | Verifier::Dev(_) => None,
+            Verifier::Devagotchi(_) | Verifier::Oidc(_) | Verifier::Dev(_) | Verifier::Closed => {
+                None
+            }
         }
     }
 
@@ -212,7 +222,7 @@ impl Verifier {
         match self {
             Verifier::Nomen(nomen) => Some(nomen.issuer()),
             Verifier::Oidc(oidc) => Some(&oidc.issuer),
-            Verifier::Dev(_) => None,
+            Verifier::Dev(_) | Verifier::Closed => None,
             Verifier::Federated { primary, .. } => primary.issuer(),
             Verifier::Devagotchi(authority) => Some(authority.issuer()),
         }
@@ -289,7 +299,7 @@ struct Discovery {
 #[derive(Debug, Deserialize)]
 struct Claims {
     sub: String,
-    #[serde(default, rename = "urn:zitadel:iam:user:resourceowner:id")]
+    #[serde(default, rename = "urn:nomen:iam:user:resourceowner:id")]
     org: Option<String>,
 }
 

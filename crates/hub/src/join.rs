@@ -153,9 +153,14 @@ pub fn routes() -> axum::Router<AppState> {
 }
 
 pub async fn join(State(state): State<AppState>, Path(asked): Path<String>) -> Response {
-    let (code, shell) = match asked.strip_suffix(".ps1") {
-        Some(code) => (code, Shell::PowerShell),
-        None => (asked.strip_suffix(".sh").unwrap_or(&asked), Shell::Sh),
+    let (code, shell) = if let Some(code) = asked.strip_suffix(".compose.yml") {
+        return compose(&state, code);
+    } else if let Some(code) = asked.strip_suffix(".host.sh") {
+        (code, Shell::Sh)
+    } else if let Some(code) = asked.strip_suffix(".ps1") {
+        (code, Shell::PowerShell)
+    } else {
+        (asked.strip_suffix(".sh").unwrap_or(&asked), Shell::Sh)
     };
     let hub = &state.hub.config.public_url;
     let Some(downloads) = state.hub.downloads.clone() else {
@@ -182,6 +187,29 @@ pub async fn join(State(state): State<AppState>, Path(asked): Path<String>) -> R
                 .into(),
         ),
     }
+}
+
+/// Docker Compose that enrolls with the same single-use code. It does not invent an image:
+/// the container runs the hub's Linux join script, which needs a Linux host with systemd
+/// when the person wants a service. The file is the other shape of that one code.
+fn compose(state: &AppState, code: &str) -> Response {
+    let hub = state
+        .hub
+        .config
+        .public_url
+        .trim_end_matches('/')
+        .to_string();
+    if !valid_code(code) || !safe_url(&hub) {
+        return text(StatusCode::OK, refusal(Shell::Sh, &hub));
+    }
+    text(
+        StatusCode::OK,
+        format!(
+            "# Same single-use join code as the Linux one-liner.\n\
+             # A host that should run Devagotchi under systemd should use that one-liner.\n\
+             services:\n  enroll:\n    image: docker.io/library/debian:stable-slim\n    network_mode: host\n    volumes:\n      - devagotchi-state:/var/lib/devagotchi\n    command:\n      - sh\n      - -c\n      - apt-get update && apt-get install -y curl ca-certificates && curl -fsSL {hub}/join/{code} | sh\nvolumes:\n  devagotchi-state: {{}}\n"
+        ),
+    )
 }
 
 /// One file of the build this hub hands out, streamed; only names `SHA256SUMS` lists.

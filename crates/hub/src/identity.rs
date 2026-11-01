@@ -497,15 +497,34 @@ impl Store {
             ));
         }
         let provisional = provisional_id;
-        let survivor = if proved.email_verified
+        // An identity already on an account is that account. Inserting it again is the
+        // primary-key conflict that left provisional accounts orphaned on the live hub.
+        let survivor = if let Some(existing) = linked_account(&tx, &proved.issuer, &proved.sub)? {
+            if existing != provisional {
+                merge_tx(&tx, &provisional, &existing)?;
+            } else {
+                tx.execute(
+                    "UPDATE accounts SET provisional_until = NULL WHERE id = ?1",
+                    params![provisional],
+                )
+                .map_err(store_error)?;
+                record(
+                    &tx,
+                    "claim",
+                    &provisional,
+                    Some(&proved.issuer),
+                    Some(&proved.sub),
+                    "claimed",
+                )?;
+            }
+            existing
+        } else if proved.email_verified
             && let Some(email) = &proved.email
             && let Some(owner) = email_owner(&tx, email)?
             && owner != provisional
         {
             merge_tx(&tx, &provisional, &owner)?;
-            if linked_account(&tx, &proved.issuer, &proved.sub)?.is_none() {
-                insert_identity(&tx, &proved, &owner)?;
-            }
+            insert_identity(&tx, &proved, &owner)?;
             owner
         } else {
             insert_identity(&tx, &proved, &provisional)?;
@@ -1326,23 +1345,67 @@ fn migrate(connection: &Connection) -> BridgeResult<()> {
             )
             .map_err(store_error)?;
     }
-    if version >= 3 {
+    if version < 3 {
+        connection
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS operator_limits (
+                   id INTEGER PRIMARY KEY CHECK (id = 1),
+                   ttl_secs INTEGER NOT NULL,
+                   starts_per_hour INTEGER NOT NULL,
+                   unclaimed_cap INTEGER NOT NULL,
+                   updated_at INTEGER NOT NULL
+                 );
+                 INSERT INTO schema_migrations (version, applied_at) VALUES (3, 0);",
+            )
+            .map_err(store_error)?;
+        connection
+            .execute(
+                "UPDATE schema_migrations SET applied_at = ?1 WHERE version = 3",
+                params![now_secs() as i64],
+            )
+            .map_err(store_error)?;
+    }
+    if version >= 4 {
         return Ok(());
     }
     connection
         .execute_batch(
-            "CREATE TABLE IF NOT EXISTS operator_limits (
+            "CREATE TABLE IF NOT EXISTS setup_codes (
+               code_hash BLOB PRIMARY KEY,
+               expires_at INTEGER NOT NULL,
+               used INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS hub_owner (
                id INTEGER PRIMARY KEY CHECK (id = 1),
-               ttl_secs INTEGER NOT NULL,
-               starts_per_hour INTEGER NOT NULL,
-               unclaimed_cap INTEGER NOT NULL,
-               updated_at INTEGER NOT NULL
-             );",
+               account_id TEXT NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS passkeys (
+               credential_id BLOB PRIMARY KEY,
+               account_id TEXT NOT NULL,
+               public_key BLOB NOT NULL,
+               alg INTEGER NOT NULL,
+               sign_count INTEGER NOT NULL,
+               backup_eligible INTEGER NOT NULL,
+               created_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS recovery_codes (
+               code_hash BLOB PRIMARY KEY,
+               account_id TEXT NOT NULL,
+               used INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS webauthn_challenges (
+               challenge_hash BLOB PRIMARY KEY,
+               purpose TEXT NOT NULL,
+               account_id TEXT,
+               expires_at INTEGER NOT NULL,
+               used INTEGER NOT NULL
+             );
+             INSERT INTO schema_migrations (version, applied_at) VALUES (4, 0);",
         )
         .map_err(store_error)?;
     connection
         .execute(
-            "INSERT INTO schema_migrations (version, applied_at) VALUES (3, ?1)",
+            "UPDATE schema_migrations SET applied_at = ?1 WHERE version = 4",
             params![now_secs() as i64],
         )
         .map_err(store_error)?;
@@ -1395,6 +1458,285 @@ impl Store {
             )
             .map_err(store_error)?;
         Ok(())
+    }
+
+    /// One outstanding setup code. A new one replaces any that were not used.
+    /// Plaintext is returned once; only the hash is stored. Fifteen minutes.
+    pub fn issue_setup_code(&self) -> BridgeResult<String> {
+        let code = format!(
+            "{}-{}",
+            hex::encode(crate::link::random::<8>()),
+            hex::encode(crate::link::random::<8>())
+        );
+        let connection = self.connection.lock().expect("identity lock");
+        connection
+            .execute("DELETE FROM setup_codes WHERE used = 0", [])
+            .map_err(store_error)?;
+        connection
+            .execute(
+                "INSERT INTO setup_codes (code_hash, expires_at, used) VALUES (?1, ?2, 0)",
+                params![
+                    claim_hash(&code).as_slice(),
+                    now_secs().saturating_add(15 * 60) as i64
+                ],
+            )
+            .map_err(store_error)?;
+        Ok(code)
+    }
+
+    pub fn hub_owner(&self) -> BridgeResult<Option<String>> {
+        let connection = self.connection.lock().expect("identity lock");
+        connection
+            .query_row("SELECT account_id FROM hub_owner WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(store_error)
+    }
+
+    /// The provisional account a live claim code names, without spending the code.
+    pub fn account_for_claim_code(&self, code: &str) -> BridgeResult<String> {
+        let connection = self.connection.lock().expect("identity lock");
+        let row: Option<(String, i64, i64)> = connection
+            .query_row(
+                "SELECT account_id, expires_at, used FROM claim_codes WHERE code_hash = ?1",
+                params![claim_hash(code).as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(store_error)?;
+        let Some((account, exp, used)) = row else {
+            return Err(BridgeError::new("invalid_grant", "unknown claim code"));
+        };
+        if used != 0 || (exp as u64) <= now_secs() {
+            return Err(BridgeError::new(
+                "invalid_grant",
+                "this claim code is no longer valid",
+            ));
+        }
+        Ok(account)
+    }
+
+    /// Spend a setup code and mark `account_id` the hub owner. Refuses when an owner
+    /// mark already names a different account.
+    pub fn consume_setup_code(&self, code: &str, account_id: &str) -> BridgeResult<()> {
+        if !is_account_id(account_id) {
+            return Err(BridgeError::new("invalid_grant", "unknown account"));
+        }
+        let mut connection = self.connection.lock().expect("identity lock");
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        let row: Option<(i64, i64)> = tx
+            .query_row(
+                "SELECT expires_at, used FROM setup_codes WHERE code_hash = ?1",
+                params![claim_hash(code).as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(store_error)?;
+        let Some((exp, used)) = row else {
+            return Err(BridgeError::new("invalid_grant", "unknown setup code"));
+        };
+        if used != 0 || (exp as u64) <= now_secs() {
+            return Err(BridgeError::new(
+                "invalid_grant",
+                "this setup code is no longer valid",
+            ));
+        }
+        let current: Option<String> = tx
+            .query_row("SELECT account_id FROM hub_owner WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(store_error)?;
+        if let Some(current) = current
+            && current != account_id
+        {
+            return Err(BridgeError::new(
+                "invalid_grant",
+                "this hub already has an owner",
+            ));
+        }
+        tx.execute(
+            "UPDATE setup_codes SET used = 1 WHERE code_hash = ?1",
+            params![claim_hash(code).as_slice()],
+        )
+        .map_err(store_error)?;
+        tx.execute(
+            "INSERT INTO hub_owner (id, account_id) VALUES (1, ?1)
+             ON CONFLICT(id) DO UPDATE SET account_id = excluded.account_id",
+            params![account_id],
+        )
+        .map_err(store_error)?;
+        tx.execute(
+            "UPDATE accounts SET provisional_until = NULL WHERE id = ?1",
+            params![account_id],
+        )
+        .map_err(store_error)?;
+        record(&tx, "owner", account_id, None, None, "setup code")?;
+        tx.commit().map_err(store_error)?;
+        Ok(())
+    }
+
+    pub fn issue_recovery_codes(&self, account_id: &str) -> BridgeResult<Vec<String>> {
+        let mut codes = Vec::with_capacity(8);
+        let mut connection = self.connection.lock().expect("identity lock");
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        tx.execute(
+            "DELETE FROM recovery_codes WHERE account_id = ?1 AND used = 0",
+            params![account_id],
+        )
+        .map_err(store_error)?;
+        for _ in 0..8 {
+            let code = hex::encode(crate::link::random::<5>());
+            tx.execute(
+                "INSERT INTO recovery_codes (code_hash, account_id, used) VALUES (?1, ?2, 0)",
+                params![claim_hash(&code).as_slice(), account_id],
+            )
+            .map_err(store_error)?;
+            codes.push(code);
+        }
+        tx.commit().map_err(store_error)?;
+        Ok(codes)
+    }
+
+    /// Spend one recovery code and return the account it belongs to.
+    pub fn consume_recovery_code(&self, code: &str) -> BridgeResult<String> {
+        let mut connection = self.connection.lock().expect("identity lock");
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        let account: Option<String> = tx
+            .query_row(
+                "SELECT account_id FROM recovery_codes WHERE code_hash = ?1 AND used = 0",
+                params![claim_hash(code.trim()).as_slice()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(store_error)?;
+        let Some(account) = account else {
+            return Err(BridgeError::new("invalid_grant", "unknown recovery code"));
+        };
+        tx.execute(
+            "UPDATE recovery_codes SET used = 1 WHERE code_hash = ?1",
+            params![claim_hash(code.trim()).as_slice()],
+        )
+        .map_err(store_error)?;
+        record(&tx, "recover", &account, None, None, "recovery code")?;
+        tx.commit().map_err(store_error)?;
+        Ok(account)
+    }
+
+    pub fn save_challenge(
+        &self,
+        challenge: &[u8],
+        purpose: &str,
+        account: Option<&str>,
+    ) -> BridgeResult<()> {
+        let connection = self.connection.lock().expect("identity lock");
+        connection
+            .execute(
+                "INSERT INTO webauthn_challenges (challenge_hash, purpose, account_id, expires_at, used)
+                 VALUES (?1, ?2, ?3, ?4, 0)",
+                params![
+                    Sha256::digest(challenge).as_slice(),
+                    purpose,
+                    account,
+                    now_secs().saturating_add(5 * 60) as i64
+                ],
+            )
+            .map_err(store_error)?;
+        Ok(())
+    }
+
+    pub fn spend_challenge(&self, challenge: &[u8], purpose: &str) -> BridgeResult<Option<String>> {
+        let mut connection = self.connection.lock().expect("identity lock");
+        let tx = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        let row: Option<(String, Option<String>, i64, i64)> = tx
+            .query_row(
+                "SELECT purpose, account_id, expires_at, used FROM webauthn_challenges WHERE challenge_hash = ?1",
+                params![Sha256::digest(challenge).as_slice()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .optional()
+            .map_err(store_error)?;
+        let Some((got, account, exp, used)) = row else {
+            return Err(BridgeError::new(
+                "invalid_ceremony",
+                "sign-in timed out; start again",
+            ));
+        };
+        if used != 0 || got != purpose || (exp as u64) <= now_secs() {
+            return Err(BridgeError::new(
+                "invalid_ceremony",
+                "sign-in timed out; start again",
+            ));
+        }
+        tx.execute(
+            "UPDATE webauthn_challenges SET used = 1 WHERE challenge_hash = ?1",
+            params![Sha256::digest(challenge).as_slice()],
+        )
+        .map_err(store_error)?;
+        tx.commit().map_err(store_error)?;
+        Ok(account)
+    }
+
+    pub fn save_passkey(
+        &self,
+        account_id: &str,
+        credential_id: &[u8],
+        public_key: &[u8],
+        alg: i64,
+        sign_count: u32,
+        backup_eligible: bool,
+    ) -> BridgeResult<()> {
+        let connection = self.connection.lock().expect("identity lock");
+        connection
+            .execute(
+                "INSERT INTO passkeys
+                 (credential_id, account_id, public_key, alg, sign_count, backup_eligible, created_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    credential_id,
+                    account_id,
+                    public_key,
+                    alg,
+                    sign_count,
+                    i64::from(backup_eligible),
+                    now_secs() as i64
+                ],
+            )
+            .map_err(store_error)?;
+        Ok(())
+    }
+
+    pub fn passkey(
+        &self,
+        credential_id: &[u8],
+    ) -> BridgeResult<Option<(String, Vec<u8>, i64, u32, bool)>> {
+        let connection = self.connection.lock().expect("identity lock");
+        connection
+            .query_row(
+                "SELECT account_id, public_key, alg, sign_count, backup_eligible
+                 FROM passkeys WHERE credential_id = ?1",
+                params![credential_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get::<_, i64>(3)? as u32,
+                        row.get::<_, i64>(4)? == 1,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(store_error)
     }
 }
 
@@ -1709,6 +2051,43 @@ mod tests {
                     true
                 ))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn claiming_with_an_identity_already_linked_merges_instead_of_conflicting() {
+        let (_dir, store) = store();
+        let owner = store
+            .resolve(&claim(
+                "https://id.shippin.cloud",
+                "395290028818825218",
+                None,
+                false,
+            ))
+            .unwrap();
+        let provisional = store.create_provisional(86_400).unwrap();
+        let code = store
+            .issue_claim_code(&provisional.account_id, 86_400)
+            .unwrap();
+        let claimed = store
+            .claim(
+                &code,
+                &claim(
+                    "https://id.shippin.cloud",
+                    "395290028818825218",
+                    Some("jesse@example.com"),
+                    true,
+                ),
+            )
+            .unwrap();
+        assert_eq!(claimed.account_id, owner.account_id);
+        assert_eq!(
+            claimed.merged_from.as_deref(),
+            Some(provisional.account_id.as_str())
+        );
+        assert_eq!(
+            store.canonical(&provisional.account_id).unwrap(),
+            owner.account_id
         );
     }
 }

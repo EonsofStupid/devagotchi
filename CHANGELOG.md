@@ -40,9 +40,83 @@ heading. Agents draft the fragments below; they never tag.
   Nothing in this change deploys. Staging for the promote script is a second
   instance on the Texas host, beside CT 110.
 
-## 0.1.0 - 2026-10-30
+## 0.1.0 - 2026-10-31
 
-The first release, tagged at the operator's word (30 Oct 2026).
+The first release, at the operator's word (30 Oct 2026; tagged once the tool surface of
+increments 34a and 34b had merged, 31 Oct). Devagotchi's local server serves 16 tools, the
+hub the same file and command tools for every linked machine.
+
+### Images the AI can see (increment 34b-3)
+- `read_image` returns a PNG, JPEG, GIF or WebP file up to 3.75 MB (so its base64 stays under
+  the 5 MB an AI client takes per image) as an MCP image block, with a line naming its type
+  and size. The type comes from the file's first bytes, never its name; anything else is
+  refused with `not_an_image`, a larger file with `too_large` at the first page. The image is
+  read in the broker's ordinary 24 KiB pages (no contract change), so it works on any broker
+  this release talks to. Local server and hub; the hub audits the path.
+- It refuses an image over 8000 pixels on a side (`too_large`, read from the PNG, GIF, JPEG or
+  WebP header): the Claude API refuses one, and a refused image stays in the conversation and
+  fails every later request. Pages must join exactly and the file must keep its size and
+  time, so pages of two files are never joined and a machine that misreports is refused, not
+  followed; a text page that starts a byte late (an image's text metadata) is read again
+  from its character's first byte. Some clients (ChatGPT, as of October 2026) do not show
+  tool images to the model; the tool's description says so.
+
+### Read by lines (increment 34b-2)
+- `read_file` reads by lines, as Desktop Commander's does: `start_line` (1-based, or negative
+  for the last lines) and `line_count` (default 1000, at most 5000; never more than the page's
+  bytes). The answer says `start_line`, `next_line` and `total_lines`: exact for files up to
+  8 MiB, and once a read from a known line number reaches the end. To read on, pass
+  `next_line` as `start_line` and `next_offset` as `offset`: nothing is scanned again, so
+  paging through a large file costs one page a call. A line longer than the page goes on by
+  bytes. Local server and hub.
+- The broker finds a start by scanning at most 256 MiB in 64 KiB chunks (`too_far` past that,
+  pointing to `offset` or a tail), reads only up to the size the file had when the call
+  began (a log growing meanwhile is read as it was; one that shrank answers
+  `changed_while_reading`), and refuses a file that is not text with `not_text`. Escape
+  counts as text now, so a coloured log reads as text by lines and by bytes.
+- Every file request runs on the broker's blocking pool, so a large file never stalls jobs,
+  waits or other callers.
+- Contracts: `FileReadInput.start_line`/`line_count`, `FileContent.start_line`/`next_line`/
+  `total_lines`; a broker from before this refuses them with `invalid_request`.
+
+### The rest of Desktop Commander's file tools (increment 34b)
+- `read_multiple_files` (up to 20 files in one call, each answered or its error reported),
+  `get_file_info` (kind, size, modified and created times, read-only, Unix mode, a link's
+  target, a text file's line count), `create_directory` (with missing parents; an existing
+  directory is not an error) and `move_file` (same filesystem; refuses an existing
+  destination unless `overwrite`, never replaces a directory, moves a link as itself), on the
+  local server and on the hub for every machine.
+- Contracts: `FileInfo`, `FileMkdir` and `FileMove` requests and the `Info` response; a broker
+  from before this answers them with `invalid_request`.
+- Under `granted`, directories are made one plain name at a time below a part that exists and
+  is inside the workspace (a `..` in the part to make is refused, for `write_file`'s
+  `create_dirs` too); a link is judged by where it lands, from where it is or would be after a
+  move, and from its text when its target is missing (`write_file` no longer writes through a
+  dangling link out of the workspace); a directory moves only when none of its links climbs
+  with `..` or points outside. Moving a file onto another name of itself (a hard link, or a
+  change of case where the filesystem ignores case) moves rather than reporting a
+  replacement. The hub audits a move's destination, every path `read_multiple_files` asked
+  for, and a refused route for `run` and `read_multiple_files`.
+
+### The local server has the hub's tools, and runs as you (increment 34a)
+- `devagotchi mcp` serves `run`, `read_file`, `list_directory`, `write_file` and `edit_file`
+  (the hub's tools, names and inputs, without the machine's name) and `operation_list`
+  beside the operation tools. An AI runs a command, or reads, writes or edits a file, in one
+  call. The server is named `devagotchi` (was `desktop-bridge`), its instructions steer an AI
+  to `run` and the file tools, and every tool has a title and read-only/destructive hints.
+- A first `devagotchi start` (and so `setup` and an AI's first `devagotchi mcp`) writes
+  `exec_policy: account`: the broker runs what the person's account can, shell lines included,
+  as Desktop Commander does (trust by default, ruled 30 Oct 2026). An existing `broker.json`
+  is kept; `"exec_policy": "granted"` narrows it again. Server installers keep their own default.
+- `run`'s composition (start, one held wait, read) lives in `devagotchi-mcp` and serves both
+  the local server and the hub. On the way, for both:
+  - the cursor `run` gives for a command still running points past the output it already
+    returned (it named the start of the last page, so following it repeated that page);
+  - it reads only the output written by its first read, so a command still writing fast is
+    not chased past the wait it was given, and stopping the call stops the reading too;
+  - a broker that runs only granted programs refuses `run` with what works instead
+    (`operation_start` with an executable, or `exec_policy` `account`), not with a field
+    `run` does not have.
 
 ### Install in one line, for a person or their AI (increment 33b)
 - README "Install": one line per system that installs `devagotchi` for the user from the
@@ -118,6 +192,16 @@ The first release, tagged at the operator's word (30 Oct 2026).
   no-store`. The hub's cookie is not accepted there, so another site cannot mint codes.
 - Verified: `cargo test -p devagotchi-hub` (121, including ES256 routing, a forged-key token
   refused, config rules, bearer-only issuing and the code joining for that account only).
+
+### The hub speaks Nomen's own names (increment 31)
+- Every scope the hub and `devagotchi` ask Nomen for, and the org claim the hub reads, use
+  Nomen's spelling: `urn:nomen:iam:user:resourceowner` (claim
+  `urn:nomen:iam:user:resourceowner:id`), `urn:nomen:iam:org:project:id:<project>:aud`, and
+  `urn:nomen:iam:org:project:id:nomen:aud` for Nomen's own APIs in `connect-nomen`. RFC 9728
+  `scopes_supported` follows, so MCP clients ask in the same spelling. The upstream
+  `urn:zitadel:` names were accepted only through Nomen's compatibility layer; the hub no
+  longer depends on it, and no longer reads the org from an identity provider that sends
+  only the upstream claim.
 
 ### The hub connects itself to a Nomen (increment 30)
 - `devagotchi hub connect-nomen --state-dir … --config … --client-id ID --project ID

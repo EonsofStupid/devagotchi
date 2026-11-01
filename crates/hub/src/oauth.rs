@@ -548,6 +548,19 @@ impl Authority {
         )
         .map_err(store_error)?;
         tx.commit().map_err(store_error)?;
+        if let Some(code) = resume.strip_prefix("claim:") {
+            let claimed = self.claim_with(
+                code,
+                &crate::identity::Claim {
+                    issuer: "urn:devagotchi:magic".into(),
+                    sub: email.clone(),
+                    email: Some(email),
+                    email_verified: true,
+                    name: None,
+                },
+            )?;
+            return Ok((claimed.account_id, String::new()));
+        }
         let resolved = self.identity.redeem_local(&email, None)?;
         Ok((resolved.account_id, resume))
     }
@@ -806,10 +819,24 @@ impl Authority {
                 escape(resume)
             )
         } else {
-            String::new()
+            "<p>Email sign-in is off on this hub until mail is configured.</p>".to_string()
         };
+        let claim = resume
+            .strip_prefix("claim:")
+            .map(|code| {
+                format!(
+                    "<form method=\"post\" action=\"/claim\"><input type=\"hidden\" name=\"code\" value=\"{}\">\
+                     <label>Setup code from the hub host <input name=\"setup\" autocomplete=\"one-time-code\" required></label>\
+                     <button type=\"submit\">Claim with the setup code</button></form>\
+                     <p>A passkey is enrolled from the one-time link <code>devagotchi hub owner</code> prints on the hub host. A recovery code signs in below.</p>\
+                     <form method=\"post\" action=\"/login/recovery\"><label>Recovery code <input name=\"code\" required></label>\
+                     <button type=\"submit\">Sign in with a recovery code</button></form>",
+                    escape(code)
+                )
+            })
+            .unwrap_or_default();
         format!(
-            "<!doctype html><title>Sign in</title><h1>Sign in to Devagotchi</h1>{providers}{magic}"
+            "<!doctype html><title>Sign in</title><h1>Sign in to Devagotchi</h1>{providers}{magic}{claim}"
         )
     }
 
@@ -2055,6 +2082,9 @@ where
     let agent_auth = auth.clone();
     let device_auth = auth.clone();
     let login_auth = auth.clone();
+    let claim_get = auth.clone();
+    let claim_post = auth.clone();
+    let recovery_auth = auth.clone();
     let magic_auth = auth.clone();
     let redeem_auth = auth.clone();
     let up_auth = auth.clone();
@@ -2441,6 +2471,112 @@ where
             }),
         )
         .route(
+            "/claim",
+            get(move |Query(query): Query<ClaimQuery>| {
+                let auth = claim_get.clone();
+                async move {
+                    let resume = query
+                        .code
+                        .map(|code| format!("claim:{code}"))
+                        .unwrap_or_default();
+                    (
+                        axum::http::StatusCode::OK,
+                        [(axum::http::header::CONTENT_TYPE, "text/html; charset=utf-8")],
+                        auth.login_page(&resume),
+                    )
+                }
+            })
+            .post(move |Form(form): Form<SetupClaimForm>| {
+                let auth = claim_post.clone();
+                async move {
+                    let account = match auth.identity().account_for_claim_code(&form.code) {
+                        Ok(account) => account,
+                        Err(error) => return oauth_http_error(&error),
+                    };
+                    if let Err(error) = auth.identity().consume_setup_code(&form.setup, &account) {
+                        return oauth_http_error(&error);
+                    }
+                    let claimed = match auth.claim_with(
+                        &form.code,
+                        &crate::identity::Claim {
+                            issuer: "urn:devagotchi:setup".into(),
+                            sub: "host".into(),
+                            email: None,
+                            email_verified: false,
+                            name: None,
+                        },
+                    ) {
+                        Ok(claimed) => claimed,
+                        Err(error) => return oauth_http_error(&error),
+                    };
+                    let codes = auth
+                        .identity()
+                        .issue_recovery_codes(&claimed.account_id)
+                        .unwrap_or_default();
+                    let Ok(cookie) = auth.open_browser_session(&claimed.account_id) else {
+                        return (axum::http::StatusCode::BAD_REQUEST, "could not start a session")
+                            .into_response();
+                    };
+                    let secure = if auth.issuer().starts_with("https://") {
+                        "; Secure"
+                    } else {
+                        ""
+                    };
+                    let listed = codes.join(", ");
+                    (
+                        axum::http::StatusCode::OK,
+                        [(
+                            axum::http::header::SET_COOKIE,
+                            format!("dg_as={cookie}; HttpOnly; SameSite=Lax; Path=/{secure}"),
+                        )],
+                        format!(
+                            "<!doctype html><title>Claimed</title><h1>This account is the hub owner</h1>\
+                             <p>Account {}</p><p>Recovery codes, shown once: {}</p>\
+                             <p><a href=\"/account/identities\">Account</a></p>",
+                            escape(&claimed.account_id),
+                            escape(&listed)
+                        ),
+                    )
+                        .into_response()
+                }
+            }),
+        )
+        .route(
+            "/login/recovery",
+            post(move |Form(form): Form<RecoveryForm>| {
+                let auth = recovery_auth.clone();
+                async move {
+                    let Ok(account) = auth.identity().consume_recovery_code(&form.code) else {
+                        return (axum::http::StatusCode::BAD_REQUEST, "recovery code is not valid")
+                            .into_response();
+                    };
+                    let Ok(cookie) = auth.open_browser_session(&account) else {
+                        return (axum::http::StatusCode::BAD_REQUEST, "could not start a session")
+                            .into_response();
+                    };
+                    let secure = if auth.issuer().starts_with("https://") {
+                        "; Secure"
+                    } else {
+                        ""
+                    };
+                    (
+                        axum::http::StatusCode::SEE_OTHER,
+                        [
+                            (
+                                axum::http::header::SET_COOKIE,
+                                format!("dg_as={cookie}; HttpOnly; SameSite=Lax; Path=/{secure}"),
+                            ),
+                            (
+                                axum::http::header::LOCATION,
+                                "/account/identities".to_string(),
+                            ),
+                        ],
+                    )
+                        .into_response()
+                }
+            }),
+        )
+        .route(
             "/login/magic",
             post(move |Form(form): Form<MagicForm>| {
                 let auth = magic_auth.clone();
@@ -2565,6 +2701,20 @@ struct ResumeRequest {
 struct ResumeQuery {
     #[serde(default)]
     resume: Option<String>,
+}
+#[derive(Deserialize)]
+struct ClaimQuery {
+    #[serde(default)]
+    code: Option<String>,
+}
+#[derive(Deserialize)]
+struct SetupClaimForm {
+    code: String,
+    setup: String,
+}
+#[derive(Deserialize)]
+struct RecoveryForm {
+    code: String,
 }
 #[derive(Deserialize)]
 struct MagicForm {

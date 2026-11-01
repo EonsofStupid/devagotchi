@@ -28,9 +28,9 @@ pub struct Named {
 
 /// The signed-in person behind a form post from this hub's own page, or the page to show.
 async fn person(state: &AppState, headers: &HeaderMap) -> Result<String, Box<Response>> {
-    let Some(web) = state.web.clone() else {
+    if state.web.is_none() && state.passkeys.is_none() {
         return Err(Box::new(not_set_up()));
-    };
+    }
     if !same_origin(headers, &state.hub.config.public_url) {
         return Err(Box::new(pages::message(
             StatusCode::FORBIDDEN,
@@ -39,10 +39,11 @@ async fn person(state: &AppState, headers: &HeaderMap) -> Result<String, Box<Res
             Some(("/account", "Your machines")),
         )));
     }
-    match who(state, &web, headers).await {
+    match who(state, headers).await {
         Who::Person(subject) => Ok(subject.id),
         Who::SignedOut => Err(Box::new(see_other("/auth/login?return_to=/account", &[]))),
         Who::Unavailable => Err(Box::new(unavailable())),
+        Who::NotSetUp => Err(Box::new(not_set_up())),
     }
 }
 

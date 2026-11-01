@@ -341,7 +341,16 @@ try:
         {"name": "machine_add", "arguments": {"name": "laptop"}}, rid=3, session=session,
     )
     added_text = added.decode()
-    check("machine_add returns the join line", status == 200 and "/join/" in added_text and "laptop" in added_text, added_text[:240])
+    check(
+        "machine_add returns every install",
+        status == 200 and "/join/" in added_text and "laptop" in added_text
+        and ".compose.yml" in added_text and ".host.sh" in added_text and "/dist/" in added_text,
+        added_text[:240],
+    )
+    claim_url = started.get("claim_url") or ""
+    if claim_url:
+        status, _, page = request(opener, "GET", claim_url, None, {})
+        check("claim page exists", status == 200 and b"Sign in" in page and claim_code.encode() in page, f"HTTP {status} {page[:160]}")
     code = ""
     if '"code":"' in added_text:
         code = added_text.split('"code":"')[1].split('"')[0]

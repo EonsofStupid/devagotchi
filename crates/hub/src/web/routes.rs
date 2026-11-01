@@ -14,7 +14,7 @@ use serde::Deserialize;
 use super::{
     Exchange, SessionToken, WebLogin, approvals, machines, notify,
     pages::{self, Viewer},
-    public,
+    passkeys, public,
 };
 use crate::{
     AppState,
@@ -29,6 +29,15 @@ pub fn router() -> Router<AppState> {
         .route("/auth/login", get(login))
         .route("/auth/callback", get(callback))
         .route("/auth/logout", post(logout))
+        .route("/owner", get(passkeys::owner_page))
+        .route(
+            "/passkey/register/options",
+            post(passkeys::register_options),
+        )
+        .route("/passkey/register", post(passkeys::register))
+        .route("/passkey/sign-in/options", post(passkeys::sign_in_options))
+        .route("/passkey/sign-in", post(passkeys::sign_in))
+        .route("/assets/passkey.js", get(passkeys::script))
         .route("/api/v1/me", get(me))
         .route("/api/v1/machines", post(machines::add_json))
         .route("/approvals", get(approvals::list))
@@ -49,8 +58,8 @@ pub fn router() -> Router<AppState> {
 }
 
 #[derive(Deserialize)]
-struct LoginQuery {
-    return_to: Option<String>,
+pub(super) struct LoginQuery {
+    pub(super) return_to: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -60,11 +69,14 @@ struct CallbackQuery {
     error: Option<String>,
 }
 
-/// Who the browser's session belongs to, checked against Nomen like any bearer token.
+/// Who the browser's session belongs to: a hub account's session, or (in Nomen mode) a
+/// session whose token is checked against Nomen like any bearer token.
 pub(super) enum Who {
     Person(Subject),
     SignedOut,
     Unavailable,
+    /// This hub has no browser sign-in.
+    NotSetUp,
 }
 
 pub(super) fn see_other(location: &str, cookies: &[String]) -> Response {
@@ -94,13 +106,36 @@ pub(super) fn not_set_up() -> Response {
 pub(super) fn unavailable() -> Response {
     pages::message(
         StatusCode::SERVICE_UNAVAILABLE,
-        "Shippin sign-in is unavailable",
-        "The hub could not reach Shippin's sign-in service. Your access has not changed; try again in a minute.",
+        "Sign-in is unavailable",
+        "The hub could not check your sign-in just now. Your access has not changed; try again in a minute.",
         Some(("/account", "Try again")),
     )
 }
 
-pub(super) async fn who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -> Who {
+pub(super) async fn who(state: &AppState, headers: &HeaderMap) -> Who {
+    if let Some(hub) = &state.passkeys {
+        return match hub.who(headers).await {
+            Ok(Some(subject)) => Who::Person(subject),
+            Ok(None) => Who::SignedOut,
+            Err(()) => Who::Unavailable,
+        };
+    }
+    let Some(web) = &state.web else {
+        return Who::NotSetUp;
+    };
+    nomen_who(state, web, headers).await
+}
+
+/// Whether this request carries a live session, without asking any other service.
+pub(super) async fn signed_in(state: &AppState, headers: &HeaderMap) -> bool {
+    match (&state.passkeys, &state.web) {
+        (Some(hub), _) => hub.signed_in(headers).await,
+        (None, Some(web)) => web.signed_in(headers),
+        (None, None) => false,
+    }
+}
+
+async fn nomen_who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -> Who {
     let token = match web.token(headers).await {
         SessionToken::Token(token) => token,
         SessionToken::None => return Who::SignedOut,
@@ -123,10 +158,12 @@ pub(super) async fn who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -
 /// Signed in, `/` is your machines; signed out, it says what Devagotchi is and offers
 /// one Sign in, instead of sending a stranger straight to an identity provider.
 async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    match &state.web {
-        Some(web) if web.signed_in(&headers) => see_other("/account", &[]),
-        Some(_) => pages::home(),
-        None => see_other("/docs", &[]),
+    if signed_in(&state, &headers).await {
+        see_other("/account", &[])
+    } else if state.passkeys.is_some() || state.web.is_some() {
+        pages::home(state.passkeys.is_some())
+    } else {
+        see_other("/docs", &[])
     }
 }
 
@@ -148,7 +185,14 @@ async fn css() -> Response {
     response
 }
 
-async fn login(State(state): State<AppState>, Query(query): Query<LoginQuery>) -> Response {
+async fn login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<LoginQuery>,
+) -> Response {
+    if state.passkeys.is_some() {
+        return passkeys::login(State(state), headers, Query(query)).await;
+    }
     let Some(web) = state.web.clone() else {
         return not_set_up();
     };
@@ -242,10 +286,7 @@ async fn callback(
 }
 
 async fn account(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let Some(web) = state.web.clone() else {
-        return not_set_up();
-    };
-    match who(&state, &web, &headers).await {
+    match who(&state, &headers).await {
         Who::Person(subject) => {
             let machines = state.hub.machine_status(&subject.id).await;
             pages::account(
@@ -253,16 +294,31 @@ async fn account(State(state): State<AppState>, headers: HeaderMap) -> Response 
                     subject: &subject.id,
                     name: subject.name.as_deref(),
                     owner: state.hub.config.is_owner(&subject.id),
+                    hub_account: state.passkeys.is_some(),
                 },
                 &machines,
             )
         }
         Who::SignedOut => see_other("/auth/login?return_to=/account", &[]),
         Who::Unavailable => unavailable(),
+        Who::NotSetUp => not_set_up(),
     }
 }
 
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    // Another site cannot sign you out, here or in your browser.
+    if !super::approvals::same_origin(&headers, &state.hub.config.public_url) {
+        return pages::message(
+            StatusCode::FORBIDDEN,
+            "Sign out from this hub's own page",
+            "That sign-out came from another site, so nothing was changed.",
+            Some(("/account", "Your account")),
+        );
+    }
+    if let Some(hub) = state.passkeys.clone() {
+        hub.end_session(&headers).await;
+        return see_other("/signed-out", &[hub.cookie(hub.session_cookie(), "", 0)]);
+    }
     let Some(web) = state.web.clone() else {
         return not_set_up();
     };
@@ -270,11 +326,16 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     see_other("/signed-out", &[web.cookie(web.session_cookie(), "", 0)])
 }
 
-async fn signed_out() -> Response {
+async fn signed_out(State(state): State<AppState>) -> Response {
+    let text = if state.passkeys.is_some() {
+        "You are signed out of this Devagotchi hub. Your passkey stays on your device for next time."
+    } else {
+        "You are signed out of this Devagotchi hub. Your Shippin account stays signed in at Shippin."
+    };
     pages::message(
         StatusCode::OK,
         "You are signed out",
-        "You are signed out of this Devagotchi hub. Your Shippin account stays signed in at Shippin.",
+        text,
         Some(("/auth/login", "Sign in again")),
     )
 }
@@ -297,8 +358,8 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> Response {
                 .or_else(|| value.strip_prefix("bearer "))
         })
         .map(str::trim);
-    let subject = match (bearer, state.web.clone()) {
-        (Some(token), _) => match state.verifier.verify(token).await {
+    let subject = match bearer {
+        Some(token) => match state.verifier.verify(token).await {
             Ok(subject) => subject,
             Err(AuthError::Invalid(why)) => {
                 crate::log_refusal(why);
@@ -308,14 +369,15 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> Response {
                 return json_error(StatusCode::SERVICE_UNAVAILABLE, "issuer_unavailable");
             }
         },
-        (None, Some(web)) => match who(&state, &web, &headers).await {
+        None => match who(&state, &headers).await {
             Who::Person(subject) => subject,
-            Who::SignedOut => return json_error(StatusCode::UNAUTHORIZED, "signed_out"),
+            Who::SignedOut | Who::NotSetUp => {
+                return json_error(StatusCode::UNAUTHORIZED, "signed_out");
+            }
             Who::Unavailable => {
                 return json_error(StatusCode::SERVICE_UNAVAILABLE, "issuer_unavailable");
             }
         },
-        (None, None) => return json_error(StatusCode::UNAUTHORIZED, "signed_out"),
     };
     let machines = state.hub.machine_status(&subject.id).await;
     let mut response = axum::Json(serde_json::json!({

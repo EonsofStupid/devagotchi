@@ -65,6 +65,8 @@ struct Accounts {
     dir: PathBuf,
     free_limit: usize,
     unlimited: HashSet<String>,
+    /// The hub's owner, who has no limit; in hub mode it can be learned after start.
+    owner: std::sync::Arc<std::sync::OnceLock<String>>,
 }
 
 /// What `board_bind` says.
@@ -94,11 +96,9 @@ pub enum Kind {
 impl Boards {
     pub fn from_config(config: &HubConfig, state_dir: &Path) -> Self {
         let accounts = config.account_boards.as_ref().map(|a| {
-            let mut unlimited: HashSet<String> = a.unlimited.iter().cloned().collect();
-            if let Some(owner) = &config.owner {
-                unlimited.insert(owner.clone());
-            }
+            let unlimited: HashSet<String> = a.unlimited.iter().cloned().collect();
             Accounts {
+                owner: config.owner_handle(),
                 dir: a
                     .dir
                     .as_deref()
@@ -227,8 +227,10 @@ impl Boards {
             ));
         }
         let held = self.account_boards(subject);
-        let limit =
-            (!who.iter().any(|id| accounts.unlimited.contains(*id))).then_some(accounts.free_limit);
+        let limit = (!who.iter().any(|id| {
+            accounts.unlimited.contains(*id) || accounts.owner.get().is_some_and(|o| o == id)
+        }))
+        .then_some(accounts.free_limit);
         let existed = held.iter().any(|name| name == project);
         if !existed && limit.is_some_and(|limit| held.len() >= limit) {
             return Err(BridgeError::new(

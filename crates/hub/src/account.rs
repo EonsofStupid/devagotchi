@@ -52,7 +52,7 @@ pub const DEFAULT_CLIENT_ID: &str = "devagotchi-cli@shippin";
 pub const DEFAULT_HUB: &str = "https://app.devagotchi.com";
 const DEVICE_GRANT_HUB: &str = "urn:ietf:params:oauth:grant-type:device_code";
 pub const FILE_NAME: &str = "account.json";
-const SCOPE: &str = "openid profile email offline_access urn:zitadel:iam:user:resourceowner";
+const SCOPE: &str = "openid profile email offline_access urn:nomen:iam:user:resourceowner";
 const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
 /// Refresh when the access token is this close to expiry.
 const REFRESH_AHEAD: Duration = Duration::from_secs(5 * 60);
@@ -199,7 +199,7 @@ pub fn remove(path: &Path) -> Result<bool, String> {
     }
 }
 
-/// The endpoints of one issuer, in Nomen's (Zitadel's) layout.
+/// The endpoints of one issuer, in Nomen's layout.
 #[derive(Clone)]
 pub struct Issuer {
     issuer: String,

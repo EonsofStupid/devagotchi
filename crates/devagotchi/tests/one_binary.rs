@@ -405,10 +405,7 @@ fn start_then_mcp_then_board_from_one_binary() {
         "initialize",
         serde_json::json!({ "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "one-binary-test", "version": "0" } }),
     );
-    assert_eq!(
-        init["result"]["serverInfo"]["name"], "desktop-bridge",
-        "{init}"
-    );
+    assert_eq!(init["result"]["serverInfo"]["name"], "devagotchi", "{init}");
     let tools = rpc(2, "tools/list", serde_json::json!({}));
     let names: Vec<&str> = tools["result"]["tools"]
         .as_array()
@@ -416,7 +413,80 @@ fn start_then_mcp_then_board_from_one_binary() {
         .iter()
         .filter_map(|t| t["name"].as_str())
         .collect();
-    assert!(names.contains(&"operation_start"), "{names:?}");
+    for tool in [
+        "run",
+        "read_file",
+        "list_directory",
+        "write_file",
+        "edit_file",
+        "operation_start",
+        "operation_list",
+    ] {
+        assert!(names.contains(&tool), "{tool} missing from {names:?}");
+    }
+
+    // What an AI does first with Desktop Commander, one call each: a shell line, then a
+    // file written, edited, read and listed. A first start runs commands as the person's
+    // own account, so a file outside the workspace is in reach too.
+    assert_eq!(config["exec_policy"], "account", "{config}");
+    let mut id = 2;
+    let mut tool = |name: &str, arguments: serde_json::Value| -> serde_json::Value {
+        id += 1;
+        let reply = rpc(
+            id,
+            "tools/call",
+            serde_json::json!({ "name": name, "arguments": arguments }),
+        );
+        assert_ne!(reply["result"]["isError"], true, "{name}: {reply}");
+        reply["result"]["structuredContent"].clone()
+    };
+    let ran = tool(
+        "run",
+        serde_json::json!({ "command": "echo devagotchi-ran && pwd" }),
+    );
+    assert_eq!(ran["state"], "succeeded", "{ran}");
+    assert_eq!(ran["exit_code"], 0, "{ran}");
+    let output = ran["output"].as_str().unwrap();
+    assert!(output.contains("devagotchi-ran"), "{ran}");
+    assert!(
+        output.contains(std::fs::canonicalize(home.path()).unwrap().to_str().unwrap()),
+        "run starts in the workspace: {ran}"
+    );
+    let notes = home.path().join("notes").join("today.md");
+    let written = tool(
+        "write_file",
+        serde_json::json!({ "path": notes, "text": "first line\n", "create_dirs": true }),
+    );
+    assert_eq!(written["created"], true, "{written}");
+    let edited = tool(
+        "edit_file",
+        serde_json::json!({ "path": notes, "old_text": "first", "new_text": "edited" }),
+    );
+    assert_eq!(edited["replacements"], 1, "{edited}");
+    let read = tool("read_file", serde_json::json!({ "path": notes }));
+    assert_eq!(read["text"], "edited line\n", "{read}");
+    let listed = tool(
+        "list_directory",
+        serde_json::json!({ "path": home.path().join("notes") }),
+    );
+    assert_eq!(listed["entries"][0]["path"], "today.md", "{listed}");
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("elsewhere.txt"), "outside the workspace").unwrap();
+    let read = tool(
+        "read_file",
+        serde_json::json!({ "path": outside.path().join("elsewhere.txt") }),
+    );
+    assert_eq!(read["text"], "outside the workspace", "{read}");
+    let listed = tool("operation_list", serde_json::json!({}));
+    assert!(
+        listed["operations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|op| op["operation_id"] == ran["operation_id"]),
+        "{listed}"
+    );
+    drop(tool);
     drop(rpc);
     drop(stdin);
     let _ = adapter.wait();

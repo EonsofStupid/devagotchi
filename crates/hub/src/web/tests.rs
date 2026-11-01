@@ -228,6 +228,7 @@ async fn world_with(downloads: Option<Arc<crate::downloads::Downloads>>) -> Worl
             links,
         },
         web: Some(Arc::new(web)),
+        passkeys: None,
     };
     let hub = state.hub.clone();
     let app = router()
@@ -331,7 +332,7 @@ impl World {
         assert_eq!(params["code_challenge_method"], "S256");
         assert_eq!(
             params["scope"],
-            "openid profile offline_access urn:zitadel:iam:user:resourceowner urn:zitadel:iam:org:project:id:hub-project:aud"
+            "openid profile offline_access urn:nomen:iam:user:resourceowner urn:nomen:iam:org:project:id:hub-project:aud"
         );
         let login = set_cookie(&start, "dg_login").expect("login cookie");
         assert!(
@@ -707,6 +708,7 @@ async fn names_from_nomen_are_escaped_on_the_page() {
             subject: OWNER,
             name: Some("<img src=x onerror=alert(1)>"),
             owner: false,
+            hub_account: false,
         },
         &[],
     );
