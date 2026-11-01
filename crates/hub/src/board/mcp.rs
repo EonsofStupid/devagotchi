@@ -880,6 +880,12 @@ impl Hub {
     /// without a seat. A seat is never a person; the account is the person on its own
     /// board and on its org's, and on a shared one when its grant says so.
     fn actor_for(&self, subject: &Subject, seat: Option<&str>, kind: Kind) -> (String, bool) {
+        // An AI the hub connected itself (`via: hub`) is never the person: without a seat
+        // of its own it works as the account's "ai" seat.
+        let seat = match (seat, subject.via) {
+            (None, "hub") => Some("ai"),
+            (seat, _) => seat,
+        };
         match (seat, kind) {
             (Some(seat), Kind::Account) => (seat.to_string(), false),
             (Some(seat), Kind::Org | Kind::Shared) => (format!("{}/{seat}", subject.id), false),

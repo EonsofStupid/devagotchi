@@ -362,7 +362,8 @@ impl Hub {
                 boards
             },
             owner: self.config.is_owner(&subject.id),
-            human: self.config.is_human(&subject.id),
+            // An AI connected through the hub's own tokens never has a person's standing.
+            human: subject.via != "hub" && self.config.is_human(&subject.id),
             subject: subject.id,
             via: subject.via.to_string(),
             name: subject.name,

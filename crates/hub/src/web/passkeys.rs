@@ -73,6 +73,11 @@ impl HubSignIn {
         })
     }
 
+    /// The accounts behind this sign-in, for the hub's own authorization server.
+    pub(super) fn accounts(&self) -> &Arc<Accounts> {
+        &self.accounts
+    }
+
     fn relying(&self) -> Relying<'_> {
         Relying {
             rp_id: &self.rp_id,
@@ -166,7 +171,7 @@ impl HubSignIn {
     }
 
     /// The JSON endpoints answer only the hub's own pages.
-    fn from_own_page(&self, headers: &HeaderMap) -> bool {
+    pub(super) fn from_own_page(&self, headers: &HeaderMap) -> bool {
         let header = |name: &str| headers.get(name).and_then(|v| v.to_str().ok());
         if header("sec-fetch-site").is_some_and(|site| site != "same-origin") {
             return false;

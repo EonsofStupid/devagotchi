@@ -156,6 +156,38 @@ hub nothing; each also rides in a `__Host-` cookie, so another site cannot sign 
 to an account of its choosing. The passkey pages run one script, the hub's own, under a
 strict Content-Security-Policy.
 
+## AI clients sign in with the hub itself (`auth.mode hub`)
+
+A hub with its own accounts is its own OAuth 2.1 authorization server, so Claude, ChatGPT,
+Codex or any MCP client connects to `<public_url>/mcp` with nothing else deployed:
+
+1. The client finds the hub from `/mcp`'s 401 (`WWW-Authenticate: Bearer resource_metadata=…`),
+   the protected-resource metadata (RFC 9728) and `/.well-known/oauth-authorization-server`
+   (RFC 8414).
+2. It registers itself at `/oauth/register` (RFC 7591): public clients only, redirect URIs
+   https or http on loopback.
+3. `/oauth/authorize` shows the signed-in person which app asks and where it sends them
+   back; **Connect** is a POST from that page alone. Not signed in: the passkey sign-in first,
+   then back to the same request.
+4. `/oauth/token` trades the code (PKCE S256 required) for an access token (`dgh_…`) and a
+   refresh token (`dgr_…`), both opaque and stored only as hashes. Refresh tokens rotate; a
+   spent one presented again ends its whole family. `/oauth/revoke` (RFC 7009) ends a family.
+
+Tokens are for this hub's `/mcp` only (RFC 8707) and die with their account. An AI on one
+acts as the account's `ai` seat on boards and never has the person's standing. Lifetimes and
+limits are the config's, each with a default:
+
+```jsonc
+"auth": { "mode": "hub", "tokens": {
+  "access_secs": 900,       // an access token
+  "refresh_secs": 604800,   // an AI connection unused (decision 4: 7 days)
+  "code_secs": 120,         // an authorization code
+  "max_clients": 10000      // registered clients kept; the oldest unused make room
+} }
+```
+
+With `auth.nomen` as well, any token that is not the hub's own goes to Nomen.
+
 ## Shippin sign-in (Nomen)
 
 Nomen's access tokens are opaque: only Nomen can say whose they are. The hub asks it about

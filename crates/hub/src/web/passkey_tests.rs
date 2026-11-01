@@ -74,7 +74,7 @@ async fn world_owned_by(owner: Option<&str>) -> World {
     let push = Arc::new(crate::push::Push::open(dir.path(), &url, devices).unwrap());
     let state = AppState {
         verifier: Arc::new(
-            Verifier::from_hub_config(&config, dir.path())
+            Verifier::from_hub_config(&config, dir.path(), Some(accounts.clone()))
                 .await
                 .unwrap(),
         ),
@@ -701,4 +701,275 @@ async fn ceremony_bodies_are_json_only() {
         .unwrap();
     assert_eq!(plain.status(), 415);
     assert!(cookie(&plain, "dg_challenge").is_none());
+}
+
+/// `key`'s value in a URL's query, decoded.
+fn query_param(url: &str, key: &str) -> Option<String> {
+    let query = url.split_once('?')?.1;
+    query.split('&').find_map(|pair| {
+        let (k, v) = pair.split_once('=')?;
+        (k == key).then(|| {
+            percent_encoding::percent_decode_str(v)
+                .decode_utf8_lossy()
+                .into_owned()
+        })
+    })
+}
+
+#[tokio::test]
+async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tokens() {
+    // What Claude or ChatGPT does against `<hub>/mcp`, with nothing but the hub deployed.
+    let world = world().await;
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let link = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
+        .unwrap();
+    let session = world.make_passkey(&world.phone(), &link).await;
+
+    // Discovery: the hub is its own authorization server.
+    let metadata: Value = world
+        .get("/.well-known/oauth-authorization-server", None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(metadata["issuer"], world.url.as_str());
+    assert_eq!(metadata["code_challenge_methods_supported"], json!(["S256"]));
+    assert_eq!(
+        metadata["token_endpoint"],
+        format!("{}/oauth/token", world.url)
+    );
+
+    // Registration (RFC 7591).
+    let redirect = "http://127.0.0.1:9/callback";
+    let registered = world
+        .http
+        .post(format!("{}/oauth/register", world.url))
+        .json(&json!({ "client_name": "Test AI", "redirect_uris": [redirect] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(registered.status(), 201);
+    let client: Value = registered.json().await.unwrap();
+    let client_id = client["client_id"].as_str().unwrap().to_string();
+    let refused = world
+        .http
+        .post(format!("{}/oauth/register", world.url))
+        .json(&json!({ "redirect_uris": ["http://evil.example/cb"] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 400);
+
+    // The authorization request; not signed in, it goes to sign-in first and back.
+    let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+    let authorize = format!(
+        "/oauth/authorize?response_type=code&client_id={client_id}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state=st+1%2F2&scope=mcp+offline_access&resource={}",
+        super::encode(redirect),
+        crate::accounts::oauth::s256(verifier),
+        super::encode(&format!("{}/mcp", world.url)),
+    );
+    let signed_out = world.get(&authorize, None).await;
+    assert_eq!(signed_out.status(), 303);
+    let to_login = signed_out.headers()[header::LOCATION].to_str().unwrap().to_string();
+    assert!(to_login.starts_with("/auth/login?return_to="), "{to_login}");
+    let back = query_param(&to_login, "return_to").unwrap();
+    assert_eq!(super::safe_return_to(&back), back, "sign-in may return to it");
+    assert_eq!(query_param(&back, "client_id").as_deref(), Some(client_id.as_str()));
+    assert_eq!(query_param(&back, "state").as_deref(), Some("st 1/2"));
+
+    // Signed in: the approval page, whose form may lead to the client and nowhere else.
+    let page = world.get(&back, Some(&session)).await;
+    assert_eq!(page.status(), 200);
+    let csp = page.headers()[header::CONTENT_SECURITY_POLICY]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(csp.contains("form-action 'self' http://127.0.0.1:9;"), "{csp}");
+    let html = page.text().await.unwrap();
+    assert!(html.contains("Connect Test AI?") && html.contains("Jesse"), "{html}");
+
+    let approve = |decision: &'static str, origin: Option<String>| {
+        let mut request = world
+            .http
+            .post(format!("{}/oauth/authorize", world.url))
+            .header(header::COOKIE, &session)
+            .form(&[
+                ("client_id", client_id.as_str()),
+                ("redirect_uri", redirect),
+                ("code_challenge", &crate::accounts::oauth::s256(verifier)),
+                ("resource", &format!("{}/mcp", world.url)),
+                ("scope", "mcp offline_access"),
+                ("state", "st 1/2"),
+                ("decision", decision),
+            ]);
+        if let Some(origin) = origin {
+            request = request.header(header::ORIGIN, origin);
+        }
+        request.send()
+    };
+    // Another site, or no Origin at all: not approved.
+    assert_eq!(approve("approve", None).await.unwrap().status(), 403);
+    assert_eq!(
+        approve("approve", Some("https://evil.example".into()))
+            .await
+            .unwrap()
+            .status(),
+        403
+    );
+    // Cancel: back to the client with access_denied.
+    let denied = approve("deny", Some(world.url.clone())).await.unwrap();
+    let to = denied.headers()[header::LOCATION].to_str().unwrap().to_string();
+    assert_eq!(query_param(&to, "error").as_deref(), Some("access_denied"));
+    // Connect: back with a code, the state and the issuer (RFC 9207).
+    let approved = approve("approve", Some(world.url.clone())).await.unwrap();
+    assert_eq!(approved.status(), 303);
+    let to = approved.headers()[header::LOCATION].to_str().unwrap().to_string();
+    assert!(to.starts_with(redirect), "{to}");
+    assert_eq!(query_param(&to, "state").as_deref(), Some("st 1/2"));
+    assert_eq!(query_param(&to, "iss").as_deref(), Some(world.url.as_str()));
+    let code = query_param(&to, "code").unwrap();
+
+    // The token request.
+    let token = |form: Vec<(&'static str, String)>| {
+        world
+            .http
+            .post(format!("{}/oauth/token", world.url))
+            .form(&form)
+            .send()
+    };
+    let wrong = token(vec![
+        ("grant_type", "authorization_code".into()),
+        ("code", code.clone()),
+        ("redirect_uri", redirect.into()),
+        ("client_id", client_id.clone()),
+        ("code_verifier", "x".repeat(43)),
+    ])
+    .await
+    .unwrap();
+    assert_eq!(wrong.status(), 400);
+    let error: Value = wrong.json().await.unwrap();
+    assert_eq!(error["error"], "invalid_grant");
+    // That code was spent by the wrong try: a new approval for a new one.
+    let approved = approve("approve", Some(world.url.clone())).await.unwrap();
+    let to = approved.headers()[header::LOCATION].to_str().unwrap().to_string();
+    let code = query_param(&to, "code").unwrap();
+    let granted = token(vec![
+        ("grant_type", "authorization_code".into()),
+        ("code", code),
+        ("redirect_uri", redirect.into()),
+        ("client_id", client_id.clone()),
+        ("code_verifier", verifier.into()),
+        ("resource", format!("{}/mcp", world.url)),
+    ])
+    .await
+    .unwrap();
+    assert_eq!(granted.status(), 200);
+    assert_eq!(granted.headers()[header::CACHE_CONTROL], "no-store");
+    let tokens: Value = granted.json().await.unwrap();
+    assert_eq!(tokens["token_type"], "Bearer");
+    assert_eq!(tokens["scope"], "mcp offline_access");
+    let access = tokens["access_token"].as_str().unwrap().to_string();
+    let refresh = tokens["refresh_token"].as_str().unwrap().to_string();
+
+    // `/mcp` takes it: the account, as an AI the hub connected, never as the person.
+    let verifier_for_mcp =
+        Verifier::from_hub_config(&world.config, world._dir.path(), Some(world.accounts.clone()))
+            .await
+            .unwrap();
+    let subject = verifier_for_mcp.verify(&access).await.unwrap();
+    assert_eq!((subject.id.as_str(), subject.via), (owner.id.as_str(), "hub"));
+    assert_eq!(verifier_for_mcp.issuer(), Some(world.url.as_str()));
+    assert!(verifier_for_mcp.verify("dgh_forged").await.is_err());
+    assert!(verifier_for_mcp.verify(&refresh).await.is_err());
+
+    // Refresh rotates; revoking ends the family.
+    let rotated: Value = token(vec![
+        ("grant_type", "refresh_token".into()),
+        ("refresh_token", refresh),
+        ("client_id", client_id.clone()),
+    ])
+    .await
+    .unwrap()
+    .json()
+    .await
+    .unwrap();
+    let access2 = rotated["access_token"].as_str().unwrap().to_string();
+    assert!(verifier_for_mcp.verify(&access).await.is_err(), "rotated out");
+    assert!(verifier_for_mcp.verify(&access2).await.is_ok());
+    let revoked = world
+        .http
+        .post(format!("{}/oauth/revoke", world.url))
+        .form(&[("token", access2.as_str())])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(revoked.status(), 200);
+    assert!(verifier_for_mcp.verify(&access2).await.is_err());
+}
+
+#[tokio::test]
+async fn an_authorization_request_for_an_unknown_client_or_redirect_goes_nowhere() {
+    // Redirecting an error to an address nobody registered would hand it to a stranger.
+    let world = world().await;
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let link = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
+        .unwrap();
+    let session = world.make_passkey(&world.phone(), &link).await;
+    let client = world
+        .accounts
+        .register_client("Test AI", &["https://ai.example.net/cb".to_string()])
+        .await
+        .unwrap();
+    let challenge = crate::accounts::oauth::s256(&"v".repeat(43));
+    for (client_id, redirect) in [
+        ("dgc_nobody", "https://ai.example.net/cb"),
+        (client.id.as_str(), "https://evil.example/cb"),
+    ] {
+        let response = world
+            .get(
+                &format!(
+                    "/oauth/authorize?response_type=code&client_id={client_id}&redirect_uri={}&code_challenge={challenge}&code_challenge_method=S256",
+                    super::encode(redirect)
+                ),
+                Some(&session),
+            )
+            .await;
+        assert_eq!(response.status(), 400, "{client_id} {redirect}");
+        assert!(response.headers().get(header::LOCATION).is_none());
+    }
+    // A known client without PKCE: the error goes back to it.
+    let response = world
+        .get(
+            &format!(
+                "/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&state=s",
+                client.id,
+                super::encode("https://ai.example.net/cb")
+            ),
+            Some(&session),
+        )
+        .await;
+    assert_eq!(response.status(), 303);
+    let to = response.headers()[header::LOCATION].to_str().unwrap();
+    assert_eq!(query_param(to, "error").as_deref(), Some("invalid_request"));
+    assert_eq!(query_param(to, "state").as_deref(), Some("s"));
+    // A resource that is not this hub's.
+    let response = world
+        .get(
+            &format!(
+                "/oauth/authorize?response_type=code&client_id={}&redirect_uri={}&code_challenge={challenge}&code_challenge_method=S256&resource={}",
+                client.id,
+                super::encode("https://ai.example.net/cb"),
+                super::encode("https://other.example/mcp")
+            ),
+            Some(&session),
+        )
+        .await;
+    let to = response.headers()[header::LOCATION].to_str().unwrap();
+    assert_eq!(query_param(to, "error").as_deref(), Some("invalid_target"));
 }
