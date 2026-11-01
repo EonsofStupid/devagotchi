@@ -27,7 +27,7 @@ getrandom = "0.3"
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 # Outbound WebSocket over TLS on 443, verified by the operating system's own trust store
 # (Windows certificate store, macOS keychain, Linux system roots): corporate roots work.
-tokio-tungstenite = { version = "0.29", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
 rustls-platform-verifier = "0.7"
 # Hub URLs are parsed, not pattern-matched.
