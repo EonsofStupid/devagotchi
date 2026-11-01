@@ -44,6 +44,36 @@ jobs:
       # one process per test, with the profile in .config/nextest.toml.
       - run: cargo nextest run --locked --profile ci
 
+  hub-postgres:
+    # The hub's store has two backends (crates/hub/src/store.rs): every hub test that takes
+    # a store runs on SQLite in `core` and here on Postgres as well, against a throwaway
+    # cluster of the runner image's PostgreSQL. A test that cannot reach it fails; none
+    # skips Postgres silently while DEVAGOTCHI_TEST_POSTGRES_URL is set.
+    name: hub (postgres)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2 (2026-10-24)
+        with:
+          tool: cargo-nextest
+      - name: Start a throwaway Postgres
+        run: |
+          if ! ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then
+            sudo apt-get update -q && sudo apt-get install -yq postgresql
+          fi
+          bin=$(ls -d /usr/lib/postgresql/*/bin | sort -V | tail -1)
+          sudo install -d -o postgres -m 700 /var/tmp/dvg-pg
+          sudo -u postgres "$bin/initdb" -D /var/tmp/dvg-pg/data -U postgres --auth=trust -E UTF8 >/dev/null
+          sudo -u postgres "$bin/pg_ctl" -D /var/tmp/dvg-pg/data -l /var/tmp/dvg-pg/log -w \
+            -o "-k /var/tmp/dvg-pg -p 55432 -c listen_addresses=127.0.0.1" start
+      - run: cargo nextest run --locked --profile ci -p devagotchi-hub
+        env:
+          DEVAGOTCHI_TEST_POSTGRES_URL: postgres://postgres@127.0.0.1:55432/postgres
+
   e2e:
     # The built binaries, end to end: broker, stdio adapter, hub over HTTP MCP.
     # Unix socket on Linux, named pipe on Windows; same probes (tests/e2e.py).

@@ -28,8 +28,8 @@ default-members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# rmcp 3.5.1 sets the floor; the pinned toolchain in rust-toolchain.toml is what builds.
-rust-version = "1.88"
+# sqlx 0.9 sets the floor; the pinned toolchain in rust-toolchain.toml is what builds.
+rust-version = "1.94"
 publish = false
 license = "Apache-2.0"
 repository = "https://github.com/EonsofStupid/devagotchi"
@@ -49,6 +49,9 @@ base64 = "0.22.1"
 dunce = "1.0.5"
 hex = "0.4.3"
 rusqlite = { version = "0.37", features = ["bundled"] }
+# The hub's store: Postgres for a hosted hub, SQLite built in for a standalone one, one
+# code path over both (`crates/hub/src/store.rs`).
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "sqlite", "any", "migrate", "macros"] }
 sha2 = "0.10.9"
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"

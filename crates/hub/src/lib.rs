@@ -20,6 +20,7 @@ mod link;
 mod nomen;
 mod push;
 mod run;
+mod store;
 #[cfg(test)]
 mod test_keys;
 mod web;
@@ -214,9 +215,15 @@ fn read_config(path: &std::path::Path) -> BridgeResult<HubConfig> {
     HubConfig::parse(&text)
 }
 
-fn accounts_at(state_dir: &std::path::Path) -> BridgeResult<accounts::Accounts> {
+/// The accounts of a hub whose state is in `state_dir`: in the store `storage` names (see
+/// `store.rs`: the environment's URL, the config's, or the state directory's SQLite file).
+async fn accounts_at(
+    state_dir: &std::path::Path,
+    config: &HubConfig,
+) -> BridgeResult<accounts::Accounts> {
     prepare_state_dir(state_dir)?;
-    accounts::Accounts::open(&state_dir.join("accounts.sqlite3"))
+    let url = store::url_for(config.storage_url(), state_dir);
+    accounts::Accounts::open(store::Store::open(&url).await?).await
 }
 
 fn prepare_state_dir(state_dir: &std::path::Path) -> BridgeResult<()> {
@@ -318,17 +325,30 @@ fn manage(command: Command) -> BridgeResult<()> {
                     "owner is for a hub with its own accounts (auth.mode hub)",
                 ));
             }
-            let accounts = accounts_at(&state)?;
-            let owner = accounts.ensure_owner(
-                config.owner_id(),
-                name.as_deref().unwrap_or("Owner"),
-                link::random::<16>(),
-            )?;
-            let token = if replace {
-                accounts.issue_replacing_link(accounts::LinkPurpose::Owner, &owner.id)?
-            } else {
-                accounts.issue_link(accounts::LinkPurpose::Owner, &owner.id)?
-            };
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| BridgeError::new("runtime", error.to_string()))?;
+            let (owner, token) = runtime.block_on(async {
+                let accounts = accounts_at(&state, &config).await?;
+                let owner = accounts
+                    .ensure_owner(
+                        config.owner_id(),
+                        name.as_deref().unwrap_or("Owner"),
+                        link::random::<16>(),
+                    )
+                    .await?;
+                let token = if replace {
+                    accounts
+                        .issue_replacing_link(accounts::LinkPurpose::Owner, &owner.id)
+                        .await?
+                } else {
+                    accounts
+                        .issue_link(accounts::LinkPurpose::Owner, &owner.id)
+                        .await?
+                };
+                Ok::<_, BridgeError>((owner, token))
+            })?;
             // The link itself is never audited or logged; only that one was issued.
             operator_event(&state, "account.owner_link", &owner.id, "ok")?;
             // The link is the one secret this prints; it goes to stdout only, once.
@@ -424,8 +444,8 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     // A hub with its own accounts knows its owner from them, and refuses to start when its
     // config names someone else.
     let passkeys = if config.has_accounts() {
-        let accounts = Arc::new(accounts_at(&state_dir)?);
-        if let Some(owner) = accounts.owner()? {
+        let accounts = Arc::new(accounts_at(&state_dir, &config).await?);
+        if let Some(owner) = accounts.owner().await? {
             config
                 .learn_owner(&owner.id)
                 .map_err(|why| BridgeError::new("invalid_config", why))?;
@@ -960,8 +980,17 @@ mod tests {
         write(serde_json::json!({ "mode": "hub" }), Some("395290028818825218"));
         run(Some("Jesse")).unwrap();
         run(None).unwrap();
-        let accounts = accounts::Accounts::open(&state.join("accounts.sqlite3")).unwrap();
-        let owner = accounts.owner().unwrap().unwrap();
+        let owner = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let url = store::sqlite_url(&state.join("accounts.sqlite3"));
+                let accounts = accounts::Accounts::open(store::Store::open(&url).await.unwrap())
+                    .await
+                    .unwrap();
+                accounts.owner().await.unwrap().unwrap()
+            });
         assert_eq!((owner.id.as_str(), owner.name.as_str()), ("395290028818825218", "Jesse"));
         // Each run is on the audit chain, without the link.
         let audit = Audit::open(&state.join("audit.sqlite3")).unwrap();
