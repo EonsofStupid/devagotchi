@@ -98,6 +98,23 @@ Unauthenticated requests get `401` with `WWW-Authenticate: Bearer resource_metad
 the metadata names the issuer. A bad token adds `error="invalid_token"`. When the identity
 provider cannot be reached the hub answers `503`, never `401`.
 
+## The store
+
+One storage layer, two backends (`src/store.rs`, ruled 2026-11-01): Postgres for a hosted
+hub, which any number of hub instances share, and SQLite built into the binary for a
+standalone one. The same code runs on both, and every hub test that takes a store runs on
+both in CI. Where it is, first match wins:
+
+1. `DEVAGOTCHI_HUB_STORAGE_URL` in the environment: how a Postgres password arrives, from
+   the secret store (Vaultix), never from a file.
+2. The config's `"storage": { "url": "postgres://hub@db.internal/devagotchi" }` (no password:
+   one in the config is refused), or `"sqlite:/absolute/path"` (`sqlite:C:/…` on Windows).
+3. `accounts.sqlite3` in the state directory, 0600 with its `-wal` and `-shm` files.
+
+The schema is migrated at start (`migrations/<backend>/`, kept in step). On Postgres every
+write runs SERIALIZABLE and runs again when it collided with another instance's; on SQLite
+it takes the write lock up front.
+
 ## The hub's own accounts (`auth.mode hub`)
 
 ```jsonc
@@ -105,8 +122,7 @@ provider cannot be reached the hub answers `503`, never `401`.
 "owner": "395290028818825218"                           // optional: an earlier provider's subject to keep
 ```
 
-The hub keeps its accounts in `accounts.sqlite3` (0600) in its state directory and signs
-people in itself with passkeys (WebAuthn, verified on `aws-lc-rs`; ES256, EdDSA and RS256;
+The hub keeps its accounts in its store and signs people in itself with passkeys (WebAuthn, verified on `aws-lc-rs`; ES256, EdDSA and RS256;
 user verification on every ceremony). Nothing else needs to be running. `rp_id` is the
 passkeys' relying party: the hub's host or a parent domain of it, and it can never change
 for passkeys already made. Plain `http` works only on loopback, for tests.

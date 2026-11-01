@@ -57,10 +57,22 @@ pub struct HubConfig {
     /// and "Add a machine" shows the installer lines instead.
     #[serde(default)]
     pub downloads: Option<String>,
+    /// Where the hub keeps its accounts (`store.rs`): a Postgres URL for a hosted hub, or a
+    /// `sqlite:/absolute/path` (`sqlite:C:/…` on Windows). Absent: `accounts.sqlite3` in the state directory. A
+    /// password never goes here: `DEVAGOTCHI_HUB_STORAGE_URL`, set from the secret store,
+    /// names the store instead and overrides this.
+    #[serde(default)]
+    pub storage: Option<StorageConfig>,
     /// The owner every holder of this config sees: `owner` above, or in hub mode the
     /// one the accounts store names, learned once at start or when it is made.
     #[serde(skip)]
     owner_cell: Arc<OnceLock<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageConfig {
+    pub url: String,
 }
 
 /// The hosted tier's boards: an account binds a project and gets a board of its own on this
@@ -268,6 +280,9 @@ impl HubConfig {
         }
         if !self.public_url.starts_with("https://") && !self.public_url.starts_with("http://") {
             return Err(invalid("public_url must be an absolute http(s) URL".into()));
+        }
+        if let Some(storage) = &self.storage {
+            crate::store::check_configured_url(&storage.url).map_err(invalid)?;
         }
         match &self.auth {
             AuthConfig::Oidc { issuer, audiences } => {
@@ -531,6 +546,11 @@ impl HubConfig {
                 "the hub's owner is {known}, but its accounts name {id}"
             ))
         }
+    }
+
+    /// The store the config names, if any (the environment can override it).
+    pub fn storage_url(&self) -> Option<&str> {
+        self.storage.as_ref().map(|storage| storage.url.as_str())
     }
 
     /// Whether people sign in with the hub's own accounts (`auth.mode hub`).

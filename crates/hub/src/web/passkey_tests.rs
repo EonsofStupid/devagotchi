@@ -59,7 +59,15 @@ async fn world_owned_by(owner: Option<&str>) -> World {
         )
         .unwrap(),
     );
-    let accounts = Arc::new(Accounts::open(&dir.path().join("accounts.sqlite3")).unwrap());
+    let accounts = Arc::new(
+        Accounts::open(
+            crate::store::Store::open(&crate::store::sqlite_url(&dir.path().join("accounts.sqlite3")))
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap(),
+    );
     let devices = Arc::new(Devices::open(&dir.path().join("devices.sqlite3")).unwrap());
     let audit = Arc::new(Audit::open(&dir.path().join("audit.sqlite3")).unwrap());
     let links = Arc::new(Links::new(config.clone(), devices.clone(), audit.clone()));
@@ -200,10 +208,11 @@ impl World {
 #[tokio::test]
 async fn the_owner_makes_a_passkey_from_the_link_and_signs_in_with_it() {
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
         .unwrap();
     assert!(
         !world.config.is_owner(&owner.id),
@@ -292,10 +301,11 @@ async fn the_owner_makes_a_passkey_from_the_link_and_signs_in_with_it() {
 #[tokio::test]
 async fn ceremonies_answer_only_the_hubs_own_pages_and_work_once() {
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
         .unwrap();
     let mut phone = world.phone();
     world.make_passkey(&phone, &link).await;
@@ -429,19 +439,21 @@ async fn the_owner_takes_the_account_back_from_a_passkey_it_did_not_make() {
     // Someone used a leaked owner link first. `hub owner --replace` gives the owner a link
     // whose use removes every other passkey of the account and ends its sessions.
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
     let leaked = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
         .unwrap();
     let mut intruder = world.phone();
     let theirs = world.make_passkey(&intruder, &leaked).await;
     let replacing = world
         .accounts
         .issue_replacing_link(LinkPurpose::Owner, &owner.id)
+        .await
         .unwrap();
     let mine = world.make_passkey(&world.phone(), &replacing).await;
-    assert_eq!(world.accounts.passkeys_of(&owner.id).unwrap().len(), 1);
+    assert_eq!(world.accounts.passkeys_of(&owner.id).await.unwrap().len(), 1);
     assert_eq!(world.get("/account", Some(&theirs)).await.status(), 303);
     assert_eq!(world.get("/account", Some(&mine)).await.status(), 200);
     let (challenge, jar, _) = world.options("/passkey/sign-in/options", json!({})).await;
@@ -458,30 +470,33 @@ async fn the_owner_takes_the_account_back_from_a_passkey_it_did_not_make() {
 #[tokio::test]
 async fn using_an_owner_link_ends_the_owners_other_sessions() {
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
     let first = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
         .unwrap();
     let laptop = world.make_passkey(&world.phone(), &first).await;
     let second = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
         .unwrap();
     let phone = world.make_passkey(&world.phone(), &second).await;
     assert_eq!(world.get("/account", Some(&laptop)).await.status(), 303);
     assert_eq!(world.get("/account", Some(&phone)).await.status(), 200);
     // Without --replace, the laptop's passkey stays and signs in again.
-    assert_eq!(world.accounts.passkeys_of(&owner.id).unwrap().len(), 2);
+    assert_eq!(world.accounts.passkeys_of(&owner.id).await.unwrap().len(), 2);
 }
 
 #[tokio::test]
 async fn signing_out_takes_the_hubs_own_page() {
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
         .unwrap();
     let session = world.make_passkey(&world.phone(), &link).await;
     let out = world
@@ -505,10 +520,11 @@ async fn signing_out_takes_the_hubs_own_page() {
 async fn a_link_for_another_owner_than_the_configs_is_refused_before_it_is_spent() {
     // The config names the Texas owner, but the store's owner was made without it.
     let world = world_owned_by(Some("395290028818825218")).await;
-    let stray = world.accounts.ensure_owner(None, "Owner", [1; 16]).unwrap();
+    let stray = world.accounts.ensure_owner(None, "Owner", [1; 16]).await.unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &stray.id)
+        .await
         .unwrap();
     let options = world
         .post("/passkey/register/options", None, json!({ "link": link }))
@@ -536,19 +552,21 @@ async fn a_link_for_another_owner_than_the_configs_is_refused_before_it_is_spent
         world
             .accounts
             .check_link(LinkPurpose::Owner, &link)
+            .await
             .unwrap(),
         stray.id
     );
-    assert!(world.accounts.passkeys_of(&stray.id).unwrap().is_empty());
+    assert!(world.accounts.passkeys_of(&stray.id).await.unwrap().is_empty());
 }
 
 #[tokio::test]
 async fn a_copied_passkey_ends_the_sessions_it_opened() {
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
         .unwrap();
     let mut phone = Authenticator::for_site(Alg::Es256, "127.0.0.1", &world.url);
     world.make_passkey(&phone, &link).await;
@@ -586,7 +604,15 @@ async fn on_https_the_cookies_are_the_hosts_alone() {
         )
         .unwrap(),
     );
-    let accounts = Arc::new(Accounts::open(&dir.path().join("accounts.sqlite3")).unwrap());
+    let accounts = Arc::new(
+        Accounts::open(
+            crate::store::Store::open(&crate::store::sqlite_url(&dir.path().join("accounts.sqlite3")))
+                .await
+                .unwrap(),
+        )
+        .await
+        .unwrap(),
+    );
     let hub = HubSignIn::new(config, accounts).unwrap();
     assert_eq!(hub.session_cookie(), "__Host-dg_session");
     let set = hub.cookie(hub.session_cookie(), "dgs_x", 60);
@@ -601,15 +627,17 @@ async fn a_replacing_link_lets_the_device_that_holds_the_old_passkey_make_the_ne
     // The owner's usual phone already holds a passkey for this hub: listing it in
     // excludeCredentials would make the phone refuse to make another.
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
         .unwrap();
     world.make_passkey(&world.phone(), &link).await;
     let plain = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
         .unwrap();
     let (_, _, options) = world
         .options("/passkey/register/options", json!({ "link": plain }))
@@ -618,6 +646,7 @@ async fn a_replacing_link_lets_the_device_that_holds_the_old_passkey_make_the_ne
     let replacing = world
         .accounts
         .issue_replacing_link(LinkPurpose::Owner, &owner.id)
+        .await
         .unwrap();
     let (_, _, options) = world
         .options("/passkey/register/options", json!({ "link": replacing }))
@@ -630,10 +659,11 @@ async fn an_old_answer_replayed_signs_nobody_out() {
     // A captured sign-in from a key that keeps a counter, replayed after the counter has
     // moved on: refused, and the sessions opened since stay.
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).unwrap();
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
         .unwrap();
     let mut phone = world.phone();
     world.make_passkey(&phone, &link).await;

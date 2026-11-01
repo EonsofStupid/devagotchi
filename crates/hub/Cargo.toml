@@ -26,6 +26,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 rusqlite = { workspace = true }
+sqlx = { workspace = true }
+# A SQLite store's path in its URL, encoded and read back the same on every OS.
+percent-encoding = "2"
 sha2 = { workspace = true }
 hex = { workspace = true }
 axum = { version = "0.8", default-features = false, features = ["form", "http1", "json", "query", "tokio", "ws"] }

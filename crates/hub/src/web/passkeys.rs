@@ -108,7 +108,7 @@ impl HubSignIn {
             return Ok(None);
         };
         let accounts = self.accounts.clone();
-        match tokio::task::spawn_blocking(move || accounts.session(&token)).await {
+        match tokio::spawn(async move { accounts.session(&token).await }).await {
             Ok(Ok(Some(session))) => Ok(Some(Subject {
                 id: session.account.id,
                 via: "passkey",
@@ -124,15 +124,14 @@ impl HubSignIn {
         }
     }
 
-    /// Whether this request's cookie names a live session (for the top bar). The store is
-    /// asked off the async workers, as every page asks.
+    /// Whether this request's cookie names a live session (for the top bar).
     pub async fn signed_in(&self, headers: &HeaderMap) -> bool {
         let Some(token) = cookie_value(headers, self.session_cookie()) else {
             return false;
         };
         let accounts = self.accounts.clone();
         matches!(
-            tokio::task::spawn_blocking(move || accounts.session(&token)).await,
+            tokio::spawn(async move { accounts.session(&token).await }).await,
             Ok(Ok(Some(_)))
         )
     }
@@ -144,7 +143,7 @@ impl HubSignIn {
         };
         let accounts = self.accounts.clone();
         if let Ok(Err(error)) =
-            tokio::task::spawn_blocking(move || accounts.end_session(&token)).await
+            tokio::spawn(async move { accounts.end_session(&token).await }).await
         {
             eprintln!("devagotchi-hub: account store: {}", error.message);
         }
@@ -349,15 +348,17 @@ pub async fn register_options(
         Err(refused) => return refused,
     };
     let accounts = hub.accounts.clone();
-    let found = tokio::task::spawn_blocking(move || {
-        let (account, replaces) = accounts.check_link_replacing(LinkPurpose::Owner, &input.link)?;
-        let holder = accounts.get(&account)?;
+    let found = tokio::spawn(async move {
+        let (account, replaces) = accounts
+            .check_link_replacing(LinkPurpose::Owner, &input.link)
+            .await?;
+        let holder = accounts.get(&account).await?;
         // A replacing link removes the account's passkeys, so none is excluded: the device
         // that holds the old one may make the new one in its place.
         let existing = if replaces {
             Vec::new()
         } else {
-            accounts.passkeys_of(&account)?
+            accounts.passkeys_of(&account).await?
         };
         let challenge = accounts.challenge(Ceremony::Register, Some(&account));
         Ok::<_, devagotchi_contracts::BridgeError>((holder, existing, challenge))
@@ -446,9 +447,9 @@ pub async fn register(
         );
     };
     let worker = hub.clone();
-    let done = tokio::task::spawn_blocking(move || {
+    let done = tokio::spawn(async move {
         let accounts = &worker.accounts;
-        let account = accounts.check_link(LinkPurpose::Owner, &input.link)?;
+        let account = accounts.check_link(LinkPurpose::Owner, &input.link).await?;
         if worker
             .config
             .owner_id()
@@ -476,13 +477,15 @@ pub async fn register(
         })?;
         let label = format!("Passkey made {}", pages::utc(crate::devices::now_secs()));
         // The passkey, the link spent and the session it signs in to: all or nothing.
-        let token = accounts.register_with_link(
-            &account,
-            &credential,
-            &label,
-            LinkPurpose::Owner,
-            &input.link,
-        )?;
+        let token = accounts
+            .register_with_link(
+                &account,
+                &credential,
+                &label,
+                LinkPurpose::Owner,
+                &input.link,
+            )
+            .await?;
         Ok::<_, devagotchi_contracts::BridgeError>((account, token))
     })
     .await;
@@ -597,9 +600,9 @@ pub async fn sign_in(
         );
     };
     let worker = hub.clone();
-    let done = tokio::task::spawn_blocking(move || {
+    let done = tokio::spawn(async move {
         let accounts = &worker.accounts;
-        let Some(stored) = accounts.passkey(&id)? else {
+        let Some(stored) = accounts.passkey(&id).await? else {
             return Err(devagotchi_contracts::BridgeError::new(
                 "invalid_passkey",
                 "unknown passkey",
@@ -621,8 +624,10 @@ pub async fn sign_in(
             eprintln!("devagotchi-hub: refused a passkey sign-in: {refusal}");
             devagotchi_contracts::BridgeError::new("refused", refusal.0)
         })?;
-        let account = accounts.sign_in(&asserted)?;
-        let token = accounts.open_session(&account.id, Some(asserted.id()))?;
+        let account = accounts.sign_in(&asserted).await?;
+        let token = accounts
+            .open_session(&account.id, Some(asserted.id()))
+            .await?;
         Ok((account, token))
     })
     .await;

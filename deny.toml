@@ -42,6 +42,11 @@ allow = [
   "Unlicense",
   "0BSD",
 ]
+# webpki-roots is Mozilla's list of root certificates, under a permissive data license;
+# sqlx checks a Postgres server's certificate against it. Allowed for that crate only.
+exceptions = [
+  { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
+]
 
 [licenses.private]
 ignore = true
