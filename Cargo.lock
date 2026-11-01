@@ -903,6 +903,7 @@ dependencies = [
  "hex",
  "http",
  "jsonwebtoken",
+ "percent-encoding",
  "reqwest",
  "rmcp",
  "rusqlite",

@@ -6,18 +6,19 @@ use super::{testing::*, *};
 
 #[test]
 fn a_configured_url_is_postgres_or_an_absolute_sqlite_file_and_never_carries_a_password() {
+    let state = std::env::temp_dir().join("devagotchi hub#1").join("accounts.sqlite3");
     for good in [
-        "postgres://hub@db.internal:5432/devagotchi",
-        "postgresql://hub@10.40.0.30/devagotchi?sslmode=require",
-        "postgres:///devagotchi?host=/run/postgresql",
-        "sqlite:///var/lib/devagotchi-hub/state/accounts.sqlite3",
+        "postgres://hub@db.internal:5432/devagotchi".to_string(),
+        "postgresql://hub@10.40.0.30/devagotchi?sslmode=require".to_string(),
+        "postgres:///devagotchi?host=/run/postgresql".to_string(),
+        sqlite_url(&state),
     ] {
-        assert_eq!(check_configured_url(good), Ok(()), "{good}");
+        assert_eq!(check_configured_url(&good), Ok(()), "{good}");
     }
     for bad in [
         "postgres://hub:hunter2@db.internal/devagotchi",
         "postgresql://hub:x@10.40.0.30/devagotchi",
-        "sqlite://relative/accounts.sqlite3",
+        "sqlite:relative/accounts.sqlite3",
         "mysql://hub@db/devagotchi",
         "",
     ] {
@@ -31,15 +32,25 @@ fn without_a_url_the_store_is_the_state_directorys_sqlite_file() {
     if std::env::var(STORAGE_URL_ENV).is_ok() {
         return; // the environment names the store; nothing else is consulted
     }
-    let state = Path::new("/var/lib/devagotchi-hub/state");
+    let state = std::env::temp_dir().join("state");
+    let url = url_for(None, &state);
+    assert_eq!(sqlite_path(&url), Some(state.join("accounts.sqlite3")));
     assert_eq!(
-        url_for(None, state),
-        "sqlite:///var/lib/devagotchi-hub/state/accounts.sqlite3?mode=rwc"
-    );
-    assert_eq!(
-        url_for(Some("postgres://hub@db/devagotchi"), state),
+        url_for(Some("postgres://hub@db/devagotchi"), &state),
         "postgres://hub@db/devagotchi"
     );
+}
+
+#[tokio::test]
+async fn a_sqlite_path_with_spaces_and_url_characters_round_trips() {
+    // Windows paths, spaces, `#`, `?` and `%`: the file opened is the file named.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("my state #2 ?100%").join("accounts.sqlite3");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let url = sqlite_url(&path);
+    assert_eq!(sqlite_path(&url), Some(path.clone()));
+    Store::open(&url).await.unwrap();
+    assert!(path.is_file(), "{url}");
 }
 
 #[tokio::test]
@@ -153,4 +164,18 @@ async fn both_backends_have_the_same_tables_and_columns() {
         .collect();
     assert!(!lite.is_empty());
     assert_eq!(lite, pg);
+}
+
+#[test]
+fn sqlx_reads_a_windows_path_back_from_its_url() {
+    // What the hub does on Windows, checked on every OS: the URL goes through `Url` (the
+    // `any` driver) and back to SQLite's options, and the drive-letter path survives.
+    use std::str::FromStr;
+    let url = "sqlite:C:/Users/runner/AppData/Local/Temp/my%20state/accounts.sqlite3?mode=rwc";
+    let any = sqlx::any::AnyConnectOptions::from_str(url).unwrap();
+    let sqlite = sqlx::sqlite::SqliteConnectOptions::try_from(&any).unwrap();
+    assert_eq!(
+        sqlite.get_filename(),
+        Path::new("C:/Users/runner/AppData/Local/Temp/my state/accounts.sqlite3")
+    );
 }

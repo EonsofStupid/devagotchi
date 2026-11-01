@@ -108,7 +108,7 @@ both in CI. Where it is, first match wins:
 1. `DEVAGOTCHI_HUB_STORAGE_URL` in the environment: how a Postgres password arrives, from
    the secret store (Vaultix), never from a file.
 2. The config's `"storage": { "url": "postgres://hub@db.internal/devagotchi" }` (no password:
-   one in the config is refused), or `"sqlite:///absolute/path"`.
+   one in the config is refused), or `"sqlite:/absolute/path"` (`sqlite:C:/…` on Windows).
 3. `accounts.sqlite3` in the state directory, 0600 with its `-wal` and `-shm` files.
 
 The schema is migrated at start (`migrations/<backend>/`, kept in step). On Postgres every

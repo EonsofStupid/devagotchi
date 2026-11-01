@@ -58,7 +58,7 @@ pub struct HubConfig {
     #[serde(default)]
     pub downloads: Option<String>,
     /// Where the hub keeps its accounts (`store.rs`): a Postgres URL for a hosted hub, or a
-    /// `sqlite:///absolute/path`. Absent: `accounts.sqlite3` in the state directory. A
+    /// `sqlite:/absolute/path` (`sqlite:C:/…` on Windows). Absent: `accounts.sqlite3` in the state directory. A
     /// password never goes here: `DEVAGOTCHI_HUB_STORAGE_URL`, set from the secret store,
     /// names the store instead and overrides this.
     #[serde(default)]

@@ -13,7 +13,10 @@
 //! arrives, from the secret store, never from a file), else the config's `storage.url`, else
 //! `accounts.sqlite3` in the state directory.
 
-use std::{path::Path, sync::Once};
+use std::{
+    path::{Path, PathBuf},
+    sync::Once,
+};
 
 use devagotchi_contracts::{BridgeError, BridgeResult};
 use sqlx::{
@@ -124,12 +127,39 @@ pub fn url_for(configured: Option<&str>, state_dir: &Path) -> String {
     }
 }
 
+/// The URL of a SQLite store at `path`, in the one form sqlx reads back the same path on
+/// every OS: `sqlite:` and the path with `/` separators (`sqlite:/var/lib/…`,
+/// `sqlite:C:/ProgramData/…`), its `%`, `?`, `#` and spaces percent-encoded.
 pub fn sqlite_url(path: &Path) -> String {
-    format!("sqlite://{}?mode=rwc", path.display())
+    let path = path.to_string_lossy();
+    #[cfg(windows)]
+    let path = path.replace('\\', "/");
+    let mut encoded = String::with_capacity(path.len());
+    for c in path.chars() {
+        match c {
+            '%' => encoded.push_str("%25"),
+            '?' => encoded.push_str("%3F"),
+            '#' => encoded.push_str("%23"),
+            ' ' => encoded.push_str("%20"),
+            c => encoded.push(c),
+        }
+    }
+    format!("sqlite:{encoded}?mode=rwc")
+}
+
+/// The file a SQLite URL names (`sqlite:PATH` or `sqlite://PATH`, before any `?`,
+/// percent-decoded), or `None` for any other URL.
+pub fn sqlite_path(url: &str) -> Option<PathBuf> {
+    let rest = url
+        .strip_prefix("sqlite://")
+        .or_else(|| url.strip_prefix("sqlite:"))?;
+    let path = rest.split('?').next().unwrap_or("");
+    let decoded = percent_encoding::percent_decode_str(path).decode_utf8_lossy();
+    Some(PathBuf::from(decoded.into_owned()))
 }
 
 /// Whether a URL is one the store opens, and keeps its password out of a file: `postgres://`
-/// or `postgresql://` without a password, or `sqlite://` with an absolute path.
+/// or `postgresql://` without a password, or `sqlite:` with an absolute path.
 pub fn check_configured_url(url: &str) -> Result<(), String> {
     if let Some(rest) = url
         .strip_prefix("postgres://")
@@ -146,15 +176,14 @@ pub fn check_configured_url(url: &str) -> Result<(), String> {
         }
         return Ok(());
     }
-    if let Some(path) = url.strip_prefix("sqlite://") {
-        let path = path.split('?').next().unwrap_or("");
-        return if Path::new(path).is_absolute() {
+    if let Some(path) = sqlite_path(url) {
+        return if path.is_absolute() {
             Ok(())
         } else {
-            Err("storage.url sqlite:// needs an absolute path".to_string())
+            Err("storage.url sqlite: needs an absolute path".to_string())
         };
     }
-    Err("storage.url is postgres://… or sqlite:///absolute/path".to_string())
+    Err("storage.url is postgres://… or sqlite:/absolute/path".to_string())
 }
 
 impl Store {
@@ -166,13 +195,12 @@ impl Store {
         let (backend, file) = if url.starts_with("postgres://") || url.starts_with("postgresql://")
         {
             (Backend::Postgres, None)
-        } else if let Some(rest) = url.strip_prefix("sqlite://") {
-            let path = rest.split('?').next().unwrap_or("");
-            (Backend::Sqlite, Some(Path::new(path).to_path_buf()))
+        } else if let Some(path) = sqlite_path(url) {
+            (Backend::Sqlite, Some(path))
         } else {
             return Err(BridgeError::new(
                 "account_store",
-                "the store's URL is postgres://… or sqlite://…",
+                "the store's URL is postgres://… or sqlite:…",
             ));
         };
         if let Some(file) = &file {
