@@ -131,6 +131,8 @@ umask 022
 # First start (or a re-run): the stack up, then update.sh pins the track's digest and
 # deploys it, health-checked, exactly as the timer will every few minutes.
 services=(postgres hub); [[ "$edge" == caddy ]] && services+=(caddy)
+# Behind an external edge, a Caddy an earlier run started here would only hold ports 80/443.
+[[ "$edge" == external ]] && (cd "$dir" && docker compose rm -sf caddy >/dev/null 2>&1 || true)
 say "starting ${services[*]} in $dir"
 (cd "$dir" && docker compose up -d --pull missing --wait --wait-timeout 180 "${services[@]}")
 DEVAGOTCHI_DIR="$dir" "$dir/update.sh" --now || die "the hub did not come up healthy; see: cd $dir && docker compose logs hub"
