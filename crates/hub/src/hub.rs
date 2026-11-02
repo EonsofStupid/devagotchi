@@ -138,7 +138,10 @@ pub struct WhoAmI {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claim_code: Option<String>,
     /// Time left is under a seventh of the live provisional ttl (at least an hour).
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    /// `default` keeps it out of the schema's `required`, since it is left out when false:
+    /// clients check `structuredContent` against the output schema (the MCP TypeScript SDK
+    /// refuses the call otherwise).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub provisional_warning: bool,
     /// `{public_url}/claim?code=…` while the account is provisional.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -646,4 +649,48 @@ pub(crate) fn tool_names() -> Vec<String> {
         .into_iter()
         .map(|tool| tool.name.to_string())
         .collect()
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    /// What `whoami` writes for an account with nothing optional set must satisfy the output
+    /// schema it advertises: every `required` property present (tests/clients_oauth.py found
+    /// one missing through the MCP TypeScript SDK, which checks).
+    #[test]
+    fn whoami_output_has_every_required_property() {
+        let tool =
+            (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router())
+                .list_all()
+                .into_iter()
+                .find(|tool| tool.name == "whoami")
+                .expect("whoami is served");
+        let schema = tool.output_schema.expect("whoami has an output schema");
+        let written = serde_json::to_value(WhoAmI {
+            subject: "300000000000000001".into(),
+            via: "hub".into(),
+            name: None,
+            org: None,
+            provisional_until: None,
+            agent: None,
+            claim_code: None,
+            provisional_warning: false,
+            claim_url: None,
+            owner: false,
+            human: false,
+            brokers: Vec::new(),
+            boards: Vec::new(),
+        })
+        .unwrap();
+        let required = schema["required"].as_array().expect("required properties");
+        for property in required {
+            let property = property.as_str().unwrap();
+            assert!(
+                written.get(property).is_some(),
+                "whoami's schema requires {property}, which it leaves out"
+            );
+        }
+        assert!(!required.iter().any(|p| p == "provisional_warning"));
+    }
 }

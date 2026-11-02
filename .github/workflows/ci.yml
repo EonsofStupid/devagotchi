@@ -163,6 +163,14 @@ jobs:
           python tests/claim_browser.py --channel chrome --devagotchi "$PWD/target/debug/devagotchi"
           python tests/passkey_browser.py --channel chrome --devagotchi "$PWD/target/debug/devagotchi"
           python tests/device_login_browser.py --channel chrome --devagotchi "$PWD/target/debug/devagotchi"
+      # Real AI clients connect through the hub's own OAuth server as a person connects them:
+      # the official MCP TypeScript SDK and the Codex CLI (locked in tests/clients), each
+      # registering, approved on the consent page in Chrome, then listing and calling tools.
+      - name: AI clients connect (MCP SDK, Codex)
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          npm ci --prefix tests/clients --ignore-scripts --no-audit --no-fund
+          python tests/clients_oauth.py --channel chrome --devagotchi "$PWD/target/debug/devagotchi"
       # The Windows installer, as a user would run it: install from the build, start the
       # broker, register with a Claude Desktop config that already has Desktop Commander,
       # then use exactly the registered command. PowerShell 7 on 2025 and on Arm64

@@ -234,6 +234,15 @@ Codex or any MCP client connects to `<public_url>/mcp` with nothing else deploye
    refresh token (`dgr_…`), both opaque and stored only as hashes. Refresh tokens rotate; a
    spent one presented again ends its whole family. `/oauth/revoke` (RFC 7009) ends a family.
 
+`tests/clients_oauth.py` runs this with real clients against a new hub, consent approved in
+Chrome with a virtual passkey: the official MCP TypeScript SDK and the Codex CLI
+(`codex mcp add --url <hub>/mcp` signs in at once; tokens in Codex's own store), each then
+listing tools and calling `whoami`. What each client sent is in
+[`verification/clients-oauth.json`](../../verification/clients-oauth.json). Claude
+(claude.ai's callback `https://claude.ai/api/mcp/auth_callback`) and Grok (grok.com →
+Connectors → New Connector → Custom) register the same way and need the hub at a public
+https URL.
+
 Tokens are for this hub's `/mcp` only (RFC 8707) and die with their account. An AI on one
 acts as the account's `ai` seat on boards and never has the person's standing. Lifetimes and
 limits are the config's, each with a default:

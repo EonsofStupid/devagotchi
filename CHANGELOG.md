@@ -27,6 +27,25 @@ heading. Agents draft the fragments below; they never tag.
   through Chrome with a virtual passkey, relays an MCP session as the account, refreshes,
   logs out, and is cancelled.
 
+### AI clients connect to a hub-mode hub, proven with real clients (increment 52)
+- **Connect worked in no real browser.** The consent page at `/oauth/authorize` carried the
+  pages' `Referrer-Policy: no-referrer`, under which a browser sends its form POST with
+  `Origin: null`; the hub refused that as "Not from this hub's page", so no AI client could
+  be approved on a hub in `auth.mode hub` (app.devagotchi.com included). The page now sends
+  `same-origin`: its own POST keeps the true origin, and no other site, the client's
+  included, gets a referrer. The origin check is unchanged (`Origin: null` is still refused).
+- **`whoami` failed in SDK-based clients.** Its output schema required `provisional_warning`,
+  which the hub leaves out when false; the MCP TypeScript SDK (Claude Code, most editors)
+  checks `structuredContent` against the schema and refused every `whoami` call. The field is
+  now optional in the schema, and a test holds what `whoami` writes to what it advertises.
+- `tests/clients_oauth.py` (CI, `e2e` on ubuntu-24.04): a new hub claimed in Chrome with a
+  virtual passkey, a recording proxy at its public URL, then the MCP authorization flow
+  driven by hand (RFC 9728, 8414, 7591, PKCE, 8707, 9207, refresh rotation, 7009), by the
+  official MCP TypeScript SDK and by the Codex CLI (`codex mcp add`, `codex mcp login`, and
+  Codex's app server listing tools and calling `whoami`), consent approved in the browser.
+  Both clients are locked in `tests/clients/package-lock.json`, and Dependabot brings their
+  new releases as PRs. The run is recorded in `verification/clients-oauth.json`.
+
 ### hub-up.sh re-runs over its own stack (increment 51)
 - `deploy/proxmox/hub-up.sh` refused a second run: the hub it had installed holds the port,
   and it stopped on "something still listens". It now goes on when that port is published

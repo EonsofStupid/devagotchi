@@ -418,6 +418,14 @@ until you disconnect it or it goes unused for {days} days.</p>\
             .headers_mut()
             .insert(header::CONTENT_SECURITY_POLICY, csp);
     }
+    // Under the pages' `no-referrer`, a browser sends a form POST with `Origin: null`
+    // (Fetch, "append a request `Origin` header"), which `decide` refuses as not from this
+    // page: Connect never worked in a real browser. `same-origin` keeps the true origin on
+    // this page's own POST and still sends nothing to any other site, the client included.
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
     response
 }
 
