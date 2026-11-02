@@ -25,8 +25,17 @@ use sqlx::{
     migrate::Migrator,
 };
 
-static SQLITE: Migrator = sqlx::migrate!("migrations/sqlite");
-static POSTGRES: Migrator = sqlx::migrate!("migrations/postgres");
+// A store a newer hub migrated still opens here: migrations only ever add (tables, columns
+// with defaults, indexes), so an older hub runs on the newer schema, and a deploy that is
+// not healthy can go back to the image before it (deploy/compose/update.sh).
+static SQLITE: Migrator = Migrator {
+    ignore_missing: true,
+    ..sqlx::migrate!("migrations/sqlite")
+};
+static POSTGRES: Migrator = Migrator {
+    ignore_missing: true,
+    ..sqlx::migrate!("migrations/postgres")
+};
 
 /// The environment variable that names the store, over the config's `storage.url`.
 pub const STORAGE_URL_ENV: &str = "DEVAGOTCHI_HUB_STORAGE_URL";

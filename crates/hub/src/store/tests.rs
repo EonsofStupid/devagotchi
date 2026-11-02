@@ -253,3 +253,24 @@ async fn sqlite_has_no_schemas_and_ignores_one() {
     let accounts = crate::accounts::Accounts::open(store).await.unwrap();
     assert!(accounts.owner().await.unwrap().is_none());
 }
+
+#[tokio::test]
+async fn a_store_a_newer_hub_migrated_still_opens() {
+    // The rollback case: a newer image applied a migration this build does not have, and
+    // was then taken back out. Migrations only add, so this build runs on that schema.
+    for store in testing::stores().await {
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+             VALUES ($1, $2, $3, $4, $5)",
+        )
+        .bind(9_999_i64)
+        .bind("a newer hub's")
+        .bind(true)
+        .bind(vec![0_u8; 48])
+        .bind(0_i64)
+        .execute(store.store.pool())
+        .await
+        .unwrap();
+        Store::open(&store.url).await.expect("an older hub opens a newer store");
+    }
+}
