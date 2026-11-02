@@ -27,7 +27,7 @@ tauri-build = { version = "=2.7.4", features = [] }
 devagotchi-contracts = { workspace = true }
 devagotchi-ipc = { workspace = true }
 serde = { workspace = true }
-tauri = { version = "=2.12.4", features = [] }
+tauri = { version = "=2.12.5", features = [] }
 
 [dev-dependencies]
 serde_json = { workspace = true }
