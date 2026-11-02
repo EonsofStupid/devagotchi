@@ -166,10 +166,24 @@ async fn the_page_needs_nothing_the_plain_csp_refuses() {
         );
         assert!(html.contains("<body class=\"landing\">"));
         assert!(html.contains("<link rel=\"stylesheet\" href=\"/assets/hub.css\">"));
-        // No script, no inline style, nothing loaded from anywhere: inline SVG only.
-        for refused in ["<script", "<style", " style=", " src=", "<img"] {
+        // No script, no inline style, nothing loaded from anywhere but this hub: inline
+        // SVG, and the setup video and its poster from /assets/.
+        for refused in ["<script", "<style", " style=", "<img", "<iframe"] {
             assert!(!html.contains(refused), "{refused}");
         }
+        for src in html.split(" src=\"").skip(1) {
+            assert!(src.starts_with("/assets/turnkey.mp4?v="), "{src}");
+        }
+        for poster in html.split(" poster=\"").skip(1) {
+            assert!(
+                poster.starts_with("/assets/turnkey-poster.png?v="),
+                "{poster}"
+            );
+        }
+        assert!(
+            csp.contains("media-src 'self'") && csp.contains("img-src 'self'"),
+            "{csp}"
+        );
         // The diagram's arrowheads are markers in the same SVG, never a fetch.
         assert!(html.split("url(").skip(1).all(|rest| rest.starts_with('#')));
         // Links leave only for the source on GitHub.
@@ -375,6 +389,47 @@ fn the_shell_stays_and_motion_is_optional_in_the_stylesheet() {
     // Nothing in it reaches another origin.
     assert!(CSS.split("url(").skip(1).all(|rest| rest.starts_with('#')));
     assert!(!CSS.contains("@import") && !CSS.contains("http"));
+}
+
+#[test]
+fn the_video_plays_only_when_asked_and_every_id_is_unique() {
+    for front in [Front::Unclaimed, Front::Passkeys, Front::Shippin] {
+        let html = body(front);
+        // In the hero (wide screens) and in the Watch it set up popup; click to play.
+        let videos: Vec<&str> = html.split("<video ").skip(1).collect();
+        assert_eq!(videos.len(), 2);
+        for video in videos {
+            let tag = video.split('>').next().unwrap();
+            for needed in [
+                "controls",
+                "muted",
+                "playsinline",
+                "preload=\"none\"",
+                "poster=\"/assets/",
+            ] {
+                assert!(tag.contains(needed), "{needed}: {tag}");
+            }
+            assert!(!tag.contains("autoplay"), "{tag}");
+            assert!(
+                video.contains("<source src=\"/assets/turnkey.mp4?v="),
+                "{video}"
+            );
+        }
+        assert!(html.contains("<figure class=\"hero-video\">"));
+        // The diagram is on the page twice (the hero on a phone, How it works on a wide
+        // screen), so its ids are prefixed: no id is used twice.
+        let ids: Vec<&str> = html
+            .split(" id=\"")
+            .skip(1)
+            .map(|rest| rest.split('"').next().unwrap())
+            .collect();
+        let unique: BTreeSet<&str> = ids.iter().copied().collect();
+        assert_eq!(unique.len(), ids.len(), "{ids:?}");
+        assert!(html.split("url(#").skip(1).all(|rest| {
+            let id = rest.split(')').next().unwrap();
+            unique.contains(id)
+        }));
+    }
 }
 
 /// The value of `name="…"` in the first tag of `html`.

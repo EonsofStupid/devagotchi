@@ -30,6 +30,9 @@ mod landing;
 #[cfg(test)]
 mod landing_tests;
 mod machines;
+mod media;
+#[cfg(test)]
+mod media_tests;
 mod notify;
 pub mod oauth;
 mod pages;

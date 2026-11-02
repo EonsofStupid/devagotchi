@@ -27,7 +27,7 @@ use super::pages::Front;
 use super::public::REPO;
 use terms::{Term as T, term};
 
-/// The hero's picture: AI apps, the hub, the phone and machines dialing out.
+/// The picture of how it fits together: AI apps, the hub, the phone and machines dialing out.
 const DIAGRAM: &str = include_str!("landing/diagram.svg");
 const SIGN_IN: &str = "/auth/login?return_to=/account";
 /// The pet from the app icon, large, beside the closing call to action.
@@ -101,11 +101,40 @@ autofocus>Close</button></div><div class=\"modal-body\">{body}</div></div>"
     )
 }
 
+/// The diagram with its ids under `prefix`, so a page can hold two copies (one shown on
+/// phones, one on wide screens) without their markers and labels colliding.
+fn diagram(prefix: &str) -> String {
+    DIAGRAM
+        .replace("id=\"dg-", &format!("id=\"{prefix}-"))
+        .replace("url(#dg-", &format!("url(#{prefix}-"))
+        .replace(
+            "aria-labelledby=\"dg-title dg-desc\"",
+            &format!("aria-labelledby=\"{prefix}-title {prefix}-desc\""),
+        )
+}
+
+/// The setup video: click to play, muted, no download until then. `class` places it.
+fn video(class: &str) -> String {
+    format!(
+        "<video class=\"{class}\" controls muted playsinline preload=\"none\" width=\"1280\" \
+height=\"720\" poster=\"{poster}\" aria-label=\"Setting up Devagotchi, step by step: 57 seconds, \
+captions on screen, no sound\"><source src=\"{src}\" type=\"video/mp4\"></video>",
+        poster = super::media::poster_url(),
+        src = super::media::video_url(),
+    )
+}
+
+/// The hero: on a phone the diagram follows the words; on a wide screen the setup video
+/// sits beside them.
 fn hero(status: &str, action: &str) -> String {
     format!(
         "<section class=\"hero\" id=\"top\"><div class=\"hero-text\">{status}\
 <h1>One hub between your AI and every machine you have.</h1>{action}</div>\
-<div class=\"diagram\">{DIAGRAM}</div></section>"
+<div class=\"hero-visual\"><div class=\"diagram\">{diagram}</div>\
+<figure class=\"hero-video\">{video}<figcaption>The whole setup, from an empty server to an AI \
+that asks first. 57 seconds, no sound.</figcaption></figure></div></section>",
+        diagram = diagram("dg"),
+        video = video("turnkey"),
     )
 }
 
@@ -144,7 +173,7 @@ newest works.</p></section>{footer}{claim}{watch}",
         hero = hero(status, &action),
         footer = footer(),
         claim = popups::claim(),
-        watch = popups::watch(),
+        watch = popups::watch(&video("turnkey")),
     )
 }
 
@@ -181,7 +210,7 @@ before a step that needs your say, and every call is on the record.</p>\
         footer(),
         popups::claim(),
         popups::tools(),
-        popups::watch(),
+        popups::watch(&video("turnkey")),
     ]
     .concat()
 }
@@ -215,9 +244,11 @@ server. The app signs in with {oauth} and you approve it once with your passkey.
 <li><h3>Add your machines</h3><p>Name a machine on your hub and paste the one line it gives \
 you on that machine. It installs Devagotchi, gives the machine its own key, and starts the \
 {broker} and its {link} now and after every reboot.</p></li>\
-<li><h3>Connect your AI</h3><p>{connect}</p></li></ol></section>",
+<li><h3>Connect your AI</h3><p>{connect}</p></li></ol>\
+<div class=\"diagram how-diagram\">{diagram}</div></section>",
         broker = term(T::Broker, "broker", 1),
         link = term(T::Link, "link", 1),
+        diagram = diagram("dgw"),
     )
 }
 

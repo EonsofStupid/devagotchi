@@ -60,7 +60,9 @@ pub fn router(hub_authorization: bool) -> Router<AppState> {
         .route("/privacy", get(public::privacy))
         .route("/terms", get(public::terms))
         .route("/support", get(public::support))
-        .route("/assets/hub.css", get(css));
+        .route("/assets/hub.css", get(css))
+        .route("/assets/turnkey.mp4", get(super::media::video))
+        .route("/assets/turnkey-poster.png", get(super::media::poster));
     if !hub_authorization {
         return router;
     }

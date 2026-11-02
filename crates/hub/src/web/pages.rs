@@ -77,7 +77,7 @@ pub fn scripted(status: StatusCode, title: &str, body: &str, script: &'static st
 enum Kind {
     Plain,
     /// The landing page: a plain page (no script) laid out wide as full-viewport pages
-    /// under the fixed bar (`body.landing`, `landing.css`).
+    /// under the fixed bar (`body.landing`, `landing.css`), with the hub's own setup video.
     Landing,
     App,
     Script(&'static str),
@@ -123,8 +123,13 @@ manifest-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none';
                 "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; \
 form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
             }
-            Kind::Plain | Kind::Landing => {
+            Kind::Plain => {
                 "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+            }
+            // The setup video and its poster, from this hub only.
+            Kind::Landing => {
+                "default-src 'none'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self'; \
+frame-ancestors 'none'; base-uri 'none'"
             }
         }),
     );
