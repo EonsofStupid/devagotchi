@@ -787,7 +787,7 @@ fn check_name<'a>(id: &str, name: &'a str) -> BridgeResult<&'a str> {
         ));
     }
     let name = name.trim();
-    if name.is_empty() || name.len() > 64 || name.chars().any(char::is_control) {
+    if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
         return Err(BridgeError::new(
             "invalid_account",
             "a name is 1 to 64 printable characters",

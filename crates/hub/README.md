@@ -140,9 +140,9 @@ for passkeys already made. Plain `http` works only on loopback, for tests.
 
 ### Claiming a new hub (16c)
 
-A new hub is claimed in a browser, with a code only someone who can read its log has. Until
-its owner has a passkey, each start of the hub prints a claim link to its log (with Docker
-Compose: `docker compose logs hub`):
+A new hub is claimed in a browser, with a code only someone who can read its log has. A hub
+whose config names no `owner` and whose owner has no passkey yet prints a claim link to its
+log each time it starts (with Docker Compose: `docker compose logs hub`):
 
 ```
 devagotchi hub is unclaimed: nobody can sign in as its owner yet. Claim it in a browser before 2026-11-02 18:00 UTC:
@@ -157,10 +157,14 @@ sign-in and says where AIs connect (`<public_url>/mcp`).
 
 - The code is 120 random bits; the store keeps only its SHA-256 and when it stops working
   (`auth.tokens.claim_secs`, a day by default). Each start replaces it, so only the newest
-  code printed works; restart the hub for a new one.
+  code printed works; restart the hub for a new one. It is issued once the hub listens, so
+  a start that fails does not replace the code a running hub printed.
 - Claiming again with the same code is how a cancelled passkey prompt is retried: it
   supersedes the earlier link. The owner's first passkey, made by a claim or by
   `devagotchi hub owner`, deletes the code, and a claimed hub refuses every claim.
+- A config that names its `owner` has decided who that is (they may already reach the hub
+  through Nomen): it prints no code, `/` offers sign-in, and `/claim` refuses. Their passkey
+  is made on the host with `devagotchi hub owner`, below.
 - Why a code and not "the first visitor owns it": a new hub is usually on the internet
   before anyone claims it. Portainer stops its setup after five minutes for this reason,
   Open WebUI documents it as an accepted risk, and Pangolin's users asked for a secret

@@ -65,6 +65,8 @@ def main() -> int:
     parser.add_argument("--devagotchi", required=True, help="absolute path of the binary")
     parser.add_argument("--allow-skip", action="store_true",
                         help="exit 0 when Playwright is missing instead of failing")
+    parser.add_argument("--channel", default=None,
+                        help="a browser already installed (e.g. chrome) instead of Playwright's")
     args = parser.parse_args()
     try:
         from playwright.sync_api import sync_playwright
@@ -103,7 +105,7 @@ def main() -> int:
         assert link.startswith(f"{url}/owner#dgl_"), link
 
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = p.chromium.launch(channel=args.channel)
             page = browser.new_context().new_page()
             cdp = page.context.new_cdp_session(page)
             cdp.send("WebAuthn.enable")

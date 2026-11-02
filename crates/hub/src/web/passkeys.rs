@@ -84,8 +84,19 @@ impl HubSignIn {
         &self.accounts
     }
 
-    /// Whether the hub's owner can sign in yet (`accounts/claim.rs`). Once they can, that
-    /// does not change, so the store is asked only until then. `Err` when it failed.
+    /// Whether this hub can be claimed from the browser (`accounts/claim.rs`): its config
+    /// names no owner, and no owner can sign in with a passkey yet. A config that names
+    /// its owner has decided who that is: their passkey is made on the host with
+    /// `devagotchi hub owner`, whatever the log says. `Err` when the store failed.
+    pub(super) async fn claimable(&self) -> Result<bool, ()> {
+        if self.config.owner.is_some() {
+            return Ok(false);
+        }
+        self.claimed().await.map(|claimed| !claimed)
+    }
+
+    /// Whether the hub's owner can sign in with a passkey yet. Once they can, that does not
+    /// change, so the store is asked only until then. `Err` when it failed.
     pub(super) async fn claimed(&self) -> Result<bool, ()> {
         if self.claimed.load(Ordering::Relaxed) {
             return Ok(true);

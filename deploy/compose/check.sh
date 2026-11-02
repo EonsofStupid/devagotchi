@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
 # Check a running compose stack: the hub answers through Caddy, it is an authorization
-# server for AI clients, its tables are in the stack's Postgres, a new hub is claimed with
-# the code from its log, and the owner command works. Run from deploy/compose/ after
-# `docker compose up -d`. CI runs it (`hub (compose)`).
+# server for AI clients, and its tables are in the stack's Postgres. On a hub nobody has
+# claimed yet (always, with --fresh), it also checks the claim: the code from the hub's log
+# claims it, as "Owner", without making a passkey, so your own claim afterwards still works
+# and names you; and that the owner command works. Run from deploy/compose/ after
+# `docker compose up -d`. CI runs it with --fresh (`hub (compose)`).
 set -euo pipefail
+fresh=false
+[[ "${1:-}" == --fresh ]] && fresh=true
 cd "$(dirname "$0")"
 set -a; . ./.env; set +a
 url="${DEVAGOTCHI_PUBLIC_URL:-https://$DEVAGOTCHI_DOMAIN}"
@@ -31,12 +35,16 @@ tables=$(docker compose exec -T postgres psql -h /var/run/postgresql -U devagotc
 [[ "$tables" == 3 ]] || fail "the hub's tables are in the stack's Postgres (found $tables of 3)"
 ok "the hub's tables are in the stack's Postgres"
 
-# Nobody has made a passkey here (CI never does): the hub is unclaimed. It printed a claim
-# link to its log when it started (the newest one works), its landing page offers the claim,
-# and the code from the log claims it through Caddy. The browser half is
-# tests/claim_browser.py; nothing below prints the code.
+# Unclaimed (CI never makes a passkey): the hub printed a claim link to its log when it
+# started (the newest one works), its landing page offers the claim, and the code from the
+# log claims it through Caddy. The browser half is tests/claim_browser.py. Nothing below
+# prints the code, but on a failure fail() shows the hub's log, which has it.
 home=$(curl_hub -f "$url/") || fail "the landing page answers"
-[[ "$home" == *'href="/claim"'* ]] || fail "the landing page of an unclaimed hub offers the claim"
+if [[ "$home" != *'href="/claim"'* ]]; then
+  $fresh && fail "the landing page of a fresh hub offers the claim"
+  ok "the hub is claimed: claim checks skipped"
+  exit 0
+fi
 ok "the landing page of an unclaimed hub offers the claim"
 
 claim=$(docker compose logs --no-color hub 2>/dev/null | grep -o "$url/claim#[0-9A-Z-]*" | tail -1 || true)

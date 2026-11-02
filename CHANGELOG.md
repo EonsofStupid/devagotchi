@@ -8,8 +8,8 @@ heading. Agents draft the fragments below; they never tag.
 ## Unreleased
 
 ### Claim a new hub in the browser (increment 41, plan 16c)
-- A hub with its own accounts whose owner has no passkey prints a claim link to its log at
-  each start (`/claim#XXXX-…`, 120 random bits, only its hash stored, a day by default:
+- A hub with its own accounts whose config names no owner, and whose owner has no passkey,
+  prints a claim link to its log at each start (`/claim#XXXX-…`, 120 random bits, only its hash stored, a day by default:
   `auth.tokens.claim_secs`; only the newest works). `/claim` takes the code, names the owner
   and makes their passkey in one step, and signs them in; the first passkey ends the code.
   `devagotchi hub owner` on the host still works, and also ends it.
@@ -17,8 +17,9 @@ heading. Agents draft the fragments below; they never tag.
   and this hub's own MCP address. `/docs` gives this hub's address and, on a hub with its
   own accounts, the connector steps with no client ID (the AI registers itself).
 - Store migration `0003_claim` (SQLite and Postgres): the `claim_codes` table.
-- CI runs the browser tests (`tests/claim_browser.py`, `tests/passkey_browser.py`) in
-  Chromium with a virtual passkey on ubuntu-24.04, Playwright pinned by hash.
+- CI runs the browser tests (`tests/claim_browser.py`, `tests/passkey_browser.py`) in the
+  runner's Chrome with a virtual passkey on ubuntu-24.04, Playwright pinned by hash.
+- `/docs` no longer names the hosted hub's Nomen client ID on other hubs.
 
 ## 0.1.0 - 2026-10-31
 

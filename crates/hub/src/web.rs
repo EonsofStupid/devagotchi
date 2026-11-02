@@ -62,15 +62,15 @@ pub use passkeys::HubSignIn;
 pub use routes::router;
 
 /// Every web page's top bar says whether the browser is signed in: the account and a
-/// one-tap Sign out, or Sign in back to this page (`pages::Bar`). On a hub nobody has
-/// claimed yet, nobody can sign in, so it offers nothing.
+/// one-tap Sign out, or Sign in back to this page (`pages::Bar`). On a hub waiting to be
+/// claimed, nobody can sign in, so it offers nothing.
 pub async fn bar(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let unclaimed = match &state.passkeys {
-        Some(hub) => matches!(hub.claimed().await, Ok(false)),
+        Some(hub) => matches!(hub.claimable().await, Ok(true)),
         None => false,
     };
     let bar = if (state.web.is_none() && state.passkeys.is_none()) || unclaimed {

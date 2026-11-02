@@ -37,7 +37,7 @@ pub(super) async fn world() -> World {
 }
 
 /// A hub whose config names `owner`, as the Texas hub's names its Nomen subject.
-async fn world_owned_by(owner: Option<&str>) -> World {
+pub(super) async fn world_owned_by(owner: Option<&str>) -> World {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let dir = tempfile::tempdir().unwrap();

@@ -6,7 +6,7 @@ use axum::http::header;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
 
-use super::passkey_tests::{World, b64, cookie, world};
+use super::passkey_tests::{World, b64, cookie, world, world_owned_by};
 
 impl World {
     /// The code a starting hub would print now.
@@ -243,5 +243,31 @@ async fn the_docs_say_how_to_connect_to_this_hub() {
     assert!(
         !docs.contains("app.devagotchi.com") && !docs.contains("client ID"),
         "{docs}"
+    );
+}
+
+#[tokio::test]
+async fn a_hub_whose_config_names_its_owner_is_never_claimed() {
+    // The Texas case: the owner is decided in the config (they may already reach the hub
+    // through Nomen). Their passkey is made on the host; the log's code is no way in.
+    let world = world_owned_by(Some("395290028818825218")).await;
+    let code = world.printed().await;
+    let landing = world.text("/", None).await;
+    assert!(
+        !landing.contains("href=\"/claim\"") && landing.contains("/auth/login"),
+        "{landing}"
+    );
+    assert!(
+        world
+            .text("/claim", None)
+            .await
+            .contains("This hub has an owner")
+    );
+    let refused = world.post("/claim", None, json!({ "code": code })).await;
+    assert_eq!(refused.status(), 409);
+    assert_eq!(refused.json::<Value>().await.unwrap()["error"], "claimed");
+    assert!(
+        world.accounts.owner().await.unwrap().is_none(),
+        "nothing was made"
     );
 }

@@ -5,7 +5,6 @@ use crate::{
 };
 
 const NOW: u64 = 1_800_000_000;
-const CONFIGURED: &str = "395290028818825218";
 
 async fn stores() -> Vec<(testing::TestStore, Accounts)> {
     let mut out = Vec::new();
@@ -41,8 +40,7 @@ async fn claim(accounts: &Accounts, code: &str, now: u64) -> BridgeResult<(Accou
     accounts
         .claim_at(
             code,
-            None,
-            "Jesse",
+            Some("Jesse"),
             [7; 16],
             crate::link::random::<32>(),
             now,
@@ -144,7 +142,7 @@ async fn the_code_claims_the_hub_until_the_owner_has_a_passkey() {
         // A cancelled prompt or a closed tab: the same code claims again, under the
         // name given now, and the earlier link stops working.
         let (again, second) = accounts
-            .claim_at(&printed.code, None, "  J.  ", [8; 16], [9; 32], NOW + 60)
+            .claim_at(&printed.code, Some("  J.  "), [8; 16], [9; 32], NOW + 60)
             .await
             .unwrap();
         assert_eq!(
@@ -228,36 +226,29 @@ async fn the_lifetime_is_the_configs() {
 }
 
 #[tokio::test]
-async fn a_configured_or_existing_owner_keeps_their_id() {
+async fn an_owner_made_on_the_host_without_a_passkey_is_claimed_as_is() {
+    // `devagotchi hub owner` made the owner, and nobody used its link: the claim keeps
+    // the account, and its name unless the claimant gives one.
     for (_store, accounts) in stores().await {
-        // The Texas case: the config names the owner from an earlier identity provider.
+        let made = accounts.ensure_owner(None, "Jesse", [5; 16]).await.unwrap();
         let code = issue(&accounts, 1, NOW).await.code;
         let (owner, _) = accounts
-            .claim_at(&code, Some(CONFIGURED), "Jesse", [7; 16], [1; 32], NOW)
+            .claim_at(&code, None, [7; 16], [1; 32], NOW)
             .await
             .unwrap();
-        assert_eq!(owner.id, CONFIGURED);
-        // A config naming someone else is refused, and changes nothing.
-        let refused = accounts
-            .claim_at(
-                &code,
-                Some("acct_bbbbbbbbbbbbbbbbbbbbbbbbbb"),
-                "X",
-                [7; 16],
-                [2; 32],
-                NOW,
-            )
-            .await
-            .unwrap_err();
-        assert_eq!(refused.code, "owner_mismatch");
-        assert_eq!(accounts.owner().await.unwrap().unwrap().name, "Jesse");
+        assert_eq!((&owner.id, owner.name.as_str()), (&made.id, "Jesse"));
+        let (owner, _) = claim(&accounts, &code, NOW).await.unwrap();
+        assert_eq!((&owner.id, owner.name.as_str()), (&made.id, "Jesse"));
+        assert_eq!(accounts.owner().await.unwrap().unwrap().id, made.id);
     }
     for (_store, accounts) in stores().await {
-        // An owner made by `devagotchi hub owner` who never made a passkey is claimed as is.
-        let made = accounts.ensure_owner(None, "Owner", [5; 16]).await.unwrap();
+        // A claim with no name makes the owner "Owner".
         let code = issue(&accounts, 1, NOW).await.code;
-        let (owner, _) = claim(&accounts, &code, NOW).await.unwrap();
-        assert_eq!((owner.id, owner.name), (made.id, "Jesse".to_string()));
+        let (owner, _) = accounts
+            .claim_at(&code, None, [7; 16], [1; 32], NOW)
+            .await
+            .unwrap();
+        assert_eq!(owner.name, DEFAULT_NAME);
     }
 }
 
@@ -265,14 +256,32 @@ async fn a_configured_or_existing_owner_keeps_their_id() {
 async fn names_are_checked_before_anything_changes() {
     for (_store, accounts) in stores().await {
         let code = issue(&accounts, 1, NOW).await.code;
-        for bad in ["", "   ", "a\nb", &"x".repeat(65)] {
+        for bad in ["", "   ", "a\nb", &"x".repeat(65), &"名".repeat(65)] {
             let refused = accounts
-                .claim_at(&code, None, bad, [7; 16], [1; 32], NOW)
+                .claim_at(&code, Some(bad), [7; 16], [1; 32], NOW)
                 .await
                 .unwrap_err();
             assert_eq!(refused.code, "invalid_account", "{bad:?}");
         }
         assert!(accounts.owner().await.unwrap().is_none());
+        // A name is counted in characters, not bytes.
+        let long = "名".repeat(64);
+        let (owner, _) = accounts
+            .claim_at(&code, Some(&long), [7; 16], [1; 32], NOW)
+            .await
+            .unwrap();
+        assert_eq!(owner.name, long);
+    }
+}
+
+#[tokio::test]
+async fn what_cannot_be_a_code_is_refused_before_any_write() {
+    for (_store, accounts) in stores().await {
+        issue(&accounts, 1, NOW).await;
+        for bad in ["", "x", "0000-0000"] {
+            let refused = claim(&accounts, bad, NOW).await.unwrap_err();
+            assert_eq!(refused.code, "wrong_code", "{bad:?}");
+        }
     }
 }
 

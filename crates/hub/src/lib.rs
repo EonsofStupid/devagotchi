@@ -460,23 +460,12 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let passkeys = accounts
         .clone()
         .and_then(|accounts| web::HubSignIn::new(config.clone(), accounts).map(Arc::new));
-    // A hub whose owner cannot sign in yet prints a new claim code each time it starts, for
-    // its owner to claim it at /claim (`accounts/claim.rs`); it replaces the last one.
-    let claim_code = match (&passkeys, &accounts) {
-        (Some(_), Some(accounts)) => accounts.issue_claim_code().await?,
+    // A hub whose config names no owner may be claimed from the browser (`accounts/claim.rs`);
+    // its code is issued once the hub listens, below.
+    let claimable = match (&passkeys, &accounts) {
+        (Some(_), Some(accounts)) if config.owner.is_none() => Some(accounts.clone()),
         _ => None,
     };
-    if claim_code.is_some() {
-        // That a code was issued, and when; never the code.
-        audit.record(&audit::AuditEntry {
-            subject: "hub",
-            via: "start",
-            tool: "account.claim_code",
-            broker: "",
-            operation_id: "",
-            outcome: "ok",
-        })?;
-    }
     let push = match (&config.web, &passkeys) {
         (None, None) => None,
         _ => Some(Arc::new(push::Push::open(
@@ -552,6 +541,24 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .map_err(|error| BridgeError::new("listen", format!("{listen}: {error}")))?;
+    // Unclaimed, the hub prints a new claim code each time it starts, replacing the last
+    // one: only once it listens, so a start that fails never replaces the code a running
+    // hub printed.
+    let claim_code = match &claimable {
+        Some(accounts) => accounts.issue_claim_code().await?,
+        None => None,
+    };
+    if claim_code.is_some() {
+        // That a code was issued, and when; never the code.
+        state.hub.audit.record(&audit::AuditEntry {
+            subject: "hub",
+            via: "start",
+            tool: "account.claim_code",
+            broker: "",
+            operation_id: "",
+            outcome: "ok",
+        })?;
+    }
     // Everything worth reading at start comes before the ready line callers wait for.
     if let Some(owner) = config.owner_id() {
         eprintln!("devagotchi hub owner: {owner} reaches every broker");

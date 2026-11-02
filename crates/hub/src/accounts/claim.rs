@@ -1,6 +1,9 @@
-//! Claiming a new hub from a browser (16c): a hub in `auth.mode hub` whose owner cannot sign
-//! in yet prints a claim code to its own log when it starts, and whoever enters that code
-//! on the hub's `/claim` page makes the owner's passkey there. No terminal on the host.
+//! Claiming a new hub from a browser (16c): a hub in `auth.mode hub` whose config names no
+//! owner, and whose owner cannot sign in with a passkey yet, prints a claim code to its own
+//! log when it starts, and whoever enters that code on the hub's `/claim` page makes the
+//! owner's passkey there. No terminal on the host. A config that names its owner has
+//! decided who that is (they may already reach the hub through Nomen): no code is printed,
+//! and their passkey is made with `devagotchi hub owner` on the host.
 //!
 //! Why a code from the log, and not "the first visitor owns it": a new hub is usually on the
 //! internet before anyone has claimed it, so an open first-run page is a race anyone can
@@ -34,6 +37,8 @@ use crate::{
 
 /// Crockford's base32: no I, L, O or U, so a code read off a screen is typed back right.
 const ALPHABET: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+/// The name of an owner made by a claim that gave none.
+pub const DEFAULT_NAME: &str = "Owner";
 /// 120 bits, 24 characters.
 const CODE_BYTES: usize = 15;
 const CODE_CHARS: usize = CODE_BYTES * 8 / 5;
@@ -146,19 +151,14 @@ impl Accounts {
         Ok(issued.then_some(ClaimCode { code, expires_at }))
     }
 
-    /// Claim the hub with the code it printed: the owner made if there is none yet (with
-    /// the config's owner id, `configured`, if it names one), named `name`, and a one-time
-    /// owner link for the claimant's first passkey. `claimed` once the owner has a passkey;
-    /// `wrong_code` for any code that is not the live one.
-    pub async fn claim(
-        &self,
-        code: &str,
-        configured: Option<&str>,
-        name: &str,
-    ) -> BridgeResult<(Account, String)> {
+    /// Claim the hub with the code it printed: the owner made if there is none yet, named
+    /// `name` (an owner made without a passkey keeps theirs when it is `None`; a new one is
+    /// "Owner"), and a one-time owner link for the claimant's first passkey. `claimed` once
+    /// the owner has a passkey; `wrong_code` for any code that is not the live one. Whether
+    /// the hub may be claimed at all (its config names no owner) is the caller's to check.
+    pub async fn claim(&self, code: &str, name: Option<&str>) -> BridgeResult<(Account, String)> {
         self.claim_at(
             code,
-            configured,
             name,
             crate::link::random::<16>(),
             crate::link::random::<32>(),
@@ -170,27 +170,24 @@ impl Accounts {
     pub(crate) async fn claim_at(
         &self,
         code: &str,
-        configured: Option<&str>,
-        name: &str,
+        name: Option<&str>,
         id_random: [u8; 16],
         link_random: [u8; 32],
         now: u64,
     ) -> BridgeResult<(Account, String)> {
-        let id = configured
-            .map(str::to_string)
-            .unwrap_or_else(|| new_account_id(id_random));
-        let name = check_name(&id, name)?;
-        let kept = normalize(code).map(|code| hash(&code));
+        let id = new_account_id(id_random);
+        let name = name.map(|name| check_name(&id, name)).transpose()?;
+        // Nothing that cannot be a code opens a write.
+        let kept = normalize(code)
+            .map(|code| hash(&code))
+            .ok_or_else(wrong_code)?;
         let token = link_token(link_random);
         let owner = transaction!(&self.store, |connection| {
             if claimed_in(connection).await? {
                 return Err(BridgeError::new("claimed", "this hub already has an owner").into());
             }
-            let Some(kept) = &kept else {
-                return Err(wrong_code().into());
-            };
             let live = sqlx::query("SELECT expires_at FROM claim_codes WHERE hash = $1")
-                .bind(kept)
+                .bind(&kept)
                 .fetch_optional(&mut *connection)
                 .await?;
             let live = match live {
@@ -201,29 +198,23 @@ impl Accounts {
                 return Err(wrong_code().into());
             }
             let owner = match owner_in(connection).await? {
-                Some(owner) => {
-                    if configured.is_some_and(|id| id != owner.id) {
-                        return Err(BridgeError::new(
-                            "owner_mismatch",
-                            format!(
-                                "this hub's owner account is {}, not the config's owner",
-                                owner.id
-                            ),
-                        )
-                        .into());
+                // Nobody signs in as the owner yet: the claimant may name them.
+                Some(owner) => match name {
+                    Some(name) => {
+                        sqlx::query("UPDATE accounts SET name = $1 WHERE id = $2")
+                            .bind(name)
+                            .bind(&owner.id)
+                            .execute(&mut *connection)
+                            .await?;
+                        Account {
+                            name: name.to_string(),
+                            ..owner
+                        }
                     }
-                    // Nobody signs in as the owner yet: the claimant names them.
-                    sqlx::query("UPDATE accounts SET name = $1 WHERE id = $2")
-                        .bind(name)
-                        .bind(&owner.id)
-                        .execute(&mut *connection)
-                        .await?;
-                    Account {
-                        name: name.to_string(),
-                        ..owner
-                    }
-                }
+                    None => owner,
+                },
                 None => {
+                    let name = name.unwrap_or(DEFAULT_NAME);
                     create_in(connection, &id, name, true, now).await?;
                     Account {
                         id: id.clone(),

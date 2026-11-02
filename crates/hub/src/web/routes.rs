@@ -168,17 +168,16 @@ async fn nomen_who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -> Who
     }
 }
 
-/// Signed in, `/` is your machines; signed out, it says what Devagotchi is and offers
-/// one Sign in, instead of sending a stranger straight to an identity provider.
-/// `/`: the landing page. A hub nobody has claimed offers the claim; one with an owner
-/// says where AIs connect and offers sign-in; a signed-in person goes to their account.
+/// `/`: the landing page. A hub that can be claimed offers only the claim; otherwise it says
+/// what Devagotchi is and where AIs connect, and offers one Sign in instead of sending a
+/// stranger straight to an identity provider. Signed in, it is your account.
 async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let public_url = state.hub.config.public_url.clone();
     if let Some(hub) = &state.passkeys {
-        return match hub.claimed().await {
-            Ok(false) => pages::home(pages::Front::Unclaimed, &public_url),
-            Ok(true) if signed_in(&state, &headers).await => see_other("/account", &[]),
-            Ok(true) => pages::home(pages::Front::Passkeys, &public_url),
+        return match hub.claimable().await {
+            Ok(true) => pages::home(pages::Front::Unclaimed, &public_url),
+            Ok(false) if signed_in(&state, &headers).await => see_other("/account", &[]),
+            Ok(false) => pages::home(pages::Front::Passkeys, &public_url),
             Err(()) => unavailable(),
         };
     }

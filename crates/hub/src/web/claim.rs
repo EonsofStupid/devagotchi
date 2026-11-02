@@ -19,25 +19,26 @@ use serde::Deserialize;
 use super::{pages, passkeys};
 use crate::{AppState, audit::AuditEntry};
 
-/// The name an owner gets when the claimant leaves it empty.
-const DEFAULT_NAME: &str = "Owner";
-
-/// `GET /claim`: the claim form on a hub nobody owns yet; a pointer to sign-in on one that
-/// has an owner.
+/// `GET /claim`: the claim form on a hub that can be claimed; a pointer to sign-in on one
+/// whose owner is decided.
 pub async fn page(State(state): State<AppState>) -> Response {
     let Some(hub) = state.passkeys.clone() else {
         return super::routes::not_set_up();
     };
-    match hub.claimed().await {
-        Ok(false) => passkeys::scripted("Claim this hub", FORM),
-        Ok(true) => pages::message(
-            StatusCode::OK,
-            "This hub has an owner",
-            "Its owner claimed it already. If that is you, sign in with your passkey.",
-            Some(("/auth/login?return_to=/account", "Sign in")),
-        ),
+    match hub.claimable().await {
+        Ok(true) => passkeys::scripted("Claim this hub", FORM),
+        Ok(false) => decided(),
         Err(()) => super::routes::unavailable(),
     }
+}
+
+fn decided() -> Response {
+    pages::message(
+        StatusCode::OK,
+        "This hub has an owner",
+        "Its owner is decided already. If that is you, sign in with your passkey; on the hub's host, devagotchi hub owner makes one.",
+        Some(("/auth/login?return_to=/account", "Sign in")),
+    )
 }
 
 const FORM: &str = "<h1>Claim this hub</h1>\
@@ -85,35 +86,35 @@ pub async fn claim(
         Ok(input) => input,
         Err(refused) => return refused,
     };
-    let name = input
-        .name
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_NAME.to_string());
-    let configured = state.hub.config.owner_id().map(str::to_string);
+    // A hub whose owner is decided (by its config, or by a passkey) answers from memory or
+    // a read, never a write.
+    match hub.claimable().await {
+        Ok(true) => {}
+        Ok(false) => return refused_claimed(),
+        Err(()) => return passkeys::store_failed("a claim could not be checked"),
+    }
+    let name = input.name.filter(|name| !name.trim().is_empty());
     let accounts = hub.accounts().clone();
+    let audit = state.hub.audit.clone();
+    // The claim and its audit row finish together even if the browser goes away: a claim
+    // that cannot be recorded is refused, and its link is never handed out.
     let done = tokio::spawn(async move {
-        accounts
-            .claim(&input.code, configured.as_deref(), &name)
-            .await
+        let (owner, link) = accounts.claim(&input.code, name.as_deref()).await?;
+        audit.record(&AuditEntry {
+            subject: &owner.id,
+            via: "claim",
+            tool: "account.claim",
+            broker: "",
+            operation_id: "",
+            outcome: "ok",
+        })?;
+        Ok::<_, devagotchi_contracts::BridgeError>((owner, link))
     })
     .await;
     match done {
         Ok(Ok((owner, link))) => {
-            // A claim is on the audit chain, or it is refused: the link it made is never
-            // handed out, and the next claim supersedes it.
-            let recorded = state.hub.audit.record(&AuditEntry {
-                subject: &owner.id,
-                via: "claim",
-                tool: "account.claim",
-                broker: "",
-                operation_id: "",
-                outcome: "ok",
-            });
-            if let Err(error) = recorded {
-                return passkeys::store_failed(&error.message);
-            }
             eprintln!(
-                "devagotchi-hub: claimed by {} ({}); making their passkey",
+                "devagotchi-hub: claimed by {:?} ({}); making their passkey",
                 owner.name, owner.id
             );
             passkeys::registration(hub, link, true).await
@@ -124,29 +125,22 @@ pub async fn claim(
                 "wrong_code",
                 "That is not this hub's claim code. Use the newest one in the hub's log: it prints a new one each time it starts.",
             ),
-            "claimed" => passkeys::refuse(
-                StatusCode::CONFLICT,
-                "claimed",
-                "This hub already has an owner. If that is you, sign in with your passkey.",
-            ),
+            "claimed" => refused_claimed(),
             "invalid_account" => passkeys::refuse(
                 StatusCode::BAD_REQUEST,
                 "invalid_name",
                 "A name is 1 to 64 characters on one line.",
             ),
-            "owner_mismatch" => {
-                eprintln!(
-                    "devagotchi-hub: a claim was refused: {}; the config's owner must be the owner the hub's accounts hold",
-                    error.message
-                );
-                passkeys::refuse(
-                    StatusCode::CONFLICT,
-                    "owner_mismatch",
-                    "This hub's config names another owner than its accounts hold. Fix the config's owner on the hub's host.",
-                )
-            }
             _ => passkeys::store_failed(&error.message),
         },
         Err(_) => passkeys::store_failed("a claim did not complete"),
     }
+}
+
+fn refused_claimed() -> Response {
+    passkeys::refuse(
+        StatusCode::CONFLICT,
+        "claimed",
+        "This hub already has an owner. If that is you, sign in with your passkey.",
+    )
 }

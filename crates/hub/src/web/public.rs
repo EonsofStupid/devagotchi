@@ -40,13 +40,22 @@ registers itself with this hub: connect, sign in with your passkey, and approve 
 <p>Any other AI app that takes a remote MCP server with OAuth connects the same way, at the \
 same URL. You see and end every connection from your account.</p>"
         )
-    } else {
+    } else if matches!(
+        state.hub.config.auth,
+        crate::config::AuthConfig::Nomen { .. }
+    ) {
         format!(
             "<p>In Claude (web, desktop or mobile): Customize, Connectors, Add, <em>Add custom connector</em>. \
 Name it Devagotchi and use the URL <code>{mcp}</code>. On the next step \
-choose <em>Use your own OAuth client</em> and enter the client ID <code>396558926876835844</code>. \
+choose <em>Use your own OAuth client</em> and enter the client ID of this hub's AI app in \
+Shippin: its operator has it (<code>devagotchi hub connect-nomen</code> printed it). \
 Connect, and sign in with your Shippin account.</p>\
 <p>Other AI apps need sign-in support that is not finished yet; this page will say when it is.</p>"
+        )
+    } else {
+        format!(
+            "<p>Add a custom connector in Claude with the URL <code>{mcp}</code>, and sign in the \
+way this hub's operator set up.</p>"
         )
     };
     page(

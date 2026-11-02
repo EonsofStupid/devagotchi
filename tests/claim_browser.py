@@ -14,7 +14,8 @@ the browser's WebAuthn API agree.
 4. Claiming names the owner, makes their passkey and signs them in.
 5. Signed out, the landing page offers sign-in and this hub's MCP address; the passkey
    signs back in.
-6. The claimed hub refuses the code, and a restart prints no new one.
+6. The claimed hub refuses the code (the page and POST /claim), and a restart prints no
+   new one.
 
 Needs Python Playwright with its Chromium (tests/requirements-browser.txt). CI runs it on
 ubuntu-24.04 (`e2e`); locally:
@@ -30,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -62,6 +64,19 @@ def serve(devagotchi: str, state: Path, config: Path, log: Path) -> subprocess.P
     )
 
 
+def post_claim(url: str, code: str) -> tuple:
+    """POST /claim as the hub's own page does; (status, error code)."""
+    request = urllib.request.Request(
+        url + "/claim", data=json.dumps({"code": code}).encode(), method="POST",
+        headers={"Origin": url, "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as answer:
+            return answer.status, None
+    except urllib.error.HTTPError as refused:
+        return refused.code, json.loads(refused.read()).get("error")
+
+
 def stop(hub: subprocess.Popen) -> None:
     hub.terminate()
     hub.wait(timeout=10)
@@ -84,6 +99,8 @@ def main() -> int:
     parser.add_argument("--devagotchi", required=True, help="absolute path of the binary")
     parser.add_argument("--allow-skip", action="store_true",
                         help="exit 0 when Playwright is missing instead of failing")
+    parser.add_argument("--channel", default=None,
+                        help="a browser already installed (e.g. chrome) instead of Playwright's")
     args = parser.parse_args()
     try:
         from playwright.sync_api import sync_playwright
@@ -110,7 +127,7 @@ def main() -> int:
         link = printed[0]
 
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = p.chromium.launch(channel=args.channel)
             page = browser.new_context().new_page()
             cdp = page.context.new_cdp_session(page)
             cdp.send("WebAuthn.enable")
@@ -166,9 +183,11 @@ def main() -> int:
             page.wait_for_url(f"{url}/account", timeout=15_000)
             print("PASS signed out, the landing page says where AIs connect; back in with the passkey")
 
-            # 6. The code is spent for good.
+            # 6. The code is spent for good: the page says so, and the hub refuses it.
             page.goto(link)
             assert "This hub has an owner" in page.inner_text("main")
+            answer = post_claim(url, link.split("#", 1)[1])
+            assert answer == (409, "claimed"), answer
             print("PASS the claimed hub refuses its code")
             browser.close()
     finally:
