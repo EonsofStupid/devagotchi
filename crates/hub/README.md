@@ -15,6 +15,9 @@ your own agents ──service user───────────┴──▶�
 
 ## Run
 
+Self-hosting with Docker (the hub, its own Postgres and Caddy, one command):
+[`deploy/compose/`](../../deploy/compose/README.md). Or the binary directly:
+
 ```bash
 devagotchi-hub --state-dir ~/.local/state/devagotchi-hub --config ~/.config/devagotchi-hub/hub.json
 # devagotchi hub owner: 300000000000000001 reaches every broker
