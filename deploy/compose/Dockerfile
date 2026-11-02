@@ -15,7 +15,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
  && cp target/release/devagotchi /out/devagotchi
 
 FROM ${RUNTIME_IMAGE}
+# The commit the image was built from: GitHub's build sets it (image.yml), and update.sh
+# fetches the deploy files of that same commit with the image. A local build leaves it
+# empty, and update.sh then keeps the deploy files it has.
+ARG REVISION=""
 LABEL org.opencontainers.image.source="https://github.com/EonsofStupid/devagotchi" \
+      org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.description="Devagotchi hub: authenticated MCP for AI clients, routed to the machines that link to it"
 COPY --from=build /out/devagotchi /usr/local/bin/devagotchi
 # The state directory, owned by nonroot so a fresh named volume takes its ownership.

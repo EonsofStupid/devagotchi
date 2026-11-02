@@ -6,6 +6,8 @@
 #   sudo ./install.sh --domain hub.example.com                    # with this stack's Caddy
 #   sudo ./install.sh --domain hub.example.com --edge external \
 #        --hub-bind 10.0.0.20                                     # behind a proxy you run
+#   sudo ./install.sh --domain app.example.com --tenancy multi \
+#        --operators email:you@example.com --google --env-file /run/hub.env   # hosted
 #
 # Re-running it is safe: it rewrites .env from the flags, keeps the volumes, and deploys
 # the image the track points at now. Nothing here is specific to one host or domain.
@@ -28,12 +30,31 @@ install.sh --domain NAME [options]
                        script, else https://raw.githubusercontent.com/<repo>/<ref>/deploy/compose)
   --repo OWNER/NAME    (default EonsofStupid/devagotchi)   --ref REF  (default main)
   --no-timer           do not install the update and backup timers
+A hosted hub, who runs it, and how people sign in (see crates/hub/README.md):
+  --tenancy single|multi
+                       single (default): one owner's hub, claimed from its log when no
+                       operator is set; multi: a hosted service, an account for everyone who
+                       connects, never claimed
+  --operators LIST     who operates it, comma separated: email:ADDRESS or PROVIDER:SUBJECT
+  --trusted-proxies LIST
+                       proxies whose X-Forwarded-For names the client, comma separated
+                       (default: private and loopback addresses)
+  --google             Sign in with Google: DEVAGOTCHI_GOOGLE_CLIENT_ID and _SECRET
+  --github             Sign in with GitHub: DEVAGOTCHI_GITHUB_CLIENT_ID and _SECRET
+  --nomen ISSUER       Sign in with Shippin: DEVAGOTCHI_NOMEN_CLIENT_ID (and _SECRET if its app
+                       has one), at the Nomen issuer ISSUER
+  --email-from ADDRESS sign-in links by email from ADDRESS: DEVAGOTCHI_SMTP_URL
+                       (smtps://user@host:465 or smtp://user@host:587) and DEVAGOTCHI_SMTP_PASSWORD
+  --env-file FILE      read those variables from FILE (KEY=VALUE lines, as the secret store
+                       writes them) rather than from this command's environment; a re-run
+                       keeps the values .env already has for any it is not given
 EOF
 }
 
 domain="" public_url="" rp_id="" edge=caddy hub_bind=127.0.0.1 hub_port=8787
 track=ghcr.io/eonsofstupid/devagotchi:main dir=/opt/devagotchi-hub source=""
 repo=EonsofStupid/devagotchi ref=main timer=true
+tenancy="" operators="" proxies="" google=false github=false nomen="" email_from="" env_file=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --domain) domain="$2"; shift 2 ;;
@@ -48,6 +69,14 @@ while [[ $# -gt 0 ]]; do
     --repo) repo="$2"; shift 2 ;;
     --ref) ref="$2"; shift 2 ;;
     --no-timer) timer=false; shift ;;
+    --tenancy) tenancy="$2"; shift 2 ;;
+    --operators) operators="$2"; shift 2 ;;
+    --trusted-proxies) proxies="$2"; shift 2 ;;
+    --google) google=true; shift ;;
+    --github) github=true; shift ;;
+    --nomen) nomen="$2"; shift 2 ;;
+    --email-from) email_from="$2"; shift 2 ;;
+    --env-file) env_file="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "install.sh: unknown option $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -62,6 +91,13 @@ die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 domain="${domain,,}"; rp_id="${rp_id,,}"
 public_url="${public_url:-https://$domain}"
 rp_id="${rp_id:-$domain}"
+[[ -z "$tenancy" || "$tenancy" == single || "$tenancy" == multi ]] || die "--tenancy is single or multi"
+[[ "$operators" =~ ^[A-Za-z0-9@._+:,-]*$ ]] || die "--operators is email:ADDRESS or PROVIDER:SUBJECT, comma separated"
+[[ "$proxies" =~ ^[0-9A-Fa-f.:/,]*$ ]] || die "--trusted-proxies is IP addresses or CIDR ranges, comma separated"
+[[ -z "$nomen" || "$nomen" =~ ^https://[A-Za-z0-9.:/-]+$ ]] || die "--nomen is the Nomen issuer's https URL"
+[[ -z "$email_from" || ( "$email_from" == *@* && "$email_from" != *[\'\"]* ) ]] \
+  || die "--email-from is an address (Name <address> works too)"
+[[ -z "$env_file" || -f "$env_file" ]] || die "--env-file $env_file is not a file"
 
 # Docker Engine and the Compose plugin, from Docker's own repository when missing: the
 # distributions' packages lag behind what compose.yaml needs (Compose 2.23+).
@@ -111,6 +147,50 @@ cache=$(( mem_mb * 3 / 4 ))
 # .env: rewritten from the flags each run; the image stays pinned to the digest that runs.
 pinned=""
 [[ -f "$dir/.env" ]] && pinned=$(sed -n 's/^DEVAGOTCHI_IMAGE=//p' "$dir/.env" | tail -1)
+
+# The sign-in providers' ids and secrets: from --env-file, else this command's environment,
+# else what .env already holds (a re-run). Never printed; written single-quoted to .env (0600).
+secret_names=(DEVAGOTCHI_GOOGLE_CLIENT_ID DEVAGOTCHI_GOOGLE_CLIENT_SECRET DEVAGOTCHI_GITHUB_CLIENT_ID
+  DEVAGOTCHI_GITHUB_CLIENT_SECRET DEVAGOTCHI_NOMEN_CLIENT_ID DEVAGOTCHI_NOMEN_CLIENT_SECRET
+  DEVAGOTCHI_SMTP_URL DEVAGOTCHI_SMTP_PASSWORD)
+declare -A secret=()
+unquote() { sed "s/^'\(.*\)'\$/\1/; s/^\"\(.*\)\"\$/\1/"; }
+from_file() { [[ -n "$env_file" ]] && sed -n "s/^\(export \)\{0,1\}$1=//p" "$env_file" | tail -1 | unquote; }
+from_dotenv() { [[ -f "$dir/.env" ]] && sed -n "s/^$1=//p" "$dir/.env" | tail -1 | unquote; }
+for name in "${secret_names[@]}"; do
+  value=$(from_file "$name" || true)
+  [[ -n "$value" ]] || value="${!name:-}"
+  [[ -n "$value" ]] || value=$(from_dotenv "$name" || true)
+  [[ "$value" != *"'"* && "$value" != *$'\n'* ]] || die "$name has a quote or a newline, which .env cannot hold"
+  secret[$name]="$value"
+done
+need() { [[ -n "${secret[$1]}" ]] || die "$2 needs $1 (in the environment or --env-file)"; }
+providers=()
+if $google; then
+  need DEVAGOTCHI_GOOGLE_CLIENT_ID --google; need DEVAGOTCHI_GOOGLE_CLIENT_SECRET --google
+  providers+=('{"kind":"google","client_id_env":"DEVAGOTCHI_GOOGLE_CLIENT_ID","client_secret_env":"DEVAGOTCHI_GOOGLE_CLIENT_SECRET"}')
+fi
+if $github; then
+  need DEVAGOTCHI_GITHUB_CLIENT_ID --github; need DEVAGOTCHI_GITHUB_CLIENT_SECRET --github
+  providers+=('{"kind":"github","client_id_env":"DEVAGOTCHI_GITHUB_CLIENT_ID","client_secret_env":"DEVAGOTCHI_GITHUB_CLIENT_SECRET"}')
+fi
+if [[ -n "$nomen" ]]; then
+  need DEVAGOTCHI_NOMEN_CLIENT_ID --nomen
+  nomen_secret=""
+  [[ -n "${secret[DEVAGOTCHI_NOMEN_CLIENT_SECRET]}" ]] && nomen_secret=',"client_secret_env":"DEVAGOTCHI_NOMEN_CLIENT_SECRET"'
+  providers+=("{\"kind\":\"oidc\",\"name\":\"nomen\",\"label\":\"Shippin\",\"issuer\":\"${nomen%/}\",\"client_id_env\":\"DEVAGOTCHI_NOMEN_CLIENT_ID\"$nomen_secret}")
+fi
+email=null
+if [[ -n "$email_from" ]]; then
+  need DEVAGOTCHI_SMTP_URL --email-from
+  password=""
+  [[ -n "${secret[DEVAGOTCHI_SMTP_PASSWORD]}" ]] && password=',"password_env":"DEVAGOTCHI_SMTP_PASSWORD"'
+  email="{\"smtp_url_env\":\"DEVAGOTCHI_SMTP_URL\"$password,\"from\":\"$email_from\"}"
+fi
+json_list() { local IFS=,; printf '[%s]' "$*"; }
+proxy_list=()
+IFS=, read -ra given <<<"$proxies"
+for proxy in "${given[@]}"; do [[ -n "$proxy" ]] && proxy_list+=("\"$proxy\""); done
 umask 077
 cat > "$dir/.env.new" <<EOF
 # Written by install.sh; re-run it to change these. update.sh moves DEVAGOTCHI_IMAGE.
@@ -124,7 +204,18 @@ DEVAGOTCHI_EDGE=$edge
 DEVAGOTCHI_PG_SHARED_BUFFERS=${shared}MB
 DEVAGOTCHI_PG_EFFECTIVE_CACHE_SIZE=${cache}MB
 DEVAGOTCHI_IMAGE=${pinned:-$track}
+# The hub: one owner's or hosted, its operators, its sign-ins (install.sh's flags).
+DEVAGOTCHI_HUB_TENANCY=${tenancy:-single}
+DEVAGOTCHI_HUB_OPERATORS=$operators
+DEVAGOTCHI_HUB_PROVIDERS='$(json_list "${providers[@]}")'
+DEVAGOTCHI_HUB_EMAIL='$email'
 EOF
+if [[ ${#proxy_list[@]} -gt 0 ]]; then
+  printf "DEVAGOTCHI_HUB_TRUSTED_PROXIES='%s'\n" "$(json_list "${proxy_list[@]}")" >> "$dir/.env.new"
+fi
+for name in "${secret_names[@]}"; do
+  if [[ -n "${secret[$name]}" ]]; then printf "%s='%s'\n" "$name" "${secret[$name]}" >> "$dir/.env.new"; fi
+done
 mv "$dir/.env.new" "$dir/.env"
 umask 022
 
@@ -184,6 +275,9 @@ EOF
 fi
 
 say "the hub is up at $public_url (here: http://$hub_bind:$hub_port)"
+if [[ "$tenancy" == multi ]]; then
+  printf '\nA hosted hub: nobody claims it. Each person gets an account the first time their AI connects to %s/mcp.\n' "$public_url"
+fi
 claim=$(cd "$dir" && docker compose logs --no-color hub 2>/dev/null | grep -o "https\?://[^ ]*/claim#[0-9A-Z-]*" | tail -1 || true)
 if [[ -n "$claim" ]]; then
   printf '\nClaim it: open this link on the phone or computer that will hold your passkey.\n  %s\n(It works until you make the passkey; `cd %s && docker compose restart hub` prints a new one.)\n' "$claim" "$dir"

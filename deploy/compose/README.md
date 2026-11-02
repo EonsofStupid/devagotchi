@@ -44,6 +44,14 @@ image pinned by digest, and two systemd timers:
   to the digest that ran before, which migrations allow (they only add; an older hub opens a
   newer store), and never tries that digest again. What it did is in
   `journalctl -u devagotchi-hub-update`.
+- The deploy files come from GitHub with the image. Each image GitHub builds is labelled
+  with its commit (`org.opencontainers.image.revision`); `update.sh` fetches `compose.yaml`,
+  `update.sh` and `backup.sh` of that same commit from
+  `raw.githubusercontent.com/<DEVAGOTCHI_REPO>/<commit>/deploy/compose/`, checks the new
+  `compose.yaml` reads with this `.env`, and swaps them in with the image. If the hub is not
+  healthy, the files that ran before go back with the image that ran before. When the
+  commit's files cannot be fetched, the image is not deployed. `.env` records the commit in
+  `DEVAGOTCHI_REVISION`. An image with no commit label (a local build) keeps the files here.
 - `devagotchi-hub-backup.timer`, nightly, runs `backup.sh`: a `pg_dump` of the database and
   an archive of the state volume in `/var/backups/devagotchi-hub`, 14 days kept. Copy them
   off the host too.
@@ -55,6 +63,33 @@ sudo ./install.sh --domain hub.example.com --edge external   # behind a proxy yo
 ```
 
 In a Proxmox VE container, `deploy/proxmox/hub-up.sh` runs it for you (`deploy/proxmox/README.md`).
+
+### A hosted hub, its operators and its sign-ins
+
+```bash
+sudo ./install.sh --domain app.example.com --rp-id example.com --tenancy multi \
+  --operators email:you@example.com \
+  --google --github --nomen https://id.shippin.cloud \
+  --email-from "Devagotchi <sign-in@example.com>" \
+  --env-file /root/hub-secrets.env
+```
+
+- `--tenancy multi` makes it a hosted hub: everyone who connects gets an account and a tenant
+  of their own, and it is never claimed (`crates/hub/README.md`, "A hosted hub").
+- `--operators` lists who operates it: `email:<verified address>`, or `<provider>:<subject>`
+  (`google:`, `github:`, `nomen:`). Their sign-in is the hub's owner, with no claim. A
+  one-owner hub with operators set is not claimed either.
+- `--google`, `--github`, `--nomen ISSUER` (Sign in with Shippin) and `--email-from ADDRESS`
+  (sign-in links by email) turn on each way in. Their ids and secrets come from `--env-file`
+  (KEY=VALUE lines, as the secret store writes them) or from the environment, and stay in
+  `.env` (0600): `DEVAGOTCHI_GOOGLE_CLIENT_ID`/`_SECRET`, `DEVAGOTCHI_GITHUB_CLIENT_ID`/`_SECRET`,
+  `DEVAGOTCHI_NOMEN_CLIENT_ID` (and `_SECRET` if its application has one),
+  `DEVAGOTCHI_SMTP_URL` (`smtps://user@host:465` or `smtp://user@host:587`, never a password)
+  and `DEVAGOTCHI_SMTP_PASSWORD`. A re-run keeps the values `.env` already has for any it is
+  not given. Each provider's redirect URI is `https://<domain>/auth/provider/<google|github|nomen>/callback`.
+- `--trusted-proxies` lists the proxies whose `X-Forwarded-For` names the client (for the
+  per-address limit on new accounts); by default private and loopback addresses, which is
+  what Caddy on the compose network and an edge proxy on the host are.
 
 ## The image
 
@@ -96,6 +131,12 @@ Everything is in `.env`; each has a default (`.env.example` lists them).
 | `DEVAGOTCHI_PG_EFFECTIVE_CACHE_SIZE` | `768MB` | About three quarters of the box's RAM. |
 | `DEVAGOTCHI_PG_MAX_CONNECTIONS` | `50` | Each hub instance holds up to 16. |
 | `DEVAGOTCHI_PG_SLOW_MS` | `500` | Statements slower than this are logged. |
+| `DEVAGOTCHI_HUB_TENANCY` | `single` | `multi` for a hosted hub. |
+| `DEVAGOTCHI_HUB_OPERATORS` | (none) | Who operates the hub, comma separated. |
+| `DEVAGOTCHI_HUB_PROVIDERS` | `[]` | The sign-in providers, JSON as `auth.providers` takes it; `install.sh` writes it from `--google`, `--github`, `--nomen`. |
+| `DEVAGOTCHI_HUB_EMAIL` | `null` | The email link's mail server, JSON as `auth.email` takes it; `install.sh` writes it from `--email-from`. |
+| `DEVAGOTCHI_HUB_TRUSTED_PROXIES` | private and loopback | JSON list of addresses or CIDR ranges. |
+| `DEVAGOTCHI_GOOGLE_CLIENT_ID` … `DEVAGOTCHI_SMTP_PASSWORD` | (none) | The providers' ids and secrets, from the secret store. |
 
 The defaults suit a 2 GB box. The hub's own settings (token lifetimes, the claim code's, limits) go in its config,
 `configs.hub` in `compose.yaml` (`crates/hub/README.md`).
@@ -106,7 +147,7 @@ The defaults suit a 2 GB box. The hub's own settings (token lifetimes, the claim
 docker compose ps                                   # all three healthy or running
 curl -fsS https://<DEVAGOTCHI_DOMAIN>/healthz       # the hub answers
 docker compose logs hub | grep "ready"              # "devagotchi hub ready: … auth hub accounts"
-curl -fsS https://<DEVAGOTCHI_DOMAIN>/ | grep -o "Claim this hub\|Sign in" | head -1
+curl -fsS https://<DEVAGOTCHI_DOMAIN>/ | grep -o "Claim this hub\|Get started\|Sign in" | head -1
 ```
 
 CI brings this stack up on every change (`hub (compose)` in `.github/workflows/ci.yml`) and

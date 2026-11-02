@@ -17,7 +17,19 @@
 #    Caddy in the container does, the hub takes its old port on loopback; otherwise the
 #    stack's own Caddy takes ports 80 and 443.
 # 5. Checks https://<domain> answers from the new hub, and prints the claim link: open it on
-#    the phone that will hold the owner's passkey.
+#    the phone that will hold the owner's passkey. A hosted hub (--tenancy multi) has none:
+#    each person's account is made the first time their AI connects.
+#
+# A hosted hub, as app.devagotchi.com runs:
+#
+#   ... | bash -s -- --ct 110 --domain app.devagotchi.com --rp-id devagotchi.com \
+#     --tenancy multi --operators email:you@example.com --google --github \
+#     --nomen https://id.shippin.cloud --email-from "Devagotchi <sign-in@devagotchi.com>" \
+#     --env-file /root/devagotchi-hub.env
+#
+# --env-file is a file on this host (from the secret store) with the providers' ids and
+# secrets as KEY=VALUE lines; it is pushed into the container 0600 for install.sh and
+# removed once it ran. install.sh keeps them in the stack's .env (0600).
 #
 # Re-running it is safe. Nothing here names a host, a domain or a container of its own.
 set -euo pipefail
@@ -34,11 +46,16 @@ hub-up.sh --ct ID --domain NAME [options]
                      where the deploy files come from (default EonsofStupid/devagotchi at
                      main, resolved to one commit)
   --no-snapshot      do not snapshot the container first
+A hosted hub, who runs it, and how people sign in (passed to install.sh; see its --help):
+  --tenancy single|multi  --operators LIST  --trusted-proxies LIST
+  --google  --github  --nomen ISSUER  --email-from ADDRESS
+  --env-file FILE    on this host: the providers' ids and secrets (KEY=VALUE lines)
 EOF
 }
 
 ct="" domain="" rp_id="" port=8787 track=ghcr.io/eonsofstupid/devagotchi:main
 repo=EonsofStupid/devagotchi ref=main snapshot=true
+hosted=() env_file="" tenancy=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ct) ct="$2"; shift 2 ;;
@@ -49,6 +66,10 @@ while [[ $# -gt 0 ]]; do
     --repo) repo="$2"; shift 2 ;;
     --ref) ref="$2"; shift 2 ;;
     --no-snapshot) snapshot=false; shift ;;
+    --tenancy) tenancy="$2"; hosted+=("$1" "$2"); shift 2 ;;
+    --operators|--trusted-proxies|--nomen|--email-from) hosted+=("$1" "$2"); shift 2 ;;
+    --google|--github) hosted+=("$1"); shift ;;
+    --env-file) env_file="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "hub-up.sh: unknown option $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -66,6 +87,7 @@ die() { printf '\nhub-up.sh: %s\n(log: %s)\n' "$*" "$log_file" >&2; exit 1; }
 [[ "$ct" =~ ^[0-9]+$ ]] || die "--ct $ct is not a container id"
 [[ "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || die "--domain $domain is not a host name"
 [[ "$port" =~ ^[0-9]+$ ]] || die "--port is a number"
+[[ -z "$env_file" || -f "$env_file" ]] || die "--env-file $env_file is not a file on this host"
 [[ $EUID -eq 0 || -n "${DEVAGOTCHI_ALLOW_NONROOT:-}" ]] || die "run it as root on the Proxmox host"
 for tool in pct curl; do
   command -v "$tool" >/dev/null || die "$tool is missing: this runs on a Proxmox VE host"
@@ -150,8 +172,18 @@ in_ct mkdir -p /root/devagotchi-hub-src
 for file in install.sh compose.yaml update.sh backup.sh; do
   pct push "$ct" "$work/$file" "/root/devagotchi-hub-src/$file" --perms 0755
 done
+# The providers' secrets: into the container for install.sh alone (0600), and out again
+# whatever install.sh does.
+secrets=()
+if [[ -n "$env_file" ]]; then
+  pct push "$ct" "$env_file" /root/devagotchi-hub-src/secrets.env --perms 0600
+  secrets=(--env-file /root/devagotchi-hub-src/secrets.env)
+fi
+installed=0
 in_ct /root/devagotchi-hub-src/install.sh --domain "$domain" --rp-id "$rp_id" --edge "$edge" \
-  --hub-bind "$bind" --hub-port "$port" --track "$track"
+  --hub-bind "$bind" --hub-port "$port" --track "$track" "${hosted[@]}" "${secrets[@]}" || installed=$?
+[[ -n "$env_file" ]] && in_ct rm -f /root/devagotchi-hub-src/secrets.env
+[[ $installed -eq 0 ]] || die "install.sh did not finish in CT $ct"
 
 # 5. The public name answers from the new hub.
 head_of() { grep -o '"head":"[0-9a-f]*"' | head -1; }
@@ -173,6 +205,9 @@ note "https://$domain is the new hub"
 claim=$(in_ct sh -c 'cd /opt/devagotchi-hub && docker compose logs --no-color hub 2>/dev/null' \
   | grep -o "https://$domain/claim#[0-9A-Z-]*" | tail -1 || true)
 say "done: CT $ct runs the hub, deploys each new image of $track by itself, and backs up nightly"
+if [[ "$tenancy" == multi ]]; then
+  printf '\nA hosted hub: nobody claims it. Each person'"'"'s account is made the first time their AI connects to https://%s/mcp.\n' "$domain"
+fi
 if [[ -n "$claim" ]]; then
   printf '\nClaim it now: open this link on the phone or computer that will hold your passkey.\n  %s\n' "$claim"
 fi

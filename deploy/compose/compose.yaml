@@ -74,6 +74,20 @@ services:
     # container, which a read-only one refuses.)
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
+    # One owner's hub (single, the default) or a hosted one (multi), who operates it, and
+    # the sign-in providers' ids and secrets: from .env, which install.sh writes 0600 from
+    # its flags and the secret store. Empty means unset. Nothing here names a provider.
+    environment:
+      DEVAGOTCHI_HUB_TENANCY: ${DEVAGOTCHI_HUB_TENANCY:-}
+      DEVAGOTCHI_HUB_OPERATORS: ${DEVAGOTCHI_HUB_OPERATORS:-}
+      DEVAGOTCHI_GOOGLE_CLIENT_ID: ${DEVAGOTCHI_GOOGLE_CLIENT_ID:-}
+      DEVAGOTCHI_GOOGLE_CLIENT_SECRET: ${DEVAGOTCHI_GOOGLE_CLIENT_SECRET:-}
+      DEVAGOTCHI_GITHUB_CLIENT_ID: ${DEVAGOTCHI_GITHUB_CLIENT_ID:-}
+      DEVAGOTCHI_GITHUB_CLIENT_SECRET: ${DEVAGOTCHI_GITHUB_CLIENT_SECRET:-}
+      DEVAGOTCHI_NOMEN_CLIENT_ID: ${DEVAGOTCHI_NOMEN_CLIENT_ID:-}
+      DEVAGOTCHI_NOMEN_CLIENT_SECRET: ${DEVAGOTCHI_NOMEN_CLIENT_SECRET:-}
+      DEVAGOTCHI_SMTP_URL: ${DEVAGOTCHI_SMTP_URL:-}
+      DEVAGOTCHI_SMTP_PASSWORD: ${DEVAGOTCHI_SMTP_PASSWORD:-}
     restart: unless-stopped
 
   caddy:
@@ -93,12 +107,24 @@ services:
 configs:
   hub:
     # The hub's config (crates/hub/README.md). Its own accounts and passkeys; its store is
-    # the Postgres above, over the shared socket.
+    # the Postgres above, over the shared socket. The sign-in providers and the email link
+    # (DEVAGOTCHI_HUB_PROVIDERS, DEVAGOTCHI_HUB_EMAIL: JSON install.sh writes from its
+    # flags) name environment variables above for their ids and secrets, never the values.
+    # Behind a proxy, the client's address comes from X-Forwarded-For only when a proxy in
+    # DEVAGOTCHI_HUB_TRUSTED_PROXIES added it (default: private and loopback addresses).
     content: |
       {
         "listen": "0.0.0.0:8787",
         "public_url": "${DEVAGOTCHI_PUBLIC_URL:-https://${DEVAGOTCHI_DOMAIN:?set DEVAGOTCHI_DOMAIN in .env}}",
-        "auth": { "mode": "hub", "rp_id": "${DEVAGOTCHI_RP_ID:-${DEVAGOTCHI_DOMAIN}}" },
+        "auth": {
+          "mode": "hub",
+          "rp_id": "${DEVAGOTCHI_RP_ID:-${DEVAGOTCHI_DOMAIN}}",
+          "providers": ${DEVAGOTCHI_HUB_PROVIDERS:-[]},
+          "email": ${DEVAGOTCHI_HUB_EMAIL:-null}
+        },
+        "tenancy": {
+          "trusted_proxies": ${DEVAGOTCHI_HUB_TRUSTED_PROXIES:-["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "::1", "fc00::/7"]}
+        },
         "storage": { "url": "postgres://devagotchi@localhost/devagotchi?host=/var/run/postgresql" },
         "brokers": [],
         "grants": []
