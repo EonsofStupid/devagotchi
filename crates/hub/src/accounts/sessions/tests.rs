@@ -71,14 +71,14 @@ async fn a_session_names_its_account_and_is_stored_only_as_a_hash() {
         assert_eq!(session.account.name, "Jesse");
         assert_eq!(session.created_at, T);
 
-        let stored: Vec<String> = sqlx::query_scalar("SELECT hash FROM sessions")
-            .fetch_all(accounts.store().pool())
+        let stored: Vec<String> = sqlx::query_scalar("SELECT hash FROM auth_sessions")
+            .fetch_all(accounts.store().admin())
             .await
             .unwrap();
         assert_eq!(stored, vec![hash(&token)]);
         if store.store.backend() == Backend::Sqlite {
             sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-                .execute(accounts.store().pool())
+                .execute(accounts.store().admin())
                 .await
                 .unwrap();
             let mut raw = std::fs::read(store.dir.path().join("accounts.sqlite3")).unwrap();
@@ -156,9 +156,9 @@ async fn removing_a_passkey_or_disabling_the_account_ends_its_sessions() {
         assert_eq!(who(&accounts, &by_phone, T + 1).await, None);
         assert_eq!(who(&accounts, &by_laptop, T + 1).await, Some(A.to_string()));
 
-        sqlx::query("UPDATE accounts SET disabled_at = 1 WHERE id = $1")
+        sqlx::query("UPDATE auth_accounts SET disabled_at = 1 WHERE id = $1")
             .bind(A)
-            .execute(accounts.store().pool())
+            .execute(accounts.store().admin())
             .await
             .unwrap();
         assert_eq!(who(&accounts, &by_laptop, T + 1).await, None);
@@ -228,9 +228,9 @@ async fn an_account_keeps_a_bounded_number_of_sessions() {
             None,
             "least recently used"
         );
-        let held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sessions WHERE account = $1")
+        let held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM auth_sessions WHERE account = $1")
             .bind(A)
-            .fetch_one(accounts.store().pool())
+            .fetch_one(accounts.store().admin())
             .await
             .unwrap();
         assert_eq!(held, MAX_SESSIONS_PER_ACCOUNT as i64);
@@ -244,20 +244,20 @@ async fn a_link_adds_the_passkey_and_opens_its_session_together_or_not_at_all() 
         // The session cannot be stored: nothing else happens either.
         let (refuse, allow) = match store.store.backend() {
             Backend::Sqlite => (
-                "CREATE TRIGGER no_sessions BEFORE INSERT ON sessions
+                "CREATE TRIGGER no_sessions BEFORE INSERT ON auth_sessions
                  BEGIN SELECT RAISE(ABORT, 'no sessions'); END;",
                 "DROP TRIGGER no_sessions;",
             ),
             Backend::Postgres => (
                 "CREATE FUNCTION no_sessions() RETURNS trigger LANGUAGE plpgsql AS
                    $$ BEGIN RAISE EXCEPTION 'no sessions'; END $$;
-                 CREATE TRIGGER no_sessions BEFORE INSERT ON sessions
+                 CREATE TRIGGER no_sessions BEFORE INSERT ON auth_sessions
                    FOR EACH ROW EXECUTE FUNCTION no_sessions();",
-                "DROP TRIGGER no_sessions ON sessions; DROP FUNCTION no_sessions();",
+                "DROP TRIGGER no_sessions ON auth_sessions; DROP FUNCTION no_sessions();",
             ),
         };
         sqlx::raw_sql(refuse)
-            .execute(accounts.store().pool())
+            .execute(accounts.store().admin())
             .await
             .unwrap();
         assert!(
@@ -279,7 +279,7 @@ async fn a_link_adds_the_passkey_and_opens_its_session_together_or_not_at_all() 
         );
         assert!(accounts.passkeys_of(A).await.unwrap().is_empty());
         sqlx::raw_sql(allow)
-            .execute(accounts.store().pool())
+            .execute(accounts.store().admin())
             .await
             .unwrap();
         let token = accounts

@@ -17,6 +17,7 @@
 //! An email counts only when the provider says it verified it; only verified ones are kept.
 
 use super::*;
+use crate::store::Lookup;
 
 /// A sign-in a provider proved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,12 +80,25 @@ pub struct Linked {
     pub email: Option<String>,
 }
 
+/// The account a sign-in is linked to, inside the caller's transaction, which is scoped to
+/// that account's tenant (to none when the sign-in is linked to nothing).
 async fn linked_account(
+    accounts: &Accounts,
     connection: &mut AnyConnection,
     proven: &Proven,
 ) -> Result<Option<Account>, Failed> {
+    if accounts
+        .enter(
+            connection,
+            Lookup::Identity(&proven.provider, &proven.subject),
+        )
+        .await?
+        .is_none()
+    {
+        return Ok(None);
+    }
     let found: Option<String> =
-        sqlx::query("SELECT account FROM identities WHERE provider = $1 AND subject = $2")
+        sqlx::query("SELECT account FROM auth_identities WHERE provider = $1 AND subject = $2")
             .bind(&proven.provider)
             .bind(&proven.subject)
             .fetch_optional(&mut *connection)
@@ -104,14 +118,15 @@ async fn insert_identity(
     now: u64,
 ) -> Result<(), Failed> {
     sqlx::query(
-        "INSERT INTO identities (provider, subject, account, email, created_at)
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO auth_identities (provider, subject, account, email, created_at, tenant_id)
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(&proven.provider)
     .bind(&proven.subject)
     .bind(&account.id)
     .bind(proven.email())
     .bind(secs(now))
+    .bind(&account.tenant)
     .execute(&mut *connection)
     .await?;
     tenants::record_in(
@@ -184,7 +199,7 @@ impl Accounts {
         let name = proven.account_name();
         let email = proven.email();
         transaction!(&self.store, |connection| {
-            if let Some(account) = linked_account(connection, proven).await? {
+            if let Some(account) = linked_account(self, connection, proven).await? {
                 if account.disabled_at.is_some() {
                     return Err(account_disabled(&account.id).into());
                 }
@@ -193,11 +208,13 @@ impl Accounts {
             if operator {
                 // The operator, with no claim: the owner, made in the home tenant if the
                 // hub has none yet.
-                let owner = match owner_in(connection).await? {
+                let owner = match self.owner_in(connection).await? {
                     Some(owner) => owner,
                     None => {
                         let home = tenants::home_in(connection).await?;
-                        create_in(connection, &fresh_id, &name, true, &home, now).await?;
+                        self.store.scope(connection, &home).await?;
+                        create_in(&self.store, connection, &fresh_id, &name, true, &home, now)
+                            .await?;
                         account_in(connection, &fresh_id).await?.ok_or_else(|| {
                             BridgeError::new("account_store", "the owner vanished")
                         })?
@@ -206,9 +223,16 @@ impl Accounts {
                 insert_identity(connection, &owner, proven, now).await?;
                 return Ok(owner);
             }
-            if let Some(email) = &email {
+            // The first account a verified email reached, in whichever tenant holds it.
+            if let Some(email) = &email
+                && self
+                    .enter(connection, Lookup::Email(email))
+                    .await?
+                    .is_some()
+            {
                 let reached: Option<String> = sqlx::query(
-                    "SELECT account FROM identities WHERE email = $1 ORDER BY created_at LIMIT 1",
+                    "SELECT account FROM auth_identities WHERE email = $1
+                     ORDER BY created_at, provider, subject LIMIT 1",
                 )
                 .bind(email)
                 .fetch_optional(&mut *connection)
@@ -224,6 +248,10 @@ impl Accounts {
                 }
             }
             if let Some(current) = current
+                && self
+                    .enter(connection, Lookup::Account(current))
+                    .await?
+                    .is_some()
                 && let Some(account) = account_in(connection, current).await?
                 && account.provisional
                 && account.disabled_at.is_none()
@@ -242,11 +270,12 @@ impl Accounts {
                 )
                 .into());
             }
-            sqlx::query("INSERT INTO tenants (id, created_at) VALUES ($1, $2)")
+            sqlx::query("INSERT INTO tenancy_tenants (id, created_at) VALUES ($1, $2)")
                 .bind(&fresh_tenant)
                 .bind(secs(now))
                 .execute(&mut *connection)
                 .await?;
+            self.store.scope(connection, &fresh_tenant).await?;
             tenants::record_in(
                 connection,
                 &fresh_tenant,
@@ -256,7 +285,16 @@ impl Accounts {
                 now,
             )
             .await?;
-            create_in(connection, &fresh_id, &name, false, &fresh_tenant, now).await?;
+            create_in(
+                &self.store,
+                connection,
+                &fresh_id,
+                &name,
+                false,
+                &fresh_tenant,
+                now,
+            )
+            .await?;
             let account = account_in(connection, &fresh_id)
                 .await?
                 .ok_or_else(|| BridgeError::new("account_store", "the account vanished"))?;
@@ -272,13 +310,16 @@ impl Accounts {
         let operator = self.is_operator_identity(proven);
         let now = now_secs();
         transaction!(&self.store, |connection| {
+            // Linked already, in any tenant? Then this transaction is scoped to the account's.
+            let linked = linked_account(self, connection, proven).await?;
+            self.enter(connection, Lookup::Account(account)).await?;
             let holder = account_in(connection, account)
                 .await?
                 .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
             if holder.disabled_at.is_some() {
                 return Err(account_disabled(account).into());
             }
-            if let Some(linked) = linked_account(connection, proven).await? {
+            if let Some(linked) = linked {
                 return if linked.id == holder.id {
                     Ok(holder)
                 } else {
@@ -306,8 +347,11 @@ impl Accounts {
 
     /// The sign-ins linked to `account`.
     pub async fn identities_of(&self, account: &str) -> BridgeResult<Vec<Linked>> {
-        let mut connection = self.store.read().await?;
-        sqlx::query("SELECT provider, email FROM identities WHERE account = $1 ORDER BY created_at")
+        transaction!(&self.store, |connection| {
+            self.enter(connection, Lookup::Account(account)).await?;
+            Ok(sqlx::query(
+                "SELECT provider, email FROM auth_identities WHERE account = $1 ORDER BY created_at",
+            )
             .bind(account)
             .fetch_all(&mut *connection)
             .await
@@ -319,8 +363,8 @@ impl Accounts {
                             email: row.try_get(1)?,
                         })
                     })
-                    .collect()
-            })
-            .map_err(store_error)
+                    .collect::<Result<Vec<_>, sqlx::Error>>()
+            })?)
+        })
     }
 }

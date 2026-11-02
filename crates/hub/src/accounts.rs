@@ -26,7 +26,7 @@ use sqlx::{AnyConnection, Row, any::AnyRow};
 
 use crate::{
     devices::now_secs,
-    store::{Failed, Store, secs, store_error, transaction, unsecs},
+    store::{Failed, Lookup, Store, secs, store_error, transaction, unsecs},
 };
 
 pub use passkey::{Alg, Asserted, NewCredential};
@@ -202,13 +202,13 @@ fn passkey_row(row: &AnyRow) -> Result<Passkey, sqlx::Error> {
 
 macro_rules! account_columns {
     () => {
-        "id, name, owner, disabled_at, tenant, provisional, last_active"
+        "id, name, owner, disabled_at, tenant_id, provisional, last_active"
     };
 }
 /// The account's columns as `a.…`, for a join (`account_row` reads them first).
 macro_rules! account_columns_a {
     () => {
-        "a.id, a.name, a.owner, a.disabled_at, a.tenant, a.provisional, a.last_active"
+        "a.id, a.name, a.owner, a.disabled_at, a.tenant_id, a.provisional, a.last_active"
     };
 }
 pub(crate) use account_columns_a;
@@ -219,7 +219,7 @@ macro_rules! passkey_columns {
 }
 
 async fn account_in(connection: &mut AnyConnection, id: &str) -> Result<Option<Account>, sqlx::Error> {
-    sqlx::query(concat!("SELECT ", account_columns!(), " FROM accounts WHERE id = $1"))
+    sqlx::query(concat!("SELECT ", account_columns!(), " FROM auth_accounts WHERE id = $1"))
         .bind(id)
         .fetch_optional(&mut *connection)
         .await?
@@ -229,7 +229,7 @@ async fn account_in(connection: &mut AnyConnection, id: &str) -> Result<Option<A
 }
 
 async fn owner_in(connection: &mut AnyConnection) -> Result<Option<Account>, sqlx::Error> {
-    sqlx::query(concat!("SELECT ", account_columns!(), " FROM accounts WHERE owner = 1"))
+    sqlx::query(concat!("SELECT ", account_columns!(), " FROM auth_accounts WHERE owner = 1"))
         .fetch_optional(&mut *connection)
         .await?
         .as_ref()
@@ -238,6 +238,20 @@ async fn owner_in(connection: &mut AnyConnection) -> Result<Option<Account>, sql
 }
 
 impl Accounts {
+    /// Scope this transaction to the tenant `lookup` leads to, and say which; `None` (and
+    /// nothing visible) when no row has that key (`store.rs`, row-level security).
+    pub(crate) async fn enter(
+        &self,
+        connection: &mut AnyConnection,
+        lookup: Lookup<'_>,
+    ) -> Result<Option<String>, sqlx::Error> {
+        let tenant = self.store.tenant_of(connection, lookup).await?;
+        self.store
+            .scope(connection, tenant.as_deref().unwrap_or(""))
+            .await?;
+        Ok(tenant)
+    }
+
     /// The accounts in `store`. Its challenge key is made the first time, once, whichever
     /// hub instance gets there first.
     pub async fn open(store: Store) -> BridgeResult<Self> {
@@ -246,15 +260,15 @@ impl Accounts {
         let now = now_secs();
         let key = transaction!(&store, |connection| {
                 sqlx::query(
-                    "INSERT INTO secrets (name, value) VALUES ('challenge_key', $1)
+                    "INSERT INTO hub_secrets (name, value) VALUES ('challenge_key', $1)
                      ON CONFLICT (name) DO NOTHING",
                 )
                 .bind(&fresh)
                 .execute(&mut *connection)
                 .await?;
-                // Every account belongs to a tenant: the hub's first one, made now if
-                // missing, takes in the accounts made before tenants existed.
-                tenants::settle_in(connection, &home, now).await?;
+                // Every account belongs to a tenant: the hub's first one is made now if
+                // missing (migration 0007 put the accounts made before tenants in it).
+                tenants::settle_in(&store, connection, &home, now).await?;
                 Ok(stored_key(connection).await?)
             })?;
         Ok(Self {
@@ -317,7 +331,8 @@ impl Accounts {
         let now = now_secs();
         let tenant = transaction!(&self.store, |connection| {
                 let tenant = tenants::home_in(connection).await?;
-                create_in(connection, id, name, owner, &tenant, now).await?;
+                self.store.scope(connection, &tenant).await?;
+                create_in(&self.store, connection, id, name, owner, &tenant, now).await?;
                 Ok(tenant)
             })?;
         Ok(Account {
@@ -357,13 +372,28 @@ impl Accounts {
     }
 
     pub async fn get(&self, id: &str) -> BridgeResult<Option<Account>> {
-        let mut connection = self.store.read().await?;
-        account_in(&mut connection, id).await.map_err(store_error)
+        transaction!(&self.store, |connection| {
+            if self.enter(connection, Lookup::Account(id)).await?.is_none() {
+                return Ok(None);
+            }
+            Ok(account_in(connection, id).await?)
+        })
     }
 
     pub async fn owner(&self) -> BridgeResult<Option<Account>> {
-        let mut connection = self.store.read().await?;
-        owner_in(&mut connection).await.map_err(store_error)
+        transaction!(&self.store, |connection| { Ok(self.owner_in(connection).await?) })
+    }
+
+    /// The hub's owner, inside the caller's transaction, which is scoped to the owner's
+    /// tenant from here on (to nothing when there is no owner).
+    pub(crate) async fn owner_in(
+        &self,
+        connection: &mut AnyConnection,
+    ) -> Result<Option<Account>, sqlx::Error> {
+        if self.enter(connection, Lookup::Owner).await?.is_none() {
+            return Ok(None);
+        }
+        owner_in(connection).await
     }
 
     /// Issue a one-time link for `account`: 256 random bits the store draws itself. Only
@@ -412,6 +442,7 @@ impl Accounts {
     ) -> BridgeResult<String> {
         let token = link_token(random);
         transaction!(&self.store, |connection| {
+                self.enter(connection, Lookup::Account(account)).await?;
                 issue_in(connection, purpose, account, &token, now, replaces).await
             })?;
         Ok(token)
@@ -424,10 +455,13 @@ impl Accounts {
         purpose: LinkPurpose,
         token: &str,
     ) -> BridgeResult<(String, bool)> {
-        let mut connection = self.store.read().await?;
-        live_link(&mut connection, purpose, token, now_secs())
-            .await
-            .map(|live| (live.account, live.replaces))
+        let now = now_secs();
+        transaction!(&self.store, |connection| {
+            self.enter(connection, Lookup::Link(&hash(token))).await?;
+            Ok(live_link(connection, purpose, token, now)
+                .await
+                .map(|live| (live.account, live.replaces))?)
+        })
     }
 
     /// The account a link is for, when it is unused and unexpired. Checking does not
@@ -442,10 +476,12 @@ impl Accounts {
         token: &str,
         now: u64,
     ) -> BridgeResult<String> {
-        let mut connection = self.store.read().await?;
-        live_link(&mut connection, purpose, token, now)
-            .await
-            .map(|live| live.account)
+        transaction!(&self.store, |connection| {
+            self.enter(connection, Lookup::Link(&hash(token))).await?;
+            Ok(live_link(connection, purpose, token, now)
+                .await
+                .map(|live| live.account)?)
+        })
     }
 
     /// Store a passkey for `account`, as `verify_registration` returned it, on the
@@ -536,6 +572,13 @@ impl Accounts {
                     )
                     .await?;
                 spend_challenge(connection, &mac, issued, now).await?;
+                // Taken anywhere on the hub, whichever tenant holds it.
+                let taken = self
+                    .store
+                    .tenant_of(connection, Lookup::Passkey(&credential.id))
+                    .await?
+                    .is_some();
+                self.enter(connection, Lookup::Account(account)).await?;
                 let holder = account_in(connection, account)
                     .await?
                     .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
@@ -544,7 +587,7 @@ impl Accounts {
                 }
                 if let Some(session) = signed_in {
                     let theirs = sqlx::query(
-                        "SELECT 1 FROM sessions WHERE hash = $1 AND account = $2 AND expires_at > $3",
+                        "SELECT 1 FROM auth_sessions WHERE hash = $1 AND account = $2 AND expires_at > $3",
                     )
                     .bind(hash(session))
                     .bind(account)
@@ -572,14 +615,14 @@ impl Accounts {
                     // A replacing link takes the account back: every other passkey goes, and
                     // with them every session they opened.
                     if live.replaces {
-                        sqlx::query("DELETE FROM passkeys WHERE account = $1")
+                        sqlx::query("DELETE FROM auth_passkeys WHERE account = $1")
                             .bind(account)
                             .execute(&mut *connection)
                             .await?;
                     }
                     // Spent only if still unspent: two uses racing cannot both count.
                     let spent = sqlx::query(
-                        "UPDATE links SET used_at = $1 WHERE hash = $2 AND used_at IS NULL",
+                        "UPDATE auth_links SET used_at = $1 WHERE hash = $2 AND used_at IS NULL",
                     )
                     .bind(secs(now))
                     .bind(hash(token))
@@ -595,16 +638,11 @@ impl Accounts {
                     }
                     // A link spent ends the account's other sessions: whoever had them, the
                     // passkey registered now is how the account signs in from here.
-                    sqlx::query("DELETE FROM sessions WHERE account = $1")
+                    sqlx::query("DELETE FROM auth_sessions WHERE account = $1")
                         .bind(account)
                         .execute(&mut *connection)
                         .await?;
                 }
-                let taken = sqlx::query("SELECT 1 FROM passkeys WHERE id = $1")
-                    .bind(&credential.id)
-                    .fetch_optional(&mut *connection)
-                    .await?
-                    .is_some();
                 if taken {
                     return Err(BridgeError::new(
                         "passkey_exists",
@@ -613,8 +651,8 @@ impl Accounts {
                     .into());
                 }
                 sqlx::query(
-                    "INSERT INTO passkeys (id, account, label, public_key, alg, sign_count, backup_eligible, created_at)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                    "INSERT INTO auth_passkeys (id, account, label, public_key, alg, sign_count, backup_eligible, created_at, tenant_id)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
                 )
                 .bind(&credential.id)
                 .bind(account)
@@ -624,6 +662,7 @@ impl Accounts {
                 .bind(i64::from(credential.sign_count))
                 .bind(i64::from(credential.backup_eligible))
                 .bind(secs(now))
+                .bind(&holder.tenant)
                 .execute(&mut *connection)
                 .await?;
                 // An account made on first connect is secured by its first passkey.
@@ -631,7 +670,7 @@ impl Accounts {
                 // The owner can sign in now: the hub is claimed, and no claim code it
                 // printed works any more (`claim.rs`).
                 if holder.owner {
-                    sqlx::query("DELETE FROM claim_codes")
+                    sqlx::query("DELETE FROM auth_claim_codes")
                         .execute(&mut *connection)
                         .await?;
                 }
@@ -639,6 +678,7 @@ impl Accounts {
                     Some(random) => Ok(Some(
                         sessions::insert_session(
                             connection,
+                            &holder.tenant,
                             account,
                             Some(&credential.id),
                             random,
@@ -717,14 +757,14 @@ impl Accounts {
                 if now.saturating_add(CHALLENGE_TTL_SECS) > spent_horizon(connection).await? {
                     return Ok(false);
                 }
-                sqlx::query("UPDATE secrets SET value = $1 WHERE name = 'challenge_key'")
+                sqlx::query("UPDATE hub_secrets SET value = $1 WHERE name = 'challenge_key'")
                     .bind(key.to_vec())
                     .execute(&mut *connection)
                     .await?;
-                sqlx::query("DELETE FROM secrets WHERE name = 'spent_horizon'")
+                sqlx::query("DELETE FROM hub_secrets WHERE name = 'spent_horizon'")
                     .execute(&mut *connection)
                     .await?;
-                sqlx::query("DELETE FROM spent_challenges")
+                sqlx::query("DELETE FROM hub_spent_challenges")
                     .execute(&mut *connection)
                     .await?;
                 Ok(true)
@@ -740,27 +780,29 @@ impl Accounts {
     }
 
     pub async fn passkey(&self, id: &[u8]) -> BridgeResult<Option<Passkey>> {
-        let mut connection = self.store.read().await?;
-        sqlx::query(concat!("SELECT ", passkey_columns!(), " FROM passkeys WHERE id = $1"))
-            .bind(id)
-            .fetch_optional(&mut *connection)
-            .await
-            .and_then(|row| row.as_ref().map(passkey_row).transpose())
-            .map_err(store_error)
+        transaction!(&self.store, |connection| {
+            self.enter(connection, Lookup::Passkey(id)).await?;
+            Ok(sqlx::query(concat!("SELECT ", passkey_columns!(), " FROM auth_passkeys WHERE id = $1"))
+                .bind(id)
+                .fetch_optional(&mut *connection)
+                .await
+                .and_then(|row| row.as_ref().map(passkey_row).transpose())?)
+        })
     }
 
     pub async fn passkeys_of(&self, account: &str) -> BridgeResult<Vec<Passkey>> {
-        let mut connection = self.store.read().await?;
-        sqlx::query(concat!(
-            "SELECT ",
-            passkey_columns!(),
-            " FROM passkeys WHERE account = $1 ORDER BY created_at, id"
-        ))
-        .bind(account)
-        .fetch_all(&mut *connection)
-        .await
-        .and_then(|rows| rows.iter().map(passkey_row).collect())
-        .map_err(store_error)
+        transaction!(&self.store, |connection| {
+            self.enter(connection, Lookup::Account(account)).await?;
+            Ok(sqlx::query(concat!(
+                "SELECT ",
+                passkey_columns!(),
+                " FROM auth_passkeys WHERE account = $1 ORDER BY created_at, id"
+            ))
+            .bind(account)
+            .fetch_all(&mut *connection)
+            .await
+            .and_then(|rows| rows.iter().map(passkey_row).collect::<Result<Vec<_>, _>>())?)
+        })
     }
 
     /// Record a sign-in, as `check_sign_in` returned it. In one transaction: the challenge
@@ -781,12 +823,13 @@ impl Accounts {
                     .check_challenge(connection, Ceremony::SignIn, None, &asserted.challenge, now)
                     .await?;
                 spend_challenge(connection, &mac, issued, now).await?;
+                self.enter(connection, Lookup::Passkey(&asserted.id)).await?;
                 let not_here =
                     || BridgeError::new("invalid_passkey", "this passkey is not registered here");
                 let passkey = sqlx::query(concat!(
                     "SELECT ",
                     passkey_columns!(),
-                    " FROM passkeys WHERE id = $1"
+                    " FROM auth_passkeys WHERE id = $1"
                 ))
                 .bind(&asserted.id)
                 .fetch_optional(&mut *connection)
@@ -824,7 +867,7 @@ impl Accounts {
                     // opened may be the copy's holder, so they end. The challenge stays
                     // spent, so the same answer cannot do it again. This is committed, and
                     // the refusal returned after.
-                    sqlx::query("DELETE FROM sessions WHERE passkey = $1")
+                    sqlx::query("DELETE FROM auth_sessions WHERE passkey = $1")
                         .bind(&asserted.id)
                         .execute(&mut *connection)
                         .await?;
@@ -833,7 +876,7 @@ impl Accounts {
                         "this passkey's counter went backwards: it may have been copied",
                     )));
                 }
-                sqlx::query("UPDATE passkeys SET sign_count = $1, last_used_at = $2 WHERE id = $3")
+                sqlx::query("UPDATE auth_passkeys SET sign_count = $1, last_used_at = $2 WHERE id = $3")
                     .bind(i64::from(count))
                     .bind(secs(now))
                     .bind(&asserted.id)
@@ -848,12 +891,13 @@ impl Accounts {
     #[allow(dead_code)] // the account page (32a-3)
     pub async fn remove_passkey(&self, account: &str, id: &[u8]) -> BridgeResult<bool> {
         transaction!(&self.store, |connection| {
-                let held: i64 = sqlx::query("SELECT COUNT(*) FROM passkeys WHERE account = $1")
+                self.enter(connection, Lookup::Account(account)).await?;
+                let held: i64 = sqlx::query("SELECT COUNT(*) FROM auth_passkeys WHERE account = $1")
                     .bind(account)
                     .fetch_one(&mut *connection)
                     .await?
                     .try_get(0)?;
-                let theirs = sqlx::query("SELECT 1 FROM passkeys WHERE id = $1 AND account = $2")
+                let theirs = sqlx::query("SELECT 1 FROM auth_passkeys WHERE id = $1 AND account = $2")
                     .bind(id)
                     .bind(account)
                     .fetch_optional(&mut *connection)
@@ -869,7 +913,7 @@ impl Accounts {
                     )
                     .into());
                 }
-                sqlx::query("DELETE FROM passkeys WHERE id = $1 AND account = $2")
+                sqlx::query("DELETE FROM auth_passkeys WHERE id = $1 AND account = $2")
                     .bind(id)
                     .bind(account)
                     .execute(&mut *connection)
@@ -907,8 +951,10 @@ fn check_name<'a>(id: &str, name: &'a str) -> BridgeResult<&'a str> {
     Ok(name)
 }
 
-/// `create`, inside a transaction the caller holds, in `tenant`; `name` already checked.
+/// `create`, inside a transaction the caller holds, scoped to `tenant`; `name` already
+/// checked. Ids and the owner are one per hub, so those checks look across tenants.
 async fn create_in(
+    store: &Store,
     connection: &mut AnyConnection,
     id: &str,
     name: &str,
@@ -916,20 +962,17 @@ async fn create_in(
     tenant: &str,
     now: u64,
 ) -> Result<(), Failed> {
-    if account_in(connection, id).await?.is_some() {
+    if store.tenant_of(connection, Lookup::Account(id)).await?.is_some() {
         return Err(BridgeError::new("account_exists", format!("{id} already exists")).into());
     }
     if owner {
-        let has_owner = sqlx::query("SELECT 1 FROM accounts WHERE owner = 1")
-            .fetch_optional(&mut *connection)
-            .await?
-            .is_some();
+        let has_owner = store.tenant_of(connection, Lookup::Owner).await?.is_some();
         if has_owner {
             return Err(BridgeError::new("owner_exists", "this hub already has an owner").into());
         }
     }
     sqlx::query(
-        "INSERT INTO accounts (id, name, owner, created_at, tenant) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO auth_accounts (id, name, owner, created_at, tenant_id) VALUES ($1, $2, $3, $4, $5)",
     )
     .bind(id)
     .bind(name)
@@ -965,7 +1008,7 @@ async fn issue_in(
         return Err(BridgeError::new("not_owner", format!("{account} is not the owner")).into());
     }
     sqlx::query(
-        "UPDATE links SET used_at = $1 WHERE purpose = $2 AND account = $3 AND used_at IS NULL",
+        "UPDATE auth_links SET used_at = $1 WHERE purpose = $2 AND account = $3 AND used_at IS NULL",
     )
     .bind(secs(now))
     .bind(purpose.as_str())
@@ -973,14 +1016,15 @@ async fn issue_in(
     .execute(&mut *connection)
     .await?;
     sqlx::query(
-        "INSERT INTO links (hash, purpose, account, expires_at, replaces)
-         VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO auth_links (hash, purpose, account, expires_at, replaces, tenant_id)
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(hash(token))
     .bind(purpose.as_str())
     .bind(account)
     .bind(secs(now + LINK_TTL_SECS))
     .bind(i64::from(replaces))
+    .bind(&holder.tenant)
     .execute(&mut *connection)
     .await?;
     Ok(())
@@ -1015,26 +1059,26 @@ async fn spend_challenge(
         return Err(invalid_ceremony().into());
     }
     let cleared: Option<i64> =
-        sqlx::query("SELECT MAX(expires_at) FROM spent_challenges WHERE expires_at <= $1")
+        sqlx::query("SELECT MAX(expires_at) FROM hub_spent_challenges WHERE expires_at <= $1")
             .bind(secs(now))
             .fetch_one(&mut *connection)
             .await?
             .try_get(0)?;
     if let Some(cleared) = cleared.map(unsecs).filter(|cleared| *cleared > horizon) {
         sqlx::query(
-            "INSERT INTO secrets (name, value) VALUES ('spent_horizon', $1)
+            "INSERT INTO hub_secrets (name, value) VALUES ('spent_horizon', $1)
              ON CONFLICT (name) DO UPDATE SET value = excluded.value",
         )
         .bind(cleared.to_be_bytes().to_vec())
         .execute(&mut *connection)
         .await?;
-        sqlx::query("DELETE FROM spent_challenges WHERE expires_at <= $1")
+        sqlx::query("DELETE FROM hub_spent_challenges WHERE expires_at <= $1")
             .bind(secs(cleared))
             .execute(&mut *connection)
             .await?;
     }
     let fresh = sqlx::query(
-        "INSERT INTO spent_challenges (mac, expires_at) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        "INSERT INTO hub_spent_challenges (mac, expires_at) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
     .bind(mac)
     .bind(secs(expires))
@@ -1050,7 +1094,7 @@ async fn spend_challenge(
 
 /// The challenge key the store holds: 32 bytes, or the store is damaged.
 async fn stored_key(connection: &mut AnyConnection) -> Result<hmac::Key, Failed> {
-    let key: Vec<u8> = sqlx::query("SELECT value FROM secrets WHERE name = 'challenge_key'")
+    let key: Vec<u8> = sqlx::query("SELECT value FROM hub_secrets WHERE name = 'challenge_key'")
         .fetch_one(&mut *connection)
         .await?
         .try_get(0)?;
@@ -1067,7 +1111,7 @@ async fn stored_key(connection: &mut AnyConnection) -> Result<hmac::Key, Failed>
 /// The latest expiry of the spent challenges cleared so far (0 before any). A value that is
 /// not 8 bytes stops ceremonies rather than switching the protection off.
 async fn spent_horizon(connection: &mut AnyConnection) -> Result<u64, Failed> {
-    let stored: Option<Vec<u8>> = sqlx::query("SELECT value FROM secrets WHERE name = 'spent_horizon'")
+    let stored: Option<Vec<u8>> = sqlx::query("SELECT value FROM hub_secrets WHERE name = 'spent_horizon'")
         .fetch_optional(&mut *connection)
         .await?
         .map(|row| row.try_get(0))
@@ -1099,7 +1143,7 @@ async fn live_link(
 ) -> BridgeResult<LiveLink> {
     let invalid = || BridgeError::new("invalid_link", "this link is used, expired or unknown");
     let row = sqlx::query(
-        "SELECT account, expires_at, used_at, replaces FROM links WHERE hash = $1 AND purpose = $2",
+        "SELECT account, expires_at, used_at, replaces FROM auth_links WHERE hash = $1 AND purpose = $2",
     )
     .bind(hash(token))
     .bind(purpose.as_str())

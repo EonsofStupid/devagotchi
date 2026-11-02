@@ -49,8 +49,8 @@ async fn claim(accounts: &Accounts, code: &str, now: u64) -> BridgeResult<(Accou
 }
 
 async fn rows(accounts: &Accounts) -> i64 {
-    sqlx::query("SELECT COUNT(*) FROM claim_codes")
-        .fetch_one(accounts.store().pool())
+    sqlx::query("SELECT COUNT(*) FROM auth_claim_codes")
+        .fetch_one(accounts.store().admin())
         .await
         .unwrap()
         .try_get::<i64, _>(0)

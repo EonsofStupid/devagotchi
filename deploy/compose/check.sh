@@ -31,9 +31,14 @@ status=$(curl_hub -o /dev/null -w '%{http_code}' -X POST "$url/mcp")
 ok "/mcp without a token is refused"
 
 tables=$(docker compose exec -T postgres psql -h /var/run/postgresql -U devagotchi -d devagotchi -tAc \
-  "SELECT count(*) FROM information_schema.tables WHERE table_name IN ('accounts', 'passkeys', 'oauth_tokens')")
-[[ "$tables" == 3 ]] || fail "the hub's tables are in the stack's Postgres (found $tables of 3)"
-ok "the hub's tables are in the stack's Postgres"
+  "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'devagotchi'
+     AND table_name IN ('auth_accounts', 'auth_passkeys', 'oauth_tokens')")
+[[ "$tables" == 3 ]] || fail "the hub's tables are in the devagotchi schema of the stack's Postgres (found $tables of 3)"
+ok "the hub's tables are in the devagotchi schema of the stack's Postgres"
+health=$(curl_hub "$url/healthz") || fail "/healthz answers"
+[[ "$health" == *'"tenant_rls":true'* ]] \
+  || fail "the hub's queries are held to row-level security ($health)"
+ok "the hub's queries are held to row-level security (the devagotchi_hub role)"
 
 # Unclaimed (CI never makes a passkey): the hub printed a claim link to its log when it
 # started (the newest one works), its landing page offers the claim, and the code from the
@@ -65,9 +70,9 @@ link=$(docker compose exec -T hub devagotchi hub owner --state-dir /var/lib/deva
 ok "the owner command still prints a one-time link (not shown)"
 
 owners=$(docker compose exec -T postgres psql -h /var/run/postgresql -U devagotchi -d devagotchi -tAc \
-  "SELECT count(*) FROM accounts WHERE owner = 1")
+  "SELECT count(*) FROM devagotchi.auth_accounts WHERE owner = 1")
 [[ "$owners" == 1 ]] || fail "the owner's account is in Postgres (found $owners)"
 codes=$(docker compose exec -T postgres psql -h /var/run/postgresql -U devagotchi -d devagotchi -tAc \
-  "SELECT count(*) FROM claim_codes")
+  "SELECT count(*) FROM devagotchi.auth_claim_codes")
 [[ "$codes" == 1 ]] || fail "one claim code, as a hash, is in Postgres (found $codes)"
 ok "the owner's account and one hashed claim code are in Postgres"

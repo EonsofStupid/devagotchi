@@ -5,15 +5,17 @@
 //! their own). Optional tenant hostnames are `<slug>.<tenancy.domain>`.
 //!
 //! - The hub's first tenant is `home`: its operator's (Jesse is tenant #1 on the hosted
-//!   hub), and on a one-owner hub (`tenancy.mode single`) the only one. A store from before
-//!   tenants takes every account into it when the hub opens it (`settle_in`).
+//!   hub), and on a one-owner hub (`tenancy.mode single`) the only one. Migration 0007 put
+//!   the accounts made before tenants in it; `settle_in` makes it on a new store.
+//! - On Postgres the database keeps tenants apart (`store.rs`, row-level security): every
+//!   query here runs in a transaction scoped to one tenant and sees no other tenant's rows.
 //! - On a hosted hub (`tenancy.mode multi`) the first connect from an AI client or the CLI
 //!   makes the person's account and its own tenant on the spot (`start_unsecured`): the
 //!   anonymous-then-link account upgrade (an anonymous account first, a real sign-in linked
 //!   to it later, as Firebase's anonymous accounts and Auth0's account linking do). Until
 //!   then it is `provisional`, held to `tenancy.unsecured` (per-tenant quotas) and ends
 //!   once unused for `idle_days`.
-//! - Each tenant's events are a hash chain of their own (`tenant_events`): one tenant's
+//! - Each tenant's events are a hash chain of their own (`tenancy_events`): one tenant's
 //!   history is never mixed into another's, and an edit to any row breaks the chain after it.
 
 use std::net::IpAddr;
@@ -63,44 +65,54 @@ pub fn tag(tenant: &str) -> String {
     format!("t{hex}")
 }
 
-/// Make the home tenant (`home`, a new id) if there is none, and put every account without
-/// a tenant into it. Inside the caller's transaction; idempotent.
+/// Make the home tenant (`home`, a new id) if there is none. Inside the caller's
+/// transaction; idempotent. Migration 0007 put the accounts made before tenants in it
+/// (making it when there was none); its chain says so the first time the hub opens it.
 pub(super) async fn settle_in(
+    store: &Store,
     connection: &mut AnyConnection,
     home: &str,
     now: u64,
 ) -> Result<(), Failed> {
     sqlx::query(
-        "INSERT INTO tenants (id, home, created_at) SELECT $1, 1, $2
-         WHERE NOT EXISTS (SELECT 1 FROM tenants WHERE home = 1)",
+        "INSERT INTO tenancy_tenants (id, home, created_at) SELECT $1, 1, $2
+         WHERE NOT EXISTS (SELECT 1 FROM tenancy_tenants WHERE home = 1)",
     )
     .bind(home)
     .bind(secs(now))
     .execute(&mut *connection)
     .await?;
     let home = home_in(connection).await?;
-    let moved = sqlx::query("UPDATE accounts SET tenant = $1 WHERE tenant IS NULL")
+    store.scope(connection, &home).await?;
+    let told = sqlx::query("SELECT 1 FROM tenancy_events WHERE tenant_id = $1 LIMIT 1")
         .bind(&home)
-        .execute(&mut *connection)
+        .fetch_optional(&mut *connection)
         .await?
-        .rows_affected();
-    if moved > 0 {
-        record_in(
-            connection,
-            &home,
-            "hub",
-            "tenant.accounts_joined",
-            &format!("{moved} accounts from before tenants"),
-            now,
-        )
-        .await?;
+        .is_some();
+    if !told {
+        let joined: i64 = sqlx::query("SELECT COUNT(*) FROM auth_accounts WHERE tenant_id = $1")
+            .bind(&home)
+            .fetch_one(&mut *connection)
+            .await?
+            .try_get(0)?;
+        if joined > 0 {
+            record_in(
+                connection,
+                &home,
+                "hub",
+                "tenant.accounts_joined",
+                &format!("{joined} accounts from before tenants"),
+                now,
+            )
+            .await?;
+        }
     }
     Ok(())
 }
 
 /// The home tenant's id.
 pub(super) async fn home_in(connection: &mut AnyConnection) -> Result<String, Failed> {
-    Ok(sqlx::query("SELECT id FROM tenants WHERE home = 1")
+    Ok(sqlx::query("SELECT id FROM tenancy_tenants WHERE home = 1")
         .fetch_one(&mut *connection)
         .await?
         .try_get(0)?)
@@ -142,7 +154,7 @@ fn event_hash(
 }
 
 /// Add an event to `tenant`'s chain, inside the caller's transaction (so it is recorded
-/// exactly when what it records is).
+/// exactly when what it records is), which is scoped to `tenant`.
 pub(super) async fn record_in(
     connection: &mut AnyConnection,
     tenant: &str,
@@ -152,7 +164,7 @@ pub(super) async fn record_in(
     now: u64,
 ) -> Result<(), Failed> {
     let head = sqlx::query(
-        "SELECT seq, hash FROM tenant_events WHERE tenant = $1 ORDER BY seq DESC LIMIT 1",
+        "SELECT seq, hash FROM tenancy_events WHERE tenant_id = $1 ORDER BY seq DESC LIMIT 1",
     )
     .bind(tenant)
     .fetch_optional(&mut *connection)
@@ -164,7 +176,7 @@ pub(super) async fn record_in(
     let at = secs(now);
     let hash = event_hash(&prev, tenant, seq, at, actor, event, detail);
     sqlx::query(
-        "INSERT INTO tenant_events (tenant, seq, at, actor, event, detail, prev_hash, hash)
+        "INSERT INTO tenancy_events (tenant_id, seq, at, actor, event, detail, prev_hash, hash)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(tenant)
@@ -190,7 +202,7 @@ pub(super) async fn touch(
     if !account.provisional || account.last_active.is_some_and(|at| now < at + 60) {
         return Ok(());
     }
-    sqlx::query("UPDATE accounts SET last_active = $1 WHERE id = $2")
+    sqlx::query("UPDATE auth_accounts SET last_active = $1 WHERE id = $2")
         .bind(secs(now))
         .bind(&account.id)
         .execute(&mut *connection)
@@ -208,7 +220,7 @@ pub(super) async fn secure_in(
     now: u64,
 ) -> Result<(), Failed> {
     let secured =
-        sqlx::query("UPDATE accounts SET provisional = 0 WHERE id = $1 AND provisional = 1")
+        sqlx::query("UPDATE auth_accounts SET provisional = 0 WHERE id = $1 AND provisional = 1")
             .bind(&account.id)
             .execute(&mut *connection)
             .await?
@@ -271,13 +283,7 @@ impl Accounts {
 
     /// The hub's first tenant: its operator's, and a one-owner hub's only one.
     pub async fn home_tenant(&self) -> BridgeResult<String> {
-        let mut connection = self.store.read().await?;
-        home_in(&mut connection)
-            .await
-            .map_err(|failed| match failed {
-                Failed::Store(error) => store_error(error),
-                Failed::Refused(error) => error,
-            })
+        transaction!(&self.store, |connection| { home_in(connection).await })
     }
 
     /// Make a person's account and its own tenant, the first time they connect an AI client
@@ -328,15 +334,16 @@ impl Accounts {
         let cap = i64::from(self.tenancy.max_unsecured);
         let idle = secs(self.tenancy.unsecured.idle_secs());
         let token = transaction!(&self.store, |connection| {
-            sqlx::query("DELETE FROM account_starts WHERE at <= $1")
+            sqlx::query("DELETE FROM auth_account_starts WHERE at <= $1")
                 .bind(secs(now) - 3600)
                 .execute(&mut *connection)
                 .await?;
-            let recent: i64 = sqlx::query("SELECT COUNT(*) FROM account_starts WHERE source = $1")
-                .bind(&source)
-                .fetch_one(&mut *connection)
-                .await?
-                .try_get(0)?;
+            let recent: i64 =
+                sqlx::query("SELECT COUNT(*) FROM auth_account_starts WHERE source = $1")
+                    .bind(&source)
+                    .fetch_one(&mut *connection)
+                    .await?
+                    .try_get(0)?;
             if recent >= per_hour {
                 return Err(BridgeError::new(
                     "rate_limited",
@@ -344,14 +351,11 @@ impl Accounts {
                 )
                 .into());
             }
-            let live: i64 = sqlx::query(
-                "SELECT COUNT(*) FROM accounts
-                 WHERE provisional = 1 AND disabled_at IS NULL AND last_active > $1",
-            )
-            .bind(secs(now) - idle)
-            .fetch_one(&mut *connection)
-            .await?
-            .try_get(0)?;
+            // Across every tenant: the one count the hub's role may make (`store.rs`).
+            let live = self
+                .store
+                .live_unsecured(connection, secs(now) - idle)
+                .await?;
             if live >= cap {
                 return Err(BridgeError::new(
                     "capacity",
@@ -359,16 +363,17 @@ impl Accounts {
                 )
                 .into());
             }
-            sqlx::query("INSERT INTO account_starts (source, at) VALUES ($1, $2)")
+            sqlx::query("INSERT INTO auth_account_starts (source, at) VALUES ($1, $2)")
                 .bind(&source)
                 .bind(secs(now))
                 .execute(&mut *connection)
                 .await?;
-            sqlx::query("INSERT INTO tenants (id, created_at) VALUES ($1, $2)")
+            sqlx::query("INSERT INTO tenancy_tenants (id, created_at) VALUES ($1, $2)")
                 .bind(&tenant)
                 .bind(secs(now))
                 .execute(&mut *connection)
                 .await?;
+            self.store.scope(connection, &tenant).await?;
             record_in(
                 connection,
                 &tenant,
@@ -379,7 +384,7 @@ impl Accounts {
             )
             .await?;
             sqlx::query(
-                "INSERT INTO accounts (id, name, owner, created_at, tenant, provisional, last_active)
+                "INSERT INTO auth_accounts (id, name, owner, created_at, tenant_id, provisional, last_active)
                  VALUES ($1, $2, 0, $3, $4, 1, $3)",
             )
             .bind(&id)
@@ -398,7 +403,8 @@ impl Accounts {
             )
             .await?;
             let token =
-                sessions::insert_session(connection, &id, None, session_random, now).await?;
+                sessions::insert_session(connection, &tenant, &id, None, session_random, now)
+                    .await?;
             record_in(
                 connection,
                 &tenant,
@@ -447,48 +453,51 @@ impl Accounts {
     ) -> BridgeResult<()> {
         let now = now_secs();
         transaction!(&self.store, |connection| {
+            self.store.scope(connection, tenant).await?;
             record_in(connection, tenant, actor, event, detail, now).await
         })
     }
 
     /// The latest `limit` events of `tenant`, newest first.
     pub async fn events(&self, tenant: &str, limit: u32) -> BridgeResult<Vec<Event>> {
-        let mut connection = self.store.read().await?;
-        sqlx::query(
-            "SELECT seq, at, actor, event, detail FROM tenant_events
-             WHERE tenant = $1 ORDER BY seq DESC LIMIT $2",
-        )
-        .bind(tenant)
-        .bind(i64::from(limit))
-        .fetch_all(&mut *connection)
-        .await
-        .and_then(|rows| {
-            rows.iter()
-                .map(|row| {
-                    Ok(Event {
-                        seq: unsecs(row.try_get(0)?),
-                        at: unsecs(row.try_get(1)?),
-                        actor: row.try_get(2)?,
-                        event: row.try_get(3)?,
-                        detail: row.try_get(4)?,
+        transaction!(&self.store, |connection| {
+            self.store.scope(connection, tenant).await?;
+            Ok(sqlx::query(
+                "SELECT seq, at, actor, event, detail FROM tenancy_events
+                 WHERE tenant_id = $1 ORDER BY seq DESC LIMIT $2",
+            )
+            .bind(tenant)
+            .bind(i64::from(limit))
+            .fetch_all(&mut *connection)
+            .await
+            .and_then(|rows| {
+                rows.iter()
+                    .map(|row| {
+                        Ok(Event {
+                            seq: unsecs(row.try_get(0)?),
+                            at: unsecs(row.try_get(1)?),
+                            actor: row.try_get(2)?,
+                            event: row.try_get(3)?,
+                            detail: row.try_get(4)?,
+                        })
                     })
-                })
-                .collect()
+                    .collect::<Result<Vec<_>, sqlx::Error>>()
+            })?)
         })
-        .map_err(store_error)
     }
 
     /// Whether `tenant`'s chain is whole: every row's hash is its own, over the row before.
     pub async fn chain_intact(&self, tenant: &str) -> BridgeResult<bool> {
-        let mut connection = self.store.read().await?;
-        let rows = sqlx::query(
-            "SELECT seq, at, actor, event, detail, prev_hash, hash FROM tenant_events
-             WHERE tenant = $1 ORDER BY seq",
-        )
-        .bind(tenant)
-        .fetch_all(&mut *connection)
-        .await
-        .map_err(store_error)?;
+        let rows = transaction!(&self.store, |connection| {
+            self.store.scope(connection, tenant).await?;
+            Ok(sqlx::query(
+                "SELECT seq, at, actor, event, detail, prev_hash, hash FROM tenancy_events
+                 WHERE tenant_id = $1 ORDER BY seq",
+            )
+            .bind(tenant)
+            .fetch_all(&mut *connection)
+            .await?)
+        })?;
         let mut prev = "0".repeat(64);
         let mut expected = 1i64;
         for row in rows {

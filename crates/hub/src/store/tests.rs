@@ -74,7 +74,7 @@ async fn writers_racing_on_one_row_each_count_once() {
             "CREATE TABLE counter (id BIGINT PRIMARY KEY, n BIGINT NOT NULL);
              INSERT INTO counter (id, n) VALUES (1, 0);",
         )
-        .execute(&store.pool)
+        .execute(&store.admin)
         .await
         .unwrap();
         let mut tasks = Vec::new();
@@ -110,7 +110,7 @@ async fn a_refusal_rolls_back_what_the_transaction_did() {
     for test in stores().await {
         let store = test.store;
         sqlx::raw_sql("CREATE TABLE notes (body TEXT NOT NULL)")
-            .execute(&store.pool)
+            .execute(&store.admin)
             .await
             .unwrap();
         let refused: BridgeResult<()> = transaction!(&store, |connection| {
@@ -155,9 +155,9 @@ async fn both_backends_have_the_same_tables_and_columns() {
     }
     let rows = sqlx::query(
         "SELECT table_name::text, column_name::text FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name NOT LIKE '\\_%'",
+         WHERE table_schema = 'devagotchi'",
     )
-    .fetch_all(&postgres.store.pool)
+    .fetch_all(&postgres.store.admin)
     .await
     .unwrap();
     let pg: BTreeSet<(String, String)> = rows
@@ -202,9 +202,9 @@ fn schema_names_need_no_quoting_and_are_never_postgress_own() {
 
 #[tokio::test]
 async fn on_postgres_the_hubs_tables_live_in_their_own_schema() {
-    // A database something else also uses (a Supabase project): the hub's tables, its
-    // migration record included, go in their own schema, made if missing; `public` stays
-    // as it was.
+    // A database something else also uses (a Supabase project): the hub's tables go in the
+    // `devagotchi` schema under their prefixed names, its migration record in the schema
+    // configured (made if missing); `public` stays as it was.
     let Some(url) = empty_postgres().await else {
         return;
     };
@@ -212,9 +212,9 @@ async fn on_postgres_the_hubs_tables_live_in_their_own_schema() {
     let mut placed = std::collections::BTreeMap::<String, Vec<String>>::new();
     let rows = sqlx::query(
         "SELECT table_schema::text, table_name::text FROM information_schema.tables
-         WHERE table_schema IN ('public', 'devagotchi_hub') ORDER BY 1, 2",
+         WHERE table_schema IN ('public', 'devagotchi_hub', 'devagotchi') ORDER BY 1, 2",
     )
-    .fetch_all(&store.pool)
+    .fetch_all(&store.admin)
     .await
     .unwrap();
     for row in rows {
@@ -224,8 +224,18 @@ async fn on_postgres_the_hubs_tables_live_in_their_own_schema() {
             .push(row.get::<String, _>(1));
     }
     assert!(!placed.contains_key("public"), "{placed:?}");
-    let hub = &placed["devagotchi_hub"];
-    for table in ["accounts", "passkeys", "sessions", "oauth_tokens", "_sqlx_migrations"] {
+    assert_eq!(placed["devagotchi_hub"], ["_sqlx_migrations"], "{placed:?}");
+    let hub = &placed["devagotchi"];
+    for table in [
+        "auth_accounts",
+        "auth_passkeys",
+        "auth_sessions",
+        "auth_identities",
+        "oauth_tokens",
+        "tenancy_tenants",
+        "tenancy_events",
+        "hub_secrets",
+    ] {
         assert!(hub.iter().any(|t| t == table), "{table} in {hub:?}");
     }
     // Opened again, as a second hub instance would: the schema and its tables are found.
@@ -268,7 +278,7 @@ async fn a_store_a_newer_hub_migrated_still_opens() {
         .bind(true)
         .bind(vec![0_u8; 48])
         .bind(0_i64)
-        .execute(store.store.pool())
+        .execute(store.store.admin())
         .await
         .unwrap();
         Store::open(&store.url).await.expect("an older hub opens a newer store");

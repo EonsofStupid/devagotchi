@@ -28,7 +28,7 @@ async fn sql(accounts: &Accounts, query: &'static str, binds: &[Option<i64>]) {
     for bind in binds {
         query = query.bind(*bind);
     }
-    query.execute(accounts.store().pool()).await.unwrap();
+    query.execute(accounts.store().admin()).await.unwrap();
 }
 
 const A: &str = "acct_aaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -159,15 +159,15 @@ async fn owner_link_is_one_time_and_stored_only_as_a_hash() {
             );
         }
         // The store holds the link's hash and never the link.
-        let stored: Vec<String> = sqlx::query_scalar("SELECT hash FROM links")
-            .fetch_all(accounts.store().pool())
+        let stored: Vec<String> = sqlx::query_scalar("SELECT hash FROM auth_links")
+            .fetch_all(accounts.store().admin())
             .await
             .unwrap();
         assert_eq!(stored, vec![hash(&token)]);
         if store.store.backend() == Backend::Sqlite {
             // Everything SQLite wrote, the write-ahead log included.
             sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-                .execute(accounts.store().pool())
+                .execute(accounts.store().admin())
                 .await
                 .unwrap();
             let file = store.dir.path().join("accounts.sqlite3");
@@ -382,8 +382,8 @@ async fn challenges_are_the_hubs_own_bound_to_their_purpose_and_spent_once() {
             nonce[..2].copy_from_slice(&i.to_be_bytes());
             accounts.challenge_at(Ceremony::SignIn, None, nonce, 100);
         }
-        let spent: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM spent_challenges")
-            .fetch_one(accounts.store().pool())
+        let spent: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM hub_spent_challenges")
+            .fetch_one(accounts.store().admin())
             .await
             .unwrap();
         assert_eq!(spent, 2);
@@ -456,9 +456,9 @@ async fn a_damaged_horizon_is_refused_not_ignored() {
     for (_store, accounts) in stores().await {
         accounts.create(A, "Jesse", true).await.unwrap();
         seed(&accounts, A, 1, "synced").await.unwrap();
-        sqlx::query("INSERT INTO secrets (name, value) VALUES ('spent_horizon', $1)")
+        sqlx::query("INSERT INTO hub_secrets (name, value) VALUES ('spent_horizon', $1)")
             .bind(vec![1u8])
-            .execute(accounts.store().pool())
+            .execute(accounts.store().admin())
             .await
             .unwrap();
         assert_eq!(
@@ -567,13 +567,13 @@ async fn signing_in_moves_the_counter_forward_once_and_only_for_a_live_account()
             "invalid_ceremony"
         );
         // A disabled account, a removed passkey, or one never registered: no sign-in.
-        sql(&accounts, "UPDATE accounts SET disabled_at = $1 WHERE id = 'acct_aaaaaaaaaaaaaaaaaaaaaaaaaa'", &[Some(1)]).await;
+        sql(&accounts, "UPDATE auth_accounts SET disabled_at = $1 WHERE id = 'acct_aaaaaaaaaaaaaaaaaaaaaaaaaa'", &[Some(1)]).await;
         assert_eq!(go(2, 0, A).await, Err("account_disabled".into()));
         assert_eq!(
             seed(&accounts, A, 5, "new").await.unwrap_err().code,
             "account_disabled"
         );
-        sql(&accounts, "UPDATE accounts SET disabled_at = $1 WHERE id = 'acct_aaaaaaaaaaaaaaaaaaaaaaaaaa'", &[None]).await;
+        sql(&accounts, "UPDATE auth_accounts SET disabled_at = $1 WHERE id = 'acct_aaaaaaaaaaaaaaaaaaaaaaaaaa'", &[None]).await;
         assert!(accounts.remove_passkey(A, &[2; 16]).await.unwrap());
         assert_eq!(go(2, 0, A).await, Err("invalid_passkey".into()));
         assert_eq!(go(9, 1, A).await, Err("invalid_passkey".into()));
@@ -677,9 +677,9 @@ async fn a_sqlite_store_is_the_hubs_alone_new_or_found() {
 #[tokio::test]
 async fn a_challenge_key_that_is_not_32_bytes_stops_the_store() {
     for (store, accounts) in stores().await {
-        sqlx::query("UPDATE secrets SET value = $1 WHERE name = 'challenge_key'")
+        sqlx::query("UPDATE hub_secrets SET value = $1 WHERE name = 'challenge_key'")
             .bind(Vec::<u8>::new())
-            .execute(accounts.store().pool())
+            .execute(accounts.store().admin())
             .await
             .unwrap();
         drop(accounts);

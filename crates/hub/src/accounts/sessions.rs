@@ -37,13 +37,14 @@ impl Accounts {
         now: u64,
     ) -> BridgeResult<String> {
         transaction!(&self.store, |connection| {
+                self.enter(connection, crate::store::Lookup::Account(account)).await?;
                 let holder = account_in(connection, account)
                     .await?
                     .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
                 if holder.disabled_at.is_some() {
                     return Err(account_disabled(account).into());
                 }
-                insert_session(connection, account, passkey, random, now).await
+                insert_session(connection, &holder.tenant, account, passkey, random, now).await
             })
     }
 
@@ -58,19 +59,25 @@ impl Accounts {
             return Ok(None);
         }
         let key = hash(token);
-        let mut connection = self.store.read().await?;
-        let found = sqlx::query(concat!(
-            "SELECT ",
-            account_columns_a!(),
-            ", s.created_at, s.last_seen, s.expires_at
-             FROM sessions s JOIN accounts a ON a.id = s.account
-             WHERE s.hash = $1"
-        ))
-        .bind(&key)
-        .fetch_optional(&mut *connection)
-        .await
-        .and_then(|row| {
-            row.map(|row| -> Result<(Session, u64), sqlx::Error> {
+        transaction!(&self.store, |connection| {
+            if self
+                .enter(connection, crate::store::Lookup::Session(&key))
+                .await?
+                .is_none()
+            {
+                return Ok(None);
+            }
+            let found = sqlx::query(concat!(
+                "SELECT ",
+                account_columns_a!(),
+                ", s.created_at, s.last_seen, s.expires_at
+                 FROM auth_sessions s JOIN auth_accounts a ON a.id = s.account
+                 WHERE s.hash = $1"
+            ))
+            .bind(&key)
+            .fetch_optional(&mut *connection)
+            .await?
+            .map(|row| -> Result<(Session, u64), sqlx::Error> {
                 Ok((
                     Session {
                         account: account_row(&row)?,
@@ -80,40 +87,35 @@ impl Accounts {
                     unsecs(row.try_get(9)?),
                 ))
             })
-            .transpose()
+            .transpose()?;
+            let Some((mut session, expires_at)) = found else {
+                return Ok(None);
+            };
+            // Past its limit, idle too long, on a disabled account, or on an account nobody
+            // secured that went unused too long: it has ended, for good.
+            if now >= expires_at
+                || now >= session.last_seen.saturating_add(SESSION_IDLE_SECS)
+                || session.account.disabled_at.is_some()
+                || self.lapsed(&session.account, now)
+            {
+                sqlx::query("DELETE FROM auth_sessions WHERE hash = $1")
+                    .bind(&key)
+                    .execute(&mut *connection)
+                    .await?;
+                return Ok(None);
+            }
+            // Written at most once a minute per session, not on every page.
+            if now >= session.last_seen + 60 {
+                sqlx::query("UPDATE auth_sessions SET last_seen = $1 WHERE hash = $2")
+                    .bind(secs(now))
+                    .bind(&key)
+                    .execute(&mut *connection)
+                    .await?;
+                session.last_seen = now;
+                tenants::touch(connection, &mut session.account, now).await?;
+            }
+            Ok(Some(session))
         })
-        .map_err(store_error)?;
-        let Some((mut session, expires_at)) = found else {
-            return Ok(None);
-        };
-        // Past its limit, idle too long, on a disabled account, or on an account nobody
-        // secured that went unused too long: it has ended, for good.
-        if now >= expires_at
-            || now >= session.last_seen.saturating_add(SESSION_IDLE_SECS)
-            || session.account.disabled_at.is_some()
-            || self.lapsed(&session.account, now)
-        {
-            sqlx::query("DELETE FROM sessions WHERE hash = $1")
-                .bind(&key)
-                .execute(&mut *connection)
-                .await
-                .map_err(store_error)?;
-            return Ok(None);
-        }
-        // Written at most once a minute per session, not on every page.
-        if now >= session.last_seen + 60 {
-            sqlx::query("UPDATE sessions SET last_seen = $1 WHERE hash = $2")
-                .bind(secs(now))
-                .bind(&key)
-                .execute(&mut *connection)
-                .await
-                .map_err(store_error)?;
-            session.last_seen = now;
-            tenants::touch(&mut connection, &mut session.account, now)
-                .await
-                .map_err(store_error)?;
-        }
-        Ok(Some(session))
     }
 
     /// Add a passkey on a link's authority and open the session it signs in to, in one
@@ -142,48 +144,52 @@ impl Accounts {
 
     /// End one session (signing out); false when there was none.
     pub async fn end_session(&self, token: &str) -> BridgeResult<bool> {
-        let mut connection = self.store.read().await?;
-        let removed = sqlx::query("DELETE FROM sessions WHERE hash = $1")
-            .bind(hash(token))
-            .execute(&mut *connection)
-            .await
-            .map_err(store_error)?
-            .rows_affected();
-        Ok(removed == 1)
+        let key = hash(token);
+        transaction!(&self.store, |connection| {
+            self.enter(connection, crate::store::Lookup::Session(&key)).await?;
+            let removed = sqlx::query("DELETE FROM auth_sessions WHERE hash = $1")
+                .bind(&key)
+                .execute(&mut *connection)
+                .await?
+                .rows_affected();
+            Ok(removed == 1)
+        })
     }
 
     /// End every session of `account`; how many there were.
     #[allow(dead_code)] // "sign out everywhere" on the account page (32a-3)
     pub async fn end_sessions(&self, account: &str) -> BridgeResult<u64> {
-        let mut connection = self.store.read().await?;
-        sqlx::query("DELETE FROM sessions WHERE account = $1")
-            .bind(account)
-            .execute(&mut *connection)
-            .await
-            .map(|done| done.rows_affected())
-            .map_err(store_error)
+        transaction!(&self.store, |connection| {
+            self.enter(connection, crate::store::Lookup::Account(account)).await?;
+            Ok(sqlx::query("DELETE FROM auth_sessions WHERE account = $1")
+                .bind(account)
+                .execute(&mut *connection)
+                .await?
+                .rows_affected())
+        })
     }
 }
 
-/// Store a new session of `account` inside the caller's transaction: expired sessions are
-/// cleared, and past the cap the account's least recently used ones make room. Returns its
-/// token.
+/// Store a new session of `account` (of `tenant`, which the caller's transaction is scoped
+/// to): expired sessions are cleared, and past the cap the account's least recently used
+/// ones make room. Returns its token.
 pub(super) async fn insert_session(
     connection: &mut AnyConnection,
+    tenant: &str,
     account: &str,
     passkey: Option<&[u8]>,
     random: [u8; 32],
     now: u64,
 ) -> Result<String, Failed> {
     let token = format!("dgs_{}", URL_SAFE_NO_PAD.encode(random));
-    sqlx::query("DELETE FROM sessions WHERE expires_at <= $1 OR last_seen + $2 <= $1")
+    sqlx::query("DELETE FROM auth_sessions WHERE expires_at <= $1 OR last_seen + $2 <= $1")
         .bind(secs(now))
         .bind(secs(SESSION_IDLE_SECS))
         .execute(&mut *connection)
         .await?;
     sqlx::query(
-        "DELETE FROM sessions WHERE account = $1 AND hash NOT IN (
-           SELECT hash FROM sessions WHERE account = $1
+        "DELETE FROM auth_sessions WHERE account = $1 AND hash NOT IN (
+           SELECT hash FROM auth_sessions WHERE account = $1
            ORDER BY last_seen DESC, created_at DESC LIMIT $2)",
     )
     .bind(account)
@@ -191,14 +197,15 @@ pub(super) async fn insert_session(
     .execute(&mut *connection)
     .await?;
     sqlx::query(
-        "INSERT INTO sessions (hash, account, passkey, created_at, last_seen, expires_at)
-         VALUES ($1, $2, $3, $4, $4, $5)",
+        "INSERT INTO auth_sessions (hash, account, passkey, created_at, last_seen, expires_at, tenant_id)
+         VALUES ($1, $2, $3, $4, $4, $5, $6)",
     )
     .bind(hash(&token))
     .bind(account)
     .bind(passkey)
     .bind(secs(now))
     .bind(secs(now + SESSION_MAX_SECS))
+    .bind(tenant)
     .execute(&mut *connection)
     .await?;
     Ok(token)
