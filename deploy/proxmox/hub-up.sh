@@ -12,9 +12,10 @@
 # 3. Stops and disables a hub installed there before (`devagotchi-hub`, user or system unit).
 # 4. Runs deploy/compose/install.sh inside it from one commit: Docker, the image pinned by
 #    digest, Postgres, a 5-minute timer that deploys each new image and rolls back one that
-#    is not healthy, and a nightly backup. When a Caddy in the container already serves the
-#    domain, the hub takes its old port on loopback and that Caddy keeps the certificates;
-#    otherwise the stack's own Caddy takes ports 80 and 443.
+#    is not healthy, and a nightly backup. When a proxy on the Proxmox host serves the
+#    domain (Caddy or nginx), the hub listens on the container's address for it; when a
+#    Caddy in the container does, the hub takes its old port on loopback; otherwise the
+#    stack's own Caddy takes ports 80 and 443.
 # 5. Checks https://<domain> answers from the new hub, and prints the claim link: open it on
 #    the phone that will hold the owner's passkey.
 #
@@ -53,8 +54,9 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# For tests (tests/proxmox_hub_up.py): another log file, and no root.
+# For tests (tests/proxmox_hub_up.py): another log file, this host's /etc, and no root.
 log_file="${DEVAGOTCHI_HUB_UP_LOG:-/var/log/devagotchi-hub-up.log}"
+host_etc="${DEVAGOTCHI_HOST_ETC:-/etc}"
 exec > >(tee -a "$log_file") 2>&1
 say() { printf '\n==> %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
@@ -119,8 +121,15 @@ fi
 # 4. The stack, from one commit of the deploy files.
 sha=$(curl -fsSL "https://api.github.com/repos/$repo/commits/$ref" | sed -n 's/^  "sha": "\([0-9a-f]\{40\}\)".*/\1/p' | head -1)
 [[ -n "$sha" ]] || die "could not resolve $repo@$ref"
-edge=caddy
-if in_ct sh -c "command -v caddy >/dev/null && grep -rlsqF -- '$domain' /etc/caddy" 2>/dev/null; then
+# Who terminates TLS for the domain today: a proxy on this Proxmox host (it reaches the
+# container's address, so the hub listens there), the container's own Caddy (loopback is
+# enough), or nobody (the stack's own Caddy takes ports 80 and 443 in the container).
+edge=caddy bind=127.0.0.1
+host_proxy=$(grep -rlsF -- "$domain" "$host_etc/caddy" "$host_etc/nginx" 2>/dev/null | head -1 || true)
+if [[ -n "$host_proxy" ]]; then
+  edge=external bind=0.0.0.0
+  note "this host's proxy serves $domain ($host_proxy): the hub listens on CT $ct's address, port $port"
+elif in_ct sh -c "command -v caddy >/dev/null && grep -rlsqF -- '$domain' /etc/caddy" 2>/dev/null; then
   edge=external
   note "CT $ct's Caddy already serves $domain: the hub takes 127.0.0.1:$port behind it"
 fi
@@ -136,7 +145,7 @@ for file in install.sh compose.yaml update.sh backup.sh; do
   pct push "$ct" "$work/$file" "/root/devagotchi-hub-src/$file" --perms 0755
 done
 in_ct /root/devagotchi-hub-src/install.sh --domain "$domain" --rp-id "$rp_id" --edge "$edge" \
-  --hub-bind 127.0.0.1 --hub-port "$port" --track "$track"
+  --hub-bind "$bind" --hub-port "$port" --track "$track"
 
 # 5. The public name answers from the new hub.
 head_of() { grep -o '"head":"[0-9a-f]*"' | head -1; }
@@ -148,7 +157,11 @@ for _ in $(seq 1 30); do
   if [[ "$(curl -fsS -m 10 "https://$domain/healthz" 2>/dev/null | head_of)" == "$new_head" ]]; then ok=true; break; fi
   sleep 2
 done
-$ok || die "https://$domain/healthz does not answer from the new hub yet; it runs in CT $ct at 127.0.0.1:$port. Check the proxy in front of it"
+if ! $ok; then
+  ct_ip=$(in_ct sh -c "hostname -I | awk '{ print \$1 }'" 2>/dev/null || true)
+  [[ -n "$host_proxy" ]] && note "$host_proxy for $domain says: $(grep -A4 -F -- "$domain" "$host_proxy" | grep -Eo '(reverse_proxy|proxy_pass)[^;{]*' | head -1)"
+  die "https://$domain/healthz does not answer from the new hub yet; it runs in CT $ct at ${ct_ip:-its address}:$port ($bind). Point the proxy in front of $domain there"
+fi
 note "https://$domain is the new hub"
 
 claim=$(in_ct sh -c 'cd /opt/devagotchi-hub && docker compose logs --no-color hub 2>/dev/null' \

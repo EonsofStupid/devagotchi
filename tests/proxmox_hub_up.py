@@ -65,6 +65,8 @@ if cmd == "exec":
     if "command -v curl" in line or inner[0] == "mkdir": sys.exit(0)
     if inner[0].endswith("/install.sh"):
         state["install"] = inner[1:]; save(); sys.exit(0)
+    if "hostname -I" in line:
+        print("10.0.0.110"); sys.exit(0)
     if inner[0] == "curl" and "/healthz" in line:
         print(json.dumps({"audit": {"entries": 1, "head": state["new"], "ok": True}, "ok": True},
                          separators=(",", ":"))); sys.exit(0)
@@ -108,8 +110,14 @@ def run(case: str, *, config: str, extra=(), **state) -> tuple[int, str, dict]:
             "calls": [], "ct": "110", "config": config, "domain": DOMAIN, "new": NEW,
             "old": OLD, "sha": SHA, "root": str(ROOT), **state,
         }))
+        host_etc = fake / "etc"
+        if state.get("host_proxy"):
+            (host_etc / "caddy").mkdir(parents=True)
+            (host_etc / "caddy" / "Caddyfile").write_text(
+                f"{DOMAIN} {{\n\treverse_proxy 10.0.0.110:8787\n}}\n")
         env = dict(os.environ, FAKE=str(fake), PATH=f"{fake / 'bin'}:{os.environ['PATH']}",
-                   DEVAGOTCHI_ALLOW_NONROOT="1", DEVAGOTCHI_HUB_UP_LOG=str(fake / "log"))
+                   DEVAGOTCHI_ALLOW_NONROOT="1", DEVAGOTCHI_HUB_UP_LOG=str(fake / "log"),
+                   DEVAGOTCHI_HOST_ETC=str(host_etc))
         proc = subprocess.run(
             ["bash", str(SCRIPT), "--ct", "110", "--domain", DOMAIN, *extra],
             env=env, capture_output=True, text=True, timeout=60,
@@ -164,9 +172,20 @@ def main() -> int:
     check("own caddy: says no snapshot", "takes no snapshots" in out, out)
     print("PASS a privileged container with no Caddy gets the stack's own")
 
+    # 2b. A proxy on the Proxmox host serves the domain (the Texas layout): the hub listens on
+    #     the container's address for it, behind that proxy, with no Caddy of its own.
+    code, out, s = run("host proxy", config=UNPRIVILEGED, host_proxy=True)
+    check("host proxy", code == 0, out)
+    check("host proxy: behind it, on the container's address",
+          s["install"][s["install"].index("--edge") + 1] == "external"
+          and s["install"][s["install"].index("--hub-bind") + 1] == "0.0.0.0", out)
+    check("host proxy: says so", "this host's proxy serves" in out, out)
+    print("PASS a proxy on the Proxmox host gets the hub on the container's address")
+
     # 3. The public name still answers from somewhere else: it says so and fails.
-    code, out, s = run("public", config=UNPRIVILEGED, edge=True, public_old=True)
-    check("public", code == 1 and "does not answer from the new hub" in out, out)
+    code, out, s = run("public", config=UNPRIVILEGED, host_proxy=True, public_old=True)
+    check("public", code == 1 and "does not answer from the new hub" in out
+          and "10.0.0.110:8787" in out and "reverse_proxy 10.0.0.110:8787" in out, out)
     print("PASS a public name that does not reach the new hub is a failure, said plainly")
 
     # 4. Something else holds the hub's port after the old hub is off: nothing installed.
