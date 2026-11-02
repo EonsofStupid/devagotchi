@@ -13,8 +13,8 @@ user verification). It checks what the Rust tests cannot: that the hub's own scr
 4. The spent link no longer works.
 5. `hub owner --replace` works on the device that already holds the owner's passkey.
 
-Needs Python Playwright with its Chromium. Not run in CI (the runners have no Playwright);
-run it before pushing a change to the sign-in pages:
+Needs Python Playwright with its Chromium (tests/requirements-browser.txt). CI runs it on
+ubuntu-24.04 (`e2e`); locally:
 
     python3 tests/passkey_browser.py --devagotchi "$PWD/target/debug/devagotchi"
 """
@@ -50,11 +50,23 @@ def wait_ready(url: str, process: subprocess.Popen) -> None:
     raise SystemExit("the hub did not answer /healthz within 30 seconds")
 
 
+def until(check, what: str, seconds: float = 15) -> None:
+    """Poll `check` from here: the pages' Content-Security-Policy refuses the eval that
+    Playwright's own `wait_for_function` polling needs."""
+    deadline = time.time() + seconds
+    while not check():
+        if time.time() > deadline:
+            raise SystemExit(f"timed out waiting until {what}")
+        time.sleep(0.05)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--devagotchi", required=True, help="absolute path of the binary")
     parser.add_argument("--allow-skip", action="store_true",
                         help="exit 0 when Playwright is missing instead of failing")
+    parser.add_argument("--channel", default=None,
+                        help="a browser already installed (e.g. chrome) instead of Playwright's")
     args = parser.parse_args()
     try:
         from playwright.sync_api import sync_playwright
@@ -93,7 +105,7 @@ def main() -> int:
         assert link.startswith(f"{url}/owner#dgl_"), link
 
         with sync_playwright() as p:
-            browser = p.chromium.launch()
+            browser = p.chromium.launch(channel=args.channel)
             page = browser.new_context().new_page()
             cdp = page.context.new_cdp_session(page)
             cdp.send("WebAuthn.enable")
@@ -105,7 +117,7 @@ def main() -> int:
 
             # 1. The owner's link makes the passkey and signs in.
             page.goto(link)
-            page.wait_for_function("!location.hash")
+            until(lambda: not page.evaluate("location.hash"), "the token left the address bar")
             assert page.url == f"{url}/owner", f"the token stayed in the address bar: {page.url}"
             assert page.evaluate("location.hash") == ""
             page.click("#passkey-register")
@@ -128,10 +140,10 @@ def main() -> int:
             # 4. The spent link no longer works.
             page.goto(link)
             page.click("#passkey-register")
-            page.wait_for_function(
-                "document.getElementById('passkey-status').textContent.length > 0"
-                " && !document.getElementById('passkey-status').textContent.startsWith('Making')"
-                " && !document.getElementById('passkey-status').textContent.startsWith('Waiting')"
+            until(
+                lambda: page.inner_text("#passkey-status")
+                and not page.inner_text("#passkey-status").startswith(("Making", "Waiting")),
+                "the page finished trying the spent link",
             )
             status = page.inner_text("#passkey-status")
             assert "timed out or was already used" in status, status

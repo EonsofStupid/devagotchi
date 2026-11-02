@@ -5,6 +5,22 @@ Releases are the operator's act: a tag `vX.Y.Z` on `main` runs `.github/workflow
 The version in `Cargo.toml` is bumped by the operator in the same commit as this file's next
 heading. Agents draft the fragments below; they never tag.
 
+## Unreleased
+
+### Claim a new hub in the browser (increment 41, plan 16c)
+- A hub with its own accounts whose config names no owner, and whose owner has no passkey,
+  prints a claim link to its log at each start (`/claim#XXXX-…`, 120 random bits, only its hash stored, a day by default:
+  `auth.tokens.claim_secs`; only the newest works). `/claim` takes the code, names the owner
+  and makes their passkey in one step, and signs them in; the first passkey ends the code.
+  `devagotchi hub owner` on the host still works, and also ends it.
+- The landing page (`/`) of an unclaimed hub offers only the claim; once claimed, sign-in
+  and this hub's own MCP address. `/docs` gives this hub's address and, on a hub with its
+  own accounts, the connector steps with no client ID (the AI registers itself).
+- Store migration `0003_claim` (SQLite and Postgres): the `claim_codes` table.
+- CI runs the browser tests (`tests/claim_browser.py`, `tests/passkey_browser.py`) in the
+  runner's Chrome with a virtual passkey on ubuntu-24.04, Playwright pinned by hash.
+- `/docs` no longer names the hosted hub's Nomen client ID on other hubs.
+
 ## 0.1.0 - 2026-10-31
 
 The first release, at the operator's word (30 Oct 2026; tagged once the tool surface of

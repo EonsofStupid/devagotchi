@@ -190,9 +190,9 @@ pub enum AuthConfig {
     },
 }
 
-/// Lifetimes and limits of the AI connections a hub in `auth.mode hub` makes itself
-/// (`auth.tokens`). The defaults are the plan's (decision 4: a connection lasts 7 days
-/// unused).
+/// Lifetimes and limits of what a hub in `auth.mode hub` hands out itself (`auth.tokens`):
+/// its AI connections (the plan's decision 4: a connection lasts 7 days unused) and the
+/// claim code a hub with no owner prints when it starts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields, default)]
 pub struct TokenConfig {
@@ -204,6 +204,9 @@ pub struct TokenConfig {
     pub code_secs: u64,
     /// Registered clients kept at once; past it, those never used make room first.
     pub max_clients: u64,
+    /// How long the claim code a hub with no owner prints when it starts stays good.
+    /// Restarting the hub prints a new one.
+    pub claim_secs: u64,
 }
 
 impl Default for TokenConfig {
@@ -213,6 +216,7 @@ impl Default for TokenConfig {
             refresh_secs: 7 * 24 * 3600,
             code_secs: 2 * 60,
             max_clients: 10_000,
+            claim_secs: 24 * 3600,
         }
     }
 }
@@ -230,6 +234,9 @@ impl TokenConfig {
         }
         if self.max_clients == 0 {
             return Err("auth.tokens.max_clients is at least 1".into());
+        }
+        if !(60..=7 * 24 * 3600).contains(&self.claim_secs) {
+            return Err("auth.tokens.claim_secs is 60 to 604800".into());
         }
         Ok(())
     }

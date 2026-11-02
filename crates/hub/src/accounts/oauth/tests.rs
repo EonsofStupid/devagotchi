@@ -181,6 +181,7 @@ async fn lifetimes_come_from_the_config() {
             refresh_secs: 3600,
             code_secs: 30,
             max_clients: 10,
+            claim_secs: 600,
         };
         let accounts = accounts.with_tokens(limits);
         let client = client(&accounts).await;

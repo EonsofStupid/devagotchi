@@ -1,4 +1,5 @@
-// Passkeys on the hub's own pages: make one from an owner link, or sign in with one.
+// Passkeys on the hub's own pages: make one from an owner link or by claiming a new hub,
+// or sign in with one.
 // The hub checks everything; this only moves bytes between the browser's WebAuthn API and
 // the hub, base64url on the wire. No other script runs on these pages.
 "use strict";
@@ -64,7 +65,45 @@
     if (!link) {
       throw new Error("Open the link devagotchi hub owner printed; this page needs it.");
     }
-    const options = await post("/passkey/register/options", { link });
+    await makePasskey(await post("/passkey/register/options", { link }));
+  }
+
+  // The claim page: the code from the link the hub's log printed (after "#", so it never
+  // reached a request line), or typed in. Each press claims again, so a cancelled prompt
+  // or an expired link is retried with the same code; the hub answers with the passkey's
+  // options and the owner link they are for.
+  // A claim link opened in a tab already on this page changes only the hash, so it is
+  // taken up then too.
+  const claimCode = document.getElementById("claim-code");
+  function takeCode() {
+    if (location.hash.length > 1) {
+      const carried = location.hash.slice(1);
+      try {
+        claimCode.value = decodeURIComponent(carried);
+      } catch (_) {
+        claimCode.value = carried;
+      }
+      history.replaceState(null, "", location.pathname);
+    }
+  }
+  if (claimCode) {
+    takeCode();
+    window.addEventListener("hashchange", takeCode);
+  }
+
+  async function claim() {
+    const code = claimCode.value.trim();
+    if (!code) {
+      claimCode.focus();
+      throw new Error("Enter the claim code from the hub's log.");
+    }
+    const name = document.getElementById("claim-name").value.trim();
+    const { link: claimed, ...options } = await post("/claim", { code, name: name || null });
+    link = claimed;
+    await makePasskey(options);
+  }
+
+  async function makePasskey(options) {
     say("Making the passkey for " + options.user.displayName + "…");
     const publicKey = Object.assign({}, options, {
       challenge: b64.decode(options.challenge),
@@ -130,4 +169,11 @@
 
   wire("passkey-register", register);
   wire("passkey-sign-in", signIn);
+  wire("passkey-claim", claim);
+
+  // The claim form submits with Enter too, and never as a plain form post.
+  const claimForm = document.getElementById("claim-form");
+  if (claimForm) {
+    claimForm.addEventListener("submit", (event) => event.preventDefault());
+  }
 })();

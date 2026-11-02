@@ -1,6 +1,7 @@
-//! The browser routes: sign in, the account page, sign out, `/api/v1/me` (which also
-//! takes a bearer token, so scripts and AI clients see the same view), `/approvals`, and the public
-//! pages the AI directories link to (`/docs`, `/privacy`, `/terms`, `/support`).
+//! The browser routes: the landing page and claiming a new hub (`/claim`), sign in, the
+//! account page, sign out, `/api/v1/me` (which also takes a bearer token, so scripts and AI
+//! clients see the same view), `/approvals`, and the public pages the AI directories link to
+//! (`/docs`, `/privacy`, `/terms`, `/support`).
 
 use axum::{
     Router,
@@ -12,7 +13,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::{
-    Exchange, SessionToken, WebLogin, approvals, machines, notify, oauth,
+    Exchange, SessionToken, WebLogin, approvals, claim, machines, notify, oauth,
     pages::{self, Viewer},
     passkeys, public,
 };
@@ -30,6 +31,7 @@ pub fn router() -> Router<AppState> {
         .route("/auth/callback", get(callback))
         .route("/auth/logout", post(logout))
         .route("/owner", get(passkeys::owner_page))
+        .route("/claim", get(claim::page).post(claim::claim))
         .route(
             "/passkey/register/options",
             post(passkeys::register_options),
@@ -166,13 +168,23 @@ async fn nomen_who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -> Who
     }
 }
 
-/// Signed in, `/` is your machines; signed out, it says what Devagotchi is and offers
-/// one Sign in, instead of sending a stranger straight to an identity provider.
+/// `/`: the landing page. A hub that can be claimed offers only the claim; otherwise it says
+/// what Devagotchi is and where AIs connect, and offers one Sign in instead of sending a
+/// stranger straight to an identity provider. Signed in, it is your account.
 async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let public_url = state.hub.config.public_url.clone();
+    if let Some(hub) = &state.passkeys {
+        return match hub.claimable().await {
+            Ok(true) => pages::home(pages::Front::Unclaimed, &public_url),
+            Ok(false) if signed_in(&state, &headers).await => see_other("/account", &[]),
+            Ok(false) => pages::home(pages::Front::Passkeys, &public_url),
+            Err(()) => unavailable(),
+        };
+    }
     if signed_in(&state, &headers).await {
         see_other("/account", &[])
-    } else if state.passkeys.is_some() || state.web.is_some() {
-        pages::home(state.passkeys.is_some())
+    } else if state.web.is_some() {
+        pages::home(pages::Front::Shippin, &public_url)
     } else {
         see_other("/docs", &[])
     }

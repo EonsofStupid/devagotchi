@@ -460,6 +460,12 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let passkeys = accounts
         .clone()
         .and_then(|accounts| web::HubSignIn::new(config.clone(), accounts).map(Arc::new));
+    // A hub whose config names no owner may be claimed from the browser (`accounts/claim.rs`);
+    // its code is issued once the hub listens, below.
+    let claimable = match (&passkeys, &accounts) {
+        (Some(_), Some(accounts)) if config.owner.is_none() => Some(accounts.clone()),
+        _ => None,
+    };
     let push = match (&config.web, &passkeys) {
         (None, None) => None,
         _ => Some(Arc::new(push::Push::open(
@@ -535,6 +541,24 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let listener = tokio::net::TcpListener::bind(listen)
         .await
         .map_err(|error| BridgeError::new("listen", format!("{listen}: {error}")))?;
+    // Unclaimed, the hub prints a new claim code each time it starts, replacing the last
+    // one: only once it listens, so a start that fails never replaces the code a running
+    // hub printed.
+    let claim_code = match &claimable {
+        Some(accounts) => accounts.issue_claim_code().await?,
+        None => None,
+    };
+    if claim_code.is_some() {
+        // That a code was issued, and when; never the code.
+        state.hub.audit.record(&audit::AuditEntry {
+            subject: "hub",
+            via: "start",
+            tool: "account.claim_code",
+            broker: "",
+            operation_id: "",
+            outcome: "ok",
+        })?;
+    }
     // Everything worth reading at start comes before the ready line callers wait for.
     if let Some(owner) = config.owner_id() {
         eprintln!("devagotchi hub owner: {owner} reaches every broker");
@@ -550,9 +574,14 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             "devagotchi hub: signing people in over plain http on loopback, for tests only: its cookies reach any other service on this host's loopback"
         );
     }
-    if state.passkeys.is_some() && config.owner_id().is_none() {
+    // The claim link is the one secret the hub writes to its log, on purpose: reading the
+    // log takes the host or its container platform, which is what owning the hub takes.
+    if let Some(claim) = &claim_code {
         eprintln!(
-            "devagotchi hub has no owner yet: on this host, run devagotchi hub owner --state-dir {} --config {}",
+            "devagotchi hub is unclaimed: nobody can sign in as its owner yet. Claim it in a browser before {}:\n  {}/claim#{}\nRestarting the hub prints a new code. Or, on this host: devagotchi hub owner --state-dir {} --config {}",
+            web::utc(claim.expires_at),
+            config.public_url.trim_end_matches('/'),
+            claim.code,
             state_dir.display(),
             config_path.display()
         );

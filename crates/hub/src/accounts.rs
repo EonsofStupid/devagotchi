@@ -10,6 +10,7 @@
 //! The hub's pages use it in `web/passkeys.rs`; `devagotchi hub owner` makes the owner and
 //! the one-time link.
 
+pub mod claim;
 pub mod oauth;
 pub mod passkey;
 pub mod sessions;
@@ -202,6 +203,15 @@ async fn account_in(connection: &mut AnyConnection, id: &str) -> Result<Option<A
         .transpose()
 }
 
+async fn owner_in(connection: &mut AnyConnection) -> Result<Option<Account>, sqlx::Error> {
+    sqlx::query(concat!("SELECT ", account_columns!(), " FROM accounts WHERE owner = 1"))
+        .fetch_optional(&mut *connection)
+        .await?
+        .as_ref()
+        .map(account_row)
+        .transpose()
+}
+
 impl Accounts {
     /// The accounts in `store`. Its challenge key is made the first time, once, whichever
     /// hub instance gets there first.
@@ -232,43 +242,10 @@ impl Accounts {
 
     /// Make an account. There is at most one owner, and an id is never reused.
     pub async fn create(&self, id: &str, name: &str, owner: bool) -> BridgeResult<Account> {
-        if !valid_account_id(id) {
-            return Err(BridgeError::new(
-                "invalid_account",
-                format!("{id:?} is not an account id"),
-            ));
-        }
-        let name = name.trim();
-        if name.is_empty() || name.len() > 64 || name.chars().any(char::is_control) {
-            return Err(BridgeError::new(
-                "invalid_account",
-                "a name is 1 to 64 printable characters",
-            ));
-        }
+        let name = check_name(id, name)?;
         let now = now_secs();
         transaction!(&self.store, |connection| {
-                if account_in(connection, id).await?.is_some() {
-                    return Err(BridgeError::new("account_exists", format!("{id} already exists")).into());
-                }
-                if owner {
-                    let has_owner = sqlx::query("SELECT 1 FROM accounts WHERE owner = 1")
-                        .fetch_optional(&mut *connection)
-                        .await?
-                        .is_some();
-                    if has_owner {
-                        return Err(BridgeError::new("owner_exists", "this hub already has an owner").into());
-                    }
-                }
-                sqlx::query(
-                    "INSERT INTO accounts (id, name, owner, created_at) VALUES ($1, $2, $3, $4)",
-                )
-                .bind(id)
-                .bind(name)
-                .bind(i64::from(owner))
-                .bind(secs(now))
-                .execute(&mut *connection)
-                .await?;
-                Ok(())
+                create_in(connection, id, name, owner, now).await
             })?;
         Ok(Account {
             id: id.to_string(),
@@ -312,11 +289,7 @@ impl Accounts {
 
     pub async fn owner(&self) -> BridgeResult<Option<Account>> {
         let mut connection = self.store.read().await?;
-        sqlx::query(concat!("SELECT ", account_columns!(), " FROM accounts WHERE owner = 1"))
-            .fetch_optional(&mut *connection)
-            .await
-            .and_then(|row| row.as_ref().map(account_row).transpose())
-            .map_err(store_error)
+        owner_in(&mut connection).await.map_err(store_error)
     }
 
     /// Issue a one-time link for `account`: 256 random bits the store draws itself. Only
@@ -363,34 +336,9 @@ impl Accounts {
         now: u64,
         replaces: bool,
     ) -> BridgeResult<String> {
-        let token = format!("dgl_{}", URL_SAFE_NO_PAD.encode(random));
+        let token = link_token(random);
         transaction!(&self.store, |connection| {
-                let holder = account_in(connection, account)
-                    .await?
-                    .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
-                if purpose == LinkPurpose::Owner && !holder.owner {
-                    return Err(BridgeError::new("not_owner", format!("{account} is not the owner")).into());
-                }
-                sqlx::query(
-                    "UPDATE links SET used_at = $1 WHERE purpose = $2 AND account = $3 AND used_at IS NULL",
-                )
-                .bind(secs(now))
-                .bind(purpose.as_str())
-                .bind(account)
-                .execute(&mut *connection)
-                .await?;
-                sqlx::query(
-                    "INSERT INTO links (hash, purpose, account, expires_at, replaces)
-                     VALUES ($1, $2, $3, $4, $5)",
-                )
-                .bind(hash(&token))
-                .bind(purpose.as_str())
-                .bind(account)
-                .bind(secs(now + LINK_TTL_SECS))
-                .bind(i64::from(replaces))
-                .execute(&mut *connection)
-                .await?;
-                Ok(())
+                issue_in(connection, purpose, account, &token, now, replaces).await
             })?;
         Ok(token)
     }
@@ -569,6 +517,13 @@ impl Accounts {
                 .bind(secs(now))
                 .execute(&mut *connection)
                 .await?;
+                // The owner can sign in now: the hub is claimed, and no claim code it
+                // printed works any more (`claim.rs`).
+                if holder.owner {
+                    sqlx::query("DELETE FROM claim_codes")
+                        .execute(&mut *connection)
+                        .await?;
+                }
                 match session {
                     Some(random) => Ok(Some(
                         sessions::insert_session(
@@ -821,6 +776,97 @@ impl Accounts {
 
 fn account_disabled(account: &str) -> BridgeError {
     BridgeError::new("account_disabled", format!("{account} is disabled"))
+}
+
+/// An account id and name the hub accepts; the name trimmed.
+fn check_name<'a>(id: &str, name: &'a str) -> BridgeResult<&'a str> {
+    if !valid_account_id(id) {
+        return Err(BridgeError::new(
+            "invalid_account",
+            format!("{id:?} is not an account id"),
+        ));
+    }
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
+        return Err(BridgeError::new(
+            "invalid_account",
+            "a name is 1 to 64 printable characters",
+        ));
+    }
+    Ok(name)
+}
+
+/// `create`, inside a transaction the caller holds; `name` already checked.
+async fn create_in(
+    connection: &mut AnyConnection,
+    id: &str,
+    name: &str,
+    owner: bool,
+    now: u64,
+) -> Result<(), Failed> {
+    if account_in(connection, id).await?.is_some() {
+        return Err(BridgeError::new("account_exists", format!("{id} already exists")).into());
+    }
+    if owner {
+        let has_owner = sqlx::query("SELECT 1 FROM accounts WHERE owner = 1")
+            .fetch_optional(&mut *connection)
+            .await?
+            .is_some();
+        if has_owner {
+            return Err(BridgeError::new("owner_exists", "this hub already has an owner").into());
+        }
+    }
+    sqlx::query("INSERT INTO accounts (id, name, owner, created_at) VALUES ($1, $2, $3, $4)")
+        .bind(id)
+        .bind(name)
+        .bind(i64::from(owner))
+        .bind(secs(now))
+        .execute(&mut *connection)
+        .await?;
+    Ok(())
+}
+
+/// A one-time link's token: `dgl_` and 256 random bits.
+fn link_token(random: [u8; 32]) -> String {
+    format!("dgl_{}", URL_SAFE_NO_PAD.encode(random))
+}
+
+/// Keep `token` as `account`'s live link for `purpose`, superseding its unused one, inside
+/// a transaction the caller holds.
+async fn issue_in(
+    connection: &mut AnyConnection,
+    purpose: LinkPurpose,
+    account: &str,
+    token: &str,
+    now: u64,
+    replaces: bool,
+) -> Result<(), Failed> {
+    let holder = account_in(connection, account)
+        .await?
+        .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
+    if purpose == LinkPurpose::Owner && !holder.owner {
+        return Err(BridgeError::new("not_owner", format!("{account} is not the owner")).into());
+    }
+    sqlx::query(
+        "UPDATE links SET used_at = $1 WHERE purpose = $2 AND account = $3 AND used_at IS NULL",
+    )
+    .bind(secs(now))
+    .bind(purpose.as_str())
+    .bind(account)
+    .execute(&mut *connection)
+    .await?;
+    sqlx::query(
+        "INSERT INTO links (hash, purpose, account, expires_at, replaces)
+         VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(hash(token))
+    .bind(purpose.as_str())
+    .bind(account)
+    .bind(secs(now + LINK_TTL_SECS))
+    .bind(i64::from(replaces))
+    .execute(&mut *connection)
+    .await?;
+    Ok(())
 }
 
 /// What a challenge's HMAC covers: its own bytes, the purpose, and the account.

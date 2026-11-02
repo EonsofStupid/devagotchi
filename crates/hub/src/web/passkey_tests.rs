@@ -23,20 +23,21 @@ use crate::{
     link::Links,
 };
 
-struct World {
-    url: String,
-    http: reqwest::Client,
-    accounts: Arc<Accounts>,
-    config: Arc<HubConfig>,
+pub(super) struct World {
+    pub(super) url: String,
+    pub(super) http: reqwest::Client,
+    pub(super) accounts: Arc<Accounts>,
+    pub(super) config: Arc<HubConfig>,
+    pub(super) audit: Arc<Audit>,
     _dir: tempfile::TempDir,
 }
 
-async fn world() -> World {
+pub(super) async fn world() -> World {
     world_owned_by(None).await
 }
 
 /// A hub whose config names `owner`, as the Texas hub's names its Nomen subject.
-async fn world_owned_by(owner: Option<&str>) -> World {
+pub(super) async fn world_owned_by(owner: Option<&str>) -> World {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let dir = tempfile::tempdir().unwrap();
@@ -83,7 +84,7 @@ async fn world_owned_by(owner: Option<&str>) -> World {
             push: Some(push),
             boards: Arc::new(crate::board::mcp::Boards::from_config(&config, dir.path())),
             config: config.clone(),
-            audit,
+            audit: audit.clone(),
             links,
         },
         web: None,
@@ -102,12 +103,13 @@ async fn world_owned_by(owner: Option<&str>) -> World {
             .unwrap(),
         accounts,
         config,
+        audit,
         _dir: dir,
     }
 }
 
 /// `name=value` from the response's Set-Cookie for `name`.
-fn cookie(response: &reqwest::Response, name: &str) -> Option<String> {
+pub(super) fn cookie(response: &reqwest::Response, name: &str) -> Option<String> {
     response
         .headers()
         .get_all(header::SET_COOKIE)
@@ -117,16 +119,16 @@ fn cookie(response: &reqwest::Response, name: &str) -> Option<String> {
         .map(|v| v.split(';').next().unwrap().to_string())
 }
 
-fn b64(bytes: &[u8]) -> String {
+pub(super) fn b64(bytes: &[u8]) -> String {
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
 impl World {
-    fn phone(&self) -> Authenticator {
+    pub(super) fn phone(&self) -> Authenticator {
         Authenticator::for_site(Alg::Es256, "127.0.0.1", &self.url)
     }
 
-    async fn get(&self, path: &str, cookie: Option<&str>) -> reqwest::Response {
+    pub(super) async fn get(&self, path: &str, cookie: Option<&str>) -> reqwest::Response {
         let mut request = self.http.get(format!("{}{path}", self.url));
         if let Some(cookie) = cookie {
             request = request.header(header::COOKIE, cookie);
@@ -135,7 +137,7 @@ impl World {
     }
 
     /// A POST as the hub's own page makes it: same origin, JSON.
-    async fn post(&self, path: &str, cookie: Option<&str>, body: Value) -> reqwest::Response {
+    pub(super) async fn post(&self, path: &str, cookie: Option<&str>, body: Value) -> reqwest::Response {
         let mut request = self
             .http
             .post(format!("{}{path}", self.url))
@@ -148,7 +150,7 @@ impl World {
     }
 
     /// Ask for a ceremony's options: its challenge, and the cookie that carries it.
-    async fn options(&self, path: &str, body: Value) -> (Vec<u8>, String, Value) {
+    pub(super) async fn options(&self, path: &str, body: Value) -> (Vec<u8>, String, Value) {
         let response = self.post(path, None, body).await;
         assert_eq!(response.status(), 200, "{path}");
         let jar = cookie(&response, "dg_challenge").expect("the challenge cookie");
@@ -397,9 +399,11 @@ async fn a_hub_alone_signs_people_in_with_no_identity_provider() {
     let world = world().await;
     let home = world.get("/", None).await;
     assert_eq!(home.status(), 200);
+    // Nobody owns it yet: the landing page offers the claim (`claim_tests.rs`), and no
+    // other service.
     let html = home.text().await.unwrap();
     assert!(
-        html.contains(">Sign in<") && !html.contains("Shippin"),
+        html.contains("href=\"/claim\"") && !html.contains("Shippin"),
         "{html}"
     );
     // Signed out, pages send you to the hub's own sign-in, never to another service.

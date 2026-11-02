@@ -25,6 +25,7 @@
 //! - Redirects are not followed when talking to Nomen.
 
 mod approvals;
+mod claim;
 mod machines;
 mod notify;
 pub mod oauth;
@@ -33,6 +34,8 @@ mod passkeys;
 mod public;
 mod routes;
 mod sessions;
+#[cfg(test)]
+mod claim_tests;
 #[cfg(test)]
 mod passkey_tests;
 #[cfg(test)]
@@ -50,17 +53,27 @@ use devagotchi_contracts::{BridgeError, BridgeResult};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
+/// Unix seconds as `YYYY-MM-DD HH:MM UTC`, as the hub's pages and log show times.
+pub(crate) fn utc(secs: u64) -> String {
+    pages::utc(secs)
+}
+
 pub use passkeys::HubSignIn;
 pub use routes::router;
 
 /// Every web page's top bar says whether the browser is signed in: the account and a
-/// one-tap Sign out, or Sign in back to this page (`pages::Bar`).
+/// one-tap Sign out, or Sign in back to this page (`pages::Bar`). On a hub waiting to be
+/// claimed, nobody can sign in, so it offers nothing.
 pub async fn bar(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
     request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    let bar = if state.web.is_none() && state.passkeys.is_none() {
+    let unclaimed = match &state.passkeys {
+        Some(hub) => matches!(hub.claimable().await, Ok(true)),
+        None => false,
+    };
+    let bar = if (state.web.is_none() && state.passkeys.is_none()) || unclaimed {
         pages::Bar::Plain
     } else if routes::signed_in(&state, request.headers()).await {
         pages::Bar::SignedIn
