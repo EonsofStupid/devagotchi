@@ -60,8 +60,9 @@ services:
     volumes:
       - hub-state:/var/lib/devagotchi
       - postgres-socket:/var/run/postgresql
-    read_only: true
-    tmpfs: [/tmp]
+    # Runs as nonroot in an image with nothing else in it, so the only place it can write
+    # is its state volume. (Not `read_only`: Compose writes the config below into the
+    # container, which a read-only one refuses.)
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     restart: unless-stopped

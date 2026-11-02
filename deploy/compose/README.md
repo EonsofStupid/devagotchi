@@ -24,7 +24,7 @@ each one once with your passkey, and the hub issues and checks their tokens itse
 | Service | What it is | Reached from |
 |---|---|---|
 | `postgres` | Postgres 18, the hub's store: accounts, passkeys, sessions, AI connections | Nothing over the network: it has no network (`network_mode: none`) and listens on a Unix socket in a volume only the hub mounts. With no TCP port there is no password to keep. Data checksums are on. |
-| `hub` | The one `devagotchi` binary (D20), built by GitHub from a known commit; no shell, runs as `nonroot`, read-only root filesystem, no capabilities | Caddy, on the compose network |
+| `hub` | The one `devagotchi` binary (D20), built by GitHub from a known commit; no shell, runs as `nonroot` with no capabilities and no privilege escalation, writing only to its state volume | Caddy, on the compose network |
 | `caddy` | TLS for `DEVAGOTCHI_DOMAIN`, certificates from Let's Encrypt | Ports 80 and 443 (and 443/udp for HTTP/3) |
 
 State lives in named volumes: `postgres-data` (the database), `hub-state` (the hub's keys and
