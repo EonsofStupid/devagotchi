@@ -1,0 +1,360 @@
+/* The landing page (`/` signed out, `landing.rs`), served inside /assets/hub.css.
+   A stack of full-viewport pages under the fixed bar: each section snaps in as it scrolls,
+   a rail shows where you are, terms carry tooltips and details open as popups. The display
+   face is a DIN where the system has one (macOS, iOS, Windows). */
+html:has(> body.landing) { scroll-snap-type: y proximity; }
+.landing main { padding: 0 max(var(--gutter), calc(50% - var(--wide) / 2)); }
+.landing h1 { font: 700 clamp(2.4rem, 1.25rem + 4.3vw, 4.2rem)/1.02 var(--font-display);
+  letter-spacing: -.022em; margin: 0 0 24px; max-width: 15ch; text-wrap: balance; }
+.landing h2 { font: 700 clamp(1.75rem, 1.15rem + 1.9vw, 2.6rem)/1.08 var(--font-display);
+  letter-spacing: -.015em; margin: 0 0 16px; max-width: 23ch; text-wrap: balance; }
+.landing h3 { font-size: 1.1rem; line-height: 1.3; margin: 0 0 6px; }
+.landing main .button { padding: 12px 22px; border-radius: 10px; font-weight: 600; }
+.intro { font-size: 1.08rem; max-width: 40em; color: var(--muted); margin: 0 0 28px; }
+.lead { font-size: 1.15rem; line-height: 1.6; max-width: 34em; margin: 0 0 28px; }
+.cta { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 14px; margin: 0 0 16px; }
+
+/* Pages: each section fills the viewport below the bar and snaps to its top. One taller than
+   the viewport (the comparison, the hero on a phone) grows and scrolls naturally. */
+.hero, .band { min-height: calc(100vh - var(--bar-h)); min-height: calc(100svh - var(--bar-h));
+  padding-block: clamp(40px, 8vh, 88px); align-content: center; scroll-snap-align: start; }
+.foot { scroll-snap-align: end; }
+
+/* Where you are: the sections as nodes on a dashed line, like a machine's link to the hub.
+   The one in view is lit like a machine that is online (scroll-driven, below). */
+.rail { display: none; }
+@media (min-width: 1000px) {
+  .landing main { padding-right: max(76px, calc(50% - var(--wide) / 2)); }
+  .rail { position: fixed; z-index: 15; right: 24px; top: 50%; translate: 0 -50%;
+    display: flex; flex-direction: column; gap: 16px; padding: 6px 0; }
+  .rail::before { content: ""; position: absolute; top: 12px; bottom: 12px; left: 6px;
+    border-left: 2px dashed color-mix(in srgb, var(--accent) 40%, transparent); }
+  .rail a { position: relative; display: block; width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid var(--muted); background: var(--bg); }
+  .rail a:hover { border-color: var(--accent); }
+  .rail span { position: absolute; right: calc(100% + 12px); top: 50%; translate: 4px -50%;
+    padding: 4px 10px; border-radius: 8px; background: var(--deep); color: var(--on-deep);
+    font-size: .82rem; font-weight: 600; white-space: nowrap; opacity: 0; pointer-events: none;
+    transition: opacity .15s, translate .15s; }
+  .rail a:hover span, .rail a:focus-visible span { opacity: 1; translate: 0 -50%; }
+}
+@keyframes rail-on { from, to { border-color: var(--online); background: var(--online);
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--online) 24%, transparent); } }
+
+.hero { display: grid; gap: 44px; align-items: center; }
+.state { display: inline-flex; align-items: center; gap: 8px; margin: 0 0 20px; padding: 5px 12px 5px 10px;
+  border: 1px solid currentColor; border-radius: 999px; color: var(--wait); font-size: .9rem; font-weight: 600; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.diagram { width: 100%; max-width: 470px; justify-self: center; }
+.topology { display: block; width: 100%; height: auto; }
+.topology text { font: 12px var(--font-ui); fill: var(--text); }
+.topology .dg-label { fill: var(--muted); font-size: 11px; font-weight: 600; }
+.topology .dg-center { text-anchor: middle; }
+.dg-chip rect, .dg-machine rect { fill: var(--surface); stroke: var(--line); }
+.topology .dg-chip text { text-anchor: middle; font-weight: 600; }
+.dg-rail { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.dg-head { fill: var(--muted); }
+.topology .dg-note { fill: var(--muted); font-size: 11.5px; }
+.dg-box { fill: var(--deep); }
+.dg-egg { fill: var(--on-deep); }
+.dg-face { fill: var(--deep); }
+.dg-smile { fill: none; stroke: var(--deep); stroke-width: 1.8; stroke-linecap: round; }
+.topology .dg-hub-title { font: 700 17px var(--font-display); fill: var(--on-deep); }
+.topology .dg-hub-sub { font-size: 11px; fill: var(--on-deep-muted); }
+.dg-pill { fill: rgba(255, 255, 255, .1); stroke: rgba(255, 255, 255, .24); }
+.topology .dg-pill-text { font-size: 10.5px; font-weight: 600; fill: var(--on-deep); text-anchor: middle; }
+.dg-push { fill: none; stroke: var(--wait); stroke-width: 1.5; stroke-dasharray: 3 3; }
+.dg-head-push { fill: var(--wait); }
+.topology .dg-tiny { font-size: 10px; font-weight: 700; fill: var(--wait); text-anchor: middle; }
+.dg-case { fill: var(--phone); stroke: var(--line); }
+.dg-screen { fill: var(--surface); }
+.topology .dg-ask { font-size: 9.5px; font-weight: 700; text-anchor: middle; }
+.dg-yes { fill: var(--online); }
+.topology .dg-yes-text { font-size: 8.5px; font-weight: 700; fill: var(--surface); text-anchor: middle; }
+.dg-no { fill: none; stroke: var(--revoked); }
+.topology .dg-no-text { font-size: 8.5px; font-weight: 700; fill: var(--revoked); text-anchor: middle; }
+.dg-link { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 5 5;
+  animation: dial-out 1.2s linear 8; }
+.dg-head-link { fill: var(--accent); }
+.dg-online { fill: var(--online); }
+.topology .dg-m-name { font-size: 13px; font-weight: 700; }
+.topology .dg-m-sub { font-size: 11px; fill: var(--muted); }
+@keyframes dial-out { to { stroke-dashoffset: -20; } }
+
+.steps { list-style: none; counter-reset: step; display: grid; gap: 32px; padding: 0; margin: 32px 0 0; }
+.steps li { counter-increment: step; min-width: 0; padding-top: 18px; border-top: 2px solid var(--text); }
+.steps li::before { content: counter(step); display: block; margin-bottom: 12px;
+  font: 700 2.6rem/1 var(--font-display); color: var(--accent); }
+.steps p { margin: 0; color: var(--muted); }
+.steps .terminal { margin-top: 12px; font-size: .8rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.steps + .meta { margin-top: 28px; }
+
+.compare { border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+.landing table.compare { background: none; border: 0; border-radius: 0; overflow: visible; }
+.compare th, .compare td { padding: 16px 18px; border-bottom: 1px solid var(--line); }
+.compare thead th { font: 700 1.1rem var(--font-display); color: var(--text); }
+.compare thead th:first-child { width: 22%; }
+.compare tbody th { color: var(--text); font-size: .95rem; }
+.compare td { color: var(--muted); }
+.compare .ours { background: var(--surface); color: var(--text); border-left: 1px solid var(--line);
+  border-right: 1px solid var(--line); }
+.compare thead .ours { border-top: 4px solid var(--accent); border-radius: 12px 12px 0 0; }
+.evidence { display: inline; margin: 0 0 0 2px; padding: 0; border: 0; background: none; color: inherit;
+  font: inherit; vertical-align: baseline; }
+.cite { display: inline-block; padding: 0 6px; border: 1px solid var(--line); border-radius: 5px;
+  color: var(--accent); font-size: .78rem; font-weight: 600; white-space: nowrap; }
+.evidence:hover .cite { border-color: var(--accent); background: var(--surface); }
+.source { max-width: 62em; margin: 20px 0 0; color: var(--muted); font-size: .9rem; }
+
+.pillars { display: grid; gap: 48px; margin-top: 36px; }
+.pillar h3 { font: 700 1.35rem var(--font-display); padding-bottom: 10px; margin-bottom: 20px;
+  border-bottom: 2px solid var(--accent); }
+.pillar dl, .clients { margin: 0; }
+.pillar dt, .clients dt { font-weight: 700; margin-top: 20px; }
+.pillar dt:first-child, .clients dt:first-child { margin-top: 0; }
+.pillar dd, .clients dd { margin: 4px 0 0; color: var(--muted); }
+.phone-figure { display: flex; flex-direction: column; align-items: center; gap: 16px; margin: 0; }
+.phone { width: 290px; max-width: 100%; padding: 12px 12px 24px; border-radius: 36px; background: var(--phone);
+  box-shadow: 0 30px 60px -30px rgba(12, 40, 26, .45); }
+.phone::before { content: ""; display: block; width: 72px; height: 6px; margin: 4px auto 14px;
+  border-radius: 3px; background: rgba(255, 255, 255, .2); }
+.approval { padding: 16px; border-radius: 22px; background: var(--surface); }
+.asker { margin: 0; color: var(--muted); font-size: .8rem; }
+.ask-title { margin: 2px 0 10px; font-weight: 700; font-size: 1.05rem; line-height: 1.3; }
+.approval .what { margin: 0 0 14px; font-size: .7rem; }
+.decide { display: flex; gap: 8px; margin: 0; }
+.decide span { flex: 1; padding: 10px; border-radius: 10px; text-align: center; font-weight: 600; font-size: .9rem; }
+.decide .yes { background: var(--online); color: var(--surface); }
+.decide .no { border: 1px solid var(--revoked); color: var(--revoked); }
+.phone-figure figcaption { max-width: 24em; color: var(--muted); font-size: .9rem; text-align: center; }
+
+.connect { display: grid; gap: 36px; }
+.address { margin: 20px 0 0; }
+.address code { display: block; padding: 18px 20px; border-radius: 12px; background: var(--deep);
+  color: var(--on-deep); font-size: clamp(1rem, .9rem + .5vw, 1.25rem); user-select: all; -webkit-user-select: all; }
+.clients { margin-bottom: 20px; }
+
+.split { display: grid; gap: 28px; }
+.terminal { min-width: 0; margin: 0; padding: 20px 22px; overflow-x: auto; border-radius: 14px;
+  background: var(--deep); color: var(--on-deep); font: .9rem/1.7 var(--font-mono); }
+.terminal .c { color: var(--on-deep-muted); }
+.facts { margin: 0; padding-left: 1.2em; }
+.facts li { margin: 0 0 10px; }
+.hosted { margin: 20px 0 0; padding: 16px 18px; border-left: 3px solid var(--accent);
+  border-radius: 0 10px 10px 0; background: var(--surface); }
+
+.coming { display: grid; gap: 16px; max-width: 780px; margin: 0; padding: 0; list-style: none; }
+.coming li { padding: 16px 18px; border: 1px dashed var(--muted); border-radius: 12px; }
+
+.faq > * { max-width: 820px; }
+.faq h2 { margin-bottom: 24px; }
+.faq details { border-bottom: 1px solid var(--line); }
+.faq details:first-of-type { border-top: 1px solid var(--line); }
+.faq summary { position: relative; padding: 18px 40px 18px 0; cursor: pointer; list-style: none;
+  font-weight: 600; font-size: 1.05rem; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary::after { content: "+"; position: absolute; right: 6px; top: 17px; color: var(--accent);
+  font-size: 1.5rem; line-height: 1; transition: transform .2s; }
+.faq details[open] summary::after { transform: rotate(45deg); }
+.faq details p { max-width: 62ch; margin: 0 0 18px; color: var(--muted); }
+.faq .meta { margin-top: 20px; }
+
+.closing-card { display: grid; gap: 32px; align-items: center; padding: clamp(32px, 6vw, 64px);
+  border-radius: 24px; background: var(--deep); color: var(--on-deep); }
+.pet { display: none; width: 168px; height: auto; }
+.pet-egg { fill: var(--on-deep); }
+.pet-face { fill: var(--deep); }
+.pet-smile { fill: none; stroke: var(--deep); stroke-width: 7; stroke-linecap: round; }
+.pet-screen { fill: none; stroke: var(--deep); stroke-width: 3; stroke-dasharray: 2 8; stroke-linecap: round; opacity: .35; }
+.closing h2 { max-width: 18ch; }
+.closing p { color: var(--on-deep-muted); margin: 0 0 24px; }
+.closing .cta { margin: 0; }
+.closing .button { background: transparent; color: var(--on-deep); border-color: rgba(255, 255, 255, .4); }
+.closing .button.primary { background: var(--on-deep); color: var(--deep); border-color: var(--on-deep); }
+.closing :focus-visible { outline-color: var(--on-deep); }
+.foot { padding: 20px 0 40px; border-top: 1px solid var(--line); }
+.foot nav { display: flex; flex-wrap: wrap; gap: 8px 24px; }
+.foot a { color: var(--muted); }
+
+/* Tooltips: a term is underlined with dots; hover or focus shows its definition above it.
+   Without anchor positioning the definition sits over the term's line, from the start of
+   its paragraph, so it never runs off a phone's screen. */
+.term { text-decoration: underline dotted 1.5px; text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
+  text-underline-offset: 3px; cursor: help; border-radius: 3px; }
+.term:hover, .term:focus { text-decoration-color: var(--accent); }
+.term:focus { outline: none; }
+.term:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+:is(p, dd, li, td):has(> .term) { position: relative; }
+.tip { position: absolute; z-index: 30; left: 0; width: max-content; max-width: min(20rem, 100%);
+  transform: translateY(calc(-100% - 8px)); padding: 10px 12px; border-radius: 10px;
+  background: var(--deep); color: var(--on-deep); font: 400 .875rem/1.45 var(--font-ui); text-align: left;
+  letter-spacing: normal; white-space: normal; box-shadow: 0 12px 28px -12px rgba(8, 24, 16, .55);
+  visibility: hidden; opacity: 0; transition: opacity .12s, visibility .12s; pointer-events: none; }
+.tip::after { content: ""; position: absolute; left: 0; right: 0; top: 100%; height: 10px; }
+.term:hover > .tip, .term:focus > .tip { visibility: visible; opacity: 1; pointer-events: auto; }
+:is(.band, .hero) > *:has(.term:hover, .term:focus) { position: relative; z-index: 5; }
+@media (min-width: 700px) {
+  @supports (anchor-scope: --term) and (position-area: top) {
+    /* With anchor positioning (and room for it) the definition sits over the term itself:
+       centred, or from the term's start or end near an edge, and below it when the bar is in
+       the way. It always stays inside the viewport. */
+    :is(p, dd, li, td):has(> .term) { position: static; }
+    .term { anchor-name: --term; anchor-scope: --term; }
+    .tip { position: fixed; left: auto; top: calc(var(--bar-h) + 6px); transform: none;
+      position-anchor: --term; position-area: top; margin: 0 0 8px; max-width: 20rem;
+      position-try-fallbacks: --tip-start, --tip-end, --tip-below, --tip-start-below, --tip-end-below; }
+    .tip::after { top: auto; bottom: -10px; }
+  }
+}
+@position-try --tip-start { position-area: top span-right; }
+@position-try --tip-end { position-area: top span-left; }
+@position-try --tip-below { position-area: bottom; top: auto; bottom: 6px; margin: 8px 0 0; }
+@position-try --tip-start-below { position-area: bottom span-right; top: auto; bottom: 6px; margin: 8px 0 0; }
+@position-try --tip-end-below { position-area: bottom span-left; top: auto; bottom: 6px; margin: 8px 0 0; }
+
+/* Popup triggers and the popups themselves (the Popover API: light dismiss, Escape). */
+.pop { display: inline-flex; align-items: center; gap: 8px; padding: 0; border: 0; background: none;
+  color: var(--accent); font: inherit; font-weight: 600; text-decoration: underline;
+  text-decoration-thickness: 1px; text-underline-offset: 3px; cursor: pointer; }
+.pop:hover { text-decoration-thickness: 2px; }
+.pop.watch { text-decoration: none; padding: 6px 4px; }
+.pop.watch:hover { text-decoration: underline; }
+.play { width: 32px; height: 32px; flex: none; }
+.play circle { fill: none; stroke: currentColor; stroke-width: 1.5; }
+.play path { fill: currentColor; }
+.meta .pop { font-weight: 600; }
+.modal { width: min(640px, calc(100vw - 32px)); max-height: min(84vh, 760px); max-height: min(84dvh, 760px);
+  margin: auto; padding: 0; overflow: auto; overscroll-behavior: contain; border: 1px solid var(--line);
+  border-radius: 20px; background: var(--surface); color: var(--text);
+  box-shadow: 0 40px 80px -30px rgba(6, 20, 13, .6); }
+.modal::backdrop { background: var(--veil); }
+@supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
+  .modal::backdrop { -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+}
+.modal-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: flex-start;
+  justify-content: space-between; gap: 16px; padding: 22px 24px 14px; background: var(--surface);
+  border-bottom: 1px solid var(--line); }
+.landing .modal h2 { margin: 0; max-width: none; font: 700 1.5rem/1.15 var(--font-display); letter-spacing: -.01em; }
+.modal .close { flex: none; padding: 6px 14px; border-radius: 999px; font-size: .9rem; font-weight: 600; }
+.modal-body { padding: 18px 24px 26px; }
+.modal-body > p { margin: 0 0 14px; }
+.modal-body h3 { margin: 22px 0 8px; font: 700 1.05rem var(--font-display); color: var(--accent); }
+.modal-kicker { color: var(--muted); font-weight: 600; }
+.modal-ours { padding: 12px 14px; border-radius: 10px; background: var(--sunk); }
+.modal-source { color: var(--muted); font-size: .92rem; }
+.modal-steps { margin: 0 0 16px; padding-left: 1.4em; }
+.modal-steps li { margin: 0 0 12px; padding-left: 4px; }
+.modal-steps li::marker { color: var(--accent); font-weight: 700; }
+.tools { margin: 0; }
+.tools dt { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.tools dt code { padding: 1px 7px; border-radius: 6px; background: var(--sunk); font-size: .82rem; }
+.tools dd { margin: 4px 0 0; color: var(--muted); }
+.video-slot { display: grid; place-items: center; aspect-ratio: 16 / 9; margin: 0 0 18px; padding: 20px;
+  border-radius: 14px; background: var(--deep); color: var(--on-deep-muted); text-align: center; }
+.video-slot p { max-width: 26em; margin: 0; }
+html:has(.modal:popover-open) { overflow: hidden; }
+
+@media (min-width: 760px) {
+  .closing-card { grid-template-columns: minmax(0, 1fr) auto; }
+  .pet { display: block; margin-right: clamp(0px, 4vw, 48px); }
+  .pillars { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .phone-figure { grid-column: 1 / -1; }
+}
+@media (min-width: 900px) {
+  .hero { grid-template-columns: minmax(0, 1.12fr) minmax(0, .88fr); gap: 56px; }
+  .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px; }
+  .connect, .split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; align-items: start; }
+}
+@media (min-width: 1100px) {
+  .pillars { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, .85fr); }
+  .phone-figure { grid-column: auto; }
+}
+@media (min-width: 721px) {
+  .compare tbody tr:last-child td { border-bottom: 1px solid var(--line); }
+  .compare tbody tr:last-child .ours { border-bottom: 1px solid var(--line); border-radius: 0 0 12px 12px; }
+}
+@media (max-width: 720px) {
+  .compare thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .compare, .compare tbody, .compare tr, .compare th, .compare td { display: block; width: auto; }
+  .compare tr { padding: 18px 0; border-bottom: 1px solid var(--line); }
+  .compare th, .compare td, .compare .ours { padding: 0; border: 0; border-radius: 0; background: none; }
+  .compare tbody th { margin-bottom: 8px; font: 700 1.1rem var(--font-display); }
+  .compare td::before { content: attr(data-label); display: block; color: var(--muted); font-size: .78rem; font-weight: 700; }
+  .compare td.ours { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px;
+    background: var(--surface); }
+  .compare td.ours::before { color: var(--accent); }
+}
+@media (max-width: 600px) {
+  .modal { width: 100%; max-width: 100%; max-height: 88vh; max-height: 88dvh; margin: auto 0 0;
+    border-width: 1px 0 0; border-radius: 22px 22px 0 0; }
+  .modal-head { padding: 18px 20px 12px; }
+  .modal-body { padding: 16px 20px calc(24px + env(safe-area-inset-bottom)); }
+}
+
+/* Motion. Opening: the hero arrives once. Scrolling: each page rises into place as it comes
+   in. Offsets, not transforms, so a page never becomes the box a tooltip is placed in. All
+   of it is skipped for anyone who asks for less motion. */
+@media (prefers-reduced-motion: no-preference) {
+  html { scroll-behavior: smooth; }
+  .hero-text > *, .diagram { position: relative; animation: arrive .7s cubic-bezier(.2, .7, .2, 1) both; }
+  .hero-text > :nth-child(2) { animation-delay: 60ms; }
+  .hero-text > :nth-child(3) { animation-delay: 140ms; }
+  .hero-text > :nth-child(4) { animation-delay: 200ms; }
+  .hero-text > :nth-child(5) { animation-delay: 240ms; }
+  .diagram { animation-delay: 180ms; }
+  .modal, .modal::backdrop { transition: opacity .2s, translate .24s cubic-bezier(.2, .8, .2, 1),
+    overlay .24s allow-discrete, display .24s allow-discrete; }
+  .modal { opacity: 0; translate: 0 18px; }
+  .modal::backdrop { opacity: 0; }
+  .modal:popover-open, .modal:popover-open::backdrop { opacity: 1; translate: 0 0; }
+  @starting-style {
+    .modal:popover-open { opacity: 0; translate: 0 18px; }
+    .modal:popover-open::backdrop { opacity: 0; }
+  }
+  @supports (animation-timeline: view()) {
+    /* Keyed to the page, not to each element: everything on a page is in place by the time
+       the page has snapped, however far down the screen it sits. */
+    .band { view-timeline: --page block; }
+    .band > :not(.modal) { position: relative; animation: rise linear both; animation-timeline: --page;
+      animation-range: entry 8% entry 70%; }
+    .band > h2, .band > :first-child { animation-range: entry 0% entry 55%; }
+  }
+}
+@keyframes arrive { from { opacity: 0; top: 18px; } }
+@keyframes rise { from { opacity: 0; top: 56px; } }
+
+/* Where you are, driven by scrolling (not motion, so it stays for reduced motion): a hairline
+   under the bar fills as you read, and the rail lights the page in view. */
+@supports (animation-timeline: scroll()) {
+  .landing .bar::after { content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+    background: var(--accent); transform-origin: 0 50%; animation: fill linear both;
+    animation-timeline: scroll(root block); }
+}
+@keyframes fill { from { scale: 0 1; } to { scale: 1 1; } }
+@supports (timeline-scope: --a) and (animation-timeline: view()) {
+  .landing main { timeline-scope: --p-top, --p-how, --p-compare, --p-features, --p-connect,
+    --p-self-host, --p-next, --p-faq, --p-get-started; }
+  #top { view-timeline: --p-top block, --page block; }
+  #how { view-timeline: --p-how block, --page block; }
+  #compare { view-timeline: --p-compare block, --page block; }
+  #features { view-timeline: --p-features block, --page block; }
+  #connect { view-timeline: --p-connect block, --page block; }
+  #self-host { view-timeline: --p-self-host block, --page block; }
+  #next { view-timeline: --p-next block, --page block; }
+  #faq { view-timeline: --p-faq block, --page block; }
+  #get-started { view-timeline: --p-get-started block, --page block; }
+  .rail a { animation: rail-on linear; animation-range: cover 50vh cover calc(100% - 50vh); }
+  .rail a[href="#top"] { animation-timeline: --p-top; }
+  .rail a[href="#how"] { animation-timeline: --p-how; }
+  .rail a[href="#compare"] { animation-timeline: --p-compare; }
+  .rail a[href="#features"] { animation-timeline: --p-features; }
+  .rail a[href="#connect"] { animation-timeline: --p-connect; }
+  .rail a[href="#self-host"] { animation-timeline: --p-self-host; }
+  .rail a[href="#next"] { animation-timeline: --p-next; }
+  .rail a[href="#faq"] { animation-timeline: --p-faq; }
+  .rail a[href="#get-started"] { animation-timeline: --p-get-started; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dg-link { animation: none; }
+  .faq summary::after, .tip, .rail span { transition: none; }
+}

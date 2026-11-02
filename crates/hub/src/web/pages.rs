@@ -7,7 +7,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-pub const CSS: &str = include_str!("hub.css");
+/// The hub's one stylesheet: the pages' shell (`hub.css`) and the landing page (`landing.css`).
+pub const CSS: &str = concat!(include_str!("hub.css"), include_str!("landing.css"));
 
 pub use crate::hub::Machine;
 
@@ -38,7 +39,7 @@ fn bar_html(bar: &Bar) -> String {
         ),
     };
     format!(
-        "<header class=\"bar\"><a class=\"brand\" href=\"/\">{MARK}Devagotchi</a>{links}</header>"
+        "<header class=\"bar\"><a class=\"brand\" href=\"/\">{MARK}<span class=\"brand-name\">Devagotchi</span></a>{links}</header>"
     )
 }
 
@@ -75,7 +76,8 @@ pub fn scripted(status: StatusCode, title: &str, body: &str, script: &'static st
 #[derive(Clone, Copy)]
 enum Kind {
     Plain,
-    /// The landing page: a plain page (no script) laid out wide (`body.landing`).
+    /// The landing page: a plain page (no script) laid out wide as full-viewport pages
+    /// under the fixed bar (`body.landing`, `landing.css`).
     Landing,
     App,
     Script(&'static str),
