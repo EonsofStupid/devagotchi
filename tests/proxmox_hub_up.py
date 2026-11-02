@@ -61,6 +61,9 @@ if cmd == "exec":
         state["stopped"] = True; save(); sys.exit(0)
     if "ss -Hltn" in line: sys.exit(0 if state.get("port_busy") else 1)
     if "ss -Hltnp" in line: print("LISTEN 0 4096 127.0.0.1:8787 users:((\"devagotchi\"))"); sys.exit(0)
+    if "docker compose port hub" in line:
+        if state.get("ours"): print("0.0.0.0:8787"); sys.exit(0)
+        sys.exit(1)
     if "command -v caddy" in line: sys.exit(0 if state.get("edge") else 1)
     if "command -v curl" in line or inner[0] == "mkdir": sys.exit(0)
     if inner[0].endswith("/install.sh"):
@@ -193,7 +196,13 @@ def main() -> int:
     check("port", code == 1 and "still listens on port 8787" in out and "install" not in s, out)
     print("PASS a busy port stops it before anything is installed")
 
-    # 5. No such container.
+    # 5. A re-run: the port is held by the stack this script installed before, so it goes
+    #    on and installs over it.
+    code, out, s = run("rerun", config=UNPRIVILEGED, host_proxy=True, port_busy=True, ours=True)
+    check("rerun", code == 0 and "updating it in place" in out and "install" in s, out)
+    print("PASS a re-run over the hub it installed before goes ahead")
+
+    # 6. No such container.
     code, out, s = run("missing", config=UNPRIVILEGED, ct="111")
     check("missing", code == 1 and "no container 110" in out and len(s["calls"]) == 1, out)
     print("PASS a container that is not there stops it before anything changes")

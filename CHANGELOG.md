@@ -7,6 +7,13 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### hub-up.sh re-runs over its own stack (increment 51)
+- `deploy/proxmox/hub-up.sh` refused a second run: the hub it had installed holds the port,
+  and it stopped on "something still listens". It now goes on when that port is published
+  by its own stack's hub (`docker compose port hub` in `/opt/devagotchi-hub`), so a re-run
+  updates the stack in place, as its header says. Anything else on the port still stops it
+  before anything is installed. `tests/proxmox_hub_up.py` covers both.
+
 ### The hub stack's container names (increment 50)
 - `deploy/compose/compose.yaml` names each container for its service alone:
   `devagotchi-hub`, `devagotchi-postgres`, `devagotchi-caddy`, no `-1`. The prefix is the
