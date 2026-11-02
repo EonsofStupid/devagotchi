@@ -7,6 +7,13 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### The hub stack's container names (increment 50)
+- `deploy/compose/compose.yaml` names each container for its service alone:
+  `devagotchi-hub`, `devagotchi-postgres`, `devagotchi-caddy`, no `-1`. The prefix is the
+  Compose project name, so `docker compose -p NAME` still runs a second stack beside it.
+  The next `docker compose up` recreates the containers under the new names; the volumes,
+  and so the database and the hub's state, stay.
+
 ### Dependencies (increment 43)
 - base64 0.23.1, getrandom 0.4.3, tokio-tungstenite 0.30 (the link's WebSocket), rusqlite
   0.39 (libsqlite3-sys 0.37), aws-lc-rs 1.19 (aws-lc-sys 0.47), tokio 1.54.1, uuid 1.29,
