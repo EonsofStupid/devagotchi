@@ -7,6 +7,16 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Dependencies (increment 43)
+- base64 0.23.1, getrandom 0.4.3, tokio-tungstenite 0.30 (the link's WebSocket), rusqlite
+  0.39 (libsqlite3-sys 0.37), aws-lc-rs 1.19 (aws-lc-sys 0.47), tokio 1.54.1, uuid 1.29,
+  tauri-build 2.7.4, and actions/checkout v7.0.1, actions/setup-python v7.1.0 and a newer
+  taiki-e/install-action v2 in CI.
+- rusqlite 0.38 moved its u64 and usize conversions behind the `fallible_uint` feature; it is
+  on, so they behave as before: values up to i64::MAX are stored, and larger ones are refused.
+- rusqlite stays at 0.39. 0.40 and later need libsqlite3-sys 0.38, and sqlx 0.9 accepts only
+  versions below 0.38, which both link to the same SQLite.
+
 ### Two account modes side by side (increment 42: PR #79 merged beside hub mode)
 - `auth.mode hub` (passkeys, the hub's own OAuth for AI clients, the browser claim, SQLite or
   Postgres) and `auth.mode devagotchi` (PR #79: provisional AI accounts, upstream sign-in,

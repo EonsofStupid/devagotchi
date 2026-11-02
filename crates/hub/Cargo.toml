@@ -41,7 +41,7 @@ tower-service = "0.3"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
 # The machine link: verify device keys, mint nonces and enrollment codes.
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
-getrandom = "0.3"
+getrandom = "0.4"
 # Browser sign-in: PKCE challenge, state and session ids are base64url.
 base64 = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }

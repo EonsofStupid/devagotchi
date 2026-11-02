@@ -20,7 +20,7 @@ name = "devagotchi"
 path = "src/main.rs"
 
 [build-dependencies]
-tauri-build = { version = "=2.7.3", features = [] }
+tauri-build = { version = "=2.7.4", features = [] }
 
 [dependencies]
 # The inspector links only the contracts and the typed client, never the broker.
