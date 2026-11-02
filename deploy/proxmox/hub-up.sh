@@ -114,8 +114,14 @@ in_ct sh -c '
   fi
   systemctl disable --now devagotchi-hub.service 2>/dev/null || true
 '
+# The port is free, or this script's own stack holds it (a re-run): anything else stops here.
+ours() { in_ct sh -c "cd /opt/devagotchi-hub 2>/dev/null && docker compose port hub 8787 2>/dev/null | grep -q ':$port\$'" 2>/dev/null; }
 if in_ct sh -c "ss -Hltn 'sport = :$port' | grep -q ." 2>/dev/null; then
-  die "something in CT $ct still listens on port $port: $(in_ct ss -Hltnp "sport = :$port" | head -1)"
+  if ours; then
+    note "the hub this script installed holds port $port; updating it in place"
+  else
+    die "something in CT $ct still listens on port $port: $(in_ct ss -Hltnp "sport = :$port" | head -1)"
+  fi
 fi
 
 # 4. The stack, from one commit of the deploy files.

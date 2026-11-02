@@ -7,6 +7,13 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### hub-up.sh re-runs over its own stack (increment 51)
+- `deploy/proxmox/hub-up.sh` refused a second run: the hub it had installed holds the port,
+  and it stopped on "something still listens". It now goes on when that port is published
+  by its own stack's hub (`docker compose port hub` in `/opt/devagotchi-hub`), so a re-run
+  updates the stack in place, as its header says. Anything else on the port still stops it
+  before anything is installed. `tests/proxmox_hub_up.py` covers both.
+
 ### Dependencies (increment 43)
 - base64 0.23.1, getrandom 0.4.3, tokio-tungstenite 0.30 (the link's WebSocket), rusqlite
   0.39 (libsqlite3-sys 0.37), aws-lc-rs 1.19 (aws-lc-sys 0.47), tokio 1.54.1, uuid 1.29,
