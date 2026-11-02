@@ -259,6 +259,29 @@ limits are the config's, each with a default:
 
 With `auth.nomen` as well, any token that is not the hub's own goes to Nomen.
 
+### A terminal signs in (`devagotchi login`)
+
+`devagotchi login --hub <public_url>` (app.devagotchi.com when no `--hub` is given) is device
+authorization (RFC 8628) at the endpoints the metadata names:
+
+1. The CLI posts to `/oauth/device` as `devagotchi-cli`, a client built into the hub (any
+   client registered at `/oauth/register` may ask too) and prints
+   `<public_url>/device?code=XXXX-XXXX`.
+2. The person opens it on any device. Not signed in: the passkey sign-in first, then back.
+   The page names the app and the account and shows the code to check against the
+   terminal; **Approve** is a POST from that page alone, as **Connect** is. `/device` with no
+   code asks for it.
+3. The CLI polls `/oauth/token` (`urn:ietf:params:oauth:grant-type:device_code`) every 5
+   seconds and gets the same `dgh_`/`dgr_` pair an AI client does: for this hub's `/mcp`, in
+   its own family, acting as the account's AI. It asks `/api/v1/me` whose they are and keeps
+   them in `account.json` (0600); `devagotchi mcp --hub` relays an agent's session with them,
+   refreshes them at the token endpoint, and `devagotchi logout` revokes them here.
+
+Codes are 8 consonants (about 34 bits), work for 10 minutes and once; the device code and
+the user code are stored only as SHA-256; polling faster than every 5 seconds is answered
+`slow_down`; at most 1000 sign-ins wait at once. `tests/device_login_browser.py` runs it end
+to end with the real binary and Chrome.
+
 ## Shippin sign-in (Nomen)
 
 Nomen's access tokens are opaque: only Nomen can say whose they are. The hub asks it about

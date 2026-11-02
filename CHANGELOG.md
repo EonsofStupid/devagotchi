@@ -7,6 +7,26 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### `devagotchi login` against a hub with its own accounts (increment 53)
+- `devagotchi login --hub URL` (and plain `devagotchi login`, app.devagotchi.com) works
+  against a hub in `auth.mode hub`: it failed there, since it spoke only the routes of
+  `auth.mode devagotchi`. The CLI now finds the endpoints in the hub's RFC 8414 metadata
+  (whose `issuer` must be the URL given) and does RFC 8628 device authorization; a hub in
+  `auth.mode devagotchi` still opens an agent account at once, as before.
+- The hub (`auth.mode hub`) is a device authorization server: `/oauth/device` (advertised as
+  `device_authorization_endpoint`, client `devagotchi-cli` built in), the `device_code` grant
+  at `/oauth/token`, and `/device`, where a person signed in with their passkey checks the
+  code against the terminal and approves or cancels. Codes are 8 consonants, live 10
+  minutes, work once and are stored as SHA-256; polls faster than every 5 s get `slow_down`.
+  The tokens are the hub's own `dgh_`/`dgr_` pair, as an AI client's. New table
+  `oauth_devices` (migration 0004, SQLite and Postgres).
+- The CLI learns the account from `/api/v1/me` (hub tokens are opaque), refreshes at the
+  metadata's token endpoint and `logout` revokes at its revocation endpoint (it tried
+  Nomen's path before, for hub accounts too).
+- `tests/device_login_browser.py` (CI, `e2e` on ubuntu-24.04): the real binary signs in
+  through Chrome with a virtual passkey, relays an MCP session as the account, refreshes,
+  logs out, and is cancelled.
+
 ### AI clients connect to a hub-mode hub, proven with real clients (increment 52)
 - **Connect worked in no real browser.** The consent page at `/oauth/authorize` carried the
   pages' `Referrer-Policy: no-referrer`, under which a browser sends its form POST with

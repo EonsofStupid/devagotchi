@@ -1,13 +1,17 @@
 //! The account this machine signs in with: `devagotchi login`, `logout`, `whoami` (D22).
 //!
-//! Sign-in is OAuth device authorization (RFC 8628) against Nomen, Shippin's identity
-//! provider: the terminal shows a short code and a URL, the person opens it anywhere — a
-//! phone will do — and the tokens arrive here. No browser on this machine, no local port,
-//! no secret in the binary: the CLI is a public client. The tokens rest in one owner-only
-//! file under the config directory (`account.json`, 0600, written whole and renamed into
-//! place); nothing else reads it but this binary, and the hub never sees it — a hub checks
-//! the access token the usual way (`nomen`, introspection), so a stolen file is a stolen
-//! token and nothing more, and `logout` revokes it.
+//! Sign-in is OAuth device authorization (RFC 8628): the terminal shows a short code and a
+//! URL, the person opens it anywhere — a phone will do — and the tokens arrive here. No
+//! browser on this machine, no local port, no secret in the binary: the CLI is a public
+//! client. By default it signs in at a hub (`--hub`, app.devagotchi.com unless named),
+//! finding the endpoints in the hub's RFC 8414 metadata: a hub with its own accounts
+//! (`auth.mode hub`) shows the code on its `/device` page, approved by a person signed in
+//! with their passkey; a hub that opens accounts for agents (`auth.mode devagotchi`) gives
+//! one at once, claimed later. `--issuer` signs in at Nomen directly. The tokens rest in one
+//! owner-only file under the config directory (`account.json`, 0600, written whole and
+//! renamed into place); nothing else reads it but this binary. A hub checks the access
+//! token the usual way, so a stolen file is a stolen token and nothing more, and `logout`
+//! revokes it where it was issued.
 //!
 //! `login --local` records the other choice D22 allows: this machine runs without an
 //! account. Until one of the two is on file, `devagotchi start` says so once per run.
@@ -38,13 +42,15 @@ pub const USAGE: &str = "Usage:
   devagotchi logout                                     revoke the tokens and forget the account
   devagotchi whoami [--json]                            who this machine is signed in as
 
-login shows a code and a URL; open the URL on any device, enter the code, and the sign-in
-lands here (OAuth device authorization, RFC 8628). Tokens are kept in account.json under
+login shows a code and a URL; open the URL on any device, check or enter the code, approve
+it there (on a hub, signed in with your passkey), and the sign-in lands here (OAuth device
+authorization, RFC 8628). --hub defaults to https://app.devagotchi.com. Tokens are kept in account.json under
 the config directory, readable by you alone. The hosted hub (devagotchi.com, shippin.cloud)
 requires an account; a local or self-hosted run does not, and --local records that choice.
 
-Defaults: issuer https://id.shippin.cloud, client id devagotchi-cli@shippin (the native
-application the operator registers in Nomen with device authorization and refresh tokens).";
+With --issuer, the client id is devagotchi-cli@shippin unless --client-id names another (the
+native application the operator registers in Nomen with device authorization and refresh
+tokens).";
 
 pub const DEFAULT_ISSUER: &str = "https://id.shippin.cloud";
 pub const DEFAULT_CLIENT_ID: &str = "devagotchi-cli@shippin";
@@ -486,12 +492,15 @@ async fn read_json<T: serde::de::DeserializeOwned>(
     let body = response
         .bytes()
         .await
-        .map_err(|error| Refusal::Unavailable(format!("Nomen: {error}")))?;
+        .map_err(|error| Refusal::Unavailable(format!("the issuer: {error}")))?;
     if body.len() > MAX_ANSWER_BYTES {
-        return Err(Refusal::Unavailable("Nomen's answer is too large".into()));
+        return Err(Refusal::Unavailable(
+            "the issuer's answer is too large".into(),
+        ));
     }
-    serde_json::from_slice(&body)
-        .map_err(|_| Refusal::Unavailable("Nomen's answer is not the JSON an issuer sends".into()))
+    serde_json::from_slice(&body).map_err(|_| {
+        Refusal::Unavailable("the issuer's answer is not the JSON an issuer sends".into())
+    })
 }
 
 pub fn unix_now() -> u64 {
@@ -624,29 +633,79 @@ async fn login(args: &[String], path: &Path) -> Outcome {
     Ok(())
 }
 
-/// Device authorization against the hub's own authorization server.
-async fn hub_device_login(hub: &str, tell: &mut dyn Write) -> Result<Account, Refusal> {
-    let hub = hub.trim_end_matches('/');
-    let http = reqwest::Client::builder()
+/// The CLI's client id at a hub: built in, no registration (`web/device.rs`).
+const HUB_CLIENT: &str = "devagotchi-cli";
+/// What the CLI asks a hub for: its MCP tools, and a refresh token.
+const HUB_SCOPE: &str = "mcp offline_access";
+
+fn hub_http() -> Result<reqwest::Client, Refusal> {
+    reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
+        .connect_timeout(Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::none())
         .build()
-        .map_err(|error| Refusal::Unavailable(error.to_string()))?;
-    let started: serde_json::Value = http
-        .post(format!("{hub}/auth/agent/start"))
-        .form(&[("client_id", "devagotchi-cli"), ("agent", "cli")])
+        .map_err(|error| Refusal::Unavailable(error.to_string()))
+}
+
+/// The hub's authorization-server metadata (RFC 8414): where its device authorization,
+/// token and revocation endpoints are, whichever auth mode it runs.
+async fn hub_metadata(http: &reqwest::Client, hub: &str) -> Result<serde_json::Value, Refusal> {
+    let response = http
+        .get(format!("{hub}/.well-known/oauth-authorization-server"))
         .send()
         .await
-        .map_err(|error| Refusal::Unavailable(format!("hub agent start: {error}")))?
-        .json()
+        .map_err(|error| Refusal::Unavailable(format!("hub {hub}: {error}")))?;
+    let status = response.status();
+    if status == reqwest::StatusCode::NOT_FOUND {
+        return Err(Refusal::Refused(format!(
+            "{hub} has no sign-in of its own (no authorization-server metadata)"
+        )));
+    }
+    if !status.is_success() {
+        return Err(Refusal::Unavailable(format!(
+            "hub metadata answered {status}"
+        )));
+    }
+    let metadata: serde_json::Value = read_json(response).await?;
+    // RFC 8414 §3.3: the metadata is the hub's own only when it names that address.
+    let issuer = metadata["issuer"]
+        .as_str()
+        .unwrap_or("")
+        .trim_end_matches('/');
+    if issuer != hub {
+        return Err(Refusal::Refused(format!(
+            "{hub} says its address is {issuer:?}; run `devagotchi login --hub {issuer}`"
+        )));
+    }
+    Ok(metadata)
+}
+
+/// One endpoint the metadata names: on the hub itself, or the hub is not trusted with it.
+fn hub_endpoint(metadata: &serde_json::Value, hub: &str, name: &str) -> Option<String> {
+    metadata[name]
+        .as_str()
+        .filter(|url| url.starts_with(&format!("{hub}/")))
+        .map(str::to_string)
+}
+
+/// Sign in at a hub: an account at once where the hub opens them for agents
+/// (`auth.mode devagotchi`, claimed later), otherwise device authorization (RFC 8628) at
+/// the endpoints the hub's metadata names: the person approves the code on the hub's
+/// `/device` page, signed in with their passkey (`auth.mode hub`).
+async fn hub_device_login(hub: &str, tell: &mut dyn Write) -> Result<Account, Refusal> {
+    let hub = hub.trim_end_matches('/');
+    let http = hub_http()?;
+    let agent = http
+        .post(format!("{hub}/auth/agent/start"))
+        .form(&[("client_id", HUB_CLIENT), ("agent", "cli")])
+        .send()
         .await
-        .map_err(|_| Refusal::Unavailable("hub agent start was not JSON".into()))?;
-    if started.get("access_token").is_some() {
-        let access = started["access_token"]
-            .as_str()
-            .ok_or_else(|| Refusal::Unavailable("hub sent no access token".into()))?
-            .to_string();
-        let subject = jwt_sub(&access)
+        .map_err(|error| Refusal::Unavailable(format!("hub {hub}: {error}")))?;
+    if agent.status().is_success()
+        && let Ok(started) = read_json::<serde_json::Value>(agent).await
+        && let Some(access) = started["access_token"].as_str()
+    {
+        let subject = jwt_sub(access)
             .ok_or_else(|| Refusal::Unavailable("hub access token has no subject".into()))?;
         let claim = started["claim_code"].as_str().unwrap_or("");
         let url = started["claim_url"].as_str().unwrap_or("");
@@ -656,100 +715,174 @@ async fn hub_device_login(hub: &str, tell: &mut dyn Write) -> Result<Account, Re
         );
         return Ok(Account {
             issuer: hub.to_string(),
-            client_id: "devagotchi-cli".into(),
+            client_id: HUB_CLIENT.into(),
             subject,
             username: None,
             email: None,
-            access_token: access,
+            access_token: access.to_string(),
             refresh_token: started["refresh_token"].as_str().map(str::to_string),
             expires_at: unix_now() + started["expires_in"].as_u64().unwrap_or(3600),
             signed_in_at: unix_now(),
         });
     }
-    let started: serde_json::Value = http
-        .post(format!("{hub}/device"))
-        .form(&[("client_id", "devagotchi-cli")])
+    let metadata = hub_metadata(&http, hub).await?;
+    let (Some(device), Some(token)) = (
+        hub_endpoint(&metadata, hub, "device_authorization_endpoint"),
+        hub_endpoint(&metadata, hub, "token_endpoint"),
+    ) else {
+        return Err(Refusal::Refused(format!(
+            "{hub} offers no sign-in from a terminal (no device authorization endpoint)"
+        )));
+    };
+    let response = http
+        .post(&device)
+        .form(&[("client_id", HUB_CLIENT), ("scope", HUB_SCOPE)])
         .send()
         .await
-        .map_err(|error| Refusal::Unavailable(format!("hub device: {error}")))?
-        .json()
-        .await
-        .map_err(|_| Refusal::Unavailable("hub device authorization was not JSON".into()))?;
-    let device_code = started["device_code"]
-        .as_str()
-        .ok_or_else(|| Refusal::Unavailable("hub sent no device code".into()))?;
-    let user_code = started["user_code"].as_str().unwrap_or("");
-    let fallback = format!("{hub}/device");
-    let verification = started["verification_uri"].as_str().unwrap_or(&fallback);
-    let _ = writeln!(
-        tell,
-        "Open {verification} and approve this machine.\nCode: {user_code}"
-    );
-    let deadline = unix_now() + MAX_WAIT.as_secs();
-    loop {
-        if unix_now() > deadline {
-            return Err(Refusal::Refused("the sign-in code expired".into()));
+        .map_err(|error| Refusal::Unavailable(format!("hub device authorization: {error}")))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let error: OAuthError = read_json(response).await.unwrap_or_default();
+        return Err(Refusal::Refused(if error.error.is_empty() {
+            format!("hub device authorization answered {status}")
+        } else {
+            error.error
+        }));
+    }
+    let auth: DeviceAuthorization = read_json(response).await?;
+    match &auth.verification_uri_complete {
+        Some(complete) => {
+            let _ = writeln!(
+                tell,
+                "To sign in, open {complete}\n  and check it shows the code {} (or open {} and enter it)",
+                auth.user_code, auth.verification_uri
+            );
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        None => {
+            let _ = writeln!(
+                tell,
+                "To sign in, open {} and enter the code {}",
+                auth.verification_uri, auth.user_code
+            );
+        }
+    }
+    let _ = writeln!(tell, "Waiting for you to approve it there…");
+    let started = unix_now();
+    let mut interval = Duration::from_secs(auth.interval.unwrap_or(5).max(1));
+    let deadline = Duration::from_secs(auth.expires_in).min(MAX_WAIT);
+    loop {
+        tokio::time::sleep(interval).await;
+        if Duration::from_secs(unix_now().saturating_sub(started)) > deadline {
+            return Err(Refusal::Refused(
+                "the code expired before it was approved; run `devagotchi login` again".into(),
+            ));
+        }
         let response = http
-            .post(format!("{hub}/token"))
+            .post(&token)
             .form(&[
                 ("grant_type", DEVICE_GRANT_HUB),
-                ("device_code", device_code),
-                ("client_id", "devagotchi-cli"),
+                ("device_code", auth.device_code.as_str()),
+                ("client_id", HUB_CLIENT),
             ])
             .send()
             .await
             .map_err(|error| Refusal::Unavailable(format!("hub token: {error}")))?;
         let status = response.status();
-        let body: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|_| Refusal::Unavailable("hub token was not JSON".into()))?;
         if status.is_success() {
-            let access = body["access_token"]
-                .as_str()
-                .ok_or_else(|| Refusal::Unavailable("hub sent no access token".into()))?
-                .to_string();
-            let subject = jwt_sub(&access)
-                .ok_or_else(|| Refusal::Unavailable("hub access token has no subject".into()))?;
-            return Ok(Account {
-                issuer: hub.to_string(),
-                client_id: "devagotchi-cli".into(),
-                subject,
-                username: None,
-                email: None,
-                access_token: access,
-                refresh_token: body["refresh_token"].as_str().map(str::to_string),
-                expires_at: unix_now() + body["expires_in"].as_u64().unwrap_or(3600),
-                signed_in_at: unix_now(),
-            });
+            let tokens: TokenAnswer = read_json(response).await?;
+            return hub_account(&http, hub, tokens).await;
         }
-        match body["error"].as_str() {
-            Some("authorization_pending" | "slow_down") => continue,
-            Some(error) => return Err(Refusal::Refused(error.to_string())),
-            None => {
-                return Err(Refusal::Unavailable(format!("hub token answered {status}")));
+        let error: OAuthError = read_json(response).await.unwrap_or_default();
+        match error.error.as_str() {
+            "authorization_pending" => {}
+            "slow_down" => interval += Duration::from_secs(5),
+            "access_denied" => {
+                return Err(Refusal::Refused("you cancelled the sign-in".into()));
             }
+            "expired_token" => {
+                return Err(Refusal::Refused(
+                    "the code expired before it was approved; run `devagotchi login` again".into(),
+                ));
+            }
+            "" => return Err(Refusal::Unavailable(format!("hub token answered {status}"))),
+            other => return Err(Refusal::Refused(other.to_string())),
         }
     }
+}
+
+/// The account a hub's tokens speak for: a signed token names it (`auth.mode devagotchi`);
+/// an opaque one (`auth.mode hub`) is asked about at the hub's `/api/v1/me`.
+async fn hub_account(
+    http: &reqwest::Client,
+    hub: &str,
+    tokens: TokenAnswer,
+) -> Result<Account, Refusal> {
+    let now = unix_now();
+    let (subject, username) = match jwt_sub(&tokens.access_token) {
+        Some(subject) => (subject, None),
+        None => {
+            let response = http
+                .get(format!("{hub}/api/v1/me"))
+                .bearer_auth(&tokens.access_token)
+                .send()
+                .await
+                .map_err(|error| Refusal::Unavailable(format!("hub /api/v1/me: {error}")))?;
+            if !response.status().is_success() {
+                return Err(Refusal::Unavailable(format!(
+                    "hub /api/v1/me answered {}",
+                    response.status()
+                )));
+            }
+            let me: serde_json::Value = read_json(response).await?;
+            let subject = me["subject"]
+                .as_str()
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| Refusal::Unavailable("the hub named no account".into()))?;
+            (
+                subject.to_string(),
+                me["name"]
+                    .as_str()
+                    .filter(|n| !n.is_empty())
+                    .map(str::to_string),
+            )
+        }
+    };
+    Ok(Account {
+        issuer: hub.to_string(),
+        client_id: HUB_CLIENT.into(),
+        subject,
+        username,
+        email: None,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_at: now + tokens.expires_in.unwrap_or(3600),
+        signed_in_at: now,
+    })
+}
+
+/// A hub's token endpoint from its metadata; `/token` (`auth.mode devagotchi`) when the
+/// metadata cannot be read.
+async fn hub_token_endpoint(http: &reqwest::Client, hub: &str) -> String {
+    match hub_metadata(http, hub).await {
+        Ok(metadata) => hub_endpoint(&metadata, hub, "token_endpoint"),
+        Err(_) => None,
+    }
+    .unwrap_or_else(|| format!("{hub}/token"))
 }
 
 async fn hub_refresh(account: &Account) -> Result<Account, Refusal> {
     let Some(refresh) = account.refresh_token.as_deref() else {
         return Err(Refusal::Refused("no refresh token".into()));
     };
-    let http = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|error| Refusal::Unavailable(error.to_string()))?;
+    let hub = account.issuer.trim_end_matches('/');
+    let http = hub_http()?;
+    let token = hub_token_endpoint(&http, hub).await;
     let body: serde_json::Value = http
-        .post(format!("{}/token", account.issuer.trim_end_matches('/')))
+        .post(token)
         .form(&[
             ("grant_type", "refresh_token"),
             ("refresh_token", refresh),
-            ("client_id", "devagotchi-cli"),
+            ("client_id", HUB_CLIENT),
         ])
         .send()
         .await
@@ -779,6 +912,40 @@ async fn hub_refresh(account: &Account) -> Result<Account, Refusal> {
     })
 }
 
+/// End a hub account's tokens (RFC 7009) at the revocation endpoint its hub names: the
+/// refresh token first, which ends the whole family on a hub with its own accounts.
+async fn hub_revoke(account: &Account) -> Result<(), Refusal> {
+    let hub = account.issuer.trim_end_matches('/');
+    let http = hub_http()?;
+    let metadata = hub_metadata(&http, hub).await?;
+    let Some(revoke) = hub_endpoint(&metadata, hub, "revocation_endpoint") else {
+        return Err(Refusal::Refused(
+            "the hub names no revocation endpoint".into(),
+        ));
+    };
+    for token in [
+        account.refresh_token.as_deref(),
+        Some(account.access_token.as_str()),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let response = http
+            .post(&revoke)
+            .form(&[("token", token), ("client_id", HUB_CLIENT)])
+            .send()
+            .await
+            .map_err(|error| Refusal::Unavailable(format!("hub revoke: {error}")))?;
+        if !response.status().is_success() {
+            return Err(Refusal::Unavailable(format!(
+                "hub revoke answered {}",
+                response.status()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn jwt_sub(token: &str) -> Option<String> {
     let payload = token.split('.').nth(1)?;
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
@@ -796,6 +963,17 @@ async fn logout(args: &[String], path: &Path) -> Outcome {
         return Err(usage(format!("unknown option {}", args[0])));
     }
     match read(path).map_err(|e| (1, e))? {
+        Some(Stored::Account(account)) if account.client_id == HUB_CLIENT => {
+            match hub_revoke(&account).await {
+                Ok(()) => eprintln!("devagotchi: tokens revoked at {}", account.issuer),
+                Err(why) => eprintln!(
+                    "devagotchi: could not revoke the tokens at {} ({why}); they expire on their own",
+                    account.issuer
+                ),
+            }
+            remove(path).map_err(|e| (1, e))?;
+            eprintln!("devagotchi: signed out ({} removed)", path.display());
+        }
         Some(Stored::Account(account)) => {
             match Issuer::new(&account.issuer, &account.client_id) {
                 Ok(nomen) => match nomen.revoke(&account).await {
@@ -837,7 +1015,7 @@ pub async fn current(path: &Path) -> Result<Option<Stored>, String> {
     ) {
         return Ok(stored);
     }
-    if account.client_id == "devagotchi-cli" {
+    if account.client_id == HUB_CLIENT {
         if let Ok(refreshed) = hub_refresh(account).await {
             write(path, &Stored::Account(refreshed.clone()))?;
             return Ok(Some(Stored::Account(refreshed)));

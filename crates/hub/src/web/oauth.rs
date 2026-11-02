@@ -28,8 +28,22 @@ use serde_json::json;
 use super::{encode, pages, routes::see_other};
 use crate::{
     AppState,
-    accounts::oauth::{Client, Tokens, valid_redirect_uri},
+    accounts::oauth::{Client, DevicePoll, Tokens, valid_redirect_uri},
 };
+
+/// RFC 8628's grant type: a terminal polling for the person's approval (`device.rs`).
+pub const DEVICE_GRANT: &str = "urn:ietf:params:oauth:grant-type:device_code";
+
+/// What each RFC 8628 §3.5 answer means, for the terminal to show.
+fn device_wait(why: &str) -> &'static str {
+    match why {
+        "authorization_pending" => "waiting for the person to approve the code",
+        "slow_down" => "polling too fast: wait the interval, and 5 seconds more",
+        "access_denied" => "the person cancelled the sign-in",
+        "expired_token" => "the code expired before it was approved",
+        _ => "the device code is unknown, used or not this client's",
+    }
+}
 
 /// The scopes a hub's own tokens carry: its MCP tools, and refresh tokens.
 pub const SCOPES: [&str; 2] = ["mcp", "offline_access"];
@@ -64,7 +78,7 @@ fn public_url(state: &AppState) -> String {
 }
 
 /// The resources a token may be for: the hub, or its `/mcp` (what clients are given).
-fn resource_for(state: &AppState, asked: Option<&str>) -> Option<String> {
+pub(super) fn resource_for(state: &AppState, asked: Option<&str>) -> Option<String> {
     let base = public_url(state);
     let mcp = format!("{base}/mcp");
     match asked.map(|r| r.trim_end_matches('/')) {
@@ -75,7 +89,7 @@ fn resource_for(state: &AppState, asked: Option<&str>) -> Option<String> {
 }
 
 /// The scopes granted: the known ones asked for, `mcp` when none are.
-fn scope_for(asked: Option<&str>) -> String {
+pub(super) fn scope_for(asked: Option<&str>) -> String {
     let mut granted: Vec<&str> = asked
         .unwrap_or("")
         .split_whitespace()
@@ -88,7 +102,7 @@ fn scope_for(asked: Option<&str>) -> String {
     granted.join(" ")
 }
 
-fn oauth_error(status: StatusCode, error: &str, description: &str) -> Response {
+pub(super) fn oauth_error(status: StatusCode, error: &str, description: &str) -> Response {
     let mut response = (
         status,
         Json(json!({ "error": error, "error_description": description })),
@@ -135,8 +149,9 @@ pub async fn metadata(State(state): State<AppState>) -> Response {
             "token_endpoint": format!("{base}/oauth/token"),
             "registration_endpoint": format!("{base}/oauth/register"),
             "revocation_endpoint": format!("{base}/oauth/revoke"),
+            "device_authorization_endpoint": format!("{base}/oauth/device"),
             "response_types_supported": ["code"],
-            "grant_types_supported": ["authorization_code", "refresh_token"],
+            "grant_types_supported": ["authorization_code", "refresh_token", DEVICE_GRANT],
             "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["none"],
             "revocation_endpoint_auth_methods_supported": ["none"],
@@ -506,6 +521,7 @@ pub struct TokenRequest {
     code_verifier: Option<String>,
     refresh_token: Option<String>,
     resource: Option<String>,
+    device_code: Option<String>,
 }
 
 fn tokens_json(tokens: Tokens) -> Response {
@@ -563,11 +579,27 @@ pub async fn token(State(state): State<AppState>, Form(asked): Form<TokenRequest
             };
             hub.accounts().refresh(refresh, client, resource).await
         }
+        DEVICE_GRANT => {
+            let Some(device_code) = &asked.device_code else {
+                return oauth_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_request",
+                    "device_code is required",
+                );
+            };
+            match hub.accounts().poll_device(device_code, client).await {
+                Ok(DevicePoll::Tokens(tokens)) => Ok(tokens),
+                Ok(DevicePoll::Waiting(why)) => {
+                    return oauth_error(StatusCode::BAD_REQUEST, why, device_wait(why));
+                }
+                Err(error) => Err(error),
+            }
+        }
         _ => {
             return oauth_error(
                 StatusCode::BAD_REQUEST,
                 "unsupported_grant_type",
-                "authorization_code or refresh_token",
+                "authorization_code, refresh_token or device_code",
             );
         }
     };

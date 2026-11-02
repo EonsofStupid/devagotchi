@@ -361,3 +361,129 @@ async fn tokens_and_codes_are_stored_only_as_hashes() {
         }
     }
 }
+
+#[test]
+fn user_codes_are_eight_consonants_typed_any_way() {
+    assert_eq!(normalize_user_code("bcdf-ghjk").as_deref(), Some("BCDFGHJK"));
+    assert_eq!(normalize_user_code(" BCDF GHJK ").as_deref(), Some("BCDFGHJK"));
+    assert_eq!(normalize_user_code("BCDFGHJK").as_deref(), Some("BCDFGHJK"));
+    for bad in ["BCDF-GHJ", "BCDF-GHJKL", "ABCD-EFGH", "BCDF-GHJ1", "", "BCDF_GHJK"] {
+        assert_eq!(normalize_user_code(bad), None, "{bad}");
+    }
+    for _ in 0..200 {
+        let made = super::device::new_user_code();
+        assert_eq!(made.len(), 9, "{made}");
+        assert!(normalize_user_code(&made).is_some(), "{made}");
+    }
+}
+
+#[tokio::test]
+async fn a_device_code_waits_for_the_person_and_becomes_tokens_once() {
+    use super::device::{DEVICE_INTERVAL, DEVICE_SECS};
+    for (_store, accounts) in stores().await {
+        let now = now_secs();
+        let started = accounts
+            .start_device_at("devagotchi-cli", "mcp offline_access", RESOURCE, now)
+            .await
+            .unwrap();
+        assert!(started.device_code.starts_with("dgd_"));
+        assert_eq!((started.expires_in, started.interval), (DEVICE_SECS, DEVICE_INTERVAL));
+        let code = normalize_user_code(&started.user_code).expect("a well-formed user code");
+        assert_eq!(started.user_code, format!("{}-{}", &code[..4], &code[4..]));
+        let pending = accounts.pending_device(&started.user_code.to_lowercase()).await.unwrap();
+        assert_eq!(
+            pending,
+            Some(super::device::DevicePending {
+                client: "devagotchi-cli".into(),
+                scope: "mcp offline_access".into()
+            })
+        );
+
+        let poll = async |client: &str, at: u64| {
+            accounts.poll_device_at(&started.device_code, client, at).await.unwrap()
+        };
+        assert_eq!(poll("devagotchi-cli", now).await, DevicePoll::Waiting("authorization_pending"));
+        assert_eq!(poll("devagotchi-cli", now + 1).await, DevicePoll::Waiting("slow_down"));
+        let mut at = now + 1 + DEVICE_INTERVAL;
+        assert_eq!(poll("devagotchi-cli", at).await, DevicePoll::Waiting("authorization_pending"));
+        // Another client's poll learns nothing, and the grant stays.
+        at += DEVICE_INTERVAL;
+        assert_eq!(poll("dgc_other", at).await, DevicePoll::Waiting("invalid_grant"));
+
+        assert!(accounts.decide_device(&code, A, true).await.unwrap());
+        assert!(!accounts.decide_device(&code, A, true).await.unwrap(), "decided once");
+        assert_eq!(accounts.pending_device(&code).await.unwrap(), None);
+        at += DEVICE_INTERVAL;
+        let DevicePoll::Tokens(tokens) = poll("devagotchi-cli", at).await else {
+            panic!("approved: tokens");
+        };
+        assert!(tokens.access.starts_with("dgh_") && tokens.refresh.starts_with("dgr_"));
+        assert_eq!(tokens.scope, "mcp offline_access");
+        let grant = accounts.verify_access_at(&tokens.access, at).await.unwrap().unwrap();
+        assert_eq!((grant.account.id.as_str(), grant.client.as_str()), (A, "devagotchi-cli"));
+        // The refresh token rotates for the same client, as any AI connection's.
+        let rotated = accounts
+            .refresh_at(&tokens.refresh, "devagotchi-cli", Some(RESOURCE), at)
+            .await
+            .unwrap();
+        assert_ne!(rotated.refresh, tokens.refresh);
+        // The grant is gone with the tokens.
+        assert_eq!(poll("devagotchi-cli", at + 60).await, DevicePoll::Waiting("invalid_grant"));
+    }
+}
+
+#[tokio::test]
+async fn a_cancelled_or_expired_device_code_says_so_once() {
+    use super::device::DEVICE_SECS;
+    for (_store, accounts) in stores().await {
+        let now = now_secs();
+        let denied = accounts
+            .start_device_at("devagotchi-cli", "mcp", RESOURCE, now)
+            .await
+            .unwrap();
+        assert!(accounts.decide_device(&denied.user_code, A, false).await.unwrap());
+        assert!(!accounts.decide_device(&denied.user_code, A, true).await.unwrap(), "no approving after a cancel");
+        let poll = async |code: &str, at: u64| {
+            accounts.poll_device_at(code, "devagotchi-cli", at).await.unwrap()
+        };
+        assert_eq!(poll(&denied.device_code, now).await, DevicePoll::Waiting("access_denied"));
+        assert_eq!(poll(&denied.device_code, now + 10).await, DevicePoll::Waiting("invalid_grant"));
+
+        let late = accounts
+            .start_device_at("devagotchi-cli", "mcp", RESOURCE, now)
+            .await
+            .unwrap();
+        assert_eq!(
+            poll(&late.device_code, now + DEVICE_SECS).await,
+            DevicePoll::Waiting("expired_token")
+        );
+        assert_eq!(poll(&late.device_code, now + DEVICE_SECS + 10).await, DevicePoll::Waiting("invalid_grant"));
+        assert_eq!(poll("dgd_never-issued", now).await, DevicePoll::Waiting("invalid_grant"));
+        assert!(!accounts.decide_device("not a code", A, true).await.unwrap());
+    }
+}
+
+#[tokio::test]
+async fn a_device_approved_for_a_disabled_account_gets_nothing() {
+    for (_store, accounts) in stores().await {
+        let started = accounts
+            .start_device("devagotchi-cli", "mcp", RESOURCE)
+            .await
+            .unwrap();
+        assert!(accounts.decide_device(&started.user_code, A, true).await.unwrap());
+        sqlx::query("UPDATE accounts SET disabled_at = $1 WHERE id = $2")
+            .bind(Some(1i64))
+            .bind(A)
+            .execute(accounts.store().pool())
+            .await
+            .unwrap();
+        assert_eq!(
+            accounts
+                .poll_device(&started.device_code, "devagotchi-cli")
+                .await
+                .unwrap_err()
+                .code,
+            "account_disabled"
+        );
+    }
+}
