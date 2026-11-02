@@ -46,6 +46,15 @@ html:has(> body.landing) { scroll-snap-type: y proximity; }
   border: 1px solid currentColor; border-radius: 999px; color: var(--wait); font-size: .9rem; font-weight: 600; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 .diagram { width: 100%; max-width: 470px; justify-self: center; }
+.hero-visual { display: grid; min-width: 0; }
+/* The setup video: in the hero on a wide screen, and in the Watch it set up popup. */
+.hero-video { display: none; margin: 0; }
+.hero-video figcaption { margin-top: 12px; color: var(--muted); font-size: .9rem; }
+.turnkey { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 16px;
+  background: var(--deep); box-shadow: 0 30px 60px -30px rgba(12, 40, 26, .45); }
+.video-frame { margin: 0 0 14px; }
+.video-frame .turnkey { border-radius: 12px; box-shadow: none; }
+.how-diagram { display: none; }
 .topology { display: block; width: 100%; height: auto; }
 .topology text { font: 12px var(--font-ui); fill: var(--text); }
 .topology .dg-label { fill: var(--muted); font-size: 11px; font-weight: 600; }
@@ -261,7 +270,17 @@ html:has(.modal:popover-open) { overflow: hidden; }
   .phone-figure { grid-column: 1 / -1; }
 }
 @media (min-width: 900px) {
-  .hero { grid-template-columns: minmax(0, 1.12fr) minmax(0, .88fr); gap: 56px; }
+  .hero { grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); gap: 56px; }
+  .landing .hero h1 { font-size: clamp(2.4rem, .8rem + 3.2vw, 3.6rem); max-width: 16ch; }
+  .hero-visual .diagram { display: none; }
+  .hero-video { display: block; }
+  #how { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 64px; align-content: center;
+    align-items: center; }
+  #how > h2 { grid-column: 1 / -1; }
+  #how .steps { grid-template-columns: 1fr; gap: 22px; margin-top: 12px; }
+  #how .steps li { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: baseline; }
+  #how .steps li::before { grid-row: span 2; margin: 0; }
+  .how-diagram { display: block; }
   .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 40px; }
   .connect, .split { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 56px; align-items: start; }
 }

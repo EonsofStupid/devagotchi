@@ -159,13 +159,14 @@ there: only the programs you granted, or anything its own account can.</p>{group
     )
 }
 
-/// The setup, step by step: what the video shows. Only what is built.
-pub fn watch() -> String {
+/// The setup video, and the same steps as text: what the video shows. Only what is built.
+pub fn watch(video: &str) -> String {
     modal(
         "m-watch",
         "Watch it set up",
-        "<div class=\"video-slot\"><p>The video of this setup is being made. Here is what it \
-shows, in order:</p></div>\
+        &format!(
+            "<div class=\"video-frame\">{video}</div>\
+<p class=\"modal-source\">57 seconds, captions on screen, no sound. The same steps, in words:</p>\
 <ol class=\"modal-steps\">\
 <li><strong>One command on a server.</strong> <code>docker compose up -d</code>, or \
 <code>install.sh</code> on Debian and Ubuntu.</li>\
@@ -176,6 +177,7 @@ in as the owner.</li>\
 it on the hub's consent page, and it is connected.</li>\
 <li><strong>Add a machine.</strong> One line on that machine, and it shows up online.</li>\
 <li><strong>Your AI asks first.</strong> It asks to restart a service; the approval reaches your \
-phone; you approve, and it is done.</li></ol>",
+phone; you approve, and it is done.</li></ol>"
+        ),
     )
 }
