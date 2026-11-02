@@ -6,3 +6,6 @@ node_modules/
 # Python harnesses leave no cache in the tree
 __pycache__/
 *.pyc
+
+# A compose stack's own settings (deploy/compose/.env.example is the template)
+deploy/compose/.env
