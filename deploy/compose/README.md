@@ -27,7 +27,10 @@ prints a new one, and only the newest works. Your first passkey ends it for good
 
 AI clients connect to `https://<DEVAGOTCHI_DOMAIN>/mcp`: they register themselves, you approve
 each one once with your passkey, and the hub issues and checks their tokens itself
-(`crates/hub/README.md`, "AI clients sign in with the hub itself").
+(`crates/hub/README.md`, "AI clients sign in with the hub itself"). From a terminal,
+`devagotchi login --hub https://<DEVAGOTCHI_DOMAIN>` shows a link and a code; approve it on
+the hub's `/device` page, signed in with your passkey, and the CLI (and `devagotchi mcp --hub`)
+works as your account.
 
 ## On a server, kept current by itself
 

@@ -977,3 +977,203 @@ async fn an_authorization_request_for_an_unknown_client_or_redirect_goes_nowhere
     let to = response.headers()[header::LOCATION].to_str().unwrap();
     assert_eq!(query_param(to, "error").as_deref(), Some("invalid_target"));
 }
+
+#[tokio::test]
+async fn a_terminal_signs_in_with_a_device_code_the_owner_approves() {
+    // `devagotchi login --hub` against a hub with its own accounts (RFC 8628).
+    let world = world().await;
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let link = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
+        .unwrap();
+    let session = world.make_passkey(&world.phone(), &link).await;
+
+    // The metadata names the endpoint; the CLI's client needs no registration.
+    let metadata: Value = world
+        .get("/.well-known/oauth-authorization-server", None)
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        metadata["device_authorization_endpoint"],
+        format!("{}/oauth/device", world.url)
+    );
+    assert!(
+        metadata["grant_types_supported"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("urn:ietf:params:oauth:grant-type:device_code"))
+    );
+    let ask = |client: &'static str| {
+        world
+            .http
+            .post(format!("{}/oauth/device", world.url))
+            .form(&[("client_id", client), ("scope", "mcp offline_access")])
+            .send()
+    };
+    assert_eq!(ask("dgc_nobody").await.unwrap().status(), 401);
+    let started = ask("devagotchi-cli").await.unwrap();
+    assert_eq!(started.status(), 200);
+    assert_eq!(started.headers()[header::CACHE_CONTROL], "no-store");
+    let started: Value = started.json().await.unwrap();
+    let user_code = started["user_code"].as_str().unwrap().to_string();
+    let device_code = started["device_code"].as_str().unwrap().to_string();
+    assert_eq!(started["verification_uri"], format!("{}/device", world.url));
+    assert_eq!(
+        started["verification_uri_complete"],
+        format!("{}/device?code={user_code}", world.url)
+    );
+    assert_eq!(started["interval"], 5);
+
+    let poll = || {
+        world
+            .http
+            .post(format!("{}/oauth/token", world.url))
+            .form(&[
+                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                ("device_code", device_code.as_str()),
+                ("client_id", "devagotchi-cli"),
+            ])
+            .send()
+    };
+    let waiting = poll().await.unwrap();
+    assert_eq!(waiting.status(), 400);
+    let waiting: Value = waiting.json().await.unwrap();
+    assert_eq!(waiting["error"], "authorization_pending");
+
+    // Signed out, the page sends the person to sign in and back to the same code.
+    let page = format!("/device?code={user_code}");
+    let signed_out = world.get(&page, None).await;
+    assert_eq!(signed_out.status(), 303);
+    let to_login = signed_out.headers()[header::LOCATION].to_str().unwrap().to_string();
+    let back = query_param(&to_login, "return_to").unwrap();
+    assert_eq!(back, page);
+    assert_eq!(super::safe_return_to(&back), back, "sign-in may return to it");
+
+    // Signed in: the app, the account, the code to check; a form that posts back here.
+    let shown = world.get(&back, Some(&session)).await;
+    assert_eq!(shown.status(), 200);
+    assert_eq!(shown.headers()[header::REFERRER_POLICY], "same-origin");
+    let html = shown.text().await.unwrap();
+    assert!(
+        html.contains("Sign in Devagotchi CLI?") && html.contains("Jesse") && html.contains(&user_code),
+        "{html}"
+    );
+    // No code: a box to type it. A wrong one: not valid.
+    assert!(world.get("/device", Some(&session)).await.text().await.unwrap().contains("name=\"code\""));
+    assert_eq!(world.get("/device?code=BCDF-GHJK", Some(&session)).await.status(), 400);
+
+    let decide = |decision: &'static str, origin: Option<String>| {
+        let mut request = world
+            .http
+            .post(format!("{}/device", world.url))
+            .header(header::COOKIE, &session)
+            .form(&[("code", user_code.to_lowercase().as_str()), ("decision", decision)]);
+        if let Some(origin) = origin {
+            request = request.header(header::ORIGIN, origin);
+        }
+        request.send()
+    };
+    // Another site, an opaque origin or none: not approved, and still waiting.
+    for origin in [None, Some("null".to_string()), Some("https://evil.example".to_string())] {
+        assert_eq!(decide("approve", origin).await.unwrap().status(), 403);
+    }
+    let approved = decide("approve", Some(world.url.clone())).await.unwrap();
+    assert_eq!(approved.status(), 200);
+    assert!(approved.text().await.unwrap().contains("Your terminal is signed in"));
+    assert_eq!(
+        decide("approve", Some(world.url.clone())).await.unwrap().status(),
+        400,
+        "a code is decided once"
+    );
+
+    // The next poll (after the interval) gets tokens, once; they speak for the account.
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    let granted = poll().await.unwrap();
+    assert_eq!(granted.status(), 200);
+    let tokens: Value = granted.json().await.unwrap();
+    assert_eq!(tokens["token_type"], "Bearer");
+    assert_eq!(tokens["scope"], "mcp offline_access");
+    let access = tokens["access_token"].as_str().unwrap().to_string();
+    let again: Value = poll().await.unwrap().json().await.unwrap();
+    assert_eq!(again["error"], "invalid_grant");
+    let me: Value = world
+        .http
+        .get(format!("{}/api/v1/me", world.url))
+        .bearer_auth(&access)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!((me["subject"].as_str(), me["via"].as_str()), (Some(owner.id.as_str()), Some("hub")));
+    assert_eq!(me["name"], "Jesse");
+    // The refresh token rotates for the CLI's client, as any AI connection's.
+    let rotated = world
+        .http
+        .post(format!("{}/oauth/token", world.url))
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", tokens["refresh_token"].as_str().unwrap()),
+            ("client_id", "devagotchi-cli"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rotated.status(), 200);
+}
+
+#[tokio::test]
+async fn a_cancelled_device_code_tells_the_terminal() {
+    let world = world().await;
+    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let link = world
+        .accounts
+        .issue_link(LinkPurpose::Owner, &owner.id)
+        .await
+        .unwrap();
+    let session = world.make_passkey(&world.phone(), &link).await;
+    let started: Value = world
+        .http
+        .post(format!("{}/oauth/device", world.url))
+        .form(&[("client_id", "devagotchi-cli")])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let cancelled = world
+        .http
+        .post(format!("{}/device", world.url))
+        .header(header::COOKIE, &session)
+        .header(header::ORIGIN, &world.url)
+        .form(&[
+            ("code", started["user_code"].as_str().unwrap()),
+            ("decision", "deny"),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status(), 200);
+    assert!(cancelled.text().await.unwrap().contains("Cancelled"));
+    let answer: Value = world
+        .http
+        .post(format!("{}/oauth/token", world.url))
+        .form(&[
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ("device_code", started["device_code"].as_str().unwrap()),
+            ("client_id", "devagotchi-cli"),
+        ])
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(answer["error"], "access_denied");
+}

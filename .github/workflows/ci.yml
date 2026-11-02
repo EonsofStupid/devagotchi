@@ -153,7 +153,8 @@ jobs:
       # second provider with the same verified email.
       - run: python tests/e2e.py --bin-dir target/debug
       # The hub's own sign-in pages in a real browser, the runner image's Chrome with a
-      # virtual passkey: claiming a new hub from its log's link, the owner link, signing in.
+      # virtual passkey: claiming a new hub from its log's link, the owner link, signing in,
+      # and `devagotchi login` approved on the hub's /device page.
       # Playwright is pinned by hash (tests/requirements-browser.txt) and downloads nothing.
       - name: Sign-in pages in Chrome
         if: matrix.os == 'ubuntu-24.04'
@@ -161,6 +162,7 @@ jobs:
           python -m pip install --require-hashes --no-deps -r tests/requirements-browser.txt
           python tests/claim_browser.py --channel chrome --devagotchi "$PWD/target/debug/devagotchi"
           python tests/passkey_browser.py --channel chrome --devagotchi "$PWD/target/debug/devagotchi"
+          python tests/device_login_browser.py --channel chrome --devagotchi "$PWD/target/debug/devagotchi"
       # The Windows installer, as a user would run it: install from the build, start the
       # broker, register with a Claude Desktop config that already has Desktop Commander,
       # then use exactly the registered command. PowerShell 7 on 2025 and on Arm64

@@ -13,7 +13,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::{
-    Exchange, SessionToken, WebLogin, approvals, claim, machines, notify, oauth,
+    Exchange, SessionToken, WebLogin, approvals, claim, device, machines, notify, oauth,
     pages::{self, Viewer},
     passkeys, public,
 };
@@ -79,6 +79,8 @@ pub fn router(hub_authorization: bool) -> Router<AppState> {
         .route("/oauth/authorize", get(oauth::authorize).post(oauth::decide))
         .route("/oauth/token", post(oauth::token).options(oauth::preflight))
         .route("/oauth/revoke", post(oauth::revoke).options(oauth::preflight))
+        .route("/oauth/device", post(device::start).options(oauth::preflight))
+        .route("/device", get(device::page).post(device::decide))
 }
 
 #[derive(Deserialize)]

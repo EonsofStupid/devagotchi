@@ -47,7 +47,7 @@ A new person gets an account id `dg_` plus 32 hex characters and a personal work
 2. Else a verified email already on file → link this subject to that account.
 3. Else create an account. An unverified email never selects an account.
 
-`devagotchi login` (no flags) does device authorization against the hub, default `https://app.devagotchi.com`. `--issuer` still talks to an upstream issuer directly. `connect-nomen` keeps using that direct path. `--hub URL` points the device flow at another hub.
+`devagotchi login` (no flags) does device authorization against the hub, default `https://app.devagotchi.com`. `--issuer` still talks to an upstream issuer directly. `connect-nomen` keeps using that direct path. `--hub URL` points the device flow at another hub. The CLI finds the endpoints in the hub's `/.well-known/oauth-authorization-server`, so the same command works against a hub in `auth.mode hub`, where the code is approved on the hub's `/device` page by a person signed in with their passkey (`crates/hub/README.md`, "A terminal signs in").
 
 ## Magic links
 
@@ -93,7 +93,7 @@ An AI can open the account and reach the person's own machine before anyone fini
 
 ### Local agent (Claude Code, Codex, `devagotchi mcp`)
 
-`devagotchi login` calls `POST /auth/agent/start` and stores tokens immediately. The terminal prints the claim code. The agent then calls `machine_add` and can run the join line itself. `--issuer` is the old device flow and is not this path.
+Against a hub in this mode, `devagotchi login` calls `POST /auth/agent/start` and stores tokens immediately (a hub in `auth.mode hub` has no such route, and the CLI goes on to device authorization). The terminal prints the claim code. The agent then calls `machine_add` and can run the join line itself. `--issuer` is the old device flow and is not this path.
 
 ### A fresh machine
 

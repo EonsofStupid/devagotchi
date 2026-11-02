@@ -14,6 +14,9 @@
 
 use super::*;
 
+mod device;
+pub use device::{DevicePoll, normalize_user_code};
+
 /// A registered client.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Client {

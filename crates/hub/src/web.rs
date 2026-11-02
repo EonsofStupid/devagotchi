@@ -26,6 +26,7 @@
 
 mod approvals;
 mod claim;
+mod device;
 mod landing;
 #[cfg(test)]
 mod landing_tests;
