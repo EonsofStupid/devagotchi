@@ -39,6 +39,8 @@ echo "PASS update.sh: an unhealthy image is rolled back and not retried"
 
 DEVAGOTCHI_BACKUP_DIR="$work/backups" "$dir/backup.sh" >/dev/null || fail "backup.sh runs"
 ls "$work"/backups/db-*.dump "$work"/backups/state-*.tgz >/dev/null || fail "backup.sh writes both files"
-tar -tzf "$work"/backups/state-*.tgz | grep -q . || fail "the state archive has the hub's files"
+# (Listed whole, not piped to grep -q: an early exit would break tar's pipe under pipefail.)
+listed=$(tar -tzf "$work"/backups/state-*.tgz) || fail "the state archive reads back"
+[[ -n "$listed" ]] || fail "the state archive has the hub's files"
 echo "PASS backup.sh: database dump and state archive"
 echo "DEPLOY SCRIPTS PASSED"
