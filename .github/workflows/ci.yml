@@ -115,6 +115,20 @@ jobs:
         working-directory: deploy/compose
         run: docker compose logs --no-color --tail 200 || true
 
+  hub-deploy:
+    # The deploy scripts: deploy/compose/install.sh, update.sh and backup.sh for real with the
+    # published image (pinned by digest, an unhealthy image rolled back), and
+    # deploy/proxmox/hub-up.sh against a stand-in Proxmox host.
+    name: hub (deploy scripts)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - run: python3 tests/proxmox_hub_up.py
+      - run: sudo bash tests/deploy_scripts.sh
+
   e2e:
     # The built binaries, end to end: broker, stdio adapter, hub over HTTP MCP.
     # Unix socket on Linux, named pipe on Windows; same probes (tests/e2e.py).
