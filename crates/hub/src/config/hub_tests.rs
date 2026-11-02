@@ -199,3 +199,48 @@ fn the_claim_code_lives_as_long_as_the_config_says() {
         assert!(refused(&config).contains("claim_secs"), "{bad}");
     }
 }
+
+/// `auth.mode hub` and `auth.mode devagotchi` (PR #79) are two account systems side by
+/// side: each parses with its own fields, and neither takes the other's.
+#[test]
+fn hub_and_devagotchi_modes_parse_side_by_side_and_keep_their_own_fields() {
+    let mut config = hub();
+    config["auth"] = serde_json::json!({
+        "mode": "hub",
+        "rp_id": "devagotchi.com",
+        "tokens": { "access_secs": 600 }
+    });
+    let parsed = parse(&config).unwrap();
+    assert!(parsed.has_accounts());
+    assert_eq!(parsed.token_config().access_secs, 600);
+
+    config["auth"] = serde_json::json!({
+        "mode": "devagotchi",
+        "upstream": [{ "name": "nomen", "issuer": "https://id.shippin.cloud", "client_id": "c" }],
+        "local": { "magic_link": false },
+        "legacy": { "issuer": "https://id.shippin.cloud" },
+        "provisional": { "ttl_days": 30 }
+    });
+    let parsed = parse(&config).unwrap();
+    assert!(matches!(parsed.auth, AuthConfig::Devagotchi { .. }));
+    // Devagotchi accounts are not the hub's own: no passkeys, no hub tokens, no claim code.
+    assert!(!parsed.has_accounts());
+    assert_eq!(parsed.rp_id(), None);
+    assert_eq!(parsed.token_config(), TokenConfig::default());
+
+    for (mode, field, value) in [
+        ("hub", "upstream", serde_json::json!([])),
+        ("hub", "provisional", serde_json::json!({ "ttl_days": 14 })),
+        ("hub", "legacy", serde_json::json!({ "issuer": "https://id.shippin.cloud" })),
+        ("hub", "local", serde_json::json!({ "magic_link": true })),
+        ("devagotchi", "tokens", serde_json::json!({ "access_secs": 600 })),
+        ("devagotchi", "rp_id", serde_json::json!("devagotchi.com")),
+        ("devagotchi", "nomen", serde_json::json!({})),
+    ] {
+        config["auth"] = serde_json::json!({ "mode": mode, field: value });
+        let message = refused(&config);
+        assert!(message.contains(field), "{mode} {field}: {message}");
+    }
+    config["auth"] = serde_json::json!({ "mode": "accounts" });
+    refused(&config);
+}

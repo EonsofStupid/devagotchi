@@ -93,6 +93,27 @@ pub struct ReadRouted {
     pub input: ReadInput,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MachineAdd {
+    /// Short name for the machine, `[a-z0-9][a-z0-9-]{0,62}`.
+    pub name: String,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MachineAdded {
+    pub name: String,
+    pub code: String,
+    pub expires_at: u64,
+    pub linux: String,
+    pub windows: String,
+    /// Compose file URL. The code is the same single-use join token.
+    pub docker: String,
+    /// Host installer for Proxmox or Incus (not inside a guest).
+    pub host: String,
+    /// Tarball plus `devagotchi link enroll`, code on stdin.
+    pub manual: String,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct WhoAmI {
     /// The account ID (`sub`) the identity provider proved, never a caller-supplied name.
@@ -107,6 +128,21 @@ pub struct WhoAmI {
     /// bound by any member belong to it and every member works them (B13).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub org: Option<String>,
+    /// Unix seconds until an agent-opened account must be claimed. Absent once claimed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provisional_until: Option<u64>,
+    /// The agent seat on this token.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    /// Code the person uses to claim this account. Shown while it is provisional.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_code: Option<String>,
+    /// Time left is under a seventh of the live provisional ttl (at least an hour).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub provisional_warning: bool,
+    /// `{public_url}/claim?code=…` while the account is provisional.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub claim_url: Option<String>,
     /// Whether this is the hub's configured owner, who reaches every broker and board.
     pub owner: bool,
     /// Whether this subject acts as a person on boards (force-release, moving tickets by
@@ -368,6 +404,56 @@ impl Hub {
             via: subject.via.to_string(),
             name: subject.name,
             org: subject.org,
+            provisional_until: subject.provisional_until,
+            agent: subject.agent.clone(),
+            claim_code: subject.claim_code.clone(),
+            provisional_warning: subject.provisional_warning,
+            claim_url: subject.claim_code.as_ref().map(|code| {
+                format!(
+                    "{}/claim?code={code}",
+                    self.config.public_url.trim_end_matches('/')
+                )
+            }),
+        }))
+    }
+
+    #[tool(
+        name = "machine_add",
+        description = "Add one of the user's own machines to this account. Returns a one-time code and every install command: Linux (systemd), Windows (no administrator), Docker Compose, a Proxmox or Incus host, and a manual tarball. The code works once. The machine that enrolls belongs to this account. Do not use a name the hub operator already configured.",
+        title = "Add a machine",
+        annotations(
+            title = "Add a machine",
+            read_only_hint = false,
+            destructive_hint = false,
+            open_world_hint = false
+        )
+    )]
+    async fn machine_add(
+        &self,
+        Parameters(input): Parameters<MachineAdd>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<MachineAdded>, Json<BridgeError>> {
+        let subject = self.subject(&context)?;
+        let name = input.name.trim().to_ascii_lowercase();
+        let code = self
+            .links
+            .issue_owned_code(&subject.id, &name)
+            .map_err(Json)?;
+        let device = name.clone();
+        let hub = self.config.public_url.trim_end_matches('/');
+        Ok(Json(MachineAdded {
+            name,
+            code: code.clone(),
+            expires_at: crate::devices::now_secs() + crate::devices::CODE_TTL_SECS,
+            linux: format!("curl -fsSL {hub}/join/{code} | sudo sh"),
+            windows: format!("irm {hub}/join/{code}.ps1 | iex"),
+            docker: format!(
+                "curl -fsSL {hub}/join/{code}.compose.yml -o compose.yml && docker compose -f compose.yml up -d"
+            ),
+            host: format!("curl -fsSL {hub}/join/{code}.host.sh | sudo sh"),
+            manual: format!(
+                "Download the archive and SHA256SUMS from {hub}/dist/ for this machine, check the sum, unpack, then: printf '%s\\n' '{code}' | devagotchi link enroll --state-dir ~/.local/state/devagotchi-link --hub {hub} --device {device} --broker <broker-endpoint>"
+            ),
         }))
     }
 

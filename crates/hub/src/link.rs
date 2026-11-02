@@ -162,6 +162,32 @@ impl Links {
         self.devices.owned_by(owner)
     }
 
+    /// Move machines, codes, and push subscriptions from one account id to another
+    /// after a provisional account is merged.
+    pub fn reassign_owner(&self, from: &str, to: &str) -> BridgeResult<usize> {
+        self.devices.reassign_owner(from, to)
+    }
+
+    /// Spend an account's one-time code and bind `public_key` to `name`. The code is
+    /// the secret; this is the same check the link handshake uses.
+    pub fn enroll_owned(
+        &self,
+        name: &str,
+        code: &str,
+        public_key: &str,
+    ) -> BridgeResult<crate::devices::Device> {
+        let device = self.devices.enroll(name, code, public_key, false)?;
+        self.event(
+            device.owner.as_deref().unwrap_or(""),
+            "join",
+            "link.enroll",
+            name,
+            "",
+            "ok",
+        );
+        Ok(device)
+    }
+
     /// A one-time code for `owner` to add a machine named `device` ("Add a machine"). The
     /// names in the hub config are the operator's. Audited without the code.
     pub fn issue_owned_code(&self, owner: &str, device: &str) -> BridgeResult<String> {
@@ -195,14 +221,25 @@ impl Links {
 
     /// The machine a live code is for, so `/join` can write its script; audited with
     /// the machine's name, never the code. Looking does not spend the code.
-    pub fn join_script(&self, code: &str, shell: crate::join::Shell) -> BridgeResult<Option<String>> {
+    pub fn join_script(
+        &self,
+        code: &str,
+        shell: crate::join::Shell,
+    ) -> BridgeResult<Option<String>> {
         let device = self.devices.live_code(code)?;
         if let Some(device) = &device {
             let shell = match shell {
                 crate::join::Shell::Sh => "sh",
                 crate::join::Shell::PowerShell => "powershell",
             };
-            self.event(&format!("device:{device}"), "join", "link.join_script", device, "", shell);
+            self.event(
+                &format!("device:{device}"),
+                "join",
+                "link.join_script",
+                device,
+                "",
+                shell,
+            );
         }
         Ok(device)
     }

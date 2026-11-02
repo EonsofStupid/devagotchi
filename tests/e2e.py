@@ -231,7 +231,12 @@ try:
          "--work", str(work / "web")],
         "browser sign-in",
     )
-    ok = adapter_ok and hub_ok and board_ok and link_ok and nomen_ok and web_ok
+    oauth_ok = run_probe(
+        [str(HERE / "oauth_probe.py"), "--devagotchi", str(devagotchi), "--work", str(work / "oauth")],
+        "Devagotchi OAuth connect",
+    )
+    promote_ok = run_probe([str(HERE / "promote_hub_dry_run.py")], "promote-hub dry-run")
+    ok = adapter_ok and hub_ok and board_ok and link_ok and nomen_ok and web_ok and oauth_ok and promote_ok
 finally:
     for process in reversed(processes):
         if process.poll() is None:

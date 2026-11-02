@@ -7,6 +7,17 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Two account modes side by side (increment 42: PR #79 merged beside hub mode)
+- `auth.mode hub` (passkeys, the hub's own OAuth for AI clients, the browser claim, SQLite or
+  Postgres) and `auth.mode devagotchi` (PR #79: provisional AI accounts, upstream sign-in,
+  `identity.rs` and `oauth.rs`) both parse and serve. Each mounts its own `/claim`,
+  `/.well-known/oauth-authorization-server` and OAuth routes, so the router builds in every
+  mode (a test builds it for each). `auth.mode hub` keeps its claim, owner link, OAuth for
+  AI clients, SQLite and Postgres storage and `/healthz` as they were: `/healthz` reports
+  `auth`, and `/api/v1/admin/settings` is served, only in devagotchi mode.
+- Shared by every mode, as PR #79 made them: the `machine_add` MCP tool, `POST /enroll`,
+  `/join/<code>.compose.yml` and `.host.sh`, and `/dist/SHA256SUMS`.
+
 ### Claim a new hub in the browser (increment 41, plan 16c)
 - A hub with its own accounts whose config names no owner, and whose owner has no passkey,
   prints a claim link to its log at each start (`/claim#XXXX-…`, 120 random bits, only its hash stored, a day by default:
@@ -20,6 +31,49 @@ heading. Agents draft the fragments below; they never tag.
 - CI runs the browser tests (`tests/claim_browser.py`, `tests/passkey_browser.py`) in the
   runner's Chrome with a virtual passkey on ubuntu-24.04, Playwright pinned by hash.
 - `/docs` no longer names the hosted hub's Nomen client ID on other hubs.
+
+### Promote a hub, and its downloads (PR #79)
+- `promote-hub.sh --artifact` installs a local or CI tarball on the live hub:
+  it copies `install-devagotchi.sh` into the container, stages `/dist` before
+  the hub starts, rolls a snapshot back with `pct rollback --start`, and
+  passes `--ssh-key`, `--ssh-opts`, and `SSH_OPTS`. `--dry-run` prints the plan.
+- `/dist/SHA256SUMS` is the checksum list the hub checked. `devagotchi hub
+  setup-code --config` prints the `dg_` owner id and the claim URL when an
+  owner already exists. An upstream's sign-in button uses `display_name`, or
+  the name with its first letter capitalized.
+
+### Devagotchi accounts, and the hub as the authorization server
+- The hub can be its own OAuth 2.1 authorization server (`auth.mode` `devagotchi`).
+  Accounts, personal workspaces, and linked sign-ins live in the hub state directory.
+  A verified email links a second provider to an existing account. An unverified email
+  does not. Claude, ChatGPT, and Cursor register a public client here (dynamic client
+  registration), use PKCE S256, and receive a JWT the hub signs and checks locally.
+  Nomen is an optional upstream provider, not a requirement. `auth.mode` `nomen` is
+  unchanged.
+- `owner` and grants that still name an identity-provider subject are adopted once
+  (`auth.legacy.issuer`, or `issuer|sub`) and stay stable. Machines enrolled to that
+  subject move with the account. The config file is not rewritten.
+- `devagotchi login` uses device authorization against the hub (`https://app.devagotchi.com`
+  by default). `--issuer` still signs in directly with an upstream issuer.
+- `/healthz` `auth` reports the identity store, the signing key, and each upstream
+  provider's discovery. `docs/auth.md` is the operator page. `docs/deploy.md` and
+  `deploy/linux/promote-hub.sh` describe staging, smoke, production, and rollback.
+  Nothing in this change deploys.
+- A devagotchi.com profile links to a Devagotchi account only when a hub token carries
+  the same verified email (`apps/website/lib/hub-account.ts`).
+- An AI can open a provisional account and add the person's machine before anyone
+  finishes a sign-in. A remote connector's one Allow, or `POST /auth/agent/start`
+  (`devagotchi login`), mints the account and tokens. `machine_add` returns the
+  join line; the enrolled machine belongs to that account. A later claim attaches
+  a sign-in to the same account, or merges it when the verified email already
+  belongs to one. Unclaimed accounts expire. Creation is rate limited.
+- Unclaimed accounts last 14 days by default (`auth.provisional` in `hub.json`).
+  The owner, or a grant with `operator: true`, can change that lifetime, the
+  per-IP rate, and the unclaimed cap at runtime with `GET`/`PUT
+  /api/v1/admin/settings`. The saved row wins over `hub.json` on the next start.
+  `whoami` warns from the live lifetime. Denied calls and changes are audited.
+  Nothing in this change deploys. Staging for the promote script is a second
+  instance on the Texas host, beside CT 110.
 
 ## 0.1.0 - 2026-10-31
 
@@ -98,7 +152,6 @@ hub the same file and command tools for every linked machine.
   - a broker that runs only granted programs refuses `run` with what works instead
     (`operation_start` with an executable, or `exec_policy` `account`), not with a field
     `run` does not have.
-
 
 ### Install in one line, for a person or their AI (increment 33b)
 - README "Install": one line per system that installs `devagotchi` for the user from the
