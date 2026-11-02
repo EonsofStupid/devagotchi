@@ -37,8 +37,16 @@ fn bar_html(bar: &Bar) -> String {
             escape(&super::encode(return_to))
         ),
     };
-    format!("<header class=\"bar\"><a class=\"brand\" href=\"/\">Devagotchi</a>{links}</header>")
+    format!(
+        "<header class=\"bar\"><a class=\"brand\" href=\"/\">{MARK}Devagotchi</a>{links}</header>"
+    )
 }
+
+/// The app icon's pet, inline: the pages' CSP loads no images, and CSS colors it per theme.
+const MARK: &str = "<svg class=\"mark\" viewBox=\"0 0 32 32\" aria-hidden=\"true\" focusable=\"false\">\
+<rect class=\"mark-bg\" width=\"32\" height=\"32\" rx=\"8\"/><ellipse class=\"mark-egg\" cx=\"16\" cy=\"17.3\" rx=\"9.4\" ry=\"10.6\"/>\
+<circle class=\"mark-face\" cx=\"12.9\" cy=\"15.6\" r=\"1.4\"/><circle class=\"mark-face\" cx=\"19.1\" cy=\"15.6\" r=\"1.4\"/>\
+<path class=\"mark-smile\" d=\"M13.5 20.1q2.5 1.9 5 0\"/></svg>";
 
 pub struct Viewer<'a> {
     pub subject: &'a str,
@@ -67,13 +75,15 @@ pub fn scripted(status: StatusCode, title: &str, body: &str, script: &'static st
 #[derive(Clone, Copy)]
 enum Kind {
     Plain,
+    /// The landing page: a plain page (no script) laid out wide (`body.landing`).
+    Landing,
     App,
     Script(&'static str),
 }
 
 fn render(status: StatusCode, title: &str, body: &str, kind: Kind) -> Response {
     let head = match kind {
-        Kind::Plain => String::new(),
+        Kind::Plain | Kind::Landing => String::new(),
         Kind::App => "<link rel=\"manifest\" href=\"/manifest.webmanifest\"><link rel=\"icon\" href=\"/assets/icon.svg\">\
 <meta name=\"theme-color\" content=\"#2f6b4f\"><script src=\"/assets/push.js\" defer></script>"
             .to_string(),
@@ -83,8 +93,12 @@ fn render(status: StatusCode, title: &str, body: &str, kind: Kind) -> Response {
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
 <title>{} · Devagotchi</title><link rel=\"stylesheet\" href=\"/assets/hub.css\">{head}</head>\
-<body>{bar}<main>{body}</main></body></html>\n",
+<body{class}>{bar}<main>{body}</main></body></html>\n",
         escape(title),
+        class = match kind {
+            Kind::Landing => " class=\"landing\"",
+            _ => "",
+        },
         bar = BAR
             .try_with(bar_html)
             .unwrap_or_else(|_| bar_html(&Bar::Plain)),
@@ -107,7 +121,7 @@ manifest-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none';
                 "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; \
 form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
             }
-            Kind::Plain => {
+            Kind::Plain | Kind::Landing => {
                 "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
             }
         }),
@@ -156,49 +170,11 @@ pub enum Front {
     Shippin,
 }
 
-/// `/` for someone not signed in: what this is, where an AI connects, and one way in. The
-/// address is this hub's own `public_url`, never a hosted one.
+/// `/` for someone not signed in: the product page (`landing.rs`). A hub nobody owns offers
+/// only the claim. The MCP address is this hub's own `public_url`, never a hosted one.
 pub fn home(front: Front, public_url: &str) -> Response {
-    let mcp = escape(&format!("{}/mcp", public_url.trim_end_matches('/')));
-    let about = "<p>Devagotchi lets Claude, ChatGPT and your other AIs work on your own servers \
-and PCs through this hub, and asks you on your phone before anything that needs your say.</p>";
-    let (title, body) = match front {
-        Front::Unclaimed => (
-            "A new Devagotchi hub",
-            format!(
-                "<h1>A new Devagotchi hub</h1>{about}\
-<p>Nobody owns this hub yet. Claiming it makes its owner's passkey: the owner reaches every \
-machine on it and approves every AI that connects.</p>\
-<p><a class=\"button primary\" href=\"/claim\">Claim this hub</a></p>\
-<p class=\"meta\">Claiming takes the code the hub printed in its log when it started. \
-<a href=\"/docs\">How it works</a></p>"
-            ),
-        ),
-        Front::Passkeys => (
-            "Your AI, on your machines",
-            format!(
-                "<h1>Your AI, on your machines</h1>{about}\
-<p><a class=\"button primary\" href=\"/auth/login?return_to=/account\">Sign in</a></p>\
-<p class=\"meta\">You sign in with a passkey. <a href=\"/docs\">How it works</a></p>\
-<h2>Connect an AI</h2>\
-<p>Add this hub to any AI app that takes a remote MCP server (in Claude: a custom \
-connector) at <code>{mcp}</code>. The app signs in with this hub, and you approve it once \
-with your passkey.</p>"
-            ),
-        ),
-        Front::Shippin => (
-            "Your AI, on your machines",
-            format!(
-                "<h1>Your AI, on your machines</h1>{about}\
-<p><a class=\"button primary\" href=\"/auth/login?return_to=/account\">Sign in with Shippin</a></p>\
-<p class=\"meta\">A Shippin account is free. <a href=\"/docs\">How it works</a></p>\
-<h2>Connect an AI</h2>\
-<p>AI apps connect at <code>{mcp}</code> and sign in with Shippin. \
-<a href=\"/docs\">How to connect Claude</a></p>"
-            ),
-        ),
-    };
-    html(StatusCode::OK, title, &body)
+    let (title, body) = super::landing::page(&front, public_url);
+    render(StatusCode::OK, title, &body, Kind::Landing)
 }
 
 pub fn account(viewer: &Viewer<'_>, machines: &[Machine]) -> Response {

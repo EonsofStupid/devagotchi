@@ -1,0 +1,54 @@
+<svg class="topology" viewBox="0 0 360 412" role="img" aria-labelledby="dg-title dg-desc" xmlns="http://www.w3.org/2000/svg">
+<title id="dg-title">How Devagotchi connects your AI to your machines</title>
+<desc id="dg-desc">AI apps (Claude, ChatGPT, Codex, Cursor, Gemini) reach one MCP address on your hub and sign in with OAuth. The hub sends approvals to your phone as a push. Each machine (a server, a home PC, a devspace) runs a broker and a link that dials out to the hub, so nothing on the machine listens on the network.</desc>
+<defs>
+<marker id="dg-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="dg-head" d="M0 0L10 5L0 10z"/></marker>
+<marker id="dg-arrow-link" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="dg-head-link" d="M0 0L10 5L0 10z"/></marker>
+<marker id="dg-arrow-push" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="dg-head-push" d="M0 0L10 5L0 10z"/></marker>
+</defs>
+<text class="dg-label" x="10" y="13">Your AI apps</text>
+<g class="dg-chip">
+<rect x="10" y="22" width="64" height="30" rx="15"/><text x="42" y="41.5">Claude</text>
+<rect x="79" y="22" width="64" height="30" rx="15"/><text x="111" y="41.5">ChatGPT</text>
+<rect x="148" y="22" width="64" height="30" rx="15"/><text x="180" y="41.5">Codex</text>
+<rect x="217" y="22" width="64" height="30" rx="15"/><text x="249" y="41.5">Cursor</text>
+<rect x="286" y="22" width="64" height="30" rx="15"/><text x="318" y="41.5">Gemini</text>
+</g>
+<path class="dg-rail" d="M42 52V70M111 52V70M180 52V70M249 52V70M318 52V70M42 70H318M135 70V122" marker-end="url(#dg-arrow)"/>
+<text class="dg-note" x="147" y="95">one MCP address</text>
+<text class="dg-note" x="147" y="110">OAuth sign-in</text>
+<g class="dg-hub">
+<rect class="dg-box" x="20" y="126" width="230" height="92" rx="16"/>
+<ellipse class="dg-egg" cx="50" cy="158" rx="15" ry="17"/>
+<circle class="dg-face" cx="45" cy="155" r="2"/><circle class="dg-face" cx="55" cy="155" r="2"/>
+<path class="dg-smile" d="M45 162.5q5 4 10 0"/>
+<text class="dg-hub-title" x="76" y="155">Your hub</text>
+<text class="dg-hub-sub" x="76" y="171">between every AI and machine</text>
+<rect class="dg-pill" x="36" y="186" width="66" height="20" rx="10"/><text class="dg-pill-text" x="69" y="200">passkeys</text>
+<rect class="dg-pill" x="108" y="186" width="72" height="20" rx="10"/><text class="dg-pill-text" x="144" y="200">approvals</text>
+<rect class="dg-pill" x="186" y="186" width="50" height="20" rx="10"/><text class="dg-pill-text" x="211" y="200">audit</text>
+</g>
+<path class="dg-push" d="M250 172H279" marker-end="url(#dg-arrow-push)"/>
+<text class="dg-tiny" x="265" y="165">push</text>
+<g class="dg-phone">
+<rect class="dg-case" x="282" y="122" width="60" height="100" rx="11"/>
+<rect class="dg-screen" x="287" y="132" width="50" height="80" rx="4"/>
+<text class="dg-ask" x="312" y="150">Approve?</text>
+<rect class="dg-yes" x="291" y="160" width="42" height="16" rx="4"/><text class="dg-yes-text" x="312" y="171.5">Approve</text>
+<rect class="dg-no" x="291" y="182" width="42" height="16" rx="4"/><text class="dg-no-text" x="312" y="193.5">Deny</text>
+</g>
+<path class="dg-link" d="M60 314V221" marker-end="url(#dg-arrow-link)"/>
+<path class="dg-link" d="M180 314V221" marker-end="url(#dg-arrow-link)"/>
+<path class="dg-link" d="M300 314V262H230V221" marker-end="url(#dg-arrow-link)"/>
+<text class="dg-note" x="72" y="262">each dials out</text>
+<text class="dg-note" x="72" y="277">no open ports</text>
+<g class="dg-machine">
+<rect x="10" y="316" width="100" height="56" rx="10"/><circle class="dg-online" cx="97" cy="329" r="4"/>
+<text class="dg-m-name" x="22" y="340">server</text><text class="dg-m-sub" x="22" y="358">broker + link</text>
+<rect x="130" y="316" width="100" height="56" rx="10"/><circle class="dg-online" cx="217" cy="329" r="4"/>
+<text class="dg-m-name" x="142" y="340">home PC</text><text class="dg-m-sub" x="142" y="358">broker + link</text>
+<rect x="250" y="316" width="100" height="56" rx="10"/><circle class="dg-online" cx="337" cy="329" r="4"/>
+<text class="dg-m-name" x="262" y="340">devspace</text><text class="dg-m-sub" x="262" y="358">broker + link</text>
+</g>
+<text class="dg-label dg-center" x="180" y="398">Linux and Windows today; macOS is coming</text>
+</svg>

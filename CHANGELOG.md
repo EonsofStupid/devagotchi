@@ -17,6 +17,18 @@ heading. Agents draft the fragments below; they never tag.
 - rusqlite stays at 0.39. 0.40 and later need libsqlite3-sys 0.38, and sqlx 0.9 accepts only
   versions below 0.38, which both link to the same SQLite.
 
+### The landing page (increment 45)
+- `/` signed out is Devagotchi's product page on every hub (`crates/hub/src/web/landing.rs`):
+  the hero with a diagram of AI apps, the hub, the phone and machines dialing out; how it
+  works in three steps; Desktop Commander side by side, each of its facts cited to a section
+  of `docs/desktop-commander-teardown.md` (commit c2b8795) or the plan's §14; features; this
+  hub's own MCP address and the connector steps; self-hosting with Docker Compose; what is
+  coming (the Iroh mesh, secrets and devspaces), labelled as not built; questions; a closing
+  call to action. A hub nobody owns shares the hero and still offers only the claim.
+- Static HTML and inline SVG under the plain pages' CSP (no script, no inline style, nothing
+  from another origin), light and dark, phone to desktop. The top bar carries the app icon's
+  pet inline. `hub.css` gains the landing styles; the shared colors move a little cooler.
+
 ### Two account modes side by side (increment 42: PR #79 merged beside hub mode)
 - `auth.mode hub` (passkeys, the hub's own OAuth for AI clients, the browser claim, SQLite or
   Postgres) and `auth.mode devagotchi` (PR #79: provisional AI accounts, upstream sign-in,
