@@ -27,6 +27,7 @@
 mod approvals;
 mod claim;
 mod device;
+mod hosted;
 mod landing;
 #[cfg(test)]
 mod landing_tests;
@@ -80,10 +81,19 @@ pub async fn bar(
         Some(hub) => matches!(hub.claimable().await, Ok(true)),
         None => false,
     };
+    let signed_in = match &state.passkeys {
+        // An account nobody secured gets a line under the bar on every page.
+        Some(hub) if !unclaimed => match hub.who(request.headers()).await {
+            Ok(Some(subject)) => Some(subject.provisional_until.is_some()),
+            _ => None,
+        },
+        _ if routes::signed_in(&state, request.headers()).await => Some(false),
+        _ => None,
+    };
     let bar = if (state.web.is_none() && state.passkeys.is_none()) || unclaimed {
         pages::Bar::Plain
-    } else if routes::signed_in(&state, request.headers()).await {
-        pages::Bar::SignedIn
+    } else if let Some(unsecured) = signed_in {
+        pages::Bar::SignedIn { unsecured }
     } else {
         pages::Bar::SignedOut {
             return_to: safe_return_to(

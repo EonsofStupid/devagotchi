@@ -2,6 +2,8 @@
 
 Devagotchi has its own accounts. Nomen and shippin.cloud are optional "sign in with" providers. The hub serves with none of them configured.
 
+A hosted hub in `auth.mode` `hub` with `tenancy.mode` `multi` (app.devagotchi.com) makes each person's account and tenant the first time they connect from Claude, Codex or the CLI, and is never claimed; see [crates/hub/README.md](../crates/hub/README.md), "A hosted hub".
+
 This page is `auth.mode` `devagotchi`. The hub has a second account system beside it, `auth.mode` `hub`: passkey accounts in SQLite or Postgres, the hub's own OAuth server for AI clients at `/oauth/*`, and the browser claim of a new hub. That one is described in [crates/hub/README.md](../crates/hub/README.md) and is what `deploy/compose/` runs. A hub runs the mode its config names. The two share no tables, and each mounts its own `/claim` and `/.well-known/oauth-authorization-server`.
 
 The design notes, including how today's Nomen-only hub maps onto this, are in [plan/hub-auth-and-identity.md](plan/hub-auth-and-identity.md).

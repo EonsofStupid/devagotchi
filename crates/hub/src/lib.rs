@@ -23,6 +23,9 @@ mod oauth;
 mod push;
 mod run;
 mod store;
+mod tenant_machines;
+#[cfg(test)]
+mod tenant_tests;
 #[cfg(test)]
 mod test_keys;
 mod web;
@@ -289,7 +292,7 @@ fn read_config(path: &std::path::Path) -> BridgeResult<HubConfig> {
     let text = std::fs::read_to_string(path).map_err(|error| {
         BridgeError::new("invalid_config", format!("{}: {error}", path.display()))
     })?;
-    HubConfig::parse(&text)
+    HubConfig::parse_with(&text, |name| env::var(name).ok())
 }
 
 /// The accounts of a hub whose state is in `state_dir`: in the store `storage` names (see
@@ -303,7 +306,8 @@ async fn accounts_at(
     let schema = store::schema_for(config.storage_schema());
     Ok(accounts::Accounts::open(store::Store::open_in(&url, schema.as_deref()).await?)
         .await?
-        .with_tokens(config.token_config()))
+        .with_tokens(config.token_config())
+        .with_tenancy(config.tenancy.clone(), config.operators.clone()))
 }
 
 fn prepare_state_dir(state_dir: &std::path::Path) -> BridgeResult<()> {
@@ -566,10 +570,11 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let passkeys = accounts
         .clone()
         .and_then(|accounts| web::HubSignIn::new(config.clone(), accounts).map(Arc::new));
-    // A hub whose config names no owner may be claimed from the browser (`accounts/claim.rs`);
-    // its code is issued once the hub listens, below.
+    // A one-owner hub whose config names neither its owner nor its operators may be claimed
+    // from the browser (`accounts/claim.rs`); its code is issued once the hub listens, below.
+    // A hosted hub (`tenancy.mode multi`) is never claimed.
     let claimable = match (&passkeys, &accounts) {
-        (Some(_), Some(accounts)) if config.owner.is_none() => Some(accounts.clone()),
+        (Some(_), Some(accounts)) if config.claim_allowed() => Some(accounts.clone()),
         _ => None,
     };
     let push = match (&config.web, &passkeys) {
@@ -668,6 +673,13 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     // Everything worth reading at start comes before the ready line callers wait for.
     if let Some(owner) = config.owner_id() {
         eprintln!("devagotchi hub owner: {owner} reaches every broker");
+    }
+    if config.multi_tenant() {
+        // How many operators, never who: they are people's sign-ins.
+        eprintln!(
+            "devagotchi hub is hosted (tenancy multi): each person's account and tenant are made when they first connect; {} operator sign-ins configured",
+            config.operators.len()
+        );
     }
     if state.web.is_some() || state.passkeys.is_some() {
         eprintln!(

@@ -1243,6 +1243,7 @@ impl Authority {
         Ok(Subject {
             id,
             via: "devagotchi",
+            tenant: None,
             name: None,
             org: None,
             provisional_until,

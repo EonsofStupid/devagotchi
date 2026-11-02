@@ -370,12 +370,13 @@ pub async fn authorize(
         Err(response) => return response,
     };
     let hub = state.passkeys.clone().expect("checked");
+    let sign_in = format!("/auth/login?return_to={}", encode(&this_request(&query)));
+    // On a hosted hub, someone with no session gets the same page: Connect makes their
+    // account (`hosted.rs`).
     let person = match hub.who(&headers).await {
-        Ok(Some(person)) => person,
-        Ok(None) => {
-            let back = this_request(&query);
-            return see_other(&format!("/auth/login?return_to={}", encode(&back)), &[]);
-        }
+        Ok(Some(person)) => Some(person),
+        Ok(None) if state.hub.config.multi_tenant() => None,
+        Ok(None) => return see_other(&sign_in, &[]),
         Err(()) => return super::routes::unavailable(),
     };
     let Some(origin) = super::passkeys::origin_of(&checked.redirect_uri) else {
@@ -387,6 +388,10 @@ pub async fn authorize(
             pages::escape(value)
         )
     };
+    let who = match &person {
+        Some(person) => pages::escape(person.name.as_deref().unwrap_or(&person.id)),
+        None => "your new Devagotchi account".to_string(),
+    };
     let body = format!(
         "<h1>Connect {app}?</h1>\
 <p><strong>{app}</strong> asks to use this hub as <strong>{who}</strong>: every tool on the machines you reach, \
@@ -394,9 +399,13 @@ until you disconnect it or it goes unused for {days} days.</p>\
 <p class=\"meta\">It sends you back to {origin}.</p>\
 <form method=\"post\" action=\"/oauth/authorize\">{fields}\
 <p><button class=\"button primary\" name=\"decision\" value=\"approve\">Connect</button> \
-<button class=\"button\" name=\"decision\" value=\"deny\">Cancel</button></p></form>",
+<button class=\"button\" name=\"decision\" value=\"deny\">Cancel</button></p></form>{new}",
         app = pages::escape(&checked.client.name),
-        who = pages::escape(person.name.as_deref().unwrap_or(&person.id)),
+        new = if person.is_none() {
+            super::hosted::new_account_note(&sign_in)
+        } else {
+            String::new()
+        },
         days = state.hub.config.token_config().refresh_secs.div_ceil(86_400),
         origin = pages::escape(&origin),
         fields = [
@@ -441,10 +450,12 @@ pub struct Decision {
     decision: String,
 }
 
-/// The person's answer, from the approval page only.
+/// The person's answer, from the approval page only. On a hosted hub, Connect from someone
+/// with no session makes their account first and signs this browser in to it.
 pub async fn decide(
     State(state): State<AppState>,
     headers: HeaderMap,
+    extensions: axum::http::Extensions,
     Form(form): Form<Decision>,
 ) -> Response {
     let Some(hub) = state.passkeys.clone() else {
@@ -472,8 +483,23 @@ pub async fn decide(
         Ok(checked) => checked,
         Err(response) => return response,
     };
+    let approve = form.decision == "approve";
+    let multi = state.hub.config.multi_tenant();
+    let mut cookies = Vec::new();
     let person = match hub.who(&headers).await {
-        Ok(Some(person)) => person,
+        Ok(Some(person)) => Some(person),
+        // Cancel needs no account.
+        Ok(None) if multi && !approve => None,
+        Ok(None) if multi => {
+            let address = super::hosted::client_address(&state, &extensions, &headers);
+            match super::hosted::start(&hub, address, &checked.client.name).await {
+                Ok((person, cookie)) => {
+                    cookies.push(cookie);
+                    Some(person)
+                }
+                Err(page) => return page,
+            }
+        }
         Ok(None) => {
             let back = this_request(&query);
             return see_other(&format!("/auth/login?return_to={}", encode(&back)), &[]);
@@ -483,7 +509,7 @@ pub async fn decide(
     let issuer = public_url(&state);
     let mut params: Vec<(&str, &str)> = Vec::new();
     let code;
-    if form.decision == "approve" {
+    if let (true, Some(person)) = (approve, &person) {
         code = match hub
             .accounts()
             .issue_code(
@@ -497,11 +523,25 @@ pub async fn decide(
             .await
         {
             Ok(code) => code,
+            Err(error) if error.code == "client_limit" => {
+                return pages::message(
+                    StatusCode::FORBIDDEN,
+                    "Secure your account to connect more apps",
+                    &error.message,
+                    Some(("/account#secure", "Secure my account")),
+                );
+            }
             Err(error) => {
                 eprintln!("devagotchi-hub: account store: {}", error.message);
                 return super::routes::unavailable();
             }
         };
+        if let Some(tenant) = &person.tenant {
+            let _ = hub
+                .accounts()
+                .record(tenant, &person.id, "client.connected", &checked.client.name)
+                .await;
+        }
         params.push(("code", &code));
     } else {
         params.push(("error", "access_denied"));
@@ -509,7 +549,7 @@ pub async fn decide(
     if let Some(sent) = checked.state.as_deref() {
         params.push(("state", sent));
     }
-    see_other(&back_to(&checked.redirect_uri, &params, &issuer), &[])
+    see_other(&back_to(&checked.redirect_uri, &params, &issuer), &cookies)
 }
 
 #[derive(Deserialize)]

@@ -331,7 +331,7 @@ goal; reliable, clean, efficient binaries that work are, in this order of users:
 | Tier | Who | What they get | Exists on `main` | Missing |
 |---|---|---|---|---|
 | Local | Vibers | One `devagotchi` binary from the release installer (`curl \| sh`, PowerShell): `devagotchi start` runs the broker and the local board, `devagotchi mcp` is what their CLI agent points at, `devagotchi board …` and the hook pack keep the agent on the protocol. No systemd, no Caddy, no account unless they sync. | The one `devagotchi` binary (13a, 13b), cargo-dist installers, the board, the CLI, the hook pack | — |
-| Hosted (default) | Everyone who is lazy, which is most | A free account made on the hub itself with a passkey (D25), or Sign in with Shippin; their boards sync to the hosted hub; their machines reach it through whichever bridge works; one project per free account, more when they pay. devagotchi.com first (friends and family), shippin.cloud as it grows into the bridge for all their systems. | The hub with Nomen sign-in and the board over MCP; the live hub signing in as the owner with three linked machines; `--role hub --caddy` for the host; `devagotchi login` from a terminal (14a) and `devagotchi mcp --hub` carrying the account into an agent's session (14c); account boards with the free rule and seats on the hub (15a); the command line bound to the hub as the account (15b) | the offline snapshot for a bound project (15c), bridge selection (later) |
+| Hosted (default) | Everyone who is lazy, which is most | A free account made on the hub itself the first time their AI connects, secured afterwards with a passkey (D25, §14a), or Sign in with Shippin; their boards sync to the hosted hub; their machines reach it through whichever bridge works; one project per free account, more when they pay. devagotchi.com first (friends and family), shippin.cloud as it grows into the bridge for all their systems. | The hub with Nomen sign-in and the board over MCP; the live hub signing in as the owner with three linked machines; `--role hub --caddy` for the host; `devagotchi login` from a terminal (14a) and `devagotchi mcp --hub` carrying the account into an agent's session (14c); account boards with the free rule and seats on the hub (15a); the command line bound to the hub as the account (15b) | the offline snapshot for a bound project (15c), bridge selection (later) |
 | Self-hosted (advanced) | Operators | A Docker image and compose (hub + its own Postgres + Caddy), or the bare-server installer; their own accounts or Nomen. | `install-devagotchi.sh --role hub --caddy`, proven on real systemd hosts behind Caddy; `--auth-config` for their identity provider (14b); `deploy/compose/` (16a); the image on GHCR, x86_64 and ARM64 (16b); claimed from the browser with the code in its log (16c) | the management pages (16d); the public pages (privacy, terms) from the operator's config |
 
 Packets, one decision each, in order:
@@ -472,6 +472,34 @@ The path to "the AI works on my machines" is 32a then 32b: after them claude.ai 
 to the Texas hub with a passkey, and `devagotchi hub enroll` links Texas and Wisconsin
 without Nomen.
 
+### 14a. The hosted hub: accounts on first connect (ruled 2026-11-02)
+
+Jesse's ruling: app.devagotchi.com is a multi-tenant control plane, never "claimed". An
+operator account is set at deploy from the secrets store. Each user's account and space are
+created automatically the first time they connect from Claude, Codex or the CLI, and they
+secure it with Google, GitHub, an email link, Sign in with Shippin (Nomen) or a passkey, all
+of them. The model is Desktop Commander: sign in once with an account you already have.
+Claiming stays only for a self-hosted one-owner hub with no operator configured. It sits
+inside D21 (a free account required and enforced on the hosted service) and D25 (built-in
+sign-in, Nomen optional).
+
+The design adopted 2 Nov, "each user self-contained":
+
+| Piece | How |
+|---|---|
+| Tenants | `t-<uuid>`, matching Shippin's tenant model. Every account belongs to one; a one-owner hub has one, and Jesse is tenant #1 and the platform operator on the hosted hub |
+| Self-contained | each tenant has its own data, limits, audit chain, export and delete; pooled by default, silo on demand; optional tenant hostnames `<slug>.<tenancy.domain>` |
+| Database | `tenant_id` leads every tenant table's key, with Postgres row-level security forced; tables get domain prefixes in a `devagotchi` schema |
+
+Increments, one PR each:
+
+| Increment | Scope | Exit |
+|---|---|---|
+| 57 | `tenancy.mode` (`single` default, `multi`) and `operators` from config or the environment; tenants in the store (add-only migration, existing accounts into the first tenant); accounts made on the first OAuth authorize or `/device` approval with no session, held to per-tenant quotas until secured (the anonymous-then-link upgrade); each tenant's own hash chain; machine names per tenant; no claim on a hosted hub | `tenant_tests.rs`: tenant A drives every MCP tool and account page with tenant B's ids, SQLite and Postgres; `tests/clients_oauth.py`: a new person connects the MCP SDK and Codex to a hosted hub with no claim and no passkey and calls `whoami` |
+| 58 | Sign in with Google, GitHub, an email link and Shippin (Nomen as generic OpenID Connect), each linkable to an account, a provisional one included | stub providers and a stub SMTP server in CI |
+| 59 | compose, `install.sh` and `hub-up.sh` carry the tenancy, operator and provider settings; `update.sh` brings the deploy files from the image's commit | `tests/deploy_scripts.sh`, `tests/proxmox_hub_up.py` |
+| 60 | the `devagotchi` schema, `tenant_id`-led keys and forced RLS | the hub's database role cannot read another tenant's rows |
+
 ### Decisions, one at a time (proposals until ruled)
 
 | # | Question | Proposal |
@@ -480,7 +508,7 @@ without Nomen.
 | 2 | Approvals: a fresh passkey tap on every Approve, or the signed-in session's tap | **Ruled 2026-10-27 (Jesse): the user decides, including an experimental full access.** Each account picks in its settings: a passkey for every approval; a passkey for root steps (23c) and new machines, a plain tap for the rest; a plain tap for everything; or experimental full access, where nothing waits for approval and everything is still recorded. Proposed around it: the middle setting is the default; turning full access on takes a passkey tap and is shown on every page while it is on |
 | 3 | AI clients: any MCP client with a consent tap, or a fixed list (Claude, ChatGPT, Claude Code, Cursor) | **Ruled 2026-10-27 (Jesse): any MCP client, with consent.** The consent page names the client and the host of its `client_id`, and warns on loopback-only or other-host redirects |
 | 4 | How long an AI connection lasts without you | **Ruled 2026-10-27 (Jesse): the user decides.** Each account picks 1, 7 or 30 days unused, or never; 7 by default. Any connection ends at once when the account is disabled, and from the account page whenever its person says so |
-| 5 | Sign-up on devagotchi.com | **Ruled 2026-10-27 (Jesse): invite links only, to start.** Open sign-up is a config switch for later |
+| 5 | Sign-up on devagotchi.com | **Ruled 2026-10-27 (Jesse): invite links only, to start.** Open sign-up is a config switch for later. **Superseded for the hosted hub 2026-11-02 (Jesse):** "auto create the account and get them started, ease of use adoption while we do the work to keep it secure": each person's account and tenant are made the first time they connect, `tenancy.mode multi` being that switch (§14a). A one-owner hub stays as ruled |
 | 6 | Orgs on hub accounts (B13): each account its own org at first; who adds members; whether a Nomen-linked account takes Nomen's org | **Ruled 2026-10-27 (Jesse): the hub's org; its owner invites.** Each account starts as its own org; the org's owner invites members on the hub; linking Nomen does not change an account's org |
 | 7 | All passkeys and codes lost | **Ruled 2026-10-27 (Jesse): recovery codes, the owner's reset, another passkey, a PIN, and email once the identity is established.** Ways back in: a recovery code; the hub owner's one-time reset link (for the owner, the link from the hub's host); any other passkey on the account; a PIN the person set; and, once the account's email is verified, a reset link by email. Proposed around it: a PIN is at least 6 digits, locks after 5 wrong tries and tells the account; email and PIN together recover, neither alone; every recovery ends all other sessions and connections and is shown on the account page |
 | 8 | Email | **Ruled 2026-10-27 (Jesse): optional.** Asked at sign-up, not required; needed for email approvals and notices (10c) and for email recovery (decision 7), and verified before either uses it |

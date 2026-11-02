@@ -84,12 +84,15 @@ impl HubSignIn {
         &self.accounts
     }
 
-    /// Whether this hub can be claimed from the browser (`accounts/claim.rs`): its config
-    /// names no owner, and no owner can sign in with a passkey yet. A config that names
+    /// Whether this hub can be claimed from the browser (`accounts/claim.rs`): a one-owner
+    /// hub whose config names no owner and no operators, and no owner can sign in with a
+    /// passkey yet. A config that names
     /// its owner has decided who that is: their passkey is made on the host with
     /// `devagotchi hub owner`, whatever the log says. `Err` when the store failed.
     pub(super) async fn claimable(&self) -> Result<bool, ()> {
-        if self.config.owner.is_some() {
+        // A hosted hub is never claimed, and neither is one whose operators were set at
+        // deploy (`HubConfig::claim_allowed`).
+        if !self.config.claim_allowed() {
             return Ok(false);
         }
         self.claimed().await.map(|claimed| !claimed)
@@ -153,16 +156,7 @@ impl HubSignIn {
         };
         let accounts = self.accounts.clone();
         match tokio::spawn(async move { accounts.session(&token).await }).await {
-            Ok(Ok(Some(session))) => Ok(Some(Subject {
-                id: session.account.id,
-                via: "passkey",
-                name: Some(session.account.name),
-                org: None,
-                provisional_until: None,
-                agent: None,
-                claim_code: None,
-                provisional_warning: false,
-            })),
+            Ok(Ok(Some(session))) => Ok(Some(self.accounts.subject(&session.account, "passkey"))),
             Ok(Ok(None)) => Ok(None),
             Ok(Err(error)) => {
                 eprintln!("devagotchi-hub: account store: {}", error.message);
@@ -382,7 +376,9 @@ on the hub's host, <code>devagotchi hub owner</code> prints a new one.</p>\
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkIn {
-    link: String,
+    /// An owner link; absent to secure the account this browser is signed in to.
+    #[serde(default)]
+    link: Option<String>,
 }
 
 pub async fn register_options(
@@ -400,7 +396,70 @@ pub async fn register_options(
         Ok(input) => input,
         Err(refused) => return refused,
     };
-    registration(hub, input.link, false).await
+    match input.link.filter(|link| !link.is_empty()) {
+        Some(link) => registration(hub, link, false).await,
+        None => securing(hub, &headers).await,
+    }
+}
+
+/// The account this browser is signed in to, when nobody has secured it yet: the only
+/// account a session alone may add a passkey to (anything else takes a link from the hub's
+/// host), with the session's token. The page to show otherwise.
+async fn unsecured_session(
+    hub: &Arc<HubSignIn>,
+    headers: &HeaderMap,
+) -> Result<(crate::auth::Subject, String), Response> {
+    let refused = || {
+        refuse(
+            StatusCode::FORBIDDEN,
+            "not_unsecured",
+            "Only an account that is not secured yet adds its first passkey here.",
+        )
+    };
+    let Some(token) = cookie_value(headers, hub.session_cookie()) else {
+        return Err(expired());
+    };
+    match hub.who(headers).await {
+        Ok(Some(subject)) if subject.provisional_until.is_some() => Ok((subject, token)),
+        Ok(Some(_)) => Err(refused()),
+        Ok(None) => Err(expired()),
+        Err(()) => Err(store_failed("a session could not be checked")),
+    }
+}
+
+/// The options to make the first passkey of the account this browser is signed in to.
+async fn securing(hub: Arc<HubSignIn>, headers: &HeaderMap) -> Response {
+    let (subject, _) = match unsecured_session(&hub, headers).await {
+        Ok(found) => found,
+        Err(page) => return page,
+    };
+    let challenge = hub.accounts.challenge(Ceremony::Register, Some(&subject.id));
+    let name = subject.name.clone().unwrap_or_else(|| subject.id.clone());
+    hub.with_challenge(
+        &challenge,
+        json!({
+            "challenge": URL_SAFE_NO_PAD.encode(&challenge),
+            "rp": { "id": hub.rp_id, "name": "Devagotchi" },
+            "user": {
+                "id": URL_SAFE_NO_PAD.encode(subject.id.as_bytes()),
+                "name": name,
+                "displayName": name,
+            },
+            "pubKeyCredParams": [
+                { "type": "public-key", "alg": -8 },
+                { "type": "public-key", "alg": -7 },
+                { "type": "public-key", "alg": -257 },
+            ],
+            "timeout": crate::accounts::CHALLENGE_TTL_SECS * 1000,
+            "attestation": "none",
+            "authenticatorSelection": {
+                "residentKey": "required",
+                "requireResidentKey": true,
+                "userVerification": "required",
+            },
+            "excludeCredentials": [],
+        }),
+    )
 }
 
 /// The options to make a passkey with the owner link `link`: who it is for, the passkeys it
@@ -470,7 +529,8 @@ pub(super) async fn registration(hub: Arc<HubSignIn>, link: String, hand_back: b
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterIn {
-    link: String,
+    #[serde(default)]
+    link: Option<String>,
     id: String,
     #[serde(rename = "clientDataJSON")]
     client_data_json: String,
@@ -509,10 +569,13 @@ pub async fn register(
             "The passkey's answer was garbled.",
         );
     };
+    let Some(link) = input.link.clone().filter(|link| !link.is_empty()) else {
+        return secure_with(hub, &headers, &challenge, &input).await;
+    };
     let worker = hub.clone();
     let done = tokio::spawn(async move {
         let accounts = &worker.accounts;
-        let account = accounts.check_link(LinkPurpose::Owner, &input.link).await?;
+        let account = accounts.check_link(LinkPurpose::Owner, &link).await?;
         if worker
             .config
             .owner_id()
@@ -546,7 +609,7 @@ pub async fn register(
                 &credential,
                 &label,
                 LinkPurpose::Owner,
-                &input.link,
+                &link,
             )
             .await?;
         Ok::<_, devagotchi_contracts::BridgeError>((account, token))
@@ -568,6 +631,82 @@ pub async fn register(
                 "refused",
                 "That passkey was not accepted here. Try again, or another device.",
             ),
+            "passkey_exists" => refuse(
+                StatusCode::CONFLICT,
+                "passkey_exists",
+                "That passkey is already registered on this hub.",
+            ),
+            "account_disabled" => refuse(
+                StatusCode::FORBIDDEN,
+                "account_disabled",
+                "This account is disabled.",
+            ),
+            _ => store_failed(&error.message),
+        },
+        Err(_) => store_failed("a passkey registration did not complete"),
+    }
+}
+
+/// The first passkey of the account this browser is signed in to, nobody having secured it
+/// yet: stored on the session's authority, checked again in the same transaction. The
+/// account is secured from then on; the session goes on.
+async fn secure_with(
+    hub: Arc<HubSignIn>,
+    headers: &HeaderMap,
+    challenge: &[u8],
+    input: &RegisterIn,
+) -> Response {
+    let (subject, session) = match unsecured_session(&hub, headers).await {
+        Ok(found) => found,
+        Err(page) => return page,
+    };
+    let (Some(id), Some(client_data_json), Some(authenticator_data), Some(public_key)) = (
+        bytes(&input.id),
+        bytes(&input.client_data_json),
+        bytes(&input.authenticator_data),
+        bytes(&input.public_key),
+    ) else {
+        return refuse(
+            StatusCode::BAD_REQUEST,
+            "malformed",
+            "The passkey's answer was garbled.",
+        );
+    };
+    let credential = match passkey::verify_registration(
+        hub.relying(),
+        challenge,
+        Registration {
+            credential_id: &id,
+            client_data_json: &client_data_json,
+            authenticator_data: &authenticator_data,
+            public_key: &public_key,
+            alg: input.public_key_algorithm,
+        },
+    ) {
+        Ok(credential) => credential,
+        Err(refusal) => {
+            eprintln!("devagotchi-hub: refused a passkey registration: {refusal}");
+            return refuse(
+                StatusCode::BAD_REQUEST,
+                "refused",
+                "That passkey was not accepted here. Try again, or another device.",
+            );
+        }
+    };
+    let accounts = hub.accounts.clone();
+    let account = subject.id.clone();
+    let kept = session.clone();
+    let done = tokio::spawn(async move {
+        let label = format!("Passkey made {}", pages::utc(crate::devices::now_secs()));
+        accounts
+            .add_passkey_signed_in(&account, &credential, &label, &kept)
+            .await
+    })
+    .await;
+    match done {
+        Ok(Ok(())) => hub.signed_in_to(&session, "/account"),
+        Ok(Err(error)) => match error.code.as_str() {
+            "invalid_link" | "invalid_ceremony" => expired(),
             "passkey_exists" => refuse(
                 StatusCode::CONFLICT,
                 "passkey_exists",

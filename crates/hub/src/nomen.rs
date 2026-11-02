@@ -672,6 +672,7 @@ fn assess(answer: &Introspection, accepts: &Accepts, now: u64) -> Result<Subject
     Ok(Subject {
         id: sub.to_string(),
         via: "nomen",
+        tenant: None,
         name,
         org: answer
             .org

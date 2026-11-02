@@ -20,6 +20,12 @@ hub's consent page in that browser:
    own app server listing the hub's tools and calling `whoami` with that token. No OpenAI
    key: nothing here reaches a model.
 
+4. hosted: a second hub in `tenancy.mode multi`, as app.devagotchi.com runs. A brand-new
+   person with no account, in a browser with no passkey, connects the SDK and then Codex:
+   the first Connect makes their account and its own tenant, the second finds it signed in,
+   and both clients call `whoami` as that one account, not secured yet. Nothing is claimed:
+   the hub prints no claim code and `/` and `/claim` offer none.
+
 Both clients are pinned with integrity hashes by tests/clients/package-lock.json. CI runs
 this on ubuntu-24.04 (`e2e`). `--receipt FILE` writes what ran, the versions and each
 step's result, with every request the clients made. No token, code, verifier, state or
@@ -413,8 +419,9 @@ def protocol(url: str, page, steps: Steps, rec: Recorder) -> None:
     steps.ok(name, "revocation (RFC 7009) answers 200 for an unknown token")
 
 
-def sdk(url: str, page, steps: Steps, rec: Recorder, sdk_dir: Path, node: str) -> dict:
-    rec.label = name = "sdk"
+def sdk(url: str, page, steps: Steps, rec: Recorder, sdk_dir: Path, node: str,
+        name: str = "sdk", owner: bool = True, seen: dict = None) -> dict:
+    rec.label = name
     version = json.loads((sdk_dir / "node_modules/@modelcontextprotocol/sdk/package.json").read_text())["version"]
     errors = Path(tempfile.mkstemp(prefix="sdk-client-", suffix=".err")[1])
     run = subprocess.Popen([node, str(sdk_dir / "sdk_client.mjs"), url + "/mcp", str(free_port())],
@@ -435,7 +442,9 @@ def sdk(url: str, page, steps: Steps, rec: Recorder, sdk_dir: Path, node: str) -
         if run.poll() is None:
             run.kill()
     assert {"whoami", "machines"} <= set(last["tools"]), last
-    assert last["whoami"]["owner"] is True and last["whoami"]["via"] == "hub", last
+    assert last["whoami"]["owner"] is owner and last["whoami"]["via"] == "hub", last
+    if seen is not None:
+        seen[name] = last["whoami"]
     steps.ok(name, "token, tools/list and whoami through the SDK", {k: v for k, v in last.items() if k != "tools"})
     assert last["refreshed"] and last["machines"], last
     steps.ok(name, "the SDK refreshed by itself on a 401 and called machines")
@@ -477,8 +486,9 @@ class AppServer:
         self.process.wait(timeout=10)
 
 
-def codex(url: str, page, steps: Steps, rec: Recorder, codex_bin: str, work: Path) -> dict:
-    rec.label = name = "codex"
+def codex(url: str, page, steps: Steps, rec: Recorder, codex_bin: str, work: Path,
+          name: str = "codex", owner: bool = True, seen: dict = None) -> dict:
+    rec.label = name
     version = subprocess.run([codex_bin, "--version"], capture_output=True, text=True).stdout.strip()
     home = work / "codex-home"
     home.mkdir()
@@ -543,7 +553,10 @@ def codex(url: str, page, steps: Steps, rec: Recorder, codex_bin: str, work: Pat
         called = app.call("mcpServer/tool/call", {"server": "devagotchi", "threadId": thread_id,
                                                    "tool": "whoami", "arguments": {}})
         who = called.get("structuredContent") or json.loads(called["content"][0]["text"])
-        assert who["owner"] is True and who["via"] == "hub", who
+        assert who["owner"] is owner and who["via"] == "hub", who
+        if seen is not None:
+            seen[name] = {"tenant": who.get("tenant"), "unsecured": bool(who.get("secure_url")),
+                          "owner": who["owner"], "via": who["via"]}
         steps.ok(name, "codex app-server: thread/start, then mcpServer/tool/call whoami",
                  {"owner": who["owner"], "via": who["via"]})
     finally:
@@ -565,6 +578,69 @@ def claim(page, url: str, log: Path) -> None:
     page.wait_for_url(f"{url}/signed-out")
 
 
+def serve(binary: str, work: Path, hub_port: int, url: str, extra: dict):
+    """`devagotchi hub serve` in `auth.mode hub` on SQLite in `work`; its log file."""
+    work.mkdir(parents=True, exist_ok=True)
+    config = work / "hub.json"
+    config.write_text(json.dumps({
+        "listen": f"127.0.0.1:{hub_port}", "public_url": url, "auth": {"mode": "hub"},
+        "storage": {"url": f"sqlite:{work / 'accounts.sqlite3'}"}, "brokers": [], "grants": [],
+        **extra}))
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("DEVAGOTCHI_HUB_STORAGE", "DEVAGOTCHI_HUB_TENANCY", "DEVAGOTCHI_HUB_OPERATORS"))}
+    log = work / "hub.log"
+    hub = subprocess.Popen([binary, "hub", "serve", "--state-dir", str(work / "state"),
+                            "--config", str(config)], stdout=subprocess.DEVNULL,
+                           stderr=open(log, "w"), env=env)
+    until(lambda: hub.poll() is not None or fetch("GET", url + "/healthz")[0] == 200,
+          "the hub answered /healthz", 30)
+    assert hub.poll() is None, log.read_text()
+    return hub, log
+
+
+def hosted(args, browser, steps: Steps, work: Path, versions: dict) -> list:
+    """A hosted hub: a new person connects the SDK and Codex with no account, no claim and no
+    passkey, and both are that one new account. Returns what its recorder saw."""
+    hub_port = free_port()
+    rec = Recorder(hub_port)
+    url = f"http://localhost:{rec.port}"
+    hub, log = serve(args.devagotchi, work, hub_port, url, {"tenancy": {"mode": "multi"}})
+    name = "hosted"
+    try:
+        status, _, body = fetch("GET", url + "/")
+        page_text = body.decode()
+        assert status == 200 and "Get started" in page_text and "Claim this hub" not in page_text
+        status, _, _ = fetch("GET", url + "/claim")
+        assert status == 404, status
+        assert "/claim#" not in log.read_text() and "is hosted (tenancy multi)" in log.read_text()
+        steps.ok(name, "a hosted hub: no claim code in its log; / gets people started; /claim is 404")
+        # A browser that holds no passkey and has never been here.
+        context = browser.new_context()
+        page = context.new_page()
+        seen = {}
+        sdk(url, page, steps, rec, Path(args.sdk_dir), args.node, name="hosted-sdk", owner=False,
+            seen=seen)
+        if args.codex != "skip":
+            codex(url, page, steps, rec, args.codex, work, name="hosted-codex", owner=False,
+                  seen=seen)
+        first = seen["hosted-sdk"]
+        assert first["tenant"] and first["tenant"].startswith("t-") and first["unsecured"], first
+        for client, who in seen.items():
+            assert who["tenant"] == first["tenant"] and who["unsecured"], (client, who)
+        steps.ok(name, "one new account, made by the first Connect, in a tenant of its own and "
+                 "not secured yet; every client calls whoami as it", sorted(seen))
+        # The account page offers to secure it; nothing asked for a passkey on the way.
+        page.goto(url + "/account")
+        text = page.inner_text("main")
+        assert "Secure your account" in text and "client.connected" in text, text[:500]
+        steps.ok(name, "the account page offers the passkey afterwards, without blocking")
+        context.close()
+    finally:
+        hub.terminate()
+        hub.wait(timeout=10)
+    return rec.entries
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--devagotchi", required=True, help="absolute path of the binary")
@@ -582,21 +658,11 @@ def main() -> int:
     hub_port = free_port()
     rec = Recorder(hub_port)
     url = f"http://localhost:{rec.port}"
-    config = work / "hub.json"
-    config.write_text(json.dumps({
-        "listen": f"127.0.0.1:{hub_port}", "public_url": url, "auth": {"mode": "hub"},
-        "storage": {"url": f"sqlite:{work / 'accounts.sqlite3'}"}, "brokers": [], "grants": []}))
-    env = {k: v for k, v in os.environ.items() if not k.startswith("DEVAGOTCHI_HUB_STORAGE")}
-    log = work / "hub.log"
-    hub = subprocess.Popen([args.devagotchi, "hub", "serve", "--state-dir", str(work / "state"),
-                            "--config", str(config)], stdout=subprocess.DEVNULL,
-                           stderr=open(log, "w"), env=env)
+    hub, log = serve(args.devagotchi, work, hub_port, url, {})
     steps = Steps()
     versions = {"python": platform.python_version()}
+    hosted_requests = []
     try:
-        until(lambda: hub.poll() is not None or fetch("GET", url + "/healthz")[0] == 200,
-              "the hub answered /healthz", 30)
-        assert hub.poll() is None, log.read_text()
         with sync_playwright() as p:
             browser = p.chromium.launch(channel=args.channel)
             versions["browser"] = f"{args.channel or browser.browser_type.name} {browser.version}"
@@ -617,6 +683,7 @@ def main() -> int:
                 versions.update(codex(url, page, steps, rec, args.codex, work))
             else:
                 print("SKIP codex: --codex skip")
+            hosted_requests = hosted(args, browser, steps, work / "hosted", versions)
             browser.close()
     finally:
         hub.terminate()
@@ -636,6 +703,7 @@ def main() -> int:
             "versions": versions,
             "steps": steps.clients,
             "requests": rec.entries,
+            "hosted_requests": hosted_requests,
             "redaction": "codes, verifiers, challenges, state, tokens and claim codes are '…'; "
                          "client ids keep their 4-character prefix",
         }

@@ -1,5 +1,5 @@
-// Passkeys on the hub's own pages: make one from an owner link or by claiming a new hub,
-// or sign in with one.
+// Passkeys on the hub's own pages: make one from an owner link, by claiming a new hub, or to
+// secure the account this browser is signed in to; or sign in with one.
 // The hub checks everything; this only moves bytes between the browser's WebAuthn API and
 // the hub, base64url on the wire. No other script runs on these pages.
 "use strict";
@@ -91,6 +91,13 @@
     window.addEventListener("hashchange", takeCode);
   }
 
+  // The account page of an account nobody secured yet: its first passkey, on the
+  // authority of this browser's session (no link).
+  async function add() {
+    link = "";
+    await makePasskey(await post("/passkey/register/options", {}));
+  }
+
   async function claim() {
     const code = claimCode.value.trim();
     if (!code) {
@@ -119,7 +126,7 @@
       throw new Error("This browser did not hand over the new passkey's key. Update it and try again.");
     }
     const done = await post("/passkey/register", {
-      link,
+      link: link || null,
       id: b64.encode(credential.rawId),
       clientDataJSON: b64.encode(response.clientDataJSON),
       authenticatorData: b64.encode(response.getAuthenticatorData()),
@@ -170,6 +177,7 @@
   wire("passkey-register", register);
   wire("passkey-sign-in", signIn);
   wire("passkey-claim", claim);
+  wire("passkey-add", add);
 
   // The claim form submits with Enter too, and never as a plain form post.
   const claimForm = document.getElementById("claim-form");

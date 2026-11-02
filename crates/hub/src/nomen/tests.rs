@@ -169,6 +169,7 @@ async fn a_live_token_for_this_hub_signs_in_and_is_remembered() {
             Subject {
                 id: OWNER.into(),
                 via: "nomen",
+                tenant: None,
                 name: Some("jessay@example.test".into()),
                 org: Some(OWNER_ORG.into()),
                 provisional_until: None,
@@ -573,6 +574,7 @@ fn a_full_cache_never_evicts_a_confirmed_sign_in_and_late_answers_never_win() {
         Ok(Subject {
             id: OWNER.into(),
             via: "nomen",
+            tenant: None,
             name: None,
             org: None,
             provisional_until: None,

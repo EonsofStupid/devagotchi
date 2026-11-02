@@ -244,3 +244,55 @@ fn hub_and_devagotchi_modes_parse_side_by_side_and_keep_their_own_fields() {
     config["auth"] = serde_json::json!({ "mode": "accounts" });
     refused(&config);
 }
+
+#[test]
+fn a_hosted_hub_and_its_operators_come_from_the_config_or_the_environment() {
+    // The default is today's one-owner hub, claimable while it names nobody.
+    let single = parse(&hub()).unwrap();
+    assert!(!single.multi_tenant() && single.claim_allowed());
+
+    let mut hosted = hub();
+    hosted["tenancy"] = serde_json::json!({ "mode": "multi", "unsecured": { "machines": 1 } });
+    hosted["operators"] = serde_json::json!(["email:ops@example.com"]);
+    let config = parse(&hosted).unwrap();
+    assert!(config.multi_tenant() && !config.claim_allowed());
+    assert_eq!(config.tenancy.unsecured.machines, 1);
+
+    // The environment sets both over the file, as a deploy does from .env and the secrets.
+    let env = |name: &str| match name {
+        TENANCY_ENV => Some("multi".to_string()),
+        OPERATORS_ENV => Some(" github:42 , email:jesse@example.com ,".to_string()),
+        _ => None,
+    };
+    let config = HubConfig::parse_with(&hub().to_string(), env).unwrap();
+    assert!(config.multi_tenant());
+    assert_eq!(config.operators, ["github:42", "email:jesse@example.com"]);
+    let wrong = HubConfig::parse_with(&hub().to_string(), |name| {
+        (name == TENANCY_ENV).then(|| "many".to_string())
+    })
+    .unwrap_err();
+    assert!(wrong.message.contains("single or multi"), "{}", wrong.message);
+
+    // A one-owner hub with operators set at deploy is not claimed either.
+    let mut operated = hub();
+    operated["operators"] = serde_json::json!(["nomen:395290028818825218"]);
+    assert!(!parse(&operated).unwrap().claim_allowed());
+
+    // A hosted hub needs the hub's own accounts, has no configured owner, and takes only
+    // operator entries it can match.
+    let mut nomen = hosted.clone();
+    nomen["auth"] = serde_json::json!({
+        "mode": "nomen", "issuer": "https://id.shippin.cloud", "audiences": ["p"],
+        "clients": ["c"], "key_file": KEY
+    });
+    assert!(refused(&nomen).contains("auth.mode hub"));
+    let mut owned = hosted.clone();
+    owned["owner"] = "395290028818825218".into();
+    assert!(refused(&owned).contains("leave owner out"));
+    let mut odd = hosted.clone();
+    odd["operators"] = serde_json::json!(["jesse"]);
+    assert!(refused(&odd).contains("provider:subject"));
+    let mut proxies = hosted;
+    proxies["tenancy"]["trusted_proxies"] = serde_json::json!(["not-an-address"]);
+    assert!(refused(&proxies).contains("trusted_proxies"));
+}

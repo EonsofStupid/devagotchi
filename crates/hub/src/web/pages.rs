@@ -17,8 +17,9 @@ pub use crate::hub::Machine;
 pub enum Bar {
     /// No web sign-in on this hub: the brand only.
     Plain,
-    /// A live session: Approvals, Machines and a one-tap Sign out.
-    SignedIn,
+    /// A live session: Approvals, Machines and a one-tap Sign out; on an account nobody
+    /// secured yet, a line under it that says so and leads to securing it.
+    SignedIn { unsecured: bool },
     /// No session: one Sign in that comes back to this page.
     SignedOut { return_to: String },
 }
@@ -30,7 +31,7 @@ tokio::task_local! {
 fn bar_html(bar: &Bar) -> String {
     let links = match bar {
         Bar::Plain => String::new(),
-        Bar::SignedIn => "<nav><a href=\"/approvals\">Approvals</a><a href=\"/account\">Machines</a>\
+        Bar::SignedIn { .. } => "<nav><a href=\"/approvals\">Approvals</a><a href=\"/account\">Machines</a>\
 <form method=\"post\" action=\"/auth/logout\"><button type=\"submit\">Sign out</button></form></nav>"
             .to_string(),
         Bar::SignedOut { return_to } => format!(
@@ -38,8 +39,13 @@ fn bar_html(bar: &Bar) -> String {
             escape(&super::encode(return_to))
         ),
     };
+    let nudge = match bar {
+        Bar::SignedIn { unsecured: true } => "<p class=\"nudge\" role=\"status\">Your account is not \
+secured yet: nothing can recover it if you lose this browser. <a href=\"/account#secure\">Secure it</a></p>",
+        _ => "",
+    };
     format!(
-        "<header class=\"bar\"><a class=\"brand\" href=\"/\">{MARK}<span class=\"brand-name\">Devagotchi</span></a>{links}</header>"
+        "<header class=\"bar\"><a class=\"brand\" href=\"/\">{MARK}<span class=\"brand-name\">Devagotchi</span></a>{links}</header>{nudge}"
     )
 }
 
@@ -55,6 +61,10 @@ pub struct Viewer<'a> {
     pub owner: bool,
     /// Signed in with the hub's own account (a passkey), not through Shippin.
     pub hub_account: bool,
+    /// When an account nobody secured yet ends if unused: the page offers to secure it.
+    pub unsecured_until: Option<u64>,
+    /// The latest steps in the account's tenant, newest first.
+    pub events: &'a [crate::accounts::tenants::Event],
 }
 
 pub fn html(status: StatusCode, title: &str, body: &str) -> Response {
@@ -175,6 +185,8 @@ pub enum Front {
     Passkeys,
     /// A hub that signs people in with Shippin (Nomen).
     Shippin,
+    /// A hosted hub (`tenancy.mode multi`): accounts are made on first connect.
+    Hosted,
 }
 
 /// `/` for someone not signed in: the product page (`landing.rs`). A hub nobody owns offers
@@ -231,10 +243,34 @@ pub fn account(viewer: &Viewer<'_>, machines: &[Machine]) -> Response {
 <input type=\"text\" name=\"name\" required maxlength=\"63\" pattern=\"[a-z0-9][a-z0-9\\-]{0,62}\" \
 autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"platinum\"></label>\
 <p class=\"actions\"><button class=\"approve\" type=\"submit\">Get a one-time code</button></p></form>";
+    let secure = viewer
+        .unsecured_until
+        .map(|until| super::hosted::secure_offer(until, true))
+        .unwrap_or_default();
+    let history = if viewer.events.is_empty() {
+        String::new()
+    } else {
+        let rows: String = viewer
+            .events
+            .iter()
+            .map(|event| {
+                format!(
+                    "<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+                    utc(event.at),
+                    escape(&event.event),
+                    escape(&event.detail)
+                )
+            })
+            .collect();
+        format!(
+            "<h2>Recent activity in your space</h2><table class=\"activity\"><thead><tr><th>When</th>\
+<th>What</th><th></th></tr></thead><tbody>{rows}</tbody></table>"
+        )
+    };
     let body = format!(
         "<h1>Signed in as {}</h1>\
-<p class=\"meta\">{kind} ID <code>{}</code></p>{owner}\
-<h2>Your machines</h2>{machines}{add}\
+<p class=\"meta\">{kind} ID <code>{}</code></p>{owner}{secure}\
+<h2>Your machines</h2>{machines}{add}{history}\
 <form method=\"post\" action=\"/auth/logout\"><button type=\"submit\">Sign out</button></form>",
         escape(shown),
         escape(viewer.subject),
@@ -244,7 +280,13 @@ autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"
             "Shippin account"
         },
     );
-    html(StatusCode::OK, "Your account", &body)
+    // The offer to secure the account makes its passkey on this page: the hub's one
+    // passkey script runs here then, and only then.
+    if viewer.unsecured_until.is_some() {
+        scripted(StatusCode::OK, "Your account", &body, "/assets/passkey.js")
+    } else {
+        html(StatusCode::OK, "Your account", &body)
+    }
 }
 
 fn status_label(status: &str) -> &'static str {
