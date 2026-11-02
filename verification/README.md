@@ -8,6 +8,20 @@ This directory records completed Linux core checks for the Devagotchi foundation
 
 The separate [website publication receipt](website-publication.json) records the October 17 public Site, HTTP reference/download checks, MCP OAuth challenge and plugin provisioning, source identity, and DNS status. Its 12 reference-handler checks concern website code, not this Rust broker. Browser visual QA and an authenticated named-client MCP call remain unverified. The Linux results below are unchanged historical evidence.
 
+## AI clients through a hub's own sign-in (increment 52)
+
+[clients-oauth.json](clients-oauth.json) is the unmodified receipt of `tests/clients_oauth.py`
+(source commit in the file): a new hub in `auth.mode hub` on SQLite, claimed in Chromium with
+a virtual passkey, then the MCP authorization flow by hand, by the official MCP TypeScript SDK
+1.32.2 and by Codex CLI 0.166.0 (`codex mcp add`, `codex mcp login`, and Codex's app server
+listing the tools and calling `whoami` with the token Codex stored), each approved on the
+consent page. `requests` is every request the clients made, with codes, verifiers, state and
+tokens replaced by `…`. Against main before increment 52 (44f05c5) the same harness stopped
+twice: **Connect** on the consent page answered "Not from this hub's page" (the page's
+`Referrer-Policy: no-referrer` makes a browser send the form with `Origin: null`), and, past
+that, the SDK refused `whoami` (its output schema required `provisional_warning`, which the
+hub leaves out). Claude and Grok were not run: they need Jesse's accounts and a public hub.
+
 ## Devspace provisioning
 
 [devspace-provision.json](devspace-provision.json) records the October 20, 2026 UTC end-to-end run of `deploy/devspace/provision.sh` in an Ubuntu 24.04 sandbox: the four failures it surfaced and their fixes, the `devspace-check` output (every toolchain under `/devspace`, nothing stray in `$HOME`), and a broker started with the generated config and probed through `bridge-mcp` (`tests/devspace_broker_probe.py`, since replaced by `tests/adapter_probe.py`: `git --version` succeeded under the broker, an ungranted executable was refused). The sandbox has no PID 1 systemd, so `enable-linger` and the user unit are listed as not verified; they are checked on the real tenant.

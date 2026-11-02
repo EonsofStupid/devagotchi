@@ -792,6 +792,9 @@ async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tok
         .unwrap()
         .to_string();
     assert!(csp.contains("form-action 'self' http://127.0.0.1:9;"), "{csp}");
+    // A browser sends this page's POST with its true origin only under `same-origin`;
+    // under `no-referrer` it sends `Origin: null`, refused below (tests/clients_oauth.py).
+    assert_eq!(page.headers()[header::REFERRER_POLICY], "same-origin");
     let html = page.text().await.unwrap();
     assert!(html.contains("Connect Test AI?") && html.contains("Jesse"), "{html}");
 
@@ -814,8 +817,12 @@ async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tok
         }
         request.send()
     };
-    // Another site, or no Origin at all: not approved.
+    // Another site, an opaque origin, or no Origin at all: not approved.
     assert_eq!(approve("approve", None).await.unwrap().status(), 403);
+    assert_eq!(
+        approve("approve", Some("null".into())).await.unwrap().status(),
+        403
+    );
     assert_eq!(
         approve("approve", Some("https://evil.example".into()))
             .await

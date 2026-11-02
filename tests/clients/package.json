@@ -1,0 +1,13 @@
+{
+  "name": "devagotchi-client-probes",
+  "private": true,
+  "description": "Real MCP clients for tests/clients_oauth.py: the official MCP TypeScript SDK and the Codex CLI, locked",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@openai/codex": "0.166.0"
+  }
+}
