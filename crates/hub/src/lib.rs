@@ -307,7 +307,16 @@ async fn accounts_at(
     prepare_state_dir(state_dir)?;
     let url = store::url_for(config.storage_url(), state_dir);
     let schema = store::schema_for(config.storage_schema());
-    Ok(accounts::Accounts::open(store::Store::open_in(&url, schema.as_deref()).await?)
+    let store = store::Store::open_in(&url, schema.as_deref()).await?;
+    // A hosted hub on Postgres keeps its tenants apart in the database as well: its queries
+    // run as a role row-level security holds, or it does not start.
+    if config.multi_tenant() && store.backend() == store::Backend::Postgres && !store.enforced() {
+        return Err(BridgeError::new(
+            "account_store",
+            "a hosted hub (tenancy.mode multi) on Postgres runs its queries as the role devagotchi_hub, held to row-level security, and its login role cannot switch to that role; see crates/hub/README.md, \"The store\"",
+        ));
+    }
+    Ok(accounts::Accounts::open(store)
         .await?
         .with_tokens(config.token_config())
         .with_tenancy(config.tenancy.clone(), config.operators.clone()))
@@ -1217,6 +1226,11 @@ async fn healthz(State(state): State<AppState>) -> Response {
             (None, None) => serde_json::Value::Null,
         },
     });
+    // The hub's own accounts: whether the database holds its queries to one tenant's rows
+    // (Postgres row-level security; false on SQLite, a standalone hub's own file).
+    if let Some(passkeys) = &state.passkeys {
+        body["store"] = serde_json::json!({ "tenant_rls": passkeys.tenant_rls() });
+    }
     // Only `auth.mode devagotchi` reports its authorization server's readiness here.
     if !auth.is_null() {
         body["auth"] = auth;

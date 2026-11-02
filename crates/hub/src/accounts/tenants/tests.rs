@@ -57,31 +57,69 @@ fn tenant_ids_are_t_and_a_uuid() {
     assert_eq!(tag(&id), "tabababababab");
 }
 
+/// Where a hub from before tenants (migration 4) left its store, with an owner, a passkey
+/// and a session: SQLite always, Postgres when the test server is set.
+async fn stores_from_before_tenants() -> Vec<(String, tempfile::TempDir)> {
+    let mut out = Vec::new();
+    let dir = tempfile::tempdir().unwrap();
+    out.push((
+        crate::store::sqlite_url(&dir.path().join("accounts.sqlite3")),
+        dir,
+    ));
+    if let Some(url) = testing::empty_postgres().await {
+        out.push((url, tempfile::tempdir().unwrap()));
+    }
+    for (url, _) in &out {
+        testing::migrated_to(url, 4).await;
+        let mut old = <sqlx::AnyConnection as sqlx::Connection>::connect(url)
+            .await
+            .unwrap();
+        for sql in [
+            "INSERT INTO accounts (id, name, owner, created_at) VALUES ('395290028818825218', 'Jesse', 1, 1)",
+            "INSERT INTO passkeys (id, account, label, public_key, alg, sign_count, backup_eligible, created_at)
+             VALUES ($1, '395290028818825218', 'laptop', $1, -7, 0, 1, 1)",
+            "INSERT INTO sessions (hash, account, passkey, created_at, last_seen, expires_at)
+             VALUES ('s1', '395290028818825218', $1, 1, 1, 9999999999)",
+        ] {
+            let query = sqlx::query(sql);
+            let query = if sql.contains("$1") { query.bind(vec![7_u8; 16]) } else { query };
+            query.execute(&mut old).await.unwrap();
+        }
+        <sqlx::AnyConnection as sqlx::Connection>::close(old)
+            .await
+            .unwrap();
+    }
+    out
+}
+
 #[tokio::test]
 async fn accounts_from_before_tenants_join_the_home_tenant_once() {
-    for (test, accounts) in stores(TenancyConfig::default(), &[]).await {
+    for (url, _dir) in stores_from_before_tenants().await {
+        // Migrations 5 to 7 run: the account, its passkey and its session join the home
+        // tenant the migration makes, and the tables move and take their prefixed names.
+        let accounts = Accounts::open(crate::store::Store::open(&url).await.unwrap())
+            .await
+            .unwrap();
         let home = accounts.home_tenant().await.unwrap();
         assert!(valid_tenant_id(&home), "{home}");
-        // An account a hub wrote before this migration: no tenant.
-        sqlx::query("INSERT INTO accounts (id, name, owner, created_at) VALUES ('395290028818825218', 'Jesse', 1, 1)")
-            .execute(accounts.store().pool())
-            .await
-            .unwrap();
-        let again = Accounts::open(crate::store::Store::open(&test.url).await.unwrap())
-            .await
-            .unwrap();
-        assert_eq!(
-            again.home_tenant().await.unwrap(),
-            home,
-            "one home tenant, kept"
-        );
-        let owner = again.owner().await.unwrap().unwrap();
+        let owner = accounts.owner().await.unwrap().unwrap();
+        assert_eq!(owner.id, "395290028818825218");
         assert_eq!(owner.tenant, home);
         assert!(
             !owner.provisional,
             "an account made before is never provisional"
         );
-        let joined = again.events(&home, 10).await.unwrap();
+        for table in ["auth_passkeys", "auth_sessions"] {
+            let tenants: Vec<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "SELECT tenant_id FROM {table}"
+            )))
+            .fetch_all(accounts.store().admin())
+            .await
+            .unwrap();
+            assert_eq!(tenants, [home.clone()], "{table}");
+        }
+        assert_eq!(accounts.passkeys_of(&owner.id).await.unwrap().len(), 1);
+        let joined = accounts.events(&home, 10).await.unwrap();
         assert_eq!(
             joined
                 .iter()
@@ -89,14 +127,19 @@ async fn accounts_from_before_tenants_join_the_home_tenant_once() {
                 .count(),
             1
         );
-        // A third open moves nothing and records nothing.
-        let third = Accounts::open(crate::store::Store::open(&test.url).await.unwrap())
+        // Opened again: one home tenant, kept; nothing moves and nothing is recorded.
+        let again = Accounts::open(crate::store::Store::open(&url).await.unwrap())
             .await
             .unwrap();
-        assert_eq!(third.events(&home, 10).await.unwrap().len(), joined.len());
-        assert!(third.chain_intact(&home).await.unwrap());
+        assert_eq!(
+            again.home_tenant().await.unwrap(),
+            home,
+            "one home tenant, kept"
+        );
+        assert_eq!(again.events(&home, 10).await.unwrap().len(), joined.len());
+        assert!(again.chain_intact(&home).await.unwrap());
         // New accounts on a one-owner hub go to the home tenant too.
-        let made = third
+        let made = again
             .create("acct_cccccccccccccccccccccccccc", "Sam", false)
             .await
             .unwrap();
@@ -148,16 +191,16 @@ async fn the_first_connect_makes_an_account_its_own_tenant_and_a_session() {
                 .all(|e| e.actor == "hub" || e.actor == bob.id)
         );
         // An edited row breaks the chain.
-        sqlx::query("UPDATE tenant_events SET detail = 'edited' WHERE tenant = $1 AND seq = 2")
+        sqlx::query("UPDATE tenancy_events SET detail = 'edited' WHERE tenant_id = $1 AND seq = 2")
             .bind(&alice.tenant)
-            .execute(accounts.store().pool())
+            .execute(accounts.store().admin())
             .await
             .unwrap();
         assert!(!accounts.chain_intact(&alice.tenant).await.unwrap());
         assert!(accounts.chain_intact(&bob.tenant).await.unwrap());
         // The address is never stored, only its keyed hash.
-        let kept: Vec<String> = sqlx::query_scalar("SELECT source FROM account_starts")
-            .fetch_all(accounts.store().pool())
+        let kept: Vec<String> = sqlx::query_scalar("SELECT source FROM auth_account_starts")
+            .fetch_all(accounts.store().admin())
             .await
             .unwrap();
         assert!(
@@ -425,5 +468,266 @@ async fn a_one_owner_hub_makes_no_account_for_a_strangers_sign_in() {
             .await
             .unwrap();
         assert!(owner.owner);
+    }
+}
+
+/// The tables row-level security holds to one tenant (migration 0007).
+const TENANT_TABLES: [&str; 8] = [
+    "auth_accounts",
+    "auth_passkeys",
+    "auth_sessions",
+    "auth_links",
+    "auth_identities",
+    "oauth_codes",
+    "oauth_tokens",
+    "tenancy_events",
+];
+
+#[tokio::test]
+async fn on_postgres_the_hubs_role_reads_and_writes_one_tenants_rows_only() {
+    // Database-enforced isolation: whatever a query of the hub's forgets, Postgres shows
+    // the hub's role (`devagotchi_hub`, no superuser, no BYPASSRLS) the rows of the tenant
+    // its transaction is scoped to and no other's, and none at all unscoped.
+    let Some(test) = testing::postgres().await else {
+        return;
+    };
+    let accounts = Accounts::open(test.store.clone())
+        .await
+        .unwrap()
+        .with_tenancy(hosted(UnsecuredLimits::default(), 8, 100), Vec::new());
+    assert!(accounts.store().enforced());
+    // Two people, each with every kind of row: a session and events (first connect), a
+    // linked sign-in, a passkey, a one-time link, an OAuth code and tokens.
+    let client = accounts
+        .register_client("An AI", &["https://ai.example.net/cb".to_string()])
+        .await
+        .unwrap();
+    let mut people = Vec::new();
+    for (n, address) in [(1_u8, "198.51.100.1"), (2, "198.51.100.2")] {
+        let (account, _session) = accounts
+            .start_unsecured(ip(address), "Claude")
+            .await
+            .unwrap();
+        accounts
+            .link_identity(&account.id, &proven("github", &format!("{n}"), None))
+            .await
+            .unwrap();
+        accounts
+            .store_passkey(
+                &account.id,
+                &crate::accounts::NewCredential {
+                    id: vec![n; 16],
+                    public_key: vec![0x30, n],
+                    alg: crate::accounts::Alg::Es256,
+                    sign_count: 0,
+                    backup_eligible: true,
+                    challenge: accounts.challenge(Ceremony::Register, Some(&account.id)),
+                },
+                "laptop",
+                None,
+                now_secs(),
+            )
+            .await
+            .unwrap();
+        // One-time links are the owner's alone; a row set up under the API stands in.
+        sqlx::query(
+            "INSERT INTO auth_links (hash, purpose, account, expires_at, replaces, tenant_id)
+             VALUES ($1, 'owner', $2, 9999999999, 0, $3)",
+        )
+        .bind(format!("link-{n}"))
+        .bind(&account.id)
+        .bind(&account.tenant)
+        .execute(accounts.store().admin())
+        .await
+        .unwrap();
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        let challenge = crate::accounts::oauth::s256(verifier);
+        let resource = "https://hub.example.com/mcp";
+        let code = accounts
+            .issue_code(
+                &client.id,
+                &account.id,
+                "https://ai.example.net/cb",
+                &challenge,
+                resource,
+                "mcp",
+            )
+            .await
+            .unwrap();
+        accounts
+            .exchange_code(
+                &code,
+                &client.id,
+                "https://ai.example.net/cb",
+                verifier,
+                Some(resource),
+            )
+            .await
+            .unwrap();
+        accounts
+            .issue_code(
+                &client.id,
+                &account.id,
+                "https://ai.example.net/cb",
+                &challenge,
+                resource,
+                "mcp",
+            )
+            .await
+            .unwrap();
+        people.push(account);
+    }
+    let (a, b) = (&people[0], &people[1]);
+    let count = |table: &str, filter: &str| {
+        sqlx::AssertSqlSafe(format!("SELECT COUNT(*) FROM {table} {filter}"))
+    };
+    // As the login role (no row-level security for it): both tenants' rows are there.
+    for table in TENANT_TABLES {
+        for who in [a, b] {
+            let held: i64 = sqlx::query_scalar(count(table, "WHERE tenant_id = $1"))
+                .bind(&who.tenant)
+                .fetch_one(accounts.store().admin())
+                .await
+                .unwrap();
+            assert!(held > 0, "{table} holds rows of {}", who.tenant);
+        }
+    }
+    let mut hub = accounts.store().pool().begin().await.unwrap();
+    let role: (String, bool, bool) = sqlx::query_as(
+        "SELECT current_user::text, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user",
+    )
+    .fetch_one(&mut *hub)
+    .await
+    .unwrap();
+    assert_eq!(role, ("devagotchi_hub".to_string(), false, false));
+    // Unscoped: nothing, in every table.
+    for table in TENANT_TABLES {
+        let seen: i64 = sqlx::query_scalar(count(table, ""))
+            .fetch_one(&mut *hub)
+            .await
+            .unwrap();
+        assert_eq!(seen, 0, "{table} unscoped");
+    }
+    // Scoped to A: A's rows, and not one of B's, even asked for by B's tenant and account.
+    accounts.store().scope(&mut hub, &a.tenant).await.unwrap();
+    for table in TENANT_TABLES {
+        let mine: i64 = sqlx::query_scalar(count(table, ""))
+            .fetch_one(&mut *hub)
+            .await
+            .unwrap();
+        assert!(mine > 0, "{table}: A sees its own rows");
+        let theirs: i64 = sqlx::query_scalar(count(table, "WHERE tenant_id = $1"))
+            .bind(&b.tenant)
+            .fetch_one(&mut *hub)
+            .await
+            .unwrap();
+        assert_eq!(theirs, 0, "{table}: B's rows, scoped to A");
+    }
+    let by_id: i64 = sqlx::query_scalar(count("auth_accounts", "WHERE id = $1"))
+        .bind(&b.id)
+        .fetch_one(&mut *hub)
+        .await
+        .unwrap();
+    assert_eq!(by_id, 0);
+    // Nor can it change them: updates and deletes of B's rows touch nothing, and a row
+    // written into B's tenant is refused.
+    for table in TENANT_TABLES {
+        let changed = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "UPDATE {table} SET tenant_id = tenant_id WHERE tenant_id = $1"
+        )))
+        .bind(&b.tenant)
+        .execute(&mut *hub)
+        .await
+        .unwrap()
+        .rows_affected();
+        assert_eq!(changed, 0, "{table}: B's rows updated from A");
+    }
+    let removed = sqlx::query("DELETE FROM auth_sessions WHERE account = $1")
+        .bind(&b.id)
+        .execute(&mut *hub)
+        .await
+        .unwrap()
+        .rows_affected();
+    assert_eq!(removed, 0);
+    let mut savepoint = sqlx::Connection::begin(&mut *hub).await.unwrap();
+    let written = sqlx::query(
+        "INSERT INTO auth_links (hash, purpose, account, expires_at, replaces, tenant_id)
+         VALUES ('planted', 'owner', $1, 9999999999, 0, $2)",
+    )
+    .bind(&b.id)
+    .bind(&b.tenant)
+    .execute(&mut *savepoint)
+    .await
+    .unwrap_err();
+    assert_eq!(
+        written
+            .as_database_error()
+            .and_then(|e| e.code())
+            .as_deref(),
+        Some("42501"),
+        "row-level security refuses it: {written}"
+    );
+    savepoint.rollback().await.unwrap();
+    // Moving A's own row into B's tenant is refused the same way.
+    let mut savepoint = sqlx::Connection::begin(&mut *hub).await.unwrap();
+    let moved = sqlx::query("UPDATE auth_links SET tenant_id = $1 WHERE account = $2")
+        .bind(&b.tenant)
+        .bind(&a.id)
+        .execute(&mut *savepoint)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        moved.as_database_error().and_then(|e| e.code()).as_deref(),
+        Some("42501"),
+        "{moved}"
+    );
+    savepoint.rollback().await.unwrap();
+    // And it makes and changes no tables: the store's schema is the migrations' alone.
+    for ddl in [
+        "CREATE TABLE devagotchi.planted (id TEXT)",
+        "ALTER TABLE auth_accounts DISABLE ROW LEVEL SECURITY",
+        "DROP POLICY tenant_only ON auth_sessions",
+    ] {
+        let mut savepoint = sqlx::Connection::begin(&mut *hub).await.unwrap();
+        let refused = sqlx::query(sqlx::AssertSqlSafe(ddl))
+            .execute(&mut *savepoint)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused
+                .as_database_error()
+                .and_then(|e| e.code())
+                .as_deref(),
+            Some("42501"),
+            "{ddl}: {refused}"
+        );
+        savepoint.rollback().await.unwrap();
+    }
+    hub.rollback().await.unwrap();
+    // The one cross-tenant lookup answers a tenant id and nothing more.
+    let mut connection = accounts.store().pool().acquire().await.unwrap();
+    assert_eq!(
+        accounts
+            .store()
+            .tenant_of(&mut connection, crate::store::Lookup::Account(&b.id))
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(b.tenant.as_str())
+    );
+    let unscoped: i64 = sqlx::query_scalar(count("auth_accounts", ""))
+        .fetch_one(&mut *connection)
+        .await
+        .unwrap();
+    assert_eq!(unscoped, 0, "a lookup scopes nothing by itself");
+    // And the API, scoped per transaction, still reaches each person's own rows.
+    for who in [a, b] {
+        assert_eq!(
+            accounts.get(&who.id).await.unwrap().unwrap().tenant,
+            who.tenant
+        );
+        assert_eq!(accounts.passkeys_of(&who.id).await.unwrap().len(), 1);
+        assert_eq!(accounts.identities_of(&who.id).await.unwrap().len(), 1);
+        assert!(accounts.chain_intact(&who.tenant).await.unwrap());
     }
 }

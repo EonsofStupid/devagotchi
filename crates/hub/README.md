@@ -129,9 +129,12 @@ both in CI. Where it is, first match wins:
    one in the config is refused), or `"sqlite:/absolute/path"` (`sqlite:C:/…` on Windows).
 3. `accounts.sqlite3` in the state directory, 0600 with its `-wal` and `-shm` files.
 
-On a Postgres something else also uses, give the hub a schema of its own:
-`"storage": { "schema": "devagotchi_hub" }` (or `DEVAGOTCHI_HUB_STORAGE_SCHEMA`). The hub makes
-it if it is missing and every connection works in it, its migration record included. On a
+On Postgres the hub's tables live in the `devagotchi` schema, named by their part of the hub:
+`auth_*` (accounts, passkeys, sessions, links, linked sign-ins, email links), `oauth_*`,
+`tenancy_*` (tenants and their event chains) and `hub_*` (its keys). Migration 0007 moved and
+renamed them once. On a Postgres something else also uses, `"storage": { "schema":
+"devagotchi_hub" }` (or `DEVAGOTCHI_HUB_STORAGE_SCHEMA`) keeps the migration record in a schema
+of its own, made if missing, and `public` stays as it was. One database holds one hub. On a
 Supabase project this matters: Supabase's REST API serves the `public` schema to anyone with
 the project's public key, so the hub's tables never go there. Use the project's **session
 pooler** connection string (port 5432): the transaction pooler (6543) does not keep a session,
@@ -140,6 +143,32 @@ and the direct `db.<ref>.supabase.co` host answers on IPv6 only.
 The schema is migrated at start (`migrations/<backend>/`, kept in step). On Postgres every
 write runs SERIALIZABLE and runs again when it collided with another instance's; on SQLite
 it takes the write lock up front.
+
+**Tenants are kept apart by the database (Postgres).** `tenant_id` leads the key of every
+table that holds a tenant's rows, and a child row's foreign key is `(tenant_id, account)`, so
+no row can point into another tenant. Row-level security is enabled and forced on each of
+those tables: a row is visible and writable only inside a transaction scoped to its tenant
+(`set_config('devagotchi.tenant', …, true)`, which the hub sets in every transaction, from the
+session, token, code, link, passkey or sign-in it was handed). Unscoped, a query sees nothing.
+Finding which tenant to scope to goes through one function, `devagotchi.tenant_of`, which
+answers a tenant id and nothing else. The hub's queries run as the role `devagotchi_hub`
+(`NOLOGIN`, no superuser, no `BYPASSRLS`, no right to make or change tables). Every
+connection switches to it with `SET ROLE`, and `/healthz` says `"store": {"tenant_rls": true}`.
+This is a second wall behind the hub's own checks: a query that forgets its tenant finds no
+other tenant's rows.
+
+- **The login role** (the one in the store's URL) runs the migrations, owns the tables and
+  the lookup functions, and must be a superuser or have `BYPASSRLS` (the compose stack's
+  `devagotchi` is a superuser). It makes `devagotchi_hub` and grants it to itself. Where it
+  may not make roles, an administrator runs `CREATE ROLE devagotchi_hub NOLOGIN NOSUPERUSER
+  NOBYPASSRLS; GRANT devagotchi_hub TO <login role>;` once, before the hub starts.
+- **A hosted hub** (`tenancy.mode multi`) on Postgres does not start unless its queries are
+  held to row-level security. A one-owner hub starts either way and reports it in `/healthz`.
+- **SQLite** has no row-level security. A standalone hub's store is its own file, and the
+  same code scopes the same queries on it.
+- **Rolling back across migration 0007** is the one rollback a new image cannot do by
+  itself: an older hub does not read the moved tables. Restore the backup `update.sh` takes
+  before every deploy ([deploy/compose/README.md](../../deploy/compose/README.md#rolling-back-across-the-tenant-migration-0007)).
 
 ## The hub's own accounts (`auth.mode hub`)
 
@@ -187,7 +216,7 @@ gets an account and a tenant (`t-<uuid>`) of their own, made on the spot:
   at most (per-tenant quotas); and it ends, with its sessions and tokens, once unused for
   `unsecured.idle_days`. New accounts are limited per client address (`starts_per_hour`,
   kept as an HMAC of the address, never the address) and in total (`max_unsecured`).
-- **Every step is on the tenant's own chain** (`tenant_events`, hash-chained per tenant):
+- **Every step is on the tenant's own chain** (`tenancy_events`, hash-chained per tenant):
   tenant and account made, session opened, each AI client and terminal connected, secured,
   each sign-in linked. The account page shows its tenant's latest steps, and only them.
 - **Each tenant's things are its own.** Machine names are per tenant (stored under the

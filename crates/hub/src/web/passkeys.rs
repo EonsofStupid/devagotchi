@@ -67,6 +67,11 @@ pub(crate) fn origin_of(public_url: &str) -> Option<String> {
 }
 
 impl HubSignIn {
+    /// Whether the store holds the hub's queries to one tenant's rows (`/healthz`).
+    pub fn tenant_rls(&self) -> bool {
+        self.accounts.store().enforced()
+    }
+
     /// Passkey sign-in for a hub in `auth.mode hub`; `None` in any other mode.
     pub fn new(config: Arc<HubConfig>, accounts: Arc<Accounts>) -> Option<Self> {
         let rp_id = config.rp_id()?;

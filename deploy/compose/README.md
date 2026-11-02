@@ -41,9 +41,10 @@ image pinned by digest, and two systemd timers:
 - `devagotchi-hub-update.timer`, every 5 minutes, runs `update.sh`. When the track
   (`DEVAGOTCHI_TRACK`, `:main` by default) points at a new digest, it backs the database up,
   deploys that digest and keeps it only if `/healthz` answers healthy. Otherwise it goes back
-  to the digest that ran before, which migrations allow (they only add; an older hub opens a
+  to the digest that ran before, which migrations allow (they add; an older hub opens a
   newer store), and never tries that digest again. What it did is in
-  `journalctl -u devagotchi-hub-update`.
+  `journalctl -u devagotchi-hub-update`. The one exception is the tenant migration (0007):
+  going back across it takes the backup made before that deploy (below).
 - The deploy files come from GitHub with the image. Each image GitHub builds is labelled
   with its commit (`org.opencontainers.image.revision`); `update.sh` fetches `compose.yaml`,
   `update.sh` and `backup.sh` of that same commit from
@@ -63,6 +64,36 @@ sudo ./install.sh --domain hub.example.com --edge external   # behind a proxy yo
 ```
 
 In a Proxmox VE container, `deploy/proxmox/hub-up.sh` runs it for you (`deploy/proxmox/README.md`).
+
+### Rolling back across the tenant migration (0007)
+
+Migration 0007 (increment 60) moves the hub's tables into the `devagotchi` schema, renames
+them and puts each tenant's rows behind row-level security (`crates/hub/README.md`, "The
+store"). It is the one migration that does not only add: a hub image from before it cannot
+read the store after it. If the first image with 0007 is not healthy, `update.sh` puts the
+image before it back, which then cannot start either. The journal says "nothing healthy to
+roll back to". Restore the database from the backup `update.sh` took just before that
+deploy, with the hub stopped:
+
+```bash
+cd /opt/devagotchi-hub
+sudo systemctl stop devagotchi-hub-update.timer
+docker compose stop hub
+dump=$(ls -t /var/lib/devagotchi-hub-update/pre-deploy/db-*.dump | head -1)   # just before the deploy
+docker compose exec -T postgres psql -h /var/run/postgresql -U devagotchi -d devagotchi \
+  -c 'DROP SCHEMA devagotchi CASCADE'
+docker compose exec -T postgres pg_restore -h /var/run/postgresql -U devagotchi -d devagotchi \
+  --clean --if-exists < "$dump"
+docker compose up -d hub              # .env already names the image before (update.sh set it)
+curl -fsS https://<DEVAGOTCHI_DOMAIN>/healthz
+sudo systemctl start devagotchi-hub-update.timer
+```
+
+Dropping `devagotchi` first matters: `pg_restore --clean` removes only what the backup holds
+(the tables before 0007, in `public`). The digest that failed stays in
+`/var/lib/devagotchi-hub-update/bad` and is not tried again. The next image runs 0007 afresh
+on the restored store. Anything written between the backup and the restore is lost: on a
+deploy that never became healthy, that is at most the minutes it ran.
 
 ### A hosted hub, its operators and its sign-ins
 

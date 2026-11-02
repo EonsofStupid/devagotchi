@@ -65,23 +65,23 @@ impl Accounts {
         let source = hex::encode(&self.mac("email source", source.to_string().as_bytes())[..16]);
         let hour_ago = secs(now) - 3600;
         transaction!(&self.store, |connection| {
-            sqlx::query("DELETE FROM email_sends WHERE at <= $1")
+            sqlx::query("DELETE FROM auth_email_sends WHERE at <= $1")
                 .bind(hour_ago)
                 .execute(&mut *connection)
                 .await?;
-            sqlx::query("DELETE FROM email_links WHERE expires_at <= $1 AND created_at <= $2")
+            sqlx::query("DELETE FROM auth_email_links WHERE expires_at <= $1 AND created_at <= $2")
                 .bind(secs(now))
                 .bind(hour_ago)
                 .execute(&mut *connection)
                 .await?;
             let from_source: i64 =
-                sqlx::query("SELECT COUNT(*) FROM email_sends WHERE source = $1")
+                sqlx::query("SELECT COUNT(*) FROM auth_email_sends WHERE source = $1")
                     .bind(&source)
                     .fetch_one(&mut *connection)
                     .await?
                     .try_get(0)?;
             let to_address: i64 = sqlx::query(
-                "SELECT COUNT(*) FROM email_links WHERE email = $1 AND created_at > $2",
+                "SELECT COUNT(*) FROM auth_email_links WHERE email = $1 AND created_at > $2",
             )
             .bind(&email)
             .bind(hour_ago)
@@ -95,13 +95,13 @@ impl Accounts {
                 )
                 .into());
             }
-            sqlx::query("INSERT INTO email_sends (source, at) VALUES ($1, $2)")
+            sqlx::query("INSERT INTO auth_email_sends (source, at) VALUES ($1, $2)")
                 .bind(&source)
                 .bind(secs(now))
                 .execute(&mut *connection)
                 .await?;
             sqlx::query(
-                "INSERT INTO email_links (hash, email, account, created_at, expires_at)
+                "INSERT INTO auth_email_links (hash, email, account, created_at, expires_at)
                  VALUES ($1, $2, $3, $4, $5)",
             )
             .bind(hash(&token))
@@ -132,7 +132,7 @@ impl Accounts {
         }
         transaction!(&self.store, |connection| {
             let spent = sqlx::query(
-                "UPDATE email_links SET used_at = $1
+                "UPDATE auth_email_links SET used_at = $1
                  WHERE hash = $2 AND used_at IS NULL AND expires_at > $1",
             )
             .bind(secs(now))
@@ -143,7 +143,7 @@ impl Accounts {
             if spent != 1 {
                 return Err(invalid().into());
             }
-            let row = sqlx::query("SELECT email, account FROM email_links WHERE hash = $1")
+            let row = sqlx::query("SELECT email, account FROM auth_email_links WHERE hash = $1")
                 .bind(hash(token))
                 .fetch_one(&mut *connection)
                 .await?;

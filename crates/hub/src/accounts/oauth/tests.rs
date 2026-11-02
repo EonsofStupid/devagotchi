@@ -274,7 +274,7 @@ async fn two_instances_refreshing_one_token_at_once_get_one_new_pair() {
         let live: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM oauth_tokens WHERE kind = 'access'",
         )
-        .fetch_one(one.store().pool())
+        .fetch_one(one.store().admin())
         .await
         .unwrap();
         // Both succeeding would leave two; a refused second may have ended the family (0).
@@ -299,10 +299,10 @@ async fn access_tokens_expire_die_with_their_account_and_can_be_revoked() {
             assert!(accounts.verify_access(wrong).await.unwrap().is_none(), "{wrong:?}");
         }
         let disable = async |at: Option<i64>| {
-            sqlx::query("UPDATE accounts SET disabled_at = $1 WHERE id = $2")
+            sqlx::query("UPDATE auth_accounts SET disabled_at = $1 WHERE id = $2")
                 .bind(at)
                 .bind(A)
-                .execute(accounts.store().pool())
+                .execute(accounts.store().admin())
                 .await
                 .unwrap();
         };
@@ -339,7 +339,7 @@ async fn tokens_and_codes_are_stored_only_as_hashes() {
         let hashes: Vec<String> = sqlx::query_scalar(
             "SELECT hash FROM oauth_tokens UNION ALL SELECT hash FROM oauth_codes",
         )
-        .fetch_all(accounts.store().pool())
+        .fetch_all(accounts.store().admin())
         .await
         .unwrap();
         for secret in [&tokens.access, &tokens.refresh, &pending] {
@@ -348,7 +348,7 @@ async fn tokens_and_codes_are_stored_only_as_hashes() {
         }
         if store.store.backend() == Backend::Sqlite {
             sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-                .execute(accounts.store().pool())
+                .execute(accounts.store().admin())
                 .await
                 .unwrap();
             let mut raw = std::fs::read(store.dir.path().join("accounts.sqlite3")).unwrap();
@@ -471,10 +471,10 @@ async fn a_device_approved_for_a_disabled_account_gets_nothing() {
             .await
             .unwrap();
         assert!(accounts.decide_device(&started.user_code, A, true).await.unwrap());
-        sqlx::query("UPDATE accounts SET disabled_at = $1 WHERE id = $2")
+        sqlx::query("UPDATE auth_accounts SET disabled_at = $1 WHERE id = $2")
             .bind(Some(1i64))
             .bind(A)
-            .execute(accounts.store().pool())
+            .execute(accounts.store().admin())
             .await
             .unwrap();
         assert_eq!(

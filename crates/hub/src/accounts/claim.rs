@@ -28,11 +28,11 @@ use sqlx::{AnyConnection, Row};
 
 use super::{
     Account, Accounts, LinkPurpose, check_name, create_in, hash, issue_in, link_token,
-    new_account_id, owner_in,
+    new_account_id,
 };
 use crate::{
     devices::now_secs,
-    store::{secs, store_error, transaction, unsecs},
+    store::{secs, transaction, unsecs},
 };
 
 /// Crockford's base32: no I, L, O or U, so a code read off a screen is typed back right.
@@ -101,22 +101,31 @@ fn wrong_code() -> BridgeError {
     )
 }
 
-/// Whether the hub's owner has a passkey to sign in with.
-async fn claimed_in(connection: &mut AnyConnection) -> Result<bool, sqlx::Error> {
-    Ok(sqlx::query(
-        "SELECT 1 FROM accounts JOIN passkeys ON passkeys.account = accounts.id
-         WHERE accounts.owner = 1 LIMIT 1",
-    )
-    .fetch_optional(&mut *connection)
-    .await?
-    .is_some())
-}
-
 impl Accounts {
+    /// Whether the hub's owner has a passkey to sign in with, inside the caller's
+    /// transaction (scoped to the owner's tenant from here on).
+    async fn claimed_in(&self, connection: &mut AnyConnection) -> Result<bool, sqlx::Error> {
+        if self
+            .enter(connection, crate::store::Lookup::Owner)
+            .await?
+            .is_none()
+        {
+            return Ok(false);
+        }
+        Ok(sqlx::query(
+            "SELECT 1 FROM auth_accounts a JOIN auth_passkeys p ON p.account = a.id
+             WHERE a.owner = 1 LIMIT 1",
+        )
+        .fetch_optional(&mut *connection)
+        .await?
+        .is_some())
+    }
+
     /// Whether this hub is claimed: its owner has a passkey to sign in with.
     pub async fn claimed(&self) -> BridgeResult<bool> {
-        let mut connection = self.store.read().await?;
-        claimed_in(&mut connection).await.map_err(store_error)
+        transaction!(&self.store, |connection| {
+            Ok(self.claimed_in(connection).await?)
+        })
     }
 
     /// A new claim code when the hub is unclaimed, replacing any earlier one; `None` when
@@ -135,13 +144,13 @@ impl Accounts {
         let kept = hash(&normalize(&code).unwrap_or_default());
         let expires_at = now + self.tokens.claim_secs;
         let issued = transaction!(&self.store, |connection| {
-            if claimed_in(connection).await? {
+            if self.claimed_in(connection).await? {
                 return Ok(false);
             }
-            sqlx::query("DELETE FROM claim_codes")
+            sqlx::query("DELETE FROM auth_claim_codes")
                 .execute(&mut *connection)
                 .await?;
-            sqlx::query("INSERT INTO claim_codes (hash, expires_at) VALUES ($1, $2)")
+            sqlx::query("INSERT INTO auth_claim_codes (hash, expires_at) VALUES ($1, $2)")
                 .bind(&kept)
                 .bind(secs(expires_at))
                 .execute(&mut *connection)
@@ -183,10 +192,10 @@ impl Accounts {
             .ok_or_else(wrong_code)?;
         let token = link_token(link_random);
         let owner = transaction!(&self.store, |connection| {
-            if claimed_in(connection).await? {
+            if self.claimed_in(connection).await? {
                 return Err(BridgeError::new("claimed", "this hub already has an owner").into());
             }
-            let live = sqlx::query("SELECT expires_at FROM claim_codes WHERE hash = $1")
+            let live = sqlx::query("SELECT expires_at FROM auth_claim_codes WHERE hash = $1")
                 .bind(&kept)
                 .fetch_optional(&mut *connection)
                 .await?;
@@ -197,11 +206,11 @@ impl Accounts {
             if !live {
                 return Err(wrong_code().into());
             }
-            let owner = match owner_in(connection).await? {
+            let owner = match self.owner_in(connection).await? {
                 // Nobody signs in as the owner yet: the claimant may name them.
                 Some(owner) => match name {
                     Some(name) => {
-                        sqlx::query("UPDATE accounts SET name = $1 WHERE id = $2")
+                        sqlx::query("UPDATE auth_accounts SET name = $1 WHERE id = $2")
                             .bind(name)
                             .bind(&owner.id)
                             .execute(&mut *connection)
@@ -216,7 +225,8 @@ impl Accounts {
                 None => {
                     let name = name.unwrap_or(DEFAULT_NAME);
                     let home = super::tenants::home_in(connection).await?;
-                    create_in(connection, &id, name, true, &home, now).await?;
+                    self.store.scope(connection, &home).await?;
+                    create_in(&self.store, connection, &id, name, true, &home, now).await?;
                     Account {
                         id: id.clone(),
                         name: name.to_string(),

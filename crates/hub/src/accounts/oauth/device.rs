@@ -178,6 +178,8 @@ impl Accounts {
         transaction!(&self.store, |connection| {
             if approve {
                 // An account nobody secured connects only so many apps and terminals.
+                self.enter(connection, crate::store::Lookup::Account(account))
+                    .await?;
                 self.room_for_a_client(connection, account, now).await?;
             }
             let decided = if approve {
@@ -266,12 +268,16 @@ impl Accounts {
                     "authorization_pending"
                 })));
             };
+            let tenant = self
+                .enter(connection, crate::store::Lookup::Account(&account))
+                .await?
+                .unwrap_or_default();
             if let Err(refused) = self.live_account(connection, &account, now).await? {
                 return Ok(Err(refused));
             }
             let tokens = self
                 .mint(
-                    connection, &family, fresh, client, &account, &scope, &resource, now,
+                    connection, &tenant, &family, fresh, client, &account, &scope, &resource, now,
                 )
                 .await?;
             Ok(Ok(DevicePoll::Tokens(tokens)))

@@ -13,6 +13,7 @@
 //! - Every token is for one resource, the hub's `/mcp`, and dies with its account.
 
 use super::*;
+use crate::store::Lookup;
 
 mod device;
 pub use device::{DevicePoll, normalize_user_code};
@@ -204,6 +205,10 @@ impl Accounts {
         let code = format!("dga_{}", URL_SAFE_NO_PAD.encode(crate::link::random::<32>()));
         let expires = secs(now.saturating_add(self.tokens.code_secs));
         transaction!(&self.store, |connection| {
+            let tenant = self
+                .enter(connection, Lookup::Account(account))
+                .await?
+                .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
             // An account nobody secured connects only so many AI clients at once.
             self.room_for_a_client(connection, account, now).await?;
             sqlx::query("DELETE FROM oauth_codes WHERE expires_at <= $1")
@@ -211,8 +216,8 @@ impl Accounts {
                 .execute(&mut *connection)
                 .await?;
             sqlx::query(
-                "INSERT INTO oauth_codes (hash, client, account, redirect_uri, challenge, resource, scope, expires_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                "INSERT INTO oauth_codes (hash, client, account, redirect_uri, challenge, resource, scope, expires_at, tenant_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind(hash(&code))
             .bind(client)
@@ -222,6 +227,7 @@ impl Accounts {
             .bind(resource)
             .bind(scope)
             .bind(expires)
+            .bind(&tenant)
             .execute(&mut *connection)
             .await?;
             Ok(())
@@ -256,6 +262,9 @@ impl Accounts {
         let family = URL_SAFE_NO_PAD.encode(crate::link::random::<16>());
         let fresh = (crate::link::random::<32>(), crate::link::random::<32>());
         transaction!(&self.store, |connection| {
+            let Some(tenant) = self.enter(connection, Lookup::Code(&hash(code))).await? else {
+                return Ok(Err(invalid_grant()));
+            };
             let issued = sqlx::query(
                 "SELECT client, account, redirect_uri, challenge, resource, scope, expires_at
                  FROM oauth_codes WHERE hash = $1",
@@ -298,6 +307,7 @@ impl Accounts {
             let tokens = self
                 .mint(
                     connection,
+                    &tenant,
                     &family,
                     fresh,
                     client,
@@ -336,6 +346,9 @@ impl Accounts {
     ) -> BridgeResult<Tokens> {
         let fresh = (crate::link::random::<32>(), crate::link::random::<32>());
         transaction!(&self.store, |connection| {
+            let Some(tenant) = self.enter(connection, Lookup::Token(&hash(refresh))).await? else {
+                return Ok(Err(invalid_grant()));
+            };
             let stored = sqlx::query(
                 "SELECT family, client, account, scope, resource, expires_at, used_at
                  FROM oauth_tokens WHERE hash = $1 AND kind = 'refresh'",
@@ -395,6 +408,7 @@ impl Accounts {
             let tokens = self
                 .mint(
                     connection,
+                    &tenant,
                     &stored.family,
                     fresh,
                     client,
@@ -421,66 +435,71 @@ impl Accounts {
         if !token.starts_with("dgh_") || token.len() > 128 {
             return Ok(None);
         }
-        let mut connection = self.store.read().await?;
-        let found = sqlx::query(concat!(
-            "SELECT ",
-            account_columns_a!(),
-            ", t.client FROM oauth_tokens t
-             JOIN accounts a ON a.id = t.account
-             WHERE t.hash = $1 AND t.kind = 'access' AND t.expires_at > $2
-               AND a.disabled_at IS NULL"
-        ))
-        .bind(hash(token))
-        .bind(secs(now))
-        .fetch_optional(&mut *connection)
-        .await
-        .and_then(|row| {
-            row.map(|row| -> Result<Grant, sqlx::Error> {
+        let key = hash(token);
+        transaction!(&self.store, |connection| {
+            if self.enter(connection, Lookup::Token(&key)).await?.is_none() {
+                return Ok(None);
+            }
+            let found = sqlx::query(concat!(
+                "SELECT ",
+                account_columns_a!(),
+                ", t.client FROM oauth_tokens t
+                 JOIN auth_accounts a ON a.id = t.account
+                 WHERE t.hash = $1 AND t.kind = 'access' AND t.expires_at > $2
+                   AND a.disabled_at IS NULL"
+            ))
+            .bind(&key)
+            .bind(secs(now))
+            .fetch_optional(&mut *connection)
+            .await?
+            .map(|row| -> Result<Grant, sqlx::Error> {
                 Ok(Grant {
                     account: account_row(&row)?,
                     client: row.try_get(7)?,
                 })
             })
-            .transpose()
+            .transpose()?;
+            let Some(mut grant) = found else {
+                return Ok(None);
+            };
+            // An account nobody secured that went unused too long has ended, with its tokens.
+            if self.lapsed(&grant.account, now) {
+                return Ok(None);
+            }
+            tenants::touch(connection, &mut grant.account, now).await?;
+            Ok(Some(grant))
         })
-        .map_err(store_error)?;
-        let Some(mut grant) = found else {
-            return Ok(None);
-        };
-        // An account nobody secured that went unused too long has ended, with its tokens.
-        if self.lapsed(&grant.account, now) {
-            return Ok(None);
-        }
-        tenants::touch(&mut connection, &mut grant.account, now)
-            .await
-            .map_err(store_error)?;
-        Ok(Some(grant))
     }
 
     /// Revoke a token (RFC 7009): its whole family ends. Unknown tokens are fine.
     pub async fn revoke_token(&self, token: &str) -> BridgeResult<()> {
-        let mut connection = self.store.read().await?;
-        sqlx::query(
-            "DELETE FROM oauth_tokens WHERE family IN (
-               SELECT family FROM oauth_tokens WHERE hash = $1)",
-        )
-        .bind(hash(token))
-        .execute(&mut *connection)
-        .await
-        .map_err(store_error)?;
-        Ok(())
+        let key = hash(token);
+        transaction!(&self.store, |connection| {
+            if self.enter(connection, Lookup::Token(&key)).await?.is_none() {
+                return Ok(());
+            }
+            sqlx::query(
+                "DELETE FROM oauth_tokens WHERE family IN (
+                   SELECT family FROM oauth_tokens WHERE hash = $1)",
+            )
+            .bind(&key)
+            .execute(&mut *connection)
+            .await?;
+            Ok(())
+        })
     }
 
     /// End every AI connection of `account` (the account page's revoke, disabling).
     #[allow(dead_code)] // the account page (32a-3)
     pub async fn revoke_connections(&self, account: &str) -> BridgeResult<u64> {
-        let mut connection = self.store.read().await?;
-        sqlx::query("DELETE FROM oauth_tokens WHERE account = $1")
-            .bind(account)
-            .execute(&mut *connection)
-            .await
-            .map(|done| done.rows_affected())
-            .map_err(store_error)
+        transaction!(&self.store, |connection| {
+            self.enter(connection, Lookup::Account(account)).await?;
+            Ok(sqlx::query("DELETE FROM oauth_tokens WHERE account = $1")
+                .bind(account)
+                .execute(&mut *connection)
+                .await?
+                .rows_affected())
+        })
     }
 
     /// A new access and refresh token in `family`, from the random bytes the caller drew
@@ -490,6 +509,7 @@ impl Accounts {
     async fn mint(
         &self,
         connection: &mut AnyConnection,
+        tenant: &str,
         family: &str,
         (access, refresh): ([u8; 32], [u8; 32]),
         client: &str,
@@ -509,8 +529,8 @@ impl Accounts {
             (&refresh, "refresh", self.tokens.refresh_secs),
         ] {
             sqlx::query(
-                "INSERT INTO oauth_tokens (hash, kind, family, client, account, scope, resource, created_at, expires_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                "INSERT INTO oauth_tokens (hash, kind, family, client, account, scope, resource, created_at, expires_at, tenant_id)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             )
             .bind(hash(token))
             .bind(kind)
@@ -521,6 +541,7 @@ impl Accounts {
             .bind(resource)
             .bind(secs(now))
             .bind(secs(now.saturating_add(ttl)))
+            .bind(tenant)
             .execute(&mut *connection)
             .await?;
         }
