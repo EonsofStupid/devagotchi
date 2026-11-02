@@ -197,14 +197,18 @@ async fn lifetimes_come_from_the_config() {
                 .is_err(),
             "the code lives 30 seconds"
         );
+        // The tokens are minted on the wall clock somewhere between `before` and `after`:
+        // still good just short of their lifetime from the earliest moment, gone just past
+        // it from the latest, whichever second the clock turned over in.
+        let before = now_secs();
         let tokens = connect(&accounts, &client).await;
+        let after = now_secs();
         assert_eq!(tokens.expires_in, 300);
-        let now = now_secs();
-        assert!(accounts.verify_access_at(&tokens.access, now + 299).await.unwrap().is_some());
-        assert!(accounts.verify_access_at(&tokens.access, now + 301).await.unwrap().is_none());
+        assert!(accounts.verify_access_at(&tokens.access, before + 299).await.unwrap().is_some());
+        assert!(accounts.verify_access_at(&tokens.access, after + 301).await.unwrap().is_none());
         assert!(
             accounts
-                .refresh_at(&tokens.refresh, &client.id, Some(RESOURCE), now + 3601)
+                .refresh_at(&tokens.refresh, &client.id, Some(RESOURCE), after + 3601)
                 .await
                 .is_err(),
             "the connection lives an hour unused"
