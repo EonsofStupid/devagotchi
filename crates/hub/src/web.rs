@@ -26,6 +26,9 @@
 
 mod approvals;
 mod claim;
+mod landing;
+#[cfg(test)]
+mod landing_tests;
 mod machines;
 mod notify;
 pub mod oauth;

@@ -11,7 +11,7 @@ use crate::AppState;
 /// The date every page below was last changed. Change it with the text.
 const UPDATED: &str = "1 November 2026";
 const OPERATOR: &str = "AngryVibes LLC";
-const REPO: &str = "https://github.com/EonsofStupid/devagotchi";
+pub(super) const REPO: &str = "https://github.com/EonsofStupid/devagotchi";
 
 fn page(title: &str, body: &str) -> Response {
     pages::html(
