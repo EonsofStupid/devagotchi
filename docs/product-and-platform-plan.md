@@ -396,6 +396,9 @@ Not one seam but several, all of which D25 changes:
 
 ### Desktop Commander, for comparison (from its source, `src/remote-device/`)
 
+The full teardown, every claim cited to a file and line at one commit, is
+[`desktop-commander-teardown.md`](desktop-commander-teardown.md) (1 Nov 2026, `c2b8795`).
+
 It has an account of its own, in its hosted service (Supabase Auth): `desktop-commander
 remote` runs a device-code sign-in with PKCE against `mcp.desktopcommander.app`, keeps the
 access and refresh tokens in `~/.desktop-commander-device/device.json` (0600), and takes
