@@ -235,7 +235,13 @@ try:
         [str(HERE / "oauth_probe.py"), "--devagotchi", str(devagotchi), "--work", str(work / "oauth")],
         "Devagotchi OAuth connect",
     )
-    promote_ok = run_probe([str(HERE / "promote_hub_dry_run.py")], "promote-hub dry-run")
+    # deploy/linux/promote-hub.sh is a bash script for the Linux host it deploys from; Windows
+    # cannot run it as a program, so its dry-run is checked on the Linux runners only.
+    if os.name != "nt":
+        promote_ok = run_probe([str(HERE / "promote_hub_dry_run.py")], "promote-hub dry-run")
+    else:
+        print("--- promote-hub dry-run: skipped on Windows (a Linux deploy script)", flush=True)
+        promote_ok = True
     ok = adapter_ok and hub_ok and board_ok and link_ok and nomen_ok and web_ok and oauth_ok and promote_ok
 finally:
     for process in reversed(processes):
