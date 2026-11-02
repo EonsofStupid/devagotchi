@@ -1,5 +1,6 @@
-# Keeps the two things a pinned build can silently fall behind on: the crates in
-# Cargo.lock and the commit SHAs the workflows pin. One PR per group per week; CI,
+# Keeps what a pinned build can silently fall behind on: the crates in Cargo.lock, the
+# commit SHAs the workflows pin, and the AI clients tests/clients_oauth.py proves the hub
+# against (tests/clients: a new Codex or MCP SDK release arrives as a PR that CI runs). One PR per group per week; CI,
 # cargo deny and the four-OS matrix decide whether it merges, as for any other PR.
 version: 2
 updates:
@@ -27,4 +28,15 @@ updates:
     open-pull-requests-limit: 5
     groups:
       actions:
+        patterns: ["*"]
+  - package-ecosystem: npm
+    directory: /tests/clients
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 2
+    groups:
+      ai-clients:
         patterns: ["*"]
