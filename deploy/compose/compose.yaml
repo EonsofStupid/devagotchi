@@ -4,8 +4,11 @@
 # README.md beside this file says what each part does and how to change it.
 name: devagotchi
 
+# One of each, so each container is named for its service alone (devagotchi-hub, not
+# devagotchi-hub-1). The prefix is the project name: `docker compose -p NAME` changes it.
 services:
   postgres:
+    container_name: ${COMPOSE_PROJECT_NAME}-postgres
     image: ${DEVAGOTCHI_POSTGRES_IMAGE:-postgres:18-bookworm@sha256:5c4783a8cc3f0074912164f94dfa1be4e043438f0f707cf968d7af9a0d31a2c8}
     # No network at all: Postgres listens on a Unix socket only, in a volume shared with
     # the hub alone. Nothing can reach it over TCP, so there is no password to keep.
@@ -47,6 +50,7 @@ services:
     restart: unless-stopped
 
   hub:
+    container_name: ${COMPOSE_PROJECT_NAME}-hub
     image: ${DEVAGOTCHI_IMAGE:-ghcr.io/eonsofstupid/devagotchi:main}
     build:
       context: ../..
@@ -73,6 +77,7 @@ services:
     restart: unless-stopped
 
   caddy:
+    container_name: ${COMPOSE_PROJECT_NAME}-caddy
     image: ${DEVAGOTCHI_CADDY_IMAGE:-caddy:2@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e}
     depends_on: [hub]
     command: ["caddy", "reverse-proxy", "--from", "${DEVAGOTCHI_DOMAIN:?set DEVAGOTCHI_DOMAIN in .env}", "--to", "hub:8787"]
