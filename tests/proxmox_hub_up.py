@@ -51,6 +51,7 @@ if cmd in ("reboot", "start"):
     save(); sys.exit(0)
 if cmd == "push":
     shutil.copy(args[2], os.path.join(fake, "pushed", os.path.basename(args[3])))
+    state.setdefault("perms", {})[os.path.basename(args[3])] = args[args.index("--perms") + 1]
     save(); sys.exit(0)
 if cmd == "exec":
     inner = args[args.index("--") + 1:]
@@ -67,13 +68,18 @@ if cmd == "exec":
     if "command -v caddy" in line: sys.exit(0 if state.get("edge") else 1)
     if "command -v curl" in line or inner[0] == "mkdir": sys.exit(0)
     if inner[0].endswith("/install.sh"):
-        state["install"] = inner[1:]; save(); sys.exit(0)
+        state["install"] = inner[1:]
+        state["secrets_there"] = os.path.exists(os.path.join(fake, "pushed", "secrets.env")) and not state.get("removed")
+        save(); sys.exit(state.get("install_fails", 0))
+    if inner[:2] == ["rm", "-f"]:
+        state["removed"] = inner[2]; save(); sys.exit(0)
     if "hostname -I" in line:
         print("10.0.0.110"); sys.exit(0)
     if inner[0] == "curl" and "/healthz" in line:
         print(json.dumps({"audit": {"entries": 1, "head": state["new"], "ok": True}, "ok": True},
                          separators=(",", ":"))); sys.exit(0)
     if "docker compose logs" in line:
+        if state.get("hosted"): sys.exit(0)
         print("hub-1  | devagotchi hub is unclaimed: nobody can sign in as its owner yet. Claim it in a browser before 2026-11-03 00:00 UTC:")
         print("hub-1  |   https://" + state["domain"] + "/claim#ABCD-EFGH-JKMN-PQRS-TVWX-YZ23"); sys.exit(0)
     print("unexpected pct exec: " + line, file=sys.stderr); sys.exit(97)
@@ -121,6 +127,9 @@ def run(case: str, *, config: str, extra=(), **state) -> tuple[int, str, dict]:
         env = dict(os.environ, FAKE=str(fake), PATH=f"{fake / 'bin'}:{os.environ['PATH']}",
                    DEVAGOTCHI_ALLOW_NONROOT="1", DEVAGOTCHI_HUB_UP_LOG=str(fake / "log"),
                    DEVAGOTCHI_HOST_ETC=str(host_etc))
+        secrets = fake / "hub.env"
+        secrets.write_text("DEVAGOTCHI_GOOGLE_CLIENT_ID=gid\nDEVAGOTCHI_GOOGLE_CLIENT_SECRET=from-the-secret-store\n")
+        extra = [str(secrets) if a == "@secrets" else a for a in extra]
         proc = subprocess.run(
             ["bash", str(SCRIPT), "--ct", "110", "--domain", DOMAIN, *extra],
             env=env, capture_output=True, text=True, timeout=60,
@@ -128,6 +137,9 @@ def run(case: str, *, config: str, extra=(), **state) -> tuple[int, str, dict]:
         result = json.loads((fake / "state.json").read_text())
         result["pushed"] = sorted(p.name for p in (fake / "pushed").iterdir())
         for name in result["pushed"]:
+            if name == "secrets.env":
+                result["secrets"] = (fake / "pushed" / name).read_text()
+                continue
             same = (fake / "pushed" / name).read_bytes() == (ROOT / "deploy/compose" / name).read_bytes()
             assert same, f"{case}: pushed {name} is not this checkout's"
         output = proc.stdout + proc.stderr
@@ -201,6 +213,31 @@ def main() -> int:
     code, out, s = run("rerun", config=UNPRIVILEGED, host_proxy=True, port_busy=True, ours=True)
     check("rerun", code == 0 and "updating it in place" in out and "install" in s, out)
     print("PASS a re-run over the hub it installed before goes ahead")
+
+    # 5b. A hosted hub: the tenancy, operators and providers go to install.sh, the secrets
+    #     file is pushed 0600 for install.sh alone and removed after it, and no claim.
+    hosted = ["--tenancy", "multi", "--operators", "email:ops@example.com", "--google",
+              "--nomen", "https://id.example.com", "--email-from", "Hub <sign-in@example.com>",
+              "--env-file", "@secrets"]
+    code, out, s = run("hosted", config=UNPRIVILEGED, host_proxy=True, hosted=True, extra=hosted)
+    install = s["install"]
+    check("hosted", code == 0, out)
+    check("hosted: flags passed on", all(flag in install for flag in
+          ["--google", "multi", "email:ops@example.com", "https://id.example.com", "Hub <sign-in@example.com>"]), out)
+    check("hosted: secrets pushed 0600 and named to install.sh",
+          s["perms"].get("secrets.env") == "0600"
+          and install[install.index("--env-file") + 1] == "/root/devagotchi-hub-src/secrets.env"
+          and s.get("secrets_there") and "from-the-secret-store" in s.get("secrets", ""), out)
+    check("hosted: secrets removed after", s.get("removed") == "/root/devagotchi-hub-src/secrets.env", out)
+    check("hosted: never printed", "from-the-secret-store" not in out, out)
+    check("hosted: no claim, says so", "Claim it now" not in out and "nobody claims it" in out, out)
+    print("PASS a hosted hub gets its tenancy, operators and providers, its secrets in and out again")
+
+    code, out, s = run("hosted fails", config=UNPRIVILEGED, host_proxy=True, hosted=True,
+                       install_fails=1, extra=hosted)
+    check("hosted fails", code == 1 and "install.sh did not finish" in out
+          and s.get("removed") == "/root/devagotchi-hub-src/secrets.env", out)
+    print("PASS a failed install still takes the secrets file out of the container")
 
     # 6. No such container.
     code, out, s = run("missing", config=UNPRIVILEGED, ct="111")

@@ -22,3 +22,14 @@ curl -fsSL https://raw.githubusercontent.com/EonsofStupid/devagotchi/main/deploy
 Re-running it is safe. Every value comes from its flags (`--help`); none names a host.
 `tests/proxmox_hub_up.py` runs it against a stand-in Proxmox host in CI, and
 `tests/deploy_scripts.sh` runs what it installs for real.
+
+A hosted hub (as app.devagotchi.com runs) takes install.sh's flags for its tenancy,
+operators and sign-ins, and a secrets file on the Proxmox host that is pushed into the
+container 0600 for install.sh alone and removed after it:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EonsofStupid/devagotchi/main/deploy/proxmox/hub-up.sh \
+  | bash -s -- --ct 110 --domain app.devagotchi.com --rp-id devagotchi.com --tenancy multi \
+      --operators email:you@example.com --google --github --nomen https://id.shippin.cloud \
+      --email-from "Devagotchi <sign-in@devagotchi.com>" --env-file /root/devagotchi-hub.env
+```
