@@ -1,13 +1,13 @@
 {
   "status": "passed",
   "what": "tests/clients_oauth.py: real MCP clients through the hub's own OAuth 2.1 server (auth.mode hub, SQLite) on loopback, consent with a virtual passkey",
-  "recorded_at": "2026-11-02T17:07:22+00:00",
-  "seconds": 7.1,
-  "source_commit": "c203c7cd9f252f6e1e9fcc767dcf3eec274b0cff",
+  "recorded_at": "2026-11-02T17:12:39+00:00",
+  "seconds": 7.3,
+  "source_commit": "338ede6c319877019ea6886ee2552bdaebe458ee",
   "platform": "Linux x86_64",
   "versions": {
     "python": "3.13.16",
-    "browser": "chromium 141.0.7390.37",
+    "browser": "chrome 141.0.7390.37",
     "node": "v22.22.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "codex": "codex-cli 0.166.0"
@@ -23,19 +23,19 @@
       {
         "step": "401 from /mcp names the protected-resource metadata",
         "result": "pass",
-        "detail": "Bearer resource_metadata=\"http://localhost:41819/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
+        "detail": "Bearer resource_metadata=\"http://localhost:35797/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
       },
       {
         "step": "protected-resource metadata (RFC 9728), root and /mcp forms",
         "result": "pass",
         "detail": {
           "authorization_servers": [
-            "http://localhost:41819"
+            "http://localhost:35797"
           ],
           "bearer_methods_supported": [
             "header"
           ],
-          "resource": "http://localhost:41819",
+          "resource": "http://localhost:35797",
           "resource_name": "Devagotchi hub",
           "scopes_supported": [
             "mcp",
@@ -47,7 +47,7 @@
         "step": "authorization-server metadata (RFC 8414)",
         "result": "pass",
         "detail": {
-          "authorization_endpoint": "http://localhost:41819/oauth/authorize",
+          "authorization_endpoint": "http://localhost:35797/oauth/authorize",
           "authorization_response_iss_parameter_supported": true,
           "code_challenge_methods_supported": [
             "S256"
@@ -56,12 +56,12 @@
             "authorization_code",
             "refresh_token"
           ],
-          "issuer": "http://localhost:41819",
-          "registration_endpoint": "http://localhost:41819/oauth/register",
+          "issuer": "http://localhost:35797",
+          "registration_endpoint": "http://localhost:35797/oauth/register",
           "response_types_supported": [
             "code"
           ],
-          "revocation_endpoint": "http://localhost:41819/oauth/revoke",
+          "revocation_endpoint": "http://localhost:35797/oauth/revoke",
           "revocation_endpoint_auth_methods_supported": [
             "none"
           ],
@@ -69,7 +69,7 @@
             "mcp",
             "offline_access"
           ],
-          "token_endpoint": "http://localhost:41819/oauth/token",
+          "token_endpoint": "http://localhost:35797/oauth/token",
           "token_endpoint_auth_methods_supported": [
             "none"
           ]
@@ -87,7 +87,7 @@
             "refresh_token"
           ],
           "redirect_uris": [
-            "http://127.0.0.1:45607/callback"
+            "http://127.0.0.1:44987/callback"
           ],
           "response_types": [
             "code"
@@ -101,7 +101,7 @@
         "detail": {
           "code": "\u2026",
           "state": "\u2026",
-          "iss": "http://localhost:41819"
+          "iss": "http://localhost:35797"
         }
       },
       {
@@ -139,7 +139,7 @@
       {
         "step": "SDK discovered the hub from the 401 and registered; asks for authorization",
         "result": "pass",
-        "detail": "http://localhost:41819/oauth/authorize?response_type=code&client_id=dgc_%E2%80%A6&code_challenge=%E2%80%A6&code_challenge_method=S256&redirect_uri=http://127.0.0.1:41213/callback&state=%E2%80%A6&scope=mcp+offline_access&prompt=consent&resource=http://localhost:41819"
+        "detail": "http://localhost:35797/oauth/authorize?response_type=code&client_id=dgc_%E2%80%A6&code_challenge=%E2%80%A6&code_challenge_method=S256&redirect_uri=http://127.0.0.1:32793/callback&state=%E2%80%A6&scope=mcp+offline_access&prompt=consent&resource=http://localhost:35797"
       },
       {
         "step": "consent page shows the SDK's registered name",
@@ -152,7 +152,7 @@
         "detail": {
           "ok": true,
           "client_id_prefix": "dgc_",
-          "iss": "http://localhost:41819",
+          "iss": "http://localhost:35797",
           "scope": "mcp offline_access",
           "refreshed": true,
           "whoami": {
@@ -178,9 +178,9 @@
           "state": "\u2026",
           "code_challenge": "\u2026",
           "code_challenge_method": "S256",
-          "redirect_uri": "http://127.0.0.1:35761/callback",
+          "redirect_uri": "http://127.0.0.1:56355/callback",
           "scope": "mcp offline_access",
-          "resource": "http://localhost:41819"
+          "resource": "http://localhost:35797"
         }
       },
       {
@@ -203,9 +203,9 @@
           "state": "\u2026",
           "code_challenge": "\u2026",
           "code_challenge_method": "S256",
-          "redirect_uri": "http://127.0.0.1:35761/callback",
+          "redirect_uri": "http://127.0.0.1:56355/callback",
           "scope": "mcp offline_access",
-          "resource": "http://localhost:41819"
+          "resource": "http://localhost:35797"
         }
       },
       {
@@ -259,7 +259,7 @@
         "initialize"
       ],
       "status": 401,
-      "www-authenticate": "Bearer resource_metadata=\"http://localhost:41819/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
+      "www-authenticate": "Bearer resource_metadata=\"http://localhost:35797/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
     },
     {
       "client": "protocol",
@@ -269,12 +269,12 @@
       "status": 200,
       "response": {
         "authorization_servers": [
-          "http://localhost:41819"
+          "http://localhost:35797"
         ],
         "bearer_methods_supported": [
           "header"
         ],
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "resource_name": "Devagotchi hub",
         "scopes_supported": [
           "mcp",
@@ -290,12 +290,12 @@
       "status": 200,
       "response": {
         "authorization_servers": [
-          "http://localhost:41819"
+          "http://localhost:35797"
         ],
         "bearer_methods_supported": [
           "header"
         ],
-        "resource": "http://localhost:41819/mcp",
+        "resource": "http://localhost:35797/mcp",
         "resource_name": "Devagotchi hub",
         "scopes_supported": [
           "mcp",
@@ -310,7 +310,7 @@
       "user_agent": "Python-urllib/3.13",
       "status": 200,
       "response": {
-        "authorization_endpoint": "http://localhost:41819/oauth/authorize",
+        "authorization_endpoint": "http://localhost:35797/oauth/authorize",
         "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": [
           "S256"
@@ -319,12 +319,12 @@
           "authorization_code",
           "refresh_token"
         ],
-        "issuer": "http://localhost:41819",
-        "registration_endpoint": "http://localhost:41819/oauth/register",
+        "issuer": "http://localhost:35797",
+        "registration_endpoint": "http://localhost:35797/oauth/register",
         "response_types_supported": [
           "code"
         ],
-        "revocation_endpoint": "http://localhost:41819/oauth/revoke",
+        "revocation_endpoint": "http://localhost:35797/oauth/revoke",
         "revocation_endpoint_auth_methods_supported": [
           "none"
         ],
@@ -332,7 +332,7 @@
           "mcp",
           "offline_access"
         ],
-        "token_endpoint": "http://localhost:41819/oauth/token",
+        "token_endpoint": "http://localhost:35797/oauth/token",
         "token_endpoint_auth_methods_supported": [
           "none"
         ]
@@ -346,7 +346,7 @@
       "body": {
         "client_name": "clients_oauth.py protocol walk",
         "redirect_uris": [
-          "http://127.0.0.1:45607/callback"
+          "http://127.0.0.1:44987/callback"
         ],
         "grant_types": [
           "authorization_code",
@@ -367,7 +367,7 @@
           "refresh_token"
         ],
         "redirect_uris": [
-          "http://127.0.0.1:45607/callback"
+          "http://127.0.0.1:44987/callback"
         ],
         "response_types": [
           "code"
@@ -382,12 +382,12 @@
       "query": {
         "response_type": "code",
         "client_id": "dgc_\u2026",
-        "redirect_uri": "http://127.0.0.1:45607/callback",
+        "redirect_uri": "http://127.0.0.1:44987/callback",
         "code_challenge": "\u2026",
         "code_challenge_method": "S256",
         "state": "\u2026",
         "scope": "mcp offline_access",
-        "resource": "http://localhost:41819/mcp"
+        "resource": "http://localhost:35797/mcp"
       },
       "status": 303,
       "location": "/auth/login?return_to=%E2%80%A6"
@@ -399,12 +399,12 @@
       "query": {
         "response_type": "code",
         "client_id": "dgc_\u2026",
-        "redirect_uri": "http://127.0.0.1:45607/callback",
+        "redirect_uri": "http://127.0.0.1:44987/callback",
         "code_challenge": "\u2026",
         "code_challenge_method": "S256",
         "state": "\u2026",
         "scope": "mcp offline_access",
-        "resource": "http://localhost:41819/mcp"
+        "resource": "http://localhost:35797/mcp"
       },
       "status": 200
     },
@@ -414,15 +414,15 @@
       "path": "/oauth/authorize",
       "body": {
         "client_id": "dgc_\u2026",
-        "redirect_uri": "http://127.0.0.1:45607/callback",
+        "redirect_uri": "http://127.0.0.1:44987/callback",
         "code_challenge": "\u2026",
-        "resource": "http://localhost:41819/mcp",
+        "resource": "http://localhost:35797/mcp",
         "scope": "mcp offline_access",
         "state": "\u2026",
         "decision": "approve"
       },
       "status": 303,
-      "location": "http://127.0.0.1:45607/callback?code=%E2%80%A6&state=%E2%80%A6&iss=http://localhost:41819"
+      "location": "http://127.0.0.1:44987/callback?code=%E2%80%A6&state=%E2%80%A6&iss=http://localhost:35797"
     },
     {
       "client": "protocol",
@@ -432,10 +432,10 @@
       "body": {
         "grant_type": "authorization_code",
         "code": "\u2026",
-        "redirect_uri": "http://127.0.0.1:45607/callback",
+        "redirect_uri": "http://127.0.0.1:44987/callback",
         "client_id": "dgc_\u2026",
         "code_verifier": "\u2026",
-        "resource": "http://localhost:41819/mcp"
+        "resource": "http://localhost:35797/mcp"
       },
       "status": 200,
       "response": {
@@ -510,7 +510,7 @@
         "grant_type": "refresh_token",
         "refresh_token": "\u2026",
         "client_id": "dgc_\u2026",
-        "resource": "http://localhost:41819/mcp"
+        "resource": "http://localhost:35797/mcp"
       },
       "status": 200,
       "response": {
@@ -547,7 +547,7 @@
         "ping"
       ],
       "status": 401,
-      "www-authenticate": "Bearer resource_metadata=\"http://localhost:41819/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\", error=\"invalid_token\""
+      "www-authenticate": "Bearer resource_metadata=\"http://localhost:35797/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\", error=\"invalid_token\""
     },
     {
       "client": "protocol",
@@ -568,7 +568,7 @@
         "initialize"
       ],
       "status": 401,
-      "www-authenticate": "Bearer resource_metadata=\"http://localhost:41819/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
+      "www-authenticate": "Bearer resource_metadata=\"http://localhost:35797/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
     },
     {
       "client": "sdk",
@@ -578,12 +578,12 @@
       "status": 200,
       "response": {
         "authorization_servers": [
-          "http://localhost:41819"
+          "http://localhost:35797"
         ],
         "bearer_methods_supported": [
           "header"
         ],
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "resource_name": "Devagotchi hub",
         "scopes_supported": [
           "mcp",
@@ -598,7 +598,7 @@
       "user_agent": "node",
       "status": 200,
       "response": {
-        "authorization_endpoint": "http://localhost:41819/oauth/authorize",
+        "authorization_endpoint": "http://localhost:35797/oauth/authorize",
         "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": [
           "S256"
@@ -607,12 +607,12 @@
           "authorization_code",
           "refresh_token"
         ],
-        "issuer": "http://localhost:41819",
-        "registration_endpoint": "http://localhost:41819/oauth/register",
+        "issuer": "http://localhost:35797",
+        "registration_endpoint": "http://localhost:35797/oauth/register",
         "response_types_supported": [
           "code"
         ],
-        "revocation_endpoint": "http://localhost:41819/oauth/revoke",
+        "revocation_endpoint": "http://localhost:35797/oauth/revoke",
         "revocation_endpoint_auth_methods_supported": [
           "none"
         ],
@@ -620,7 +620,7 @@
           "mcp",
           "offline_access"
         ],
-        "token_endpoint": "http://localhost:41819/oauth/token",
+        "token_endpoint": "http://localhost:35797/oauth/token",
         "token_endpoint_auth_methods_supported": [
           "none"
         ]
@@ -634,7 +634,7 @@
       "body": {
         "client_name": "MCP TypeScript SDK probe",
         "redirect_uris": [
-          "http://127.0.0.1:41213/callback"
+          "http://127.0.0.1:32793/callback"
         ],
         "grant_types": [
           "authorization_code",
@@ -656,7 +656,7 @@
           "refresh_token"
         ],
         "redirect_uris": [
-          "http://127.0.0.1:41213/callback"
+          "http://127.0.0.1:32793/callback"
         ],
         "response_types": [
           "code"
@@ -673,11 +673,11 @@
         "client_id": "dgc_\u2026",
         "code_challenge": "\u2026",
         "code_challenge_method": "S256",
-        "redirect_uri": "http://127.0.0.1:41213/callback",
+        "redirect_uri": "http://127.0.0.1:32793/callback",
         "state": "\u2026",
         "scope": "mcp offline_access",
         "prompt": "consent",
-        "resource": "http://localhost:41819"
+        "resource": "http://localhost:35797"
       },
       "status": 200
     },
@@ -687,15 +687,15 @@
       "path": "/oauth/authorize",
       "body": {
         "client_id": "dgc_\u2026",
-        "redirect_uri": "http://127.0.0.1:41213/callback",
+        "redirect_uri": "http://127.0.0.1:32793/callback",
         "code_challenge": "\u2026",
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "scope": "mcp offline_access",
         "state": "\u2026",
         "decision": "approve"
       },
       "status": 303,
-      "location": "http://127.0.0.1:41213/callback?code=%E2%80%A6&state=%E2%80%A6&iss=http://localhost:41819"
+      "location": "http://127.0.0.1:32793/callback?code=%E2%80%A6&state=%E2%80%A6&iss=http://localhost:35797"
     },
     {
       "client": "sdk",
@@ -705,12 +705,12 @@
       "status": 200,
       "response": {
         "authorization_servers": [
-          "http://localhost:41819"
+          "http://localhost:35797"
         ],
         "bearer_methods_supported": [
           "header"
         ],
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "resource_name": "Devagotchi hub",
         "scopes_supported": [
           "mcp",
@@ -725,7 +725,7 @@
       "user_agent": "node",
       "status": 200,
       "response": {
-        "authorization_endpoint": "http://localhost:41819/oauth/authorize",
+        "authorization_endpoint": "http://localhost:35797/oauth/authorize",
         "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": [
           "S256"
@@ -734,12 +734,12 @@
           "authorization_code",
           "refresh_token"
         ],
-        "issuer": "http://localhost:41819",
-        "registration_endpoint": "http://localhost:41819/oauth/register",
+        "issuer": "http://localhost:35797",
+        "registration_endpoint": "http://localhost:35797/oauth/register",
         "response_types_supported": [
           "code"
         ],
-        "revocation_endpoint": "http://localhost:41819/oauth/revoke",
+        "revocation_endpoint": "http://localhost:35797/oauth/revoke",
         "revocation_endpoint_auth_methods_supported": [
           "none"
         ],
@@ -747,7 +747,7 @@
           "mcp",
           "offline_access"
         ],
-        "token_endpoint": "http://localhost:41819/oauth/token",
+        "token_endpoint": "http://localhost:35797/oauth/token",
         "token_endpoint_auth_methods_supported": [
           "none"
         ]
@@ -762,8 +762,8 @@
         "grant_type": "authorization_code",
         "code": "\u2026",
         "code_verifier": "\u2026",
-        "redirect_uri": "http://127.0.0.1:41213/callback",
-        "resource": "http://localhost:41819",
+        "redirect_uri": "http://127.0.0.1:32793/callback",
+        "resource": "http://localhost:35797",
         "client_id": "dgc_\u2026"
       },
       "status": 200,
@@ -837,7 +837,7 @@
         "initialize"
       ],
       "status": 401,
-      "www-authenticate": "Bearer resource_metadata=\"http://localhost:41819/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\", error=\"invalid_token\""
+      "www-authenticate": "Bearer resource_metadata=\"http://localhost:35797/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\", error=\"invalid_token\""
     },
     {
       "client": "sdk",
@@ -847,12 +847,12 @@
       "status": 200,
       "response": {
         "authorization_servers": [
-          "http://localhost:41819"
+          "http://localhost:35797"
         ],
         "bearer_methods_supported": [
           "header"
         ],
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "resource_name": "Devagotchi hub",
         "scopes_supported": [
           "mcp",
@@ -867,7 +867,7 @@
       "user_agent": "node",
       "status": 200,
       "response": {
-        "authorization_endpoint": "http://localhost:41819/oauth/authorize",
+        "authorization_endpoint": "http://localhost:35797/oauth/authorize",
         "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": [
           "S256"
@@ -876,12 +876,12 @@
           "authorization_code",
           "refresh_token"
         ],
-        "issuer": "http://localhost:41819",
-        "registration_endpoint": "http://localhost:41819/oauth/register",
+        "issuer": "http://localhost:35797",
+        "registration_endpoint": "http://localhost:35797/oauth/register",
         "response_types_supported": [
           "code"
         ],
-        "revocation_endpoint": "http://localhost:41819/oauth/revoke",
+        "revocation_endpoint": "http://localhost:35797/oauth/revoke",
         "revocation_endpoint_auth_methods_supported": [
           "none"
         ],
@@ -889,7 +889,7 @@
           "mcp",
           "offline_access"
         ],
-        "token_endpoint": "http://localhost:41819/oauth/token",
+        "token_endpoint": "http://localhost:35797/oauth/token",
         "token_endpoint_auth_methods_supported": [
           "none"
         ]
@@ -903,7 +903,7 @@
       "body": {
         "grant_type": "refresh_token",
         "refresh_token": "\u2026",
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "client_id": "dgc_\u2026"
       },
       "status": 200,
@@ -962,7 +962,7 @@
       "path": "/mcp",
       "user_agent": "codex-mcp-client/0.166.0",
       "status": 401,
-      "www-authenticate": "Bearer resource_metadata=\"http://localhost:41819/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
+      "www-authenticate": "Bearer resource_metadata=\"http://localhost:35797/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
     },
     {
       "client": "codex",
@@ -972,12 +972,12 @@
       "status": 200,
       "response": {
         "authorization_servers": [
-          "http://localhost:41819"
+          "http://localhost:35797"
         ],
         "bearer_methods_supported": [
           "header"
         ],
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "resource_name": "Devagotchi hub",
         "scopes_supported": [
           "mcp",
@@ -992,7 +992,7 @@
       "user_agent": "codex-mcp-client/0.166.0",
       "status": 200,
       "response": {
-        "authorization_endpoint": "http://localhost:41819/oauth/authorize",
+        "authorization_endpoint": "http://localhost:35797/oauth/authorize",
         "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": [
           "S256"
@@ -1001,12 +1001,12 @@
           "authorization_code",
           "refresh_token"
         ],
-        "issuer": "http://localhost:41819",
-        "registration_endpoint": "http://localhost:41819/oauth/register",
+        "issuer": "http://localhost:35797",
+        "registration_endpoint": "http://localhost:35797/oauth/register",
         "response_types_supported": [
           "code"
         ],
-        "revocation_endpoint": "http://localhost:41819/oauth/revoke",
+        "revocation_endpoint": "http://localhost:35797/oauth/revoke",
         "revocation_endpoint_auth_methods_supported": [
           "none"
         ],
@@ -1014,7 +1014,7 @@
           "mcp",
           "offline_access"
         ],
-        "token_endpoint": "http://localhost:41819/oauth/token",
+        "token_endpoint": "http://localhost:35797/oauth/token",
         "token_endpoint_auth_methods_supported": [
           "none"
         ]
@@ -1026,7 +1026,7 @@
       "path": "/mcp",
       "user_agent": "codex-mcp-client/0.166.0",
       "status": 401,
-      "www-authenticate": "Bearer resource_metadata=\"http://localhost:41819/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
+      "www-authenticate": "Bearer resource_metadata=\"http://localhost:35797/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
     },
     {
       "client": "codex",
@@ -1036,12 +1036,12 @@
       "status": 200,
       "response": {
         "authorization_servers": [
-          "http://localhost:41819"
+          "http://localhost:35797"
         ],
         "bearer_methods_supported": [
           "header"
         ],
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "resource_name": "Devagotchi hub",
         "scopes_supported": [
           "mcp",
@@ -1056,7 +1056,7 @@
       "user_agent": "codex-mcp-client/0.166.0",
       "status": 200,
       "response": {
-        "authorization_endpoint": "http://localhost:41819/oauth/authorize",
+        "authorization_endpoint": "http://localhost:35797/oauth/authorize",
         "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": [
           "S256"
@@ -1065,12 +1065,12 @@
           "authorization_code",
           "refresh_token"
         ],
-        "issuer": "http://localhost:41819",
-        "registration_endpoint": "http://localhost:41819/oauth/register",
+        "issuer": "http://localhost:35797",
+        "registration_endpoint": "http://localhost:35797/oauth/register",
         "response_types_supported": [
           "code"
         ],
-        "revocation_endpoint": "http://localhost:41819/oauth/revoke",
+        "revocation_endpoint": "http://localhost:35797/oauth/revoke",
         "revocation_endpoint_auth_methods_supported": [
           "none"
         ],
@@ -1078,7 +1078,7 @@
           "mcp",
           "offline_access"
         ],
-        "token_endpoint": "http://localhost:41819/oauth/token",
+        "token_endpoint": "http://localhost:35797/oauth/token",
         "token_endpoint_auth_methods_supported": [
           "none"
         ]
@@ -1092,7 +1092,7 @@
       "body": {
         "client_name": "Codex",
         "redirect_uris": [
-          "http://127.0.0.1:35761/callback"
+          "http://127.0.0.1:56355/callback"
         ],
         "grant_types": [
           "authorization_code",
@@ -1115,7 +1115,7 @@
           "refresh_token"
         ],
         "redirect_uris": [
-          "http://127.0.0.1:35761/callback"
+          "http://127.0.0.1:56355/callback"
         ],
         "response_types": [
           "code"
@@ -1133,9 +1133,9 @@
         "state": "\u2026",
         "code_challenge": "\u2026",
         "code_challenge_method": "S256",
-        "redirect_uri": "http://127.0.0.1:35761/callback",
+        "redirect_uri": "http://127.0.0.1:56355/callback",
         "scope": "mcp offline_access",
-        "resource": "http://localhost:41819"
+        "resource": "http://localhost:35797"
       },
       "status": 200
     },
@@ -1145,15 +1145,15 @@
       "path": "/oauth/authorize",
       "body": {
         "client_id": "dgc_\u2026",
-        "redirect_uri": "http://127.0.0.1:35761/callback",
+        "redirect_uri": "http://127.0.0.1:56355/callback",
         "code_challenge": "\u2026",
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "scope": "mcp offline_access",
         "state": "\u2026",
         "decision": "approve"
       },
       "status": 303,
-      "location": "http://127.0.0.1:35761/callback?code=%E2%80%A6&state=%E2%80%A6&iss=http://localhost:41819"
+      "location": "http://127.0.0.1:56355/callback?code=%E2%80%A6&state=%E2%80%A6&iss=http://localhost:35797"
     },
     {
       "client": "codex",
@@ -1165,8 +1165,8 @@
         "code": "\u2026",
         "code_verifier": "\u2026",
         "client_id": "dgc_\u2026",
-        "redirect_uri": "http://127.0.0.1:35761/callback",
-        "resource": "http://localhost:41819"
+        "redirect_uri": "http://127.0.0.1:56355/callback",
+        "resource": "http://localhost:35797"
       },
       "status": 200,
       "response": {
@@ -1183,7 +1183,7 @@
       "path": "/mcp",
       "user_agent": "codex-mcp-client/0.166.0",
       "status": 401,
-      "www-authenticate": "Bearer resource_metadata=\"http://localhost:41819/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
+      "www-authenticate": "Bearer resource_metadata=\"http://localhost:35797/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
     },
     {
       "client": "codex",
@@ -1193,12 +1193,12 @@
       "status": 200,
       "response": {
         "authorization_servers": [
-          "http://localhost:41819"
+          "http://localhost:35797"
         ],
         "bearer_methods_supported": [
           "header"
         ],
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "resource_name": "Devagotchi hub",
         "scopes_supported": [
           "mcp",
@@ -1213,7 +1213,7 @@
       "user_agent": "codex-mcp-client/0.166.0",
       "status": 200,
       "response": {
-        "authorization_endpoint": "http://localhost:41819/oauth/authorize",
+        "authorization_endpoint": "http://localhost:35797/oauth/authorize",
         "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": [
           "S256"
@@ -1222,12 +1222,12 @@
           "authorization_code",
           "refresh_token"
         ],
-        "issuer": "http://localhost:41819",
-        "registration_endpoint": "http://localhost:41819/oauth/register",
+        "issuer": "http://localhost:35797",
+        "registration_endpoint": "http://localhost:35797/oauth/register",
         "response_types_supported": [
           "code"
         ],
-        "revocation_endpoint": "http://localhost:41819/oauth/revoke",
+        "revocation_endpoint": "http://localhost:35797/oauth/revoke",
         "revocation_endpoint_auth_methods_supported": [
           "none"
         ],
@@ -1235,7 +1235,7 @@
           "mcp",
           "offline_access"
         ],
-        "token_endpoint": "http://localhost:41819/oauth/token",
+        "token_endpoint": "http://localhost:35797/oauth/token",
         "token_endpoint_auth_methods_supported": [
           "none"
         ]
@@ -1247,7 +1247,7 @@
       "path": "/mcp",
       "user_agent": "codex-mcp-client/0.166.0",
       "status": 401,
-      "www-authenticate": "Bearer resource_metadata=\"http://localhost:41819/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
+      "www-authenticate": "Bearer resource_metadata=\"http://localhost:35797/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
     },
     {
       "client": "codex",
@@ -1257,12 +1257,12 @@
       "status": 200,
       "response": {
         "authorization_servers": [
-          "http://localhost:41819"
+          "http://localhost:35797"
         ],
         "bearer_methods_supported": [
           "header"
         ],
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "resource_name": "Devagotchi hub",
         "scopes_supported": [
           "mcp",
@@ -1277,7 +1277,7 @@
       "user_agent": "codex-mcp-client/0.166.0",
       "status": 200,
       "response": {
-        "authorization_endpoint": "http://localhost:41819/oauth/authorize",
+        "authorization_endpoint": "http://localhost:35797/oauth/authorize",
         "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": [
           "S256"
@@ -1286,12 +1286,12 @@
           "authorization_code",
           "refresh_token"
         ],
-        "issuer": "http://localhost:41819",
-        "registration_endpoint": "http://localhost:41819/oauth/register",
+        "issuer": "http://localhost:35797",
+        "registration_endpoint": "http://localhost:35797/oauth/register",
         "response_types_supported": [
           "code"
         ],
-        "revocation_endpoint": "http://localhost:41819/oauth/revoke",
+        "revocation_endpoint": "http://localhost:35797/oauth/revoke",
         "revocation_endpoint_auth_methods_supported": [
           "none"
         ],
@@ -1299,7 +1299,7 @@
           "mcp",
           "offline_access"
         ],
-        "token_endpoint": "http://localhost:41819/oauth/token",
+        "token_endpoint": "http://localhost:35797/oauth/token",
         "token_endpoint_auth_methods_supported": [
           "none"
         ]
@@ -1313,7 +1313,7 @@
       "body": {
         "client_name": "Codex",
         "redirect_uris": [
-          "http://127.0.0.1:35761/callback"
+          "http://127.0.0.1:56355/callback"
         ],
         "grant_types": [
           "authorization_code",
@@ -1336,7 +1336,7 @@
           "refresh_token"
         ],
         "redirect_uris": [
-          "http://127.0.0.1:35761/callback"
+          "http://127.0.0.1:56355/callback"
         ],
         "response_types": [
           "code"
@@ -1354,9 +1354,9 @@
         "state": "\u2026",
         "code_challenge": "\u2026",
         "code_challenge_method": "S256",
-        "redirect_uri": "http://127.0.0.1:35761/callback",
+        "redirect_uri": "http://127.0.0.1:56355/callback",
         "scope": "mcp offline_access",
-        "resource": "http://localhost:41819"
+        "resource": "http://localhost:35797"
       },
       "status": 200
     },
@@ -1366,15 +1366,15 @@
       "path": "/oauth/authorize",
       "body": {
         "client_id": "dgc_\u2026",
-        "redirect_uri": "http://127.0.0.1:35761/callback",
+        "redirect_uri": "http://127.0.0.1:56355/callback",
         "code_challenge": "\u2026",
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "scope": "mcp offline_access",
         "state": "\u2026",
         "decision": "approve"
       },
       "status": 303,
-      "location": "http://127.0.0.1:35761/callback?code=%E2%80%A6&state=%E2%80%A6&iss=http://localhost:41819"
+      "location": "http://127.0.0.1:56355/callback?code=%E2%80%A6&state=%E2%80%A6&iss=http://localhost:35797"
     },
     {
       "client": "codex",
@@ -1386,8 +1386,8 @@
         "code": "\u2026",
         "code_verifier": "\u2026",
         "client_id": "dgc_\u2026",
-        "redirect_uri": "http://127.0.0.1:35761/callback",
-        "resource": "http://localhost:41819"
+        "redirect_uri": "http://127.0.0.1:56355/callback",
+        "resource": "http://localhost:35797"
       },
       "status": 200,
       "response": {
@@ -1404,7 +1404,7 @@
       "path": "/mcp",
       "user_agent": "codex-mcp-client/0.166.0",
       "status": 401,
-      "www-authenticate": "Bearer resource_metadata=\"http://localhost:41819/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
+      "www-authenticate": "Bearer resource_metadata=\"http://localhost:35797/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
     },
     {
       "client": "codex",
@@ -1414,12 +1414,12 @@
       "status": 200,
       "response": {
         "authorization_servers": [
-          "http://localhost:41819"
+          "http://localhost:35797"
         ],
         "bearer_methods_supported": [
           "header"
         ],
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "resource_name": "Devagotchi hub",
         "scopes_supported": [
           "mcp",
@@ -1434,7 +1434,7 @@
       "user_agent": "codex-mcp-client/0.166.0",
       "status": 200,
       "response": {
-        "authorization_endpoint": "http://localhost:41819/oauth/authorize",
+        "authorization_endpoint": "http://localhost:35797/oauth/authorize",
         "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": [
           "S256"
@@ -1443,12 +1443,12 @@
           "authorization_code",
           "refresh_token"
         ],
-        "issuer": "http://localhost:41819",
-        "registration_endpoint": "http://localhost:41819/oauth/register",
+        "issuer": "http://localhost:35797",
+        "registration_endpoint": "http://localhost:35797/oauth/register",
         "response_types_supported": [
           "code"
         ],
-        "revocation_endpoint": "http://localhost:41819/oauth/revoke",
+        "revocation_endpoint": "http://localhost:35797/oauth/revoke",
         "revocation_endpoint_auth_methods_supported": [
           "none"
         ],
@@ -1456,7 +1456,7 @@
           "mcp",
           "offline_access"
         ],
-        "token_endpoint": "http://localhost:41819/oauth/token",
+        "token_endpoint": "http://localhost:35797/oauth/token",
         "token_endpoint_auth_methods_supported": [
           "none"
         ]
@@ -1486,6 +1486,17 @@
     },
     {
       "client": "codex",
+      "method": "POST",
+      "path": "/mcp",
+      "user_agent": "codex-mcp-client/0.166.0",
+      "authorization": "Bearer",
+      "mcp": [
+        "tools/list"
+      ],
+      "status": 200
+    },
+    {
+      "client": "codex",
       "method": "GET",
       "path": "/mcp",
       "user_agent": "codex-mcp-client/0.166.0",
@@ -1499,7 +1510,7 @@
       "user_agent": "codex-mcp-client/0.166.0",
       "authorization": "Bearer",
       "mcp": [
-        "tools/list"
+        "resources/templates/list"
       ],
       "status": 200
     },
@@ -1511,17 +1522,6 @@
       "authorization": "Bearer",
       "mcp": [
         "resources/list"
-      ],
-      "status": 200
-    },
-    {
-      "client": "codex",
-      "method": "POST",
-      "path": "/mcp",
-      "user_agent": "codex-mcp-client/0.166.0",
-      "authorization": "Bearer",
-      "mcp": [
-        "resources/templates/list"
       ],
       "status": 200
     },
@@ -1539,7 +1539,7 @@
       "path": "/mcp",
       "user_agent": "codex-mcp-client/0.166.0",
       "status": 401,
-      "www-authenticate": "Bearer resource_metadata=\"http://localhost:41819/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
+      "www-authenticate": "Bearer resource_metadata=\"http://localhost:35797/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
     },
     {
       "client": "codex",
@@ -1549,12 +1549,12 @@
       "status": 200,
       "response": {
         "authorization_servers": [
-          "http://localhost:41819"
+          "http://localhost:35797"
         ],
         "bearer_methods_supported": [
           "header"
         ],
-        "resource": "http://localhost:41819",
+        "resource": "http://localhost:35797",
         "resource_name": "Devagotchi hub",
         "scopes_supported": [
           "mcp",
@@ -1569,7 +1569,7 @@
       "user_agent": "codex-mcp-client/0.166.0",
       "status": 200,
       "response": {
-        "authorization_endpoint": "http://localhost:41819/oauth/authorize",
+        "authorization_endpoint": "http://localhost:35797/oauth/authorize",
         "authorization_response_iss_parameter_supported": true,
         "code_challenge_methods_supported": [
           "S256"
@@ -1578,12 +1578,12 @@
           "authorization_code",
           "refresh_token"
         ],
-        "issuer": "http://localhost:41819",
-        "registration_endpoint": "http://localhost:41819/oauth/register",
+        "issuer": "http://localhost:35797",
+        "registration_endpoint": "http://localhost:35797/oauth/register",
         "response_types_supported": [
           "code"
         ],
-        "revocation_endpoint": "http://localhost:41819/oauth/revoke",
+        "revocation_endpoint": "http://localhost:35797/oauth/revoke",
         "revocation_endpoint_auth_methods_supported": [
           "none"
         ],
@@ -1591,7 +1591,7 @@
           "mcp",
           "offline_access"
         ],
-        "token_endpoint": "http://localhost:41819/oauth/token",
+        "token_endpoint": "http://localhost:35797/oauth/token",
         "token_endpoint_auth_methods_supported": [
           "none"
         ]
@@ -1621,6 +1621,14 @@
     },
     {
       "client": "codex",
+      "method": "GET",
+      "path": "/mcp",
+      "user_agent": "codex-mcp-client/0.166.0",
+      "authorization": "Bearer",
+      "status": 200
+    },
+    {
+      "client": "codex",
       "method": "POST",
       "path": "/mcp",
       "user_agent": "codex-mcp-client/0.166.0",
@@ -1628,14 +1636,6 @@
       "mcp": [
         "tools/list"
       ],
-      "status": 200
-    },
-    {
-      "client": "codex",
-      "method": "GET",
-      "path": "/mcp",
-      "user_agent": "codex-mcp-client/0.166.0",
-      "authorization": "Bearer",
       "status": 200
     },
     {
