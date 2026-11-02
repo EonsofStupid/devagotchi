@@ -25,6 +25,9 @@ pub async fn page(State(state): State<AppState>) -> Response {
     let Some(hub) = state.passkeys.clone() else {
         return super::routes::not_set_up();
     };
+    if state.hub.config.multi_tenant() {
+        return super::hosted::nothing_to_claim();
+    }
     match hub.claimable().await {
         Ok(true) => passkeys::scripted("Claim this hub", FORM),
         Ok(false) => decided(),

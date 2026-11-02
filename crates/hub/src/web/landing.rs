@@ -1,7 +1,9 @@
 //! `/` for someone not signed in: Devagotchi's product page, served by every hub. What it
 //! is, how it works, how it compares with Desktop Commander, where an AI connects (this
 //! hub's own `public_url`, never a hosted one) and how to run your own. A hub nobody owns
-//! shares the hero and offers only the claim.
+//! shares the hero and offers only the claim. A hosted hub (`tenancy.mode multi`) is never
+//! claimed: its page gets people started, since their account is made the first time their
+//! AI connects.
 //!
 //! The page is a stack of full-viewport pages under the hub's fixed top bar: each `section`
 //! snaps into place as it scrolls in, and a rail beside them shows which one you are on.
@@ -69,6 +71,10 @@ pub fn page(front: &Front, public_url: &str) -> (&'static str, String) {
             "One hub for your AI and every machine",
             full(Way::Shippin, &mcp),
         ),
+        Front::Hosted => (
+            "One hub for your AI and every machine",
+            full(Way::Hosted, &mcp),
+        ),
     }
 }
 
@@ -79,12 +85,14 @@ enum Way {
     Passkeys,
     /// Sign in with Shippin (Nomen).
     Shippin,
+    /// A hosted hub: an account is made the first time someone's AI connects.
+    Hosted,
 }
 
 impl Way {
     fn sign_in(self) -> &'static str {
         match self {
-            Way::Passkeys => "Sign in",
+            Way::Passkeys | Way::Hosted => "Sign in",
             Way::Shippin => "Sign in with Shippin",
         }
     }
@@ -186,7 +194,39 @@ one command</a>.",
             term(T::Passkey, "passkey", 1)
         ),
         Way::Shippin => "A Shippin account is free. <a href=\"/docs\">Docs</a>".to_string(),
+        Way::Hosted => format!(
+            "No form and nothing to claim: your account is made the moment your AI connects, \
+and you secure it with a {} afterwards. Have one already? <a href=\"{SIGN_IN}\">Sign in</a>.",
+            term(T::Passkey, "passkey", 1)
+        ),
     };
+    if let Way::Hosted = way {
+        let action = format!(
+            "<p class=\"lead\">Devagotchi is a Desktop Commander you can own. Claude, ChatGPT, Codex \
+and the rest work on your servers, PCs and devspaces through this hub. Nothing on your machines \
+listens on the network, your AI asks on your phone before a step that needs your say, and every \
+call is on the record.</p>\
+<p class=\"cta\"><a class=\"button primary\" href=\"#connect\">Get started</a>{WATCH}</p>\
+<p class=\"meta\">{note}</p>"
+        );
+        return [
+            rail(),
+            hero("", &action),
+            how(way),
+            compare::section(),
+            features(way),
+            connect(way, mcp),
+            self_host(),
+            next(),
+            faq(),
+            closing(way),
+            footer(),
+            popups::claim(),
+            popups::tools(),
+            popups::watch(&video("turnkey")),
+        ]
+        .concat();
+    }
     let action = format!(
         "<p class=\"lead\">Devagotchi is a Desktop Commander you can own. Claude, ChatGPT, Codex \
 and the rest work on your servers, PCs and devspaces through one hub, which you host yourself \
@@ -228,6 +268,18 @@ server. The app signs in with {oauth} and you approve it once with your passkey.
                 oauth = term(T::OAuth, "OAuth", 1),
             ),
         ),
+        Way::Hosted => (
+            "Use this one: it is hosted, so there is nothing to install or run. Or run your own \
+with Docker Compose."
+                .to_string(),
+            format!(
+                "Add this hub's address to Claude, ChatGPT, Codex or any app that takes a remote \
+{mcp} server. The app signs in with {oauth}: press Connect once and your account is made on the \
+spot, with its own space.",
+                mcp = term(T::Mcp, "MCP", 1),
+                oauth = term(T::OAuth, "OAuth", 1),
+            ),
+        ),
         Way::Shippin => (
             "Sign in to this hub with your Shippin account, or run your own with Docker Compose."
                 .to_string(),
@@ -255,6 +307,7 @@ you on that machine. It installs Devagotchi, gives the machine its own key, and 
 fn features(way: Way) -> String {
     let approve = match way {
         Way::Passkeys => "You approve each one once with your passkey.",
+        Way::Hosted => "You approve each one once.",
         Way::Shippin => "On this hub they sign in with your Shippin account.",
     };
     format!(
@@ -299,6 +352,23 @@ tap.</figcaption></figure></div></section>",
 
 fn connect(way: Way, mcp: &str) -> String {
     let (intro, clients) = match way {
+        Way::Hosted => (
+            format!(
+                "Add this hub to any AI app that takes a remote {} server, at this address. \
+Your account is made when it first connects:",
+                term(T::Mcp, "MCP", 3)
+            ),
+            "<dt>Claude</dt><dd>On the web, desktop or phone: Customize, Connectors, Add, then \
+<em>Add custom connector</em>. Name it Devagotchi, paste the address and leave the OAuth \
+fields empty. Press Connect on the page that opens: that is your account made.</dd>\
+<dt>ChatGPT, Codex, Cursor, Gemini and others</dt><dd>Add a remote MCP server with the same \
+address. The app registers itself with this hub and signs in with OAuth; press Connect \
+once.</dd>\
+<dt>A terminal</dt><dd><code>devagotchi login</code> shows a code; approve it on the page it \
+opens.</dd>\
+<dt>Then secure it</dt><dd>Until you add a passkey on your account page, your account lives \
+in that browser and the apps you connected, and nothing can recover it.</dd>",
+        ),
         Way::Passkeys => (
             format!(
                 "Add this hub to any AI app that takes a remote {} server, at this address:",
@@ -355,7 +425,7 @@ only if the hub comes up healthy. The database is backed up nightly too.</li>\
 <li>GitHub builds the image for x86_64 and ARM64 from every commit on main, with signed build \
 provenance you can check.</li></ul>\
 <p class=\"hosted\">Rather not run it? Use the same hub hosted at devagotchi.com, free during \
-the alpha. New accounts there open with invitations, which are coming.</p></div></div></section>",
+the alpha: your account there is made the first time your AI connects.</p></div></div></section>",
         code = term(T::ClaimCode, "claim code", 2),
         digest = term(T::Digest, "digest", 1),
     )
@@ -420,14 +490,17 @@ Commander teardown this page cites, are on GitHub: \
 }
 
 fn closing(way: Way) -> String {
+    let (lead, href, label) = match way {
+        Way::Hosted => ("Connect your AI to this hub, or run your own.", "#connect", "Get started"),
+        _ => ("Sign in to this hub, or run your own.", SIGN_IN, way.sign_in()),
+    };
     format!(
         "<section class=\"band closing\" id=\"get-started\" aria-labelledby=\"closing-title\">\
 <div class=\"closing-card\"><div>\
 <h2 id=\"closing-title\">Give your AI the whole space. Keep the keys.</h2>\
-<p>Sign in to this hub, or run your own.</p><p class=\"cta\">\
-<a class=\"button primary\" href=\"{SIGN_IN}\">{sign_in}</a>\
-<a class=\"button\" href=\"#self-host\">Self-host it</a></p></div>{PET}</div></section>",
-        sign_in = way.sign_in()
+<p>{lead}</p><p class=\"cta\">\
+<a class=\"button primary\" href=\"{href}\">{label}</a>\
+<a class=\"button\" href=\"#self-host\">Self-host it</a></p></div>{PET}</div></section>"
     )
 }
 

@@ -186,6 +186,16 @@ async fn nomen_who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -> Who
 /// stranger straight to an identity provider. Signed in, it is your account.
 async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let public_url = state.hub.config.public_url.clone();
+    if let Some(hub) = &state.passkeys
+        && state.hub.config.multi_tenant()
+    {
+        // A hosted hub is never claimed: its page gets people started.
+        return if hub.signed_in(&headers).await {
+            see_other("/account", &[])
+        } else {
+            pages::home(pages::Front::Hosted, &public_url)
+        };
+    }
     if let Some(hub) = &state.passkeys {
         return match hub.claimable().await {
             Ok(true) => pages::home(pages::Front::Unclaimed, &public_url),
@@ -324,13 +334,24 @@ async fn callback(
 async fn account(State(state): State<AppState>, headers: HeaderMap) -> Response {
     match who(&state, &headers).await {
         Who::Person(subject) => {
-            let machines = state.hub.machine_status(&subject.id).await;
+            let machines = state.hub.machine_status(&subject).await;
+            // A tenant's own history, on a hub with its own accounts: its chain only.
+            let events = match (&state.passkeys, &subject.tenant) {
+                (Some(hub), Some(tenant)) => {
+                    hub.accounts().events(tenant, 12).await.unwrap_or_default()
+                }
+                _ => Vec::new(),
+            };
             pages::account(
                 &Viewer {
                     subject: &subject.id,
                     name: subject.name.as_deref(),
                     owner: state.hub.config.is_owner(&subject.id),
                     hub_account: state.passkeys.is_some(),
+                    unsecured_until: subject
+                        .provisional_until
+                        .filter(|_| state.passkeys.is_some()),
+                    events: &events,
                 },
                 &machines,
             )
@@ -415,7 +436,7 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> Response {
             }
         },
     };
-    let machines = state.hub.machine_status(&subject.id).await;
+    let machines = state.hub.machine_status(&subject).await;
     let mut response = axum::Json(serde_json::json!({
         "subject": subject.id,
         "via": subject.via,

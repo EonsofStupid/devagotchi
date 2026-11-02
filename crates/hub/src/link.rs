@@ -191,6 +191,17 @@ impl Links {
     /// A one-time code for `owner` to add a machine named `device` ("Add a machine"). The
     /// names in the hub config are the operator's. Audited without the code.
     pub fn issue_owned_code(&self, owner: &str, device: &str) -> BridgeResult<String> {
+        self.issue_owned_code_within(owner, device, None)
+    }
+
+    /// `issue_owned_code`, holding the owner to `limit` machines instead of the usual
+    /// quota when one is given (an account nobody secured, `tenant_machines.rs`).
+    pub fn issue_owned_code_within(
+        &self,
+        owner: &str,
+        device: &str,
+        limit: Option<usize>,
+    ) -> BridgeResult<String> {
         if !crate::config::valid_name(device) {
             return Err(BridgeError::new(
                 "invalid_name",
@@ -206,7 +217,7 @@ impl Links {
         let limit = if self.config.is_owner(owner) {
             usize::MAX
         } else {
-            crate::devices::OWNED_LIMIT
+            limit.unwrap_or(crate::devices::OWNED_LIMIT)
         };
         let issued = self
             .devices

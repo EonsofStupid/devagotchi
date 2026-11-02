@@ -709,6 +709,8 @@ async fn names_from_nomen_are_escaped_on_the_page() {
             name: Some("<img src=x onerror=alert(1)>"),
             owner: false,
             hub_account: false,
+            unsecured_until: None,
+            events: &[],
         },
         &[],
     );
@@ -1357,6 +1359,7 @@ async fn a_person_adds_a_machine_of_their_own_and_revokes_it() {
     let subject = |id: &str| crate::auth::Subject {
         id: id.into(),
         via: "dev",
+        tenant: None,
         name: None,
         org: None,
         provisional_until: None,

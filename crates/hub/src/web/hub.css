@@ -57,6 +57,13 @@ main { padding: 32px max(var(--gutter), calc(50% - var(--narrow) / 2)) 64px; }
 h1 { font-size: 1.6rem; line-height: 1.25; margin: 0 0 8px; overflow-wrap: anywhere; }
 h2 { font-size: 1.1rem; margin: 32px 0 12px; }
 .meta, .note, .empty { color: var(--muted); margin: 0 0 8px; }
+/* An account nobody secured yet: one line under the bar on every page, and the offer on the
+   account page. */
+.nudge { position: sticky; top: var(--bar-h); z-index: 19; margin: 0; padding: 8px var(--gutter);
+  background: var(--sunk); border-bottom: 1px solid var(--line); color: var(--wait); font-size: .92rem; }
+.secure { margin: 24px 0; padding: 16px 20px; background: var(--surface); border: 1px solid var(--wait);
+  border-radius: 8px; }
+.secure h2 { margin-top: 0; }
 code { font: .9em var(--font-mono); overflow-wrap: anywhere; }
 table { width: 100%; border-collapse: collapse; background: var(--surface);
   border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }

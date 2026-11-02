@@ -28,6 +28,9 @@ pub struct Subject {
     /// The login name the identity provider reported, shown so a person can tell their
     /// accounts apart. Never used for grants: two accounts can share a name.
     pub name: Option<String>,
+    /// The tenant the account belongs to on a hub with its own accounts (`t-<uuid>`,
+    /// `accounts/tenants.rs`): what keeps one tenant's machines from another's.
+    pub tenant: Option<String>,
     /// The organization (tenant) the account belongs to, as the identity provider proved
     /// it (Nomen's `urn:nomen:iam:user:resourceowner:id`). Project boards belong to it:
     /// every member works them (B13). `None` when the token carries no org; the account's
@@ -197,6 +200,7 @@ impl Verifier {
                     Subject {
                         id: id.to_string(),
                         via: "dev",
+                        tenant: None,
                         name: None,
                         org,
                         provisional_until: None,
@@ -227,16 +231,7 @@ impl Verifier {
             } => {
                 if bearer.starts_with("dgh_") {
                     return match accounts.verify_access(bearer).await {
-                        Ok(Some(grant)) => Ok(Subject {
-                            id: grant.account.id,
-                            via: "hub",
-                            name: Some(grant.account.name),
-                            org: None,
-                            provisional_until: None,
-                            agent: None,
-                            claim_code: None,
-                            provisional_warning: false,
-                        }),
+                        Ok(Some(grant)) => Ok(accounts.subject(&grant.account, "hub")),
                         Ok(None) => Err(AuthError::Invalid(
                             "unknown, expired or revoked hub token",
                         )),
@@ -454,6 +449,7 @@ impl OidcVerifier {
         Ok(Subject {
             id: data.claims.sub,
             via: "oidc",
+            tenant: None,
             name: None,
             org: data.claims.org.filter(|org| valid_org(org)),
             provisional_until: None,
@@ -521,6 +517,7 @@ mod tests {
             Subject {
                 id: "jesse".into(),
                 via: "dev",
+                tenant: None,
                 name: None,
                 org: None,
                 provisional_until: None,

@@ -176,6 +176,10 @@ impl Accounts {
         };
         let now = now_secs();
         transaction!(&self.store, |connection| {
+            if approve {
+                // An account nobody secured connects only so many apps and terminals.
+                self.room_for_a_client(connection, account, now).await?;
+            }
             let decided = if approve {
                 sqlx::query(
                     "UPDATE oauth_devices SET account = $1
@@ -262,7 +266,7 @@ impl Accounts {
                     "authorization_pending"
                 })));
             };
-            if let Err(refused) = live_account(connection, &account).await? {
+            if let Err(refused) = self.live_account(connection, &account, now).await? {
                 return Ok(Err(refused));
             }
             let tokens = self

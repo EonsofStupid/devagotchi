@@ -74,6 +74,7 @@ impl SignIns {
                     Subject {
                         id: row.get(1)?,
                         via: "nomen",
+                        tenant: None,
                         name: row.get(2)?,
                         org: row.get(3)?,
                         provisional_until: None,

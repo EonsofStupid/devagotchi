@@ -1880,6 +1880,7 @@ mod tests {
         let member = |id: &str, org: Option<&str>| Subject {
             id: id.into(),
             via: "nomen",
+            tenant: None,
             name: None,
             org: org.map(str::to_string),
             provisional_until: None,

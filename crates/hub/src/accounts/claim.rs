@@ -215,12 +215,14 @@ impl Accounts {
                 },
                 None => {
                     let name = name.unwrap_or(DEFAULT_NAME);
-                    create_in(connection, &id, name, true, now).await?;
+                    let home = super::tenants::home_in(connection).await?;
+                    create_in(connection, &id, name, true, &home, now).await?;
                     Account {
                         id: id.clone(),
                         name: name.to_string(),
                         owner: true,
-                        disabled_at: None,
+                        tenant: home,
+                        ..Account::default()
                     }
                 }
             };

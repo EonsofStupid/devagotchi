@@ -11,6 +11,10 @@ use std::{
 use devagotchi_contracts::{BridgeError, BridgeResult};
 use serde::Deserialize;
 
+pub(crate) mod tenancy;
+pub use tenancy::{OPERATORS_ENV, TENANCY_ENV, TenancyConfig, TenancyMode, is_operator};
+use tenancy::check_operator;
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HubConfig {
@@ -64,6 +68,18 @@ pub struct HubConfig {
     /// instead and overrides this (`DEVAGOTCHI_HUB_STORAGE_SCHEMA` the schema).
     #[serde(default)]
     pub storage: Option<StorageConfig>,
+    /// One owner's hub (`single`, the default) or a hosted service where everyone who
+    /// connects gets an account and a tenant of their own (`multi`), with the limits on an
+    /// account nobody has secured yet (`config/tenancy.rs`). `DEVAGOTCHI_HUB_TENANCY`
+    /// overrides the mode.
+    #[serde(default)]
+    pub tenancy: TenancyConfig,
+    /// Who runs this hub: identities (`email:<verified address>` or
+    /// `<provider>:<subject>`) whose sign-in is the hub's owner, the platform operator,
+    /// with no claim. Set at deploy, from `DEVAGOTCHI_HUB_OPERATORS` (comma separated) or
+    /// here; never in the code.
+    #[serde(default)]
+    pub operators: Vec<String>,
     /// The owner every holder of this config sees: `owner` above, or in hub mode the
     /// one the accounts store names, learned once at start or when it is made.
     #[serde(skip)]
@@ -486,8 +502,35 @@ pub struct Grant {
 
 impl HubConfig {
     pub fn parse(text: &str) -> BridgeResult<Self> {
-        let config: HubConfig = serde_json::from_str(text)
+        Self::parse_with(text, |_| None)
+    }
+
+    /// `parse`, with `DEVAGOTCHI_HUB_TENANCY` and `DEVAGOTCHI_HUB_OPERATORS` from `env`
+    /// over the file's `tenancy.mode` and `operators`: how a deploy sets them from `.env`
+    /// or the secret store.
+    pub fn parse_with(text: &str, env: impl Fn(&str) -> Option<String>) -> BridgeResult<Self> {
+        let mut config: HubConfig = serde_json::from_str(text)
             .map_err(|error| BridgeError::new("invalid_config", error.to_string()))?;
+        let invalid = |message: String| BridgeError::new("invalid_config", message);
+        if let Some(mode) = env(TENANCY_ENV).filter(|mode| !mode.trim().is_empty()) {
+            config.tenancy.mode = match mode.trim() {
+                "single" => TenancyMode::Single,
+                "multi" => TenancyMode::Multi,
+                other => {
+                    return Err(invalid(format!(
+                        "{TENANCY_ENV}={other:?}: single or multi"
+                    )));
+                }
+            };
+        }
+        if let Some(operators) = env(OPERATORS_ENV).filter(|list| !list.trim().is_empty()) {
+            config.operators = operators
+                .split(',')
+                .map(str::trim)
+                .filter(|entry| !entry.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
         config.validate()?;
         if let Some(owner) = &config.owner {
             let _ = config.owner_cell.set(owner.clone());
@@ -505,6 +548,22 @@ impl HubConfig {
         }
         if !self.public_url.starts_with("https://") && !self.public_url.starts_with("http://") {
             return Err(invalid("public_url must be an absolute http(s) URL".into()));
+        }
+        self.tenancy.check().map_err(invalid)?;
+        for operator in &self.operators {
+            check_operator(operator).map_err(invalid)?;
+        }
+        if (self.tenancy.multi() || !self.operators.is_empty())
+            && !matches!(self.auth, AuthConfig::Hub { .. })
+        {
+            return Err(invalid(
+                "tenancy.mode multi and operators need the hub's own accounts (auth.mode hub)".into(),
+            ));
+        }
+        if self.tenancy.multi() && self.owner.is_some() {
+            return Err(invalid(
+                "a multi-tenant hub's owner is its operator, from operators (or devagotchi hub owner on its host); leave owner out".into(),
+            ));
         }
         if let Some(storage) = &self.storage {
             if let Some(url) = &storage.url {
@@ -892,6 +951,19 @@ impl HubConfig {
     /// override it).
     pub fn storage_schema(&self) -> Option<&str> {
         self.storage.as_ref().and_then(|storage| storage.schema.as_deref())
+    }
+
+    /// Whether this hub is a hosted service where everyone who connects gets an account
+    /// and a tenant of their own (`tenancy.mode multi`).
+    pub fn multi_tenant(&self) -> bool {
+        self.tenancy.multi()
+    }
+
+    /// Whether a new hub may be claimed from the browser with the code in its log (16c):
+    /// one owner's hub whose config names neither its owner nor its operators. A hosted
+    /// hub is never claimed; an operator set at deploy has decided who runs it.
+    pub fn claim_allowed(&self) -> bool {
+        !self.multi_tenant() && self.operators.is_empty() && self.owner.is_none()
     }
 
     /// Whether people sign in with the hub's own accounts (`auth.mode hub`).

@@ -165,15 +165,17 @@ pub async fn page(
         .as_deref()
         .map(str::trim)
         .filter(|c| !c.is_empty());
+    let back = match typed {
+        Some(code) => format!("/device?code={}", encode(code)),
+        None => "/device".to_string(),
+    };
+    let sign_in = format!("/auth/login?return_to={}", encode(&back));
+    // On a hosted hub, someone with no session gets the same page: Approve makes their
+    // account (`hosted.rs`).
     let person = match hub.who(&headers).await {
-        Ok(Some(person)) => person,
-        Ok(None) => {
-            let back = match typed {
-                Some(code) => format!("/device?code={}", encode(code)),
-                None => "/device".to_string(),
-            };
-            return see_other(&format!("/auth/login?return_to={}", encode(&back)), &[]);
-        }
+        Ok(Some(person)) => Some(person),
+        Ok(None) if state.hub.config.multi_tenant() => None,
+        Ok(None) => return see_other(&sign_in, &[]),
         Err(()) => return super::routes::unavailable(),
     };
     let Some(typed) = typed else {
@@ -212,9 +214,17 @@ on the machines you reach, until you sign it out or it goes unused for {days} da
 <p>Continue only if your terminal shows <strong>{shown}</strong>. Never approve a code someone else gave you.</p>\
 <form method=\"post\" action=\"/device\"><input type=\"hidden\" name=\"code\" value=\"{shown}\">\
 <p><button class=\"button primary\" name=\"decision\" value=\"approve\">Approve</button> \
-<button class=\"button\" name=\"decision\" value=\"deny\">Cancel</button></p></form>",
+<button class=\"button\" name=\"decision\" value=\"deny\">Cancel</button></p></form>{new}",
         app = pages::escape(&app),
-        who = pages::escape(person.name.as_deref().unwrap_or(&person.id)),
+        who = match &person {
+            Some(person) => pages::escape(person.name.as_deref().unwrap_or(&person.id)),
+            None => "your new Devagotchi account".to_string(),
+        },
+        new = if person.is_none() {
+            super::hosted::new_account_note(&sign_in)
+        } else {
+            String::new()
+        },
         days = state
             .hub
             .config
@@ -231,10 +241,12 @@ pub struct DeviceDecision {
     decision: String,
 }
 
-/// The person's answer, from the verification page only.
+/// The person's answer, from the verification page only. On a hosted hub, Approve from
+/// someone with no session makes their account first and signs this browser in to it.
 pub async fn decide(
     State(state): State<AppState>,
     headers: HeaderMap,
+    extensions: axum::http::Extensions,
     Form(form): Form<DeviceDecision>,
 ) -> Response {
     let Some(hub) = state.passkeys.clone() else {
@@ -248,25 +260,88 @@ pub async fn decide(
             None,
         );
     }
+    let approve = form.decision == "approve";
+    let mut cookies = Vec::new();
     let person = match hub.who(&headers).await {
         Ok(Some(person)) => person,
+        Ok(None) if state.hub.config.multi_tenant() && approve => {
+            // Only a code that waits makes an account.
+            let waiting = match normalize_user_code(&form.code) {
+                Some(code) => hub.accounts().pending_device(&code).await,
+                None => Ok(None),
+            };
+            let pending = match waiting {
+                Ok(Some(pending)) => pending,
+                Ok(None) => return not_valid(),
+                Err(error) => {
+                    eprintln!("devagotchi-hub: account store: {}", error.message);
+                    return super::routes::unavailable();
+                }
+            };
+            let app = client_name(&state, &pending.client)
+                .await
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| "a terminal".to_string());
+            let address = super::hosted::client_address(&state, &extensions, &headers);
+            match super::hosted::start(&hub, address, &app).await {
+                Ok((person, cookie)) => {
+                    cookies.push(cookie);
+                    person
+                }
+                Err(page) => return page,
+            }
+        }
+        Ok(None) if state.hub.config.multi_tenant() => {
+            return pages::message(
+                StatusCode::OK,
+                "Cancelled",
+                "Your terminal was not signed in.",
+                None,
+            );
+        }
         Ok(None) => {
             let back = format!("/device?code={}", encode(&form.code));
             return see_other(&format!("/auth/login?return_to={}", encode(&back)), &[]);
         }
         Err(()) => return super::routes::unavailable(),
     };
-    let approve = form.decision == "approve";
     match hub
         .accounts()
         .decide_device(&form.code, &person.id, approve)
         .await
     {
-        Ok(true) if approve => pages::message(
-            StatusCode::OK,
-            "Your terminal is signed in",
-            "Go back to it: it finishes signing in within a few seconds. You can close this page.",
-            None,
+        Ok(true) if approve => {
+            if let Some(tenant) = &person.tenant {
+                let _ = hub
+                    .accounts()
+                    .record(tenant, &person.id, "terminal.connected", "devagotchi login")
+                    .await;
+            }
+            let offer = person
+                .provisional_until
+                .map(|until| super::hosted::secure_offer(until, false))
+                .unwrap_or_default();
+            let mut page = pages::html(
+                StatusCode::OK,
+                "Your terminal is signed in",
+                &format!(
+                    "<h1>Your terminal is signed in</h1><p>Go back to it: it finishes signing in \
+within a few seconds.</p>{offer}"
+                ),
+            );
+            for cookie in &cookies {
+                if let Ok(value) = HeaderValue::from_str(cookie) {
+                    page.headers_mut().append(header::SET_COOKIE, value);
+                }
+            }
+            page
+        }
+        Err(error) if error.code == "client_limit" => pages::message(
+            StatusCode::FORBIDDEN,
+            "Secure your account to sign in more terminals",
+            &error.message,
+            Some(("/account#secure", "Secure my account")),
         ),
         Ok(true) => pages::message(
             StatusCode::OK,

@@ -153,9 +153,63 @@ user verification on every ceremony). Nothing else needs to be running. `rp_id` 
 passkeys' relying party: the hub's host or a parent domain of it, and it can never change
 for passkeys already made. Plain `http` works only on loopback, for tests.
 
+### A hosted hub: accounts on first connect (`tenancy.mode multi`)
+
+app.devagotchi.com is a multi-tenant control plane, never claimed. Everyone who connects
+gets an account and a tenant (`t-<uuid>`) of their own, made on the spot:
+
+```jsonc
+"auth": { "mode": "hub", "rp_id": "devagotchi.com" },
+"tenancy": {
+  "mode": "multi",                     // or DEVAGOTCHI_HUB_TENANCY=multi; "single" is the default
+  "trusted_proxies": ["172.16.0.0/12"], // whose X-Forwarded-For names the client (Caddy, the edge)
+  "starts_per_hour": 8,                // new accounts per client address per hour
+  "max_unsecured": 10000,              // accounts nobody secured yet, live at once
+  "unsecured": { "machines": 2, "clients": 3, "idle_days": 14 }
+},
+"operators": ["email:you@example.com"] // or DEVAGOTCHI_HUB_OPERATORS, from the secret store
+```
+
+- **First connect makes the account.** The first OAuth authorize from an AI client, or the
+  `/device` page of `devagotchi login`, opened with no session shows the same Connect (or
+  Approve) page anyone sees, naming "your new Devagotchi account". Pressing it makes the
+  account and its tenant, signs that browser in, and sends the code to the client: one
+  click, no form, the AI working within seconds. "Sign in" is on the page for anyone who
+  has an account.
+- **Securing never blocks.** Afterwards the account page offers a passkey (Google, GitHub,
+  an email link and Sign in with Shippin join it next), every page carries a line saying
+  the account is not secured, `/device`'s answer offers it, and `whoami` returns
+  `secure_url` and `provisional_until` so the AI says so too.
+- **Until it is secured** (the anonymous-then-link account upgrade: an anonymous account
+  first, a real sign-in linked to it later), the account is reached only through the
+  browser session that made it and the AI tokens that session approved; nothing can
+  recover it; it adds `unsecured.machines` machines and connects `unsecured.clients` AI apps
+  at most (per-tenant quotas); and it ends, with its sessions and tokens, once unused for
+  `unsecured.idle_days`. New accounts are limited per client address (`starts_per_hour`,
+  kept as an HMAC of the address, never the address) and in total (`max_unsecured`).
+- **Every step is on the tenant's own chain** (`tenant_events`, hash-chained per tenant):
+  tenant and account made, session opened, each AI client and terminal connected, secured,
+  each sign-in linked. The account page shows its tenant's latest steps, and only them.
+- **Each tenant's things are its own.** Machine names are per tenant (stored under the
+  tenant's tag, `t1a2b3c4d5e6f-laptop`; people and their AI see `laptop`), so two people can
+  both have a `laptop` and neither can find the other's by trying names. Boards are the
+  account's own (`board_bind`), tokens die with their account, and configured brokers need a
+  grant as before. `tenant_tests.rs` drives every MCP tool and every account page as one
+  tenant with another's ids, on SQLite and Postgres.
+- **Operators, with no claim.** Someone who signs in with an identity `operators` names (a
+  verified `email:`, or `google:`, `github:`, `nomen:` or `oidc:` and the provider's
+  subject) is the hub's owner, the platform operator, in the first tenant (Jesse is tenant
+  #1). `devagotchi hub owner` on the host still makes the owner's passkey link.
+- **No claim.** A hosted hub prints no claim code, `/` gets people started, and `/claim`
+  is a 404. A one-owner hub (`single`) whose config names `operators` is not claimed either:
+  its operators were decided at deploy.
+
+Every account belongs to a tenant. On a one-owner hub there is one, and a store from
+before tenants moves its accounts into it when the hub opens it (an add-only migration).
+
 ### Claiming a new hub (16c)
 
-A new hub is claimed in a browser, with a code only someone who can read its log has. A hub
+A one-owner hub (`tenancy.mode single`, with no `operators`) is claimed in a browser, with a code only someone who can read its log has. A hub
 whose config names no `owner` and whose owner has no passkey yet prints a claim link to its
 log each time it starts (with Docker Compose: `docker compose logs hub`):
 

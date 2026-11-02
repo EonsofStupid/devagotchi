@@ -59,11 +59,13 @@ impl Accounts {
         }
         let key = hash(token);
         let mut connection = self.store.read().await?;
-        let found = sqlx::query(
-            "SELECT a.id, a.name, a.owner, a.disabled_at, s.created_at, s.last_seen, s.expires_at
+        let found = sqlx::query(concat!(
+            "SELECT ",
+            account_columns_a!(),
+            ", s.created_at, s.last_seen, s.expires_at
              FROM sessions s JOIN accounts a ON a.id = s.account
-             WHERE s.hash = $1",
-        )
+             WHERE s.hash = $1"
+        ))
         .bind(&key)
         .fetch_optional(&mut *connection)
         .await
@@ -72,10 +74,10 @@ impl Accounts {
                 Ok((
                     Session {
                         account: account_row(&row)?,
-                        created_at: unsecs(row.try_get(4)?),
-                        last_seen: unsecs(row.try_get(5)?),
+                        created_at: unsecs(row.try_get(7)?),
+                        last_seen: unsecs(row.try_get(8)?),
                     },
-                    unsecs(row.try_get(6)?),
+                    unsecs(row.try_get(9)?),
                 ))
             })
             .transpose()
@@ -84,10 +86,12 @@ impl Accounts {
         let Some((mut session, expires_at)) = found else {
             return Ok(None);
         };
-        // Past its limit, idle too long, or on a disabled account: it has ended, for good.
+        // Past its limit, idle too long, on a disabled account, or on an account nobody
+        // secured that went unused too long: it has ended, for good.
         if now >= expires_at
             || now >= session.last_seen.saturating_add(SESSION_IDLE_SECS)
             || session.account.disabled_at.is_some()
+            || self.lapsed(&session.account, now)
         {
             sqlx::query("DELETE FROM sessions WHERE hash = $1")
                 .bind(&key)
@@ -105,6 +109,9 @@ impl Accounts {
                 .await
                 .map_err(store_error)?;
             session.last_seen = now;
+            tenants::touch(&mut connection, &mut session.account, now)
+                .await
+                .map_err(store_error)?;
         }
         Ok(Some(session))
     }
@@ -125,6 +132,7 @@ impl Accounts {
             credential,
             label,
             Some((purpose, token)),
+            None,
             now_secs(),
             Some(crate::link::random::<32>()),
         )

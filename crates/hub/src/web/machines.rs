@@ -27,7 +27,10 @@ pub struct Named {
 }
 
 /// The signed-in person behind a form post from this hub's own page, or the page to show.
-async fn person(state: &AppState, headers: &HeaderMap) -> Result<String, Box<Response>> {
+async fn person(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<crate::auth::Subject, Box<Response>> {
     if state.web.is_none() && state.passkeys.is_none() {
         return Err(Box::new(not_set_up()));
     }
@@ -40,7 +43,7 @@ async fn person(state: &AppState, headers: &HeaderMap) -> Result<String, Box<Res
         )));
     }
     match who(state, headers).await {
-        Who::Person(subject) => Ok(subject.id),
+        Who::Person(subject) => Ok(subject),
         Who::SignedOut => Err(Box::new(see_other("/auth/login?return_to=/account", &[]))),
         Who::Unavailable => Err(Box::new(unavailable())),
         Who::NotSetUp => Err(Box::new(not_set_up())),
@@ -57,10 +60,11 @@ pub async fn add(
         Err(page) => return *page,
     };
     let name = form.name.trim().to_ascii_lowercase();
-    match state.hub.links.issue_owned_code(&owner, &name) {
-        Ok(code) => code_page(
+    match state.hub.add_own_machine(&owner, &name) {
+        Ok((stored, code)) => code_page(
             &state.hub.config.public_url,
             &name,
+            &stored,
             &code,
             state.hub.downloads.is_some(),
         ),
@@ -85,7 +89,7 @@ pub async fn revoke(
         Ok(owner) => owner,
         Err(page) => return *page,
     };
-    match state.hub.links.revoke_owned(&owner, &form.name) {
+    match state.hub.revoke_own_machine(&owner, form.name.trim()) {
         Ok(_) => see_other("/account", &[]),
         Err(error) => pages::message(
             StatusCode::CONFLICT,
@@ -98,10 +102,10 @@ pub async fn revoke(
 
 /// The code, once, with what to run on the machine. The page is never cached. With a
 /// downloads directory the hub hands out its own build: one line per OS (`/join`).
-fn code_page(hub: &str, name: &str, code: &str, joinable: bool) -> Response {
+fn code_page(hub: &str, name: &str, stored: &str, code: &str, joinable: bool) -> Response {
     let until = pages::utc(devices::now_secs() + devices::CODE_TTL_SECS);
     let hub = hub.trim_end_matches('/');
-    let (hub, name, code) = (escape(hub), escape(name), escape(code));
+    let (hub, name, stored, code) = (escape(hub), escape(name), escape(stored), escape(code));
     let how = if joinable {
         format!(
             "<p>Paste one line on that machine. It installs Devagotchi, gives the machine its own \
@@ -116,9 +120,9 @@ works once, until {until}; this page is the only place it is shown.</p>\
             "<p>This code adds one machine as <strong>{name}</strong>. It works once, until {until}, and \
 this page is the only place it is shown.</p><pre class=\"what\">{code}</pre>\
 <h2>Linux</h2><p class=\"meta\">With the Devagotchi installer on that machine:</p>\
-<pre class=\"what\">echo {code} | sudo ./install-devagotchi.sh --hub {hub} --device {name} --enroll --exec-policy account</pre>\
+<pre class=\"what\">echo {code} | sudo ./install-devagotchi.sh --hub {hub} --device {stored} --enroll --exec-policy account</pre>\
 <h2>Windows</h2><p class=\"meta\">In PowerShell, next to the installer:</p>\
-<pre class=\"what\">.\\install-devagotchi.ps1 -Autostart -ExecPolicy account -Hub {hub} -Device {name} -EnrollCode {code}</pre>"
+<pre class=\"what\">.\\install-devagotchi.ps1 -Autostart -ExecPolicy account -Hub {hub} -Device {stored} -EnrollCode {code}</pre>"
         )
     };
     pages::html(
@@ -167,7 +171,7 @@ pub async fn add_json(
         );
     };
     let owner = match state.verifier.verify(token).await {
-        Ok(subject) => subject.id,
+        Ok(subject) => subject,
         Err(AuthError::Invalid(why)) => {
             crate::log_refusal(why);
             return json_reply(
@@ -183,8 +187,8 @@ pub async fn add_json(
         }
     };
     let name = form.name.trim().to_ascii_lowercase();
-    let code = match state.hub.links.issue_owned_code(&owner, &name) {
-        Ok(code) => code,
+    let code = match state.hub.add_own_machine(&owner, &name) {
+        Ok((_, code)) => code,
         Err(error) => {
             let status = match error.code.as_str() {
                 "device_store" => StatusCode::SERVICE_UNAVAILABLE,

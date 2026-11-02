@@ -119,7 +119,14 @@ emit({
   scope: provider.saved.scope,
   refreshed: provider.saves > saves,
   tools,
-  whoami: { owner: whoami?.owner, via: whoami?.via, subject: Boolean(whoami?.subject) },
+  whoami: {
+    owner: whoami?.owner,
+    via: whoami?.via,
+    subject: Boolean(whoami?.subject),
+    // A hosted hub: the tenant the account was made in, and whether it is not secured yet.
+    tenant: whoami?.tenant ?? null,
+    unsecured: Boolean(whoami?.secure_url),
+  },
   machines: Array.isArray(machines?.machines),
 });
 process.exit(0);

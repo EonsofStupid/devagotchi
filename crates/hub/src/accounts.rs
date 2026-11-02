@@ -11,9 +11,11 @@
 //! the one-time link.
 
 pub mod claim;
+pub mod identities;
 pub mod oauth;
 pub mod passkey;
 pub mod sessions;
+pub mod tenants;
 
 use aws_lc_rs::hmac;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -123,12 +125,20 @@ fn invalid_ceremony() -> BridgeError {
     BridgeError::new("invalid_ceremony", "sign-in timed out; start again")
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Account {
     pub id: String,
     pub name: String,
     pub owner: bool,
     pub disabled_at: Option<u64>,
+    /// The tenant it belongs to (`tenants.rs`): `t-<uuid>`.
+    pub tenant: String,
+    /// Made on first connect and not secured yet: no passkey and no linked sign-in, so only
+    /// the browser session and the AI tokens it approved reach it, and nothing can recover
+    /// it. It ends once unused for `tenancy.unsecured.idle_days`.
+    pub provisional: bool,
+    /// When it was last used, kept for an account not secured yet.
+    pub last_active: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,6 +156,10 @@ pub struct Accounts {
     store: Store,
     /// How long the hub's own AI tokens live (`auth.tokens`).
     tokens: crate::config::TokenConfig,
+    /// One owner's hub or a hosted one, and what an account not secured yet may hold.
+    tenancy: crate::config::TenancyConfig,
+    /// The identities whose sign-in is the hub's operator (`operators`).
+    operators: Vec<String>,
     /// Signs the passkey challenges this process makes: the store's key as last read. The
     /// store's copy is the one that counts: every ceremony checks against it, read in its
     /// own transaction, and refreshes this one. It changes only when a clock is found set
@@ -163,6 +177,9 @@ fn account_row(row: &AnyRow) -> Result<Account, sqlx::Error> {
         name: row.try_get(1)?,
         owner: row.try_get::<i64, _>(2)? == 1,
         disabled_at: row.try_get::<Option<i64>, _>(3)?.map(unsecs),
+        tenant: row.try_get::<Option<String>, _>(4)?.unwrap_or_default(),
+        provisional: row.try_get::<i64, _>(5)? == 1,
+        last_active: row.try_get::<Option<i64>, _>(6)?.map(unsecs),
     })
 }
 
@@ -184,9 +201,16 @@ fn passkey_row(row: &AnyRow) -> Result<Passkey, sqlx::Error> {
 
 macro_rules! account_columns {
     () => {
-        "id, name, owner, disabled_at"
+        "id, name, owner, disabled_at, tenant, provisional, last_active"
     };
 }
+/// The account's columns as `a.…`, for a join (`account_row` reads them first).
+macro_rules! account_columns_a {
+    () => {
+        "a.id, a.name, a.owner, a.disabled_at, a.tenant, a.provisional, a.last_active"
+    };
+}
+pub(crate) use account_columns_a;
 macro_rules! passkey_columns {
     () => {
         "id, account, label, public_key, alg, sign_count, backup_eligible"
@@ -217,6 +241,8 @@ impl Accounts {
     /// hub instance gets there first.
     pub async fn open(store: Store) -> BridgeResult<Self> {
         let fresh = crate::link::random::<32>().to_vec();
+        let home = tenants::new_tenant_id(crate::link::random::<16>());
+        let now = now_secs();
         let key = transaction!(&store, |connection| {
                 sqlx::query(
                     "INSERT INTO secrets (name, value) VALUES ('challenge_key', $1)
@@ -225,11 +251,16 @@ impl Accounts {
                 .bind(&fresh)
                 .execute(&mut *connection)
                 .await?;
+                // Every account belongs to a tenant: the hub's first one, made now if
+                // missing, takes in the accounts made before tenants existed.
+                tenants::settle_in(connection, &home, now).await?;
                 Ok(stored_key(connection).await?)
             })?;
         Ok(Self {
             store,
             tokens: crate::config::TokenConfig::default(),
+            tenancy: crate::config::TenancyConfig::default(),
+            operators: Vec::new(),
             challenge_key: std::sync::RwLock::new(key),
         })
     }
@@ -240,18 +271,37 @@ impl Accounts {
         self
     }
 
+    /// These accounts as the config's tenancy and operators say.
+    pub fn with_tenancy(
+        mut self,
+        tenancy: crate::config::TenancyConfig,
+        operators: Vec<String>,
+    ) -> Self {
+        self.tenancy = tenancy;
+        self.operators = operators;
+        self
+    }
+
+    /// The tenancy these accounts were opened with.
+    pub fn tenancy(&self) -> &crate::config::TenancyConfig {
+        &self.tenancy
+    }
+
     /// Make an account. There is at most one owner, and an id is never reused.
     pub async fn create(&self, id: &str, name: &str, owner: bool) -> BridgeResult<Account> {
         let name = check_name(id, name)?;
         let now = now_secs();
-        transaction!(&self.store, |connection| {
-                create_in(connection, id, name, owner, now).await
+        let tenant = transaction!(&self.store, |connection| {
+                let tenant = tenants::home_in(connection).await?;
+                create_in(connection, id, name, owner, &tenant, now).await?;
+                Ok(tenant)
             })?;
         Ok(Account {
             id: id.to_string(),
             name: name.to_string(),
             owner,
-            disabled_at: None,
+            tenant,
+            ..Account::default()
         })
     }
 
@@ -407,7 +457,23 @@ impl Accounts {
         link: Option<(LinkPurpose, &str)>,
         now: u64,
     ) -> BridgeResult<()> {
-        self.put_passkey(account, credential, label, link, now, None)
+        self.put_passkey(account, credential, label, link, None, now, None)
+            .await
+            .map(|_| ())
+    }
+
+    /// Add a passkey to the account a live browser session (`session`, its token) is
+    /// signed in to: how an account made on first connect is secured. The challenge must be
+    /// one this hub made to register a passkey on that account, and the session must still
+    /// be its, checked in the same transaction as the passkey is stored.
+    pub async fn add_passkey_signed_in(
+        &self,
+        account: &str,
+        credential: &NewCredential,
+        label: &str,
+        session: &str,
+    ) -> BridgeResult<()> {
+        self.put_passkey(account, credential, label, None, Some(session), now_secs(), None)
             .await
             .map(|_| ())
     }
@@ -421,6 +487,7 @@ impl Accounts {
         credential: &NewCredential,
         label: &str,
         link: Option<(LinkPurpose, &str)>,
+        signed_in: Option<&str>,
         now: u64,
         session: Option<[u8; 32]>,
     ) -> BridgeResult<Option<String>> {
@@ -450,6 +517,24 @@ impl Accounts {
                     .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
                 if holder.disabled_at.is_some() {
                     return Err(account_disabled(account).into());
+                }
+                if let Some(session) = signed_in {
+                    let theirs = sqlx::query(
+                        "SELECT 1 FROM sessions WHERE hash = $1 AND account = $2 AND expires_at > $3",
+                    )
+                    .bind(hash(session))
+                    .bind(account)
+                    .bind(secs(now))
+                    .fetch_optional(&mut *connection)
+                    .await?
+                    .is_some();
+                    if !theirs {
+                        return Err(BridgeError::new(
+                            "invalid_link",
+                            "this browser is no longer signed in to that account",
+                        )
+                        .into());
+                    }
                 }
                 if let Some((purpose, token)) = link {
                     let live = live_link(connection, purpose, token, now).await?;
@@ -517,6 +602,8 @@ impl Accounts {
                 .bind(secs(now))
                 .execute(&mut *connection)
                 .await?;
+                // An account made on first connect is secured by its first passkey.
+                tenants::secure_in(connection, &holder, "passkey", now).await?;
                 // The owner can sign in now: the hub is claimed, and no claim code it
                 // printed works any more (`claim.rs`).
                 if holder.owner {
@@ -796,12 +883,13 @@ fn check_name<'a>(id: &str, name: &'a str) -> BridgeResult<&'a str> {
     Ok(name)
 }
 
-/// `create`, inside a transaction the caller holds; `name` already checked.
+/// `create`, inside a transaction the caller holds, in `tenant`; `name` already checked.
 async fn create_in(
     connection: &mut AnyConnection,
     id: &str,
     name: &str,
     owner: bool,
+    tenant: &str,
     now: u64,
 ) -> Result<(), Failed> {
     if account_in(connection, id).await?.is_some() {
@@ -816,13 +904,18 @@ async fn create_in(
             return Err(BridgeError::new("owner_exists", "this hub already has an owner").into());
         }
     }
-    sqlx::query("INSERT INTO accounts (id, name, owner, created_at) VALUES ($1, $2, $3, $4)")
-        .bind(id)
-        .bind(name)
-        .bind(i64::from(owner))
-        .bind(secs(now))
-        .execute(&mut *connection)
-        .await?;
+    sqlx::query(
+        "INSERT INTO accounts (id, name, owner, created_at, tenant) VALUES ($1, $2, $3, $4, $5)",
+    )
+    .bind(id)
+    .bind(name)
+    .bind(i64::from(owner))
+    .bind(secs(now))
+    .bind(tenant)
+    .execute(&mut *connection)
+    .await?;
+    let event = if owner { "account.owner_created" } else { "account.created" };
+    tenants::record_in(connection, tenant, id, event, "", now).await?;
     Ok(())
 }
 
