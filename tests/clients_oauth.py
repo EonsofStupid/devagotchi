@@ -234,7 +234,14 @@ class Callback:
                 pass
 
             def do_GET(self):
-                callback.params = dict(urllib.parse.parse_qsl(urllib.parse.urlsplit(self.path).query))
+                # Only the redirect counts: Chrome then asks for /favicon.ico as well.
+                parts = urllib.parse.urlsplit(self.path)
+                if parts.path != "/callback" or callback.params is not None:
+                    self.send_response(404)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                callback.params = dict(urllib.parse.parse_qsl(parts.query))
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain")
                 self.end_headers()
@@ -592,7 +599,7 @@ def main() -> int:
         assert hub.poll() is None, log.read_text()
         with sync_playwright() as p:
             browser = p.chromium.launch(channel=args.channel)
-            versions["browser"] = f"{browser.browser_type.name} {browser.version}"
+            versions["browser"] = f"{args.channel or browser.browser_type.name} {browser.version}"
             page = browser.new_context().new_page()
             cdp = page.context.new_cdp_session(page)
             cdp.send("WebAuthn.enable")
