@@ -19,6 +19,21 @@ AI clients connect to `https://<DEVAGOTCHI_DOMAIN>/mcp`: they register themselve
 each one once with your passkey, and the hub issues and checks their tokens itself
 (`crates/hub/README.md`, "AI clients sign in with the hub itself").
 
+## The image
+
+GitHub builds the hub image from every commit that lands on `main` (and every release tag),
+natively on x86_64 and ARM64, and publishes one multi-arch image to GHCR
+(`.github/workflows/image.yml`): `:main` and `:sha-<commit>` for main, the version and
+`:latest` for a release. Each carries a signed build-provenance attestation, so you can check
+the image you pulled was built by this repository's workflow from a given commit:
+
+```bash
+gh attestation verify oci://ghcr.io/eonsofstupid/devagotchi:main --owner EonsofStupid
+```
+
+Pin a commit with `DEVAGOTCHI_IMAGE=ghcr.io/eonsofstupid/devagotchi:sha-<commit>`, or build
+from this checkout with `docker compose up --build`.
+
 ## What runs
 
 | Service | What it is | Reached from |
