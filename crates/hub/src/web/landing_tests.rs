@@ -42,6 +42,7 @@ fn a_claimed_hub_shows_the_whole_product_page() {
         ("connect", "id=\"connect\""),
         ("self-host", "id=\"self-host\""),
         ("the one command", "docker compose up -d"),
+        ("kept current", "<code>install.sh</code>"),
         ("FAQ", "id=\"faq\""),
         ("closing", "Give your AI the whole space. Keep the keys."),
         ("footer", "<a href=\"/privacy\">Privacy</a>"),

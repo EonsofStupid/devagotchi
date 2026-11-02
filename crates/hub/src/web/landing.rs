@@ -327,6 +327,9 @@ docker compose up -d</pre>\
 <li>Postgres has no network at all. The hub reaches it over a Unix socket, so there is no \
 database password to keep.</li>\
 <li>Caddy gets the certificate for your domain.</li>\
+<li>On a Debian or Ubuntu server, <code>install.sh</code> does all of this and keeps the hub \
+current: each new image is deployed after a backup and kept only if the hub comes up healthy. \
+The database is backed up nightly too.</li>\
 <li>GitHub builds the image for x86_64 and ARM64 from every commit on main, with signed build \
 provenance you can check.</li></ul>\
 <p class=\"hosted\">Rather not run it? Use the same hub hosted at devagotchi.com, free during \
