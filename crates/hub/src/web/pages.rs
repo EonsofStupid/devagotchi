@@ -146,24 +146,59 @@ pub fn message(
     )
 }
 
-/// `/` for someone not signed in: what this is, and one way in.
-pub fn home(hub_accounts: bool) -> Response {
-    let way_in = if hub_accounts {
-        "<p><a class=\"button primary\" href=\"/auth/login?return_to=/account\">Sign in</a></p>\
-<p class=\"meta\">You sign in with a passkey. <a href=\"/docs\">How it works</a></p>"
-    } else {
-        "<p><a class=\"button primary\" href=\"/auth/login?return_to=/account\">Sign in with Shippin</a></p>\
-<p class=\"meta\">A Shippin account is free. <a href=\"/docs\">How it works</a></p>"
-    };
-    html(
-        StatusCode::OK,
-        "Your AI, on your machines",
-        &format!(
-            "<h1>Your AI, on your machines</h1>\
-<p>Devagotchi lets Claude, Codex and your other AIs work on your own servers and PCs, and asks \
-you on your phone before anything that needs your say.</p>{way_in}"
+/// What `/` shows someone not signed in.
+pub enum Front {
+    /// A hub with its own accounts whose owner cannot sign in yet: claim it.
+    Unclaimed,
+    /// A hub with its own accounts: sign in with a passkey.
+    Passkeys,
+    /// A hub that signs people in with Shippin (Nomen).
+    Shippin,
+}
+
+/// `/` for someone not signed in: what this is, where an AI connects, and one way in. The
+/// address is this hub's own `public_url`, never a hosted one.
+pub fn home(front: Front, public_url: &str) -> Response {
+    let mcp = escape(&format!("{}/mcp", public_url.trim_end_matches('/')));
+    let about = "<p>Devagotchi lets Claude, ChatGPT and your other AIs work on your own servers \
+and PCs through this hub, and asks you on your phone before anything that needs your say.</p>";
+    let (title, body) = match front {
+        Front::Unclaimed => (
+            "A new Devagotchi hub",
+            format!(
+                "<h1>A new Devagotchi hub</h1>{about}\
+<p>Nobody owns this hub yet. Claiming it makes its owner's passkey: the owner reaches every \
+machine on it and approves every AI that connects.</p>\
+<p><a class=\"button primary\" href=\"/claim\">Claim this hub</a></p>\
+<p class=\"meta\">Claiming takes the code the hub printed in its log when it started. \
+<a href=\"/docs\">How it works</a></p>"
+            ),
         ),
-    )
+        Front::Passkeys => (
+            "Your AI, on your machines",
+            format!(
+                "<h1>Your AI, on your machines</h1>{about}\
+<p><a class=\"button primary\" href=\"/auth/login?return_to=/account\">Sign in</a></p>\
+<p class=\"meta\">You sign in with a passkey. <a href=\"/docs\">How it works</a></p>\
+<h2>Connect an AI</h2>\
+<p>Add this hub to any AI app that takes a remote MCP server (in Claude: a custom \
+connector) at <code>{mcp}</code>. The app signs in with this hub, and you approve it once \
+with your passkey.</p>"
+            ),
+        ),
+        Front::Shippin => (
+            "Your AI, on your machines",
+            format!(
+                "<h1>Your AI, on your machines</h1>{about}\
+<p><a class=\"button primary\" href=\"/auth/login?return_to=/account\">Sign in with Shippin</a></p>\
+<p class=\"meta\">A Shippin account is free. <a href=\"/docs\">How it works</a></p>\
+<h2>Connect an AI</h2>\
+<p>AI apps connect at <code>{mcp}</code> and sign in with Shippin. \
+<a href=\"/docs\">How to connect Claude</a></p>"
+            ),
+        ),
+    };
+    html(StatusCode::OK, title, &body)
 }
 
 pub fn account(viewer: &Viewer<'_>, machines: &[Machine]) -> Response {

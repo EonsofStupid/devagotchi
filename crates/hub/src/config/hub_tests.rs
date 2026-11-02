@@ -186,3 +186,16 @@ fn a_hub_without_nomen_takes_no_other_issuers_tokens() {
         serde_json::json!([{ "issuer": "https://x.example", "audiences": ["a"] }]);
     assert!(refused(&trusting).contains("trusted_issuers"));
 }
+
+#[test]
+fn the_claim_code_lives_as_long_as_the_config_says() {
+    assert_eq!(parse(&hub()).unwrap().token_config().claim_secs, 24 * 3600);
+    let mut config = hub();
+    config["auth"]["tokens"] = serde_json::json!({ "claim_secs": 900 });
+    let tokens = parse(&config).unwrap().token_config();
+    assert_eq!((tokens.claim_secs, tokens.access_secs), (900, 15 * 60));
+    for bad in [0, 59, 7 * 24 * 3600 + 1] {
+        config["auth"]["tokens"] = serde_json::json!({ "claim_secs": bad });
+        assert!(refused(&config).contains("claim_secs"), "{bad}");
+    }
+}

@@ -8,12 +8,22 @@ cp .env.example .env        # set DEVAGOTCHI_DOMAIN to the name that points at t
 docker compose up -d
 ```
 
-Then make the owner's passkey: run the command below on the box, and open the link it
-prints (once, for 15 minutes) on the phone or computer that will hold the passkey.
+Then claim it: the hub prints a claim link to its log when it starts. Open that link on the
+phone or computer that will hold your passkey, give your name, and press **Claim this hub
+and make my passkey**. You are signed in as its owner.
 
 ```bash
-docker compose exec hub devagotchi hub owner --state-dir /var/lib/devagotchi --config /etc/devagotchi/hub.json
+docker compose logs hub | grep -A1 "Claim it in a browser"
+#   https://<DEVAGOTCHI_DOMAIN>/claim#XXXX-XXXX-XXXX-XXXX-XXXX-XXXX
 ```
+
+Until then, `https://<DEVAGOTCHI_DOMAIN>/` offers only the claim, and only the code from the
+log claims it: reading the log takes this box or its container platform, so nobody who just
+found the address can. The code works for a day (`claim_secs`); `docker compose restart hub`
+prints a new one, and only the newest works. Your first passkey ends it for good. On the box,
+`docker compose exec hub devagotchi hub owner --state-dir /var/lib/devagotchi --config
+/etc/devagotchi/hub.json` prints a one-time owner link instead, and later adds passkeys
+(`crates/hub/README.md`).
 
 AI clients connect to `https://<DEVAGOTCHI_DOMAIN>/mcp`: they register themselves, you approve
 each one once with your passkey, and the hub issues and checks their tokens itself
@@ -60,7 +70,7 @@ Everything is in `.env`; each has a default (`.env.example` lists them).
 | `DEVAGOTCHI_PG_MAX_CONNECTIONS` | `50` | Each hub instance holds up to 16. |
 | `DEVAGOTCHI_PG_SLOW_MS` | `500` | Statements slower than this are logged. |
 
-The defaults suit a 2 GB box. The hub's own settings (token lifetimes, limits) go in its config,
+The defaults suit a 2 GB box. The hub's own settings (token lifetimes, the claim code's, limits) go in its config,
 `configs.hub` in `compose.yaml` (`crates/hub/README.md`).
 
 ## Checking it
@@ -69,7 +79,10 @@ The defaults suit a 2 GB box. The hub's own settings (token lifetimes, limits) g
 docker compose ps                                   # all three healthy or running
 curl -fsS https://<DEVAGOTCHI_DOMAIN>/healthz       # the hub answers
 docker compose logs hub | grep "ready"              # "devagotchi hub ready: … auth hub accounts"
+curl -fsS https://<DEVAGOTCHI_DOMAIN>/ | grep -o "Claim this hub\|Sign in" | head -1
 ```
 
 CI brings this stack up on every change (`hub (compose)` in `.github/workflows/ci.yml`) and
-checks the hub answers through Caddy and keeps its tables in this Postgres.
+checks the hub answers through Caddy, keeps its tables in this Postgres, and is claimed with
+the code from its log; `e2e` claims a fresh hub in Chromium with a virtual passkey
+(`tests/claim_browser.py`).

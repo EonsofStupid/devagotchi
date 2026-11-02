@@ -460,6 +460,23 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     let passkeys = accounts
         .clone()
         .and_then(|accounts| web::HubSignIn::new(config.clone(), accounts).map(Arc::new));
+    // A hub whose owner cannot sign in yet prints a new claim code each time it starts, for
+    // its owner to claim it at /claim (`accounts/claim.rs`); it replaces the last one.
+    let claim_code = match (&passkeys, &accounts) {
+        (Some(_), Some(accounts)) => accounts.issue_claim_code().await?,
+        _ => None,
+    };
+    if claim_code.is_some() {
+        // That a code was issued, and when; never the code.
+        audit.record(&audit::AuditEntry {
+            subject: "hub",
+            via: "start",
+            tool: "account.claim_code",
+            broker: "",
+            operation_id: "",
+            outcome: "ok",
+        })?;
+    }
     let push = match (&config.web, &passkeys) {
         (None, None) => None,
         _ => Some(Arc::new(push::Push::open(
@@ -550,9 +567,14 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             "devagotchi hub: signing people in over plain http on loopback, for tests only: its cookies reach any other service on this host's loopback"
         );
     }
-    if state.passkeys.is_some() && config.owner_id().is_none() {
+    // The claim link is the one secret the hub writes to its log, on purpose: reading the
+    // log takes the host or its container platform, which is what owning the hub takes.
+    if let Some(claim) = &claim_code {
         eprintln!(
-            "devagotchi hub has no owner yet: on this host, run devagotchi hub owner --state-dir {} --config {}",
+            "devagotchi hub is unclaimed: nobody can sign in as its owner yet. Claim it in a browser before {}:\n  {}/claim#{}\nRestarting the hub prints a new code. Or, on this host: devagotchi hub owner --state-dir {} --config {}",
+            web::utc(claim.expires_at),
+            config.public_url.trim_end_matches('/'),
+            claim.code,
             state_dir.display(),
             config_path.display()
         );

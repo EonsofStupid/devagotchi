@@ -138,8 +138,39 @@ user verification on every ceremony). Nothing else needs to be running. `rp_id` 
 passkeys' relying party: the hub's host or a parent domain of it, and it can never change
 for passkeys already made. Plain `http` works only on loopback, for tests.
 
-The owner is made on the hub's host, by whoever can write its state directory (the same
-trust as `hub enroll`):
+### Claiming a new hub (16c)
+
+A new hub is claimed in a browser, with a code only someone who can read its log has. Until
+its owner has a passkey, each start of the hub prints a claim link to its log (with Docker
+Compose: `docker compose logs hub`):
+
+```
+devagotchi hub is unclaimed: nobody can sign in as its owner yet. Claim it in a browser before 2026-11-02 18:00 UTC:
+  https://hub.example.com/claim#XXXX-XXXX-XXXX-XXXX-XXXX-XXXX
+```
+
+Open it on the device that will hold the owner's passkey (or open `/claim` and type the
+code; any case, dashes optional), give the owner a name and press **Claim this hub and make
+my passkey**: that makes the owner's account and their passkey, and signs them in. The
+landing page (`/`) of an unclaimed hub offers nothing but the claim; once claimed it offers
+sign-in and says where AIs connect (`<public_url>/mcp`).
+
+- The code is 120 random bits; the store keeps only its SHA-256 and when it stops working
+  (`auth.tokens.claim_secs`, a day by default). Each start replaces it, so only the newest
+  code printed works; restart the hub for a new one.
+- Claiming again with the same code is how a cancelled passkey prompt is retried: it
+  supersedes the earlier link. The owner's first passkey, made by a claim or by
+  `devagotchi hub owner`, deletes the code, and a claimed hub refuses every claim.
+- Why a code and not "the first visitor owns it": a new hub is usually on the internet
+  before anyone claims it. Portainer stops its setup after five minutes for this reason,
+  Open WebUI documents it as an accepted risk, and Pangolin's users asked for a secret
+  (issue 1053). Reading the log takes the host or its container platform, which is what
+  owning the hub should take; Jenkins unlocks its setup the same way.
+
+### The owner on the hub's host
+
+On the host, whoever can write the state directory (the same trust as `hub enroll`) makes
+the owner's link directly:
 
 ```bash
 devagotchi hub owner --state-dir DIR --config /etc/devagotchi/hub.json [--name Jesse]
@@ -193,7 +224,8 @@ limits are the config's, each with a default:
   "access_secs": 900,       // an access token
   "refresh_secs": 604800,   // an AI connection unused (decision 4: 7 days)
   "code_secs": 120,         // an authorization code
-  "max_clients": 10000      // registered clients kept; the oldest unused make room
+  "max_clients": 10000,     // registered clients kept; the oldest unused make room
+  "claim_secs": 86400       // the claim code an unclaimed hub prints (60 s to 7 days)
 } }
 ```
 

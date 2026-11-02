@@ -753,8 +753,14 @@ async fn the_public_pages_need_no_sign_in_and_name_the_operator() {
     }
     let privacy = w.get("/privacy", None).await.text().await.unwrap();
     assert!(privacy.contains("AngryVibes LLC"));
+    // The address an AI connects to is this hub's own, never a hosted one.
     let docs = w.get("/docs", None).await.text().await.unwrap();
-    assert!(docs.contains("https://app.devagotchi.com/mcp"));
+    assert!(
+        docs.contains(&format!("<code>{}/mcp</code>", w.url)),
+        "{docs}"
+    );
+    assert!(!docs.contains("app.devagotchi.com"), "{docs}");
+    assert!(docs.contains("sign in with your Shippin account"), "{docs}");
 }
 
 #[tokio::test]

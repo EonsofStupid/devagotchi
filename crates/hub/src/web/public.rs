@@ -3,12 +3,13 @@
 //! (Claude's Connectors Directory, OpenAI's plugin directory), so they describe this hub as
 //! it runs, never planned behavior. Static text, no sign-in, no script.
 
-use axum::{http::StatusCode, response::Response};
+use axum::{extract::State, http::StatusCode, response::Response};
 
 use super::pages;
+use crate::AppState;
 
 /// The date every page below was last changed. Change it with the text.
-const UPDATED: &str = "24 October 2026";
+const UPDATED: &str = "1 November 2026";
 const OPERATOR: &str = "AngryVibes LLC";
 const REPO: &str = "https://github.com/EonsofStupid/devagotchi";
 
@@ -24,7 +25,30 @@ fn page(title: &str, body: &str) -> Response {
     )
 }
 
-pub async fn docs() -> Response {
+/// `/docs`: what Devagotchi is and how to connect an AI to this hub, at this hub's own
+/// address and with the sign-in it runs.
+pub async fn docs(State(state): State<AppState>) -> Response {
+    let mcp = pages::escape(&format!(
+        "{}/mcp",
+        state.hub.config.public_url.trim_end_matches('/')
+    ));
+    let connect = if state.passkeys.is_some() {
+        format!(
+            "<p>In Claude (web, desktop or mobile): Customize, Connectors, Add, <em>Add custom connector</em>. \
+Name it Devagotchi and use the URL <code>{mcp}</code>; leave the OAuth fields empty. Claude \
+registers itself with this hub: connect, sign in with your passkey, and approve it.</p>\
+<p>Any other AI app that takes a remote MCP server with OAuth connects the same way, at the \
+same URL. You see and end every connection from your account.</p>"
+        )
+    } else {
+        format!(
+            "<p>In Claude (web, desktop or mobile): Customize, Connectors, Add, <em>Add custom connector</em>. \
+Name it Devagotchi and use the URL <code>{mcp}</code>. On the next step \
+choose <em>Use your own OAuth client</em> and enter the client ID <code>396558926876835844</code>. \
+Connect, and sign in with your Shippin account.</p>\
+<p>Other AI apps need sign-in support that is not finished yet; this page will say when it is.</p>"
+        )
+    };
     page(
         "Docs",
         &format!(
@@ -33,12 +57,7 @@ pub async fn docs() -> Response {
 you sign in to. Each machine runs a broker that owns its jobs and a link that dials out to the \
 hub; nothing on the machine listens on the network, and the services run as a dedicated \
 account, never as root.</p>\
-<h2>Connect Claude</h2>\
-<p>In Claude (web, desktop or mobile): Customize, Connectors, Add, <em>Add custom connector</em>. \
-Name it Devagotchi and use the URL <code>https://app.devagotchi.com/mcp</code>. On the next step \
-choose <em>Use your own OAuth client</em> and enter the client ID <code>396558926876835844</code>. \
-Connect, and sign in with your Shippin account.</p>\
-<p>Other AI apps need sign-in support that is not finished yet; this page will say when it is.</p>\
+<h2>Connect Claude</h2>{connect}\
 <h2>Add a machine</h2>\
 <p>A machine joins a hub with a one-time code from the hub's operator. The Linux installer \
 (x86_64 and ARM64, systemd) and the Windows installer are in the \

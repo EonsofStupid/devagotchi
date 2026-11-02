@@ -14,7 +14,10 @@
 //!   Content-Security-Policy.
 //! - The owner's link is `/owner#<token>`: the token never reaches a request line or a log.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use axum::{
     Json,
@@ -45,6 +48,8 @@ pub struct HubSignIn {
     rp_id: String,
     origin: String,
     secure: bool,
+    /// Seen claimed: the owner has a passkey (`claimed`).
+    claimed: AtomicBool,
 }
 
 /// `scheme://host[:port]` of the hub's public URL, as a browser writes an origin.
@@ -70,12 +75,35 @@ impl HubSignIn {
             config,
             rp_id,
             origin,
+            claimed: AtomicBool::new(false),
         })
     }
 
     /// The accounts behind this sign-in, for the hub's own authorization server.
     pub(super) fn accounts(&self) -> &Arc<Accounts> {
         &self.accounts
+    }
+
+    /// Whether the hub's owner can sign in yet (`accounts/claim.rs`). Once they can, that
+    /// does not change, so the store is asked only until then. `Err` when it failed.
+    pub(super) async fn claimed(&self) -> Result<bool, ()> {
+        if self.claimed.load(Ordering::Relaxed) {
+            return Ok(true);
+        }
+        let accounts = self.accounts.clone();
+        match tokio::spawn(async move { accounts.claimed().await }).await {
+            Ok(Ok(claimed)) => {
+                if claimed {
+                    self.claimed.store(true, Ordering::Relaxed);
+                }
+                Ok(claimed)
+            }
+            Ok(Err(error)) => {
+                eprintln!("devagotchi-hub: account store: {}", error.message);
+                Err(())
+            }
+            Err(_) => Err(()),
+        }
     }
 
     fn relying(&self) -> Relying<'_> {
@@ -156,7 +184,7 @@ impl HubSignIn {
 
     /// An owner link names the owner the config already knows, if it knows one: a store
     /// whose owner was made without the config's id is refused before its link is spent.
-    fn owner_mismatch(&self, account: &str) -> Option<Response> {
+    pub(super) fn owner_mismatch(&self, account: &str) -> Option<Response> {
         let known = self.config.owner_id()?;
         (known != account).then(|| {
             eprintln!(
@@ -216,15 +244,17 @@ impl HubSignIn {
         response
     }
 
-    /// The owner made or signed in: every holder of the config now knows them.
+    /// The owner made a passkey or signed in with one: every holder of the config now
+    /// knows them, and the hub is claimed.
     fn learn_owner(&self, account: &str) {
+        self.claimed.store(true, Ordering::Relaxed);
         if let Err(why) = self.config.learn_owner(account) {
             eprintln!("devagotchi-hub: {why}");
         }
     }
 }
 
-fn refuse(status: StatusCode, code: &str, message: &str) -> Response {
+pub(super) fn refuse(status: StatusCode, code: &str, message: &str) -> Response {
     let mut response = (status, Json(json!({ "error": code, "message": message }))).into_response();
     response
         .headers_mut()
@@ -232,7 +262,7 @@ fn refuse(status: StatusCode, code: &str, message: &str) -> Response {
     response
 }
 
-fn not_own_page() -> Response {
+pub(super) fn not_own_page() -> Response {
     refuse(
         StatusCode::FORBIDDEN,
         "not_same_origin",
@@ -248,7 +278,7 @@ fn expired() -> Response {
     )
 }
 
-fn store_failed(message: &str) -> Response {
+pub(super) fn store_failed(message: &str) -> Response {
     eprintln!("devagotchi-hub: account store: {message}");
     refuse(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -276,7 +306,10 @@ fn json_only(headers: &HeaderMap) -> Result<(), Response> {
 }
 
 /// The request body as `T`, parsed only after the origin check has passed.
-fn body<T: serde::de::DeserializeOwned>(headers: &HeaderMap, raw: &[u8]) -> Result<T, Response> {
+pub(super) fn body<T: serde::de::DeserializeOwned>(
+    headers: &HeaderMap,
+    raw: &[u8],
+) -> Result<T, Response> {
     json_only(headers)?;
     serde_json::from_slice(raw).map_err(|_| {
         refuse(
@@ -292,7 +325,7 @@ fn bytes(field: &str) -> Option<Vec<u8>> {
 }
 
 /// The page for a script: the hub's one passkey script, nothing else.
-fn scripted(title: &str, body: &str) -> Response {
+pub(super) fn scripted(title: &str, body: &str) -> Response {
     pages::scripted(StatusCode::OK, title, body, "/assets/passkey.js")
 }
 
@@ -352,10 +385,19 @@ pub async fn register_options(
         Ok(input) => input,
         Err(refused) => return refused,
     };
+    registration(hub, input.link, false).await
+}
+
+/// The options to make a passkey with the owner link `link`: who it is for, the passkeys it
+/// must not make again, and a register challenge (also set as the challenge cookie). With
+/// `hand_back`, the answer carries `link` too, for the page that just got it by claiming
+/// the hub (`claim.rs`).
+pub(super) async fn registration(hub: Arc<HubSignIn>, link: String, hand_back: bool) -> Response {
     let accounts = hub.accounts.clone();
+    let checked = link.clone();
     let found = tokio::spawn(async move {
         let (account, replaces) = accounts
-            .check_link_replacing(LinkPurpose::Owner, &input.link)
+            .check_link_replacing(LinkPurpose::Owner, &checked)
             .await?;
         let holder = accounts.get(&account).await?;
         // A replacing link removes the account's passkeys, so none is excluded: the device
@@ -381,32 +423,33 @@ pub async fn register_options(
         .iter()
         .map(|p| json!({ "type": "public-key", "id": URL_SAFE_NO_PAD.encode(&p.id) }))
         .collect();
-    hub.with_challenge(
-        &challenge,
-        json!({
-            "challenge": URL_SAFE_NO_PAD.encode(&challenge),
-            "rp": { "id": hub.rp_id, "name": "Devagotchi" },
-            "user": {
-                "id": URL_SAFE_NO_PAD.encode(account.id.as_bytes()),
-                "name": account.name,
-                "displayName": account.name,
-            },
-            // Ed25519 first, then P-256 (nearly every passkey), then RSA (older Windows Hello).
-            "pubKeyCredParams": [
-                { "type": "public-key", "alg": -8 },
-                { "type": "public-key", "alg": -7 },
-                { "type": "public-key", "alg": -257 },
-            ],
-            "timeout": crate::accounts::CHALLENGE_TTL_SECS * 1000,
-            "attestation": "none",
-            "authenticatorSelection": {
-                "residentKey": "required",
-                "requireResidentKey": true,
-                "userVerification": "required",
-            },
-            "excludeCredentials": exclude,
-        }),
-    )
+    let mut options = json!({
+        "challenge": URL_SAFE_NO_PAD.encode(&challenge),
+        "rp": { "id": hub.rp_id, "name": "Devagotchi" },
+        "user": {
+            "id": URL_SAFE_NO_PAD.encode(account.id.as_bytes()),
+            "name": account.name,
+            "displayName": account.name,
+        },
+        // Ed25519 first, then P-256 (nearly every passkey), then RSA (older Windows Hello).
+        "pubKeyCredParams": [
+            { "type": "public-key", "alg": -8 },
+            { "type": "public-key", "alg": -7 },
+            { "type": "public-key", "alg": -257 },
+        ],
+        "timeout": crate::accounts::CHALLENGE_TTL_SECS * 1000,
+        "attestation": "none",
+        "authenticatorSelection": {
+            "residentKey": "required",
+            "requireResidentKey": true,
+            "userVerification": "required",
+        },
+        "excludeCredentials": exclude,
+    });
+    if hand_back {
+        options["link"] = link.into();
+    }
+    hub.with_challenge(&challenge, options)
 }
 
 #[derive(Deserialize)]
