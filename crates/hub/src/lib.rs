@@ -18,12 +18,15 @@ mod hub;
 mod identity;
 mod join;
 mod link;
+mod mail;
 mod nomen;
 mod oauth;
 mod push;
 mod run;
 mod store;
 mod tenant_machines;
+#[cfg(test)]
+mod provider_tests;
 #[cfg(test)]
 mod tenant_tests;
 #[cfg(test)]
@@ -567,9 +570,21 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     } else {
         None
     };
-    let passkeys = accounts
-        .clone()
-        .and_then(|accounts| web::HubSignIn::new(config.clone(), accounts).map(Arc::new));
+    // Sign in with Google, GitHub, OpenID Connect and the email link: their secrets are read
+    // now, so one that is missing stops the start rather than a sign-in later.
+    let providers = if config.has_accounts() {
+        Some(web::Providers::from_config(&config).map_err(|why| BridgeError::new("invalid_config", why))?)
+    } else {
+        None
+    };
+    let passkeys = accounts.clone().and_then(|accounts| {
+        web::HubSignIn::new(config.clone(), accounts)
+            .map(|hub| match providers {
+                Some(providers) => hub.with_providers(providers),
+                None => hub,
+            })
+            .map(Arc::new)
+    });
     // A one-owner hub whose config names neither its owner nor its operators may be claimed
     // from the browser (`accounts/claim.rs`); its code is issued once the hub listens, below.
     // A hosted hub (`tenancy.mode multi`) is never claimed.

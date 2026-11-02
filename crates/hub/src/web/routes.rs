@@ -13,9 +13,9 @@ use axum::{
 use serde::Deserialize;
 
 use super::{
-    Exchange, SessionToken, WebLogin, approvals, claim, device, machines, notify, oauth,
+    Exchange, SessionToken, WebLogin, approvals, claim, device, email, machines, notify, oauth,
     pages::{self, Viewer},
-    passkeys, public,
+    passkeys, providers, public,
 };
 use crate::{
     AppState,
@@ -44,6 +44,10 @@ pub fn router(hub_authorization: bool) -> Router<AppState> {
         .route("/passkey/sign-in/options", post(passkeys::sign_in_options))
         .route("/passkey/sign-in", post(passkeys::sign_in))
         .route("/assets/passkey.js", get(passkeys::script))
+        .route("/auth/provider/{name}", get(providers::start))
+        .route("/auth/provider/{name}/callback", get(providers::callback))
+        .route("/auth/email", get(email::page).post(email::ask))
+        .route("/auth/email/verify", post(email::verify))
         .route("/api/v1/me", get(me))
         .route("/api/v1/machines", post(machines::add_json))
         .route("/approvals", get(approvals::list))
@@ -342,6 +346,15 @@ async fn account(State(state): State<AppState>, headers: HeaderMap) -> Response 
                 }
                 _ => Vec::new(),
             };
+            let ways = state
+                .passkeys
+                .as_ref()
+                .map(|hub| hub.linking_ways())
+                .unwrap_or_default();
+            let linked = match &state.passkeys {
+                Some(hub) => hub.accounts().identities_of(&subject.id).await.unwrap_or_default(),
+                None => Vec::new(),
+            };
             pages::account(
                 &Viewer {
                     subject: &subject.id,
@@ -352,6 +365,8 @@ async fn account(State(state): State<AppState>, headers: HeaderMap) -> Response 
                         .provisional_until
                         .filter(|_| state.passkeys.is_some()),
                     events: &events,
+                    ways: &ways,
+                    linked: &linked,
                 },
                 &machines,
             )

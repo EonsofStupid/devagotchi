@@ -496,7 +496,7 @@ Increments, one PR each:
 | Increment | Scope | Exit |
 |---|---|---|
 | 57 | `tenancy.mode` (`single` default, `multi`) and `operators` from config or the environment; tenants in the store (add-only migration, existing accounts into the first tenant); accounts made on the first OAuth authorize or `/device` approval with no session, held to per-tenant quotas until secured (the anonymous-then-link upgrade); each tenant's own hash chain; machine names per tenant; no claim on a hosted hub | `tenant_tests.rs`: tenant A drives every MCP tool and account page with tenant B's ids, SQLite and Postgres; `tests/clients_oauth.py`: a new person connects the MCP SDK and Codex to a hosted hub with no claim and no passkey and calls `whoami` |
-| 58 | Sign in with Google, GitHub, an email link and Shippin (Nomen as generic OpenID Connect), each linkable to an account, a provisional one included | stub providers and a stub SMTP server in CI |
+| 58 | Sign in with Google, GitHub, an email link and Shippin (Nomen as generic OpenID Connect), each linkable to an account, a provisional one included | `provider_tests.rs`: stub OpenID Connect, GitHub and SMTP servers, in CI |
 | 59 | compose, `install.sh` and `hub-up.sh` carry the tenancy, operator and provider settings; `update.sh` brings the deploy files from the image's commit | `tests/deploy_scripts.sh`, `tests/proxmox_hub_up.py` |
 | 60 | the `devagotchi` schema, `tenant_id`-led keys and forced RLS | the hub's database role cannot read another tenant's rows |
 

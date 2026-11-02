@@ -176,10 +176,10 @@ gets an account and a tenant (`t-<uuid>`) of their own, made on the spot:
   account and its tenant, signs that browser in, and sends the code to the client: one
   click, no form, the AI working within seconds. "Sign in" is on the page for anyone who
   has an account.
-- **Securing never blocks.** Afterwards the account page offers a passkey (Google, GitHub,
-  an email link and Sign in with Shippin join it next), every page carries a line saying
-  the account is not secured, `/device`'s answer offers it, and `whoami` returns
-  `secure_url` and `provisional_until` so the AI says so too.
+- **Securing never blocks.** Afterwards the account page offers a passkey and every sign-in
+  the hub has (Google, GitHub, an email link, Sign in with Shippin: below), every page
+  carries a line saying the account is not secured, `/device`'s answer offers it, and
+  `whoami` returns `secure_url` and `provisional_until` so the AI says so too.
 - **Until it is secured** (the anonymous-then-link account upgrade: an anonymous account
   first, a real sign-in linked to it later), the account is reached only through the
   browser session that made it and the AI tokens that session approved; nothing can
@@ -206,6 +206,52 @@ gets an account and a tenant (`t-<uuid>`) of their own, made on the spot:
 
 Every account belongs to a tenant. On a one-owner hub there is one, and a store from
 before tenants moves its accounts into it when the hub opens it (an add-only migration).
+
+### Sign in with Google, GitHub, Shippin or an email link
+
+Besides passkeys, a hub with its own accounts signs people in with any of these, each a
+linked sign-in of the same account (`src/accounts/identities.rs`): signing in reaches the
+account it is linked to; else, for an `operators` identity, the owner; else the account a
+verified email already reaches; else one made on a hosted hub. From the account page, or
+from a browser signed in to an account nobody secured yet, it is linked to that account,
+which secures it. A sign-in already linked elsewhere is refused, never moved.
+
+```jsonc
+"auth": { "mode": "hub",
+  "providers": [
+    { "kind": "google", "client_id_env": "DEVAGOTCHI_GOOGLE_CLIENT_ID",
+      "client_secret_env": "DEVAGOTCHI_GOOGLE_CLIENT_SECRET" },
+    { "kind": "github", "client_id_env": "DEVAGOTCHI_GITHUB_CLIENT_ID",
+      "client_secret_env": "DEVAGOTCHI_GITHUB_CLIENT_SECRET" },
+    { "kind": "oidc", "name": "nomen", "label": "Shippin", "issuer": "https://id.shippin.cloud",
+      "client_id_env": "DEVAGOTCHI_NOMEN_CLIENT_ID", "client_secret_env": "DEVAGOTCHI_NOMEN_CLIENT_SECRET" }
+  ],
+  "email": { "smtp_url_env": "DEVAGOTCHI_SMTP_URL", "password_env": "DEVAGOTCHI_SMTP_PASSWORD",
+             "from": "Devagotchi <sign-in@devagotchi.com>" }
+}
+```
+
+- Client ids may be in the file (`client_id`) or the environment; secrets and the SMTP
+  password come only from the environment (set from the secret store) or a 0600 file
+  (`client_secret_file`, `password_file`). A variable a provider names that is not set
+  stops the hub at start.
+- Each provider's redirect URI is `<public_url>/auth/provider/<name>/callback`
+  (`…/google/callback`, `…/github/callback`, `…/nomen/callback`).
+- The flow is the authorization code with PKCE; `state`, the verifier and the OpenID nonce
+  ride in a short-lived `__Host-` cookie under the store's HMAC, so nothing is stored
+  until the sign-in comes back and any hub instance finishes it. Google and any OpenID
+  Connect provider are found from their issuer's discovery document; the ID token is
+  checked for `iss`, `aud`, `exp` and the nonce, and an email counts only with
+  `email_verified`. GitHub gives its numeric user id and its primary verified email
+  (scopes `read:user user:email`). `authorize_url`, `token_url` and `api_url` point a
+  `github` provider at GitHub Enterprise.
+- The email link: `smtps://user@host:465` or `smtp://user@host:587` (STARTTLS required);
+  `POST /auth/email` mails `<public_url>/auth/email#<token>` (256 bits, SHA-256 kept, once,
+  15 minutes) and answers the same for every address; the page it opens posts the token
+  from its one button, so a mail scanner that follows links spends nothing. Five links per
+  address an hour (`per_address_per_hour`), twenty per client address.
+- `src/provider_tests.rs` runs all of it against a stub OpenID Connect provider, a stub
+  GitHub and a stub mail server.
 
 ### Claiming a new hub (16c)
 

@@ -98,7 +98,8 @@ lives in this browser and the apps you connect, and nothing can recover it.</p>\
 
 /// The offer to secure an account nobody has secured yet, on the account page and the
 /// device page's answer: never in the way, always there.
-pub(super) fn secure_offer(lapses_at: u64, with_button: bool) -> String {
+/// `ways` is the other sign-ins this hub offers, ready to link (`HubSignIn::linking_ways`).
+pub(super) fn secure_offer(lapses_at: u64, with_button: bool, ways: &str) -> String {
     let button = if with_button {
         "<p><button class=\"button primary\" id=\"passkey-add\" disabled>Make a passkey</button></p>\
 <p class=\"meta\" id=\"passkey-status\" role=\"status\"></p>\
@@ -113,8 +114,7 @@ pub(super) fn secure_offer(lapses_at: u64, with_button: bool) -> String {
 <h2 id=\"secure-title\">Secure your account</h2>\
 <p>Your account is not secured yet. It lives in this browser and the AI apps you connected; if you \
 lose them, nothing can recover it. Unused, it ends on {until}.</p>{button}\
-<p class=\"meta\">A passkey is your phone's or computer's fingerprint, face or PIN. Signing in with \
-Google, GitHub, an email link or Shippin is coming to this page.</p></section>",
+<p class=\"meta\">A passkey is your phone's or computer's fingerprint, face or PIN.</p>{ways}</section>",
         until = pages::utc(lapses_at),
     )
 }

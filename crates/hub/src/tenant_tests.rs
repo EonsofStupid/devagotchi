@@ -11,19 +11,19 @@ use serde_json::{Value, json};
 use super::*;
 use crate::accounts::oauth::s256;
 
-struct Hosted {
-    url: String,
-    http: reqwest::Client,
-    accounts: Arc<accounts::Accounts>,
-    devices: Arc<devices::Devices>,
-    _dir: tempfile::TempDir,
+pub(crate) struct Hosted {
+    pub(crate) url: String,
+    pub(crate) http: reqwest::Client,
+    pub(crate) accounts: Arc<accounts::Accounts>,
+    pub(crate) devices: Arc<devices::Devices>,
+    pub(crate) dir: tempfile::TempDir,
 }
 
 /// A person's browser and AI client after their first connect.
-struct Person {
-    cookie: String,
-    token: String,
-    session: Option<String>,
+pub(crate) struct Person {
+    pub(crate) cookie: String,
+    pub(crate) token: String,
+    pub(crate) session: Option<String>,
 }
 
 async fn hosted() -> Hosted {
@@ -33,25 +33,38 @@ async fn hosted() -> Hosted {
 /// A hosted hub whose store is `url` (a Postgres database under test), or SQLite in its
 /// state directory.
 async fn hosted_on(store: Option<&str>) -> Hosted {
+    hosted_with(store, |_, _| json!({})).await
+}
+
+/// A hosted hub with more config: `extra(dir, url)` is merged in (its `auth` into `auth`).
+pub(crate) async fn hosted_with(
+    store: Option<&str>,
+    extra: impl FnOnce(&std::path::Path, &str) -> Value,
+) -> Hosted {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let dir = tempfile::tempdir().unwrap();
     let boards = dir.path().join("account-boards");
-    let config = Arc::new(
-        HubConfig::parse(
-            &json!({
-                "listen": "127.0.0.1:1",
-                "public_url": url,
-                "auth": { "mode": "hub" },
-                "tenancy": { "mode": "multi", "starts_per_hour": 100 },
-                "account_boards": { "dir": boards.to_string_lossy(), "free_limit": 5 },
-                "brokers": [{ "name": "wi1", "link": true }],
-                "grants": []
-            })
-            .to_string(),
-        )
-        .unwrap(),
-    );
+    let mut value = json!({
+        "listen": "127.0.0.1:1",
+        "public_url": url,
+        "auth": { "mode": "hub" },
+        "tenancy": { "mode": "multi", "starts_per_hour": 100 },
+        "account_boards": { "dir": boards.to_string_lossy(), "free_limit": 5 },
+        "brokers": [{ "name": "wi1", "link": true }],
+        "grants": []
+    });
+    for (key, more) in extra(dir.path(), &url).as_object().unwrap() {
+        match (key.as_str(), value.get_mut(key)) {
+            ("auth", Some(auth)) => {
+                for (k, v) in more.as_object().unwrap() {
+                    auth[k] = v.clone();
+                }
+            }
+            _ => value[key] = more.clone(),
+        }
+    }
+    let config = Arc::new(HubConfig::parse(&value.to_string()).unwrap());
     let store_url = store
         .map(str::to_string)
         .unwrap_or_else(|| store::sqlite_url(&dir.path().join("accounts.sqlite3")));
@@ -80,7 +93,9 @@ async fn hosted_on(store: Option<&str>) -> Hosted {
             downloads: None,
         },
         web: None,
-        passkeys: web::HubSignIn::new(config.clone(), accounts.clone()).map(Arc::new),
+        passkeys: web::HubSignIn::new(config.clone(), accounts.clone())
+            .map(|hub| hub.with_providers(web::Providers::from_config(&config).unwrap()))
+            .map(Arc::new),
     };
     let app = app(state);
     tokio::spawn(async move {
@@ -99,11 +114,11 @@ async fn hosted_on(store: Option<&str>) -> Hosted {
             .unwrap(),
         accounts,
         devices,
-        _dir: dir,
+        dir,
     }
 }
 
-fn set_cookie(response: &reqwest::Response, name: &str) -> Option<String> {
+pub(crate) fn set_cookie(response: &reqwest::Response, name: &str) -> Option<String> {
     response
         .headers()
         .get_all(header::SET_COOKIE)
@@ -113,7 +128,7 @@ fn set_cookie(response: &reqwest::Response, name: &str) -> Option<String> {
         .map(|v| v.split(';').next().unwrap().to_string())
 }
 
-fn query_param(url: &str, key: &str) -> Option<String> {
+pub(crate) fn query_param(url: &str, key: &str) -> Option<String> {
     url.split_once('?')?.1.split('&').find_map(|pair| {
         let (k, v) = pair.split_once('=')?;
         (k == key).then(|| {
@@ -125,7 +140,7 @@ fn query_param(url: &str, key: &str) -> Option<String> {
 }
 
 impl Hosted {
-    async fn get(&self, path: &str, cookie: Option<&str>) -> reqwest::Response {
+    pub(crate) async fn get(&self, path: &str, cookie: Option<&str>) -> reqwest::Response {
         let mut request = self.http.get(format!("{}{path}", self.url));
         if let Some(cookie) = cookie {
             request = request.header(header::COOKIE, cookie);
@@ -133,7 +148,7 @@ impl Hosted {
         request.send().await.unwrap()
     }
 
-    async fn form(
+    pub(crate) async fn form(
         &self,
         path: &str,
         cookie: Option<&str>,
@@ -150,14 +165,14 @@ impl Hosted {
         request.send().await.unwrap()
     }
 
-    async fn text(response: reqwest::Response) -> (u16, String) {
+    pub(crate) async fn text(response: reqwest::Response) -> (u16, String) {
         let status = response.status().as_u16();
         (status, response.text().await.unwrap())
     }
 
     /// Someone new connects an AI client: the consent page, one Connect, the code back at
     /// the client, the client's tokens. No sign-in, no form, no claim.
-    async fn first_connect(&self, app: &str) -> Person {
+    pub(crate) async fn first_connect(&self, app: &str) -> Person {
         let redirect = "http://127.0.0.1:9/callback";
         let registered: Value = self
             .http
@@ -286,7 +301,7 @@ impl Hosted {
         body.get("result").cloned().unwrap_or(body)
     }
 
-    async fn call(&self, person: &mut Person, tool: &str, arguments: Value) -> Value {
+    pub(crate) async fn call(&self, person: &mut Person, tool: &str, arguments: Value) -> Value {
         self.mcp(
             person,
             "tools/call",

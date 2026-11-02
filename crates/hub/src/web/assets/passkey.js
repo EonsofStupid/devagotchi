@@ -174,6 +174,14 @@
     });
   }
 
+  // The email link's page: the token after "#" goes into the form, and out of the address
+  // bar and the history.
+  const emailToken = document.getElementById("email-token");
+  if (emailToken && location.hash.length > 1) {
+    emailToken.value = location.hash.slice(1);
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+
   wire("passkey-register", register);
   wire("passkey-sign-in", signIn);
   wire("passkey-claim", claim);

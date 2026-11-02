@@ -320,7 +320,7 @@ pub async fn decide(
             }
             let offer = person
                 .provisional_until
-                .map(|until| super::hosted::secure_offer(until, false))
+                .map(|until| super::hosted::secure_offer(until, false, ""))
                 .unwrap_or_default();
             let mut page = pages::html(
                 StatusCode::OK,

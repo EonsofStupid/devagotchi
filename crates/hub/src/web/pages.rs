@@ -65,6 +65,10 @@ pub struct Viewer<'a> {
     pub unsecured_until: Option<u64>,
     /// The latest steps in the account's tenant, newest first.
     pub events: &'a [crate::accounts::tenants::Event],
+    /// The other sign-ins the offer to secure the account lists, ready to link.
+    pub ways: &'a str,
+    /// The sign-ins linked to the account (Google, GitHub, email, Shippin…).
+    pub linked: &'a [crate::accounts::identities::Linked],
 }
 
 pub fn html(status: StatusCode, title: &str, body: &str) -> Response {
@@ -245,8 +249,30 @@ autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"
 <p class=\"actions\"><button class=\"approve\" type=\"submit\">Get a one-time code</button></p></form>";
     let secure = viewer
         .unsecured_until
-        .map(|until| super::hosted::secure_offer(until, true))
+        .map(|until| super::hosted::secure_offer(until, true, viewer.ways))
         .unwrap_or_default();
+    // A secured hub account: the sign-ins that reach it, and the others it may add.
+    let sign_ins = if viewer.hub_account && viewer.unsecured_until.is_none() {
+        let rows: String = viewer
+            .linked
+            .iter()
+            .map(|linked| {
+                format!(
+                    "<li>{}{}</li>",
+                    escape(&linked.provider),
+                    linked
+                        .email
+                        .as_deref()
+                        .map(|email| format!(" ({})", escape(email)))
+                        .unwrap_or_default()
+                )
+            })
+            .collect();
+        let rows = if rows.is_empty() { "<li>Passkeys only</li>".to_string() } else { rows };
+        format!("<h2>How you sign in</h2><ul class=\"linked\">{rows}</ul>{}", viewer.ways)
+    } else {
+        String::new()
+    };
     let history = if viewer.events.is_empty() {
         String::new()
     } else {
@@ -270,7 +296,7 @@ autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"
     let body = format!(
         "<h1>Signed in as {}</h1>\
 <p class=\"meta\">{kind} ID <code>{}</code></p>{owner}{secure}\
-<h2>Your machines</h2>{machines}{add}{history}\
+<h2>Your machines</h2>{machines}{add}{sign_ins}{history}\
 <form method=\"post\" action=\"/auth/logout\"><button type=\"submit\">Sign out</button></form>",
         escape(shown),
         escape(viewer.subject),
@@ -283,7 +309,14 @@ autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"
     // The offer to secure the account makes its passkey on this page: the hub's one
     // passkey script runs here then, and only then.
     if viewer.unsecured_until.is_some() {
-        scripted(StatusCode::OK, "Your account", &body, "/assets/passkey.js")
+        let mut response = scripted(StatusCode::OK, "Your account", &body, "/assets/passkey.js");
+        // Its email form posts here: the browser sends that POST's true Origin only under
+        // `same-origin`.
+        response.headers_mut().insert(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("same-origin"),
+        );
+        response
     } else {
         html(StatusCode::OK, "Your account", &body)
     }

@@ -50,6 +50,8 @@ pub struct HubSignIn {
     secure: bool,
     /// Seen claimed: the owner has a passkey (`claimed`).
     claimed: AtomicBool,
+    /// Sign in with Google, GitHub, OpenID Connect providers and the email link.
+    pub(super) providers: super::providers::Providers,
 }
 
 /// `scheme://host[:port]` of the hub's public URL, as a browser writes an origin.
@@ -76,7 +78,43 @@ impl HubSignIn {
             rp_id,
             origin,
             claimed: AtomicBool::new(false),
+            providers: super::providers::Providers::none(),
         })
+    }
+
+    /// This sign-in with the config's providers and email link (`Providers::from_config`).
+    pub fn with_providers(mut self, providers: super::providers::Providers) -> Self {
+        self.providers = providers;
+        self
+    }
+
+    /// The other ways to secure the signed-in account this hub offers, as links and a form
+    /// that add them to it: each provider, and the email link.
+    pub(super) fn linking_ways(&self) -> String {
+        let buttons = self.providers.buttons("/account", true);
+        let mut ways = String::new();
+        if !buttons.is_empty() {
+            ways.push_str(&format!("<p class=\"ways\">Or add a sign-in you already have: {buttons}</p>"));
+        }
+        if self.providers.email.is_some() {
+            ways.push_str(&super::email::form("/account", true));
+        }
+        ways
+    }
+
+    /// Whether the hub is on https (its cookies `__Host-` and `Secure`).
+    pub(super) fn secure(&self) -> bool {
+        self.secure
+    }
+
+    /// The hub's public URL, without a trailing slash.
+    pub(super) fn public_url(&self) -> &str {
+        self.config.public_url.trim_end_matches('/')
+    }
+
+    /// The owner signed in another way than a passkey: every holder of the config knows them.
+    pub(super) fn learn_owner_of(&self, account: &str) {
+        self.learn_owner(account);
     }
 
     /// The accounts behind this sign-in, for the hub's own authorization server.
@@ -338,19 +376,39 @@ pub(super) fn scripted(title: &str, body: &str) -> Response {
     pages::scripted(StatusCode::OK, title, body, "/assets/passkey.js")
 }
 
-/// `/auth/login` in hub mode: one button, and the script that runs the passkey prompt.
-pub fn login_page(return_to: &str) -> Response {
-    scripted(
+/// `/auth/login` in hub mode: the passkey button and the script that runs its prompt, then
+/// every other way in this hub offers (`providers.rs`, `email.rs`).
+pub fn login_page(hub: &HubSignIn, return_to: &str) -> Response {
+    let return_to = safe_return_to(return_to);
+    let others = hub.providers.buttons(return_to, false);
+    let others = if others.is_empty() {
+        String::new()
+    } else {
+        format!("<p class=\"ways\">{others}</p>")
+    };
+    let email = if hub.providers.email.is_some() {
+        super::email::form(return_to, false)
+    } else {
+        String::new()
+    };
+    let mut response = scripted(
         "Sign in",
         &format!(
             "<h1>Sign in</h1>\
 <p>Use the passkey you made for this hub: your phone's or computer's fingerprint, face or PIN.</p>\
 <p><button class=\"button primary\" id=\"passkey-sign-in\" data-return-to=\"{}\" disabled>Sign in with a passkey</button></p>\
 <p class=\"meta\" id=\"passkey-status\" role=\"status\"></p>\
-<noscript><p>Signing in with a passkey needs JavaScript for this page.</p></noscript>",
-            pages::escape(safe_return_to(return_to))
+<noscript><p>Signing in with a passkey needs JavaScript for this page.</p></noscript>{others}{email}",
+            pages::escape(return_to)
         ),
-    )
+    );
+    // Its email form posts here: the browser sends that POST's true Origin only under
+    // `same-origin`.
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    response
 }
 
 /// `/owner#<link>`: the owner's one-time link carries its token after `#`, which a browser
@@ -885,7 +943,7 @@ pub async fn login(
         Some(hub) if hub.signed_in(&headers).await => {
             super::routes::see_other(safe_return_to(return_to), &[])
         }
-        Some(_) => login_page(return_to),
+        Some(hub) => login_page(hub, return_to),
         None => super::routes::not_set_up(),
     }
 }
