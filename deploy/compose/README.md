@@ -29,6 +29,30 @@ AI clients connect to `https://<DEVAGOTCHI_DOMAIN>/mcp`: they register themselve
 each one once with your passkey, and the hub issues and checks their tokens itself
 (`crates/hub/README.md`, "AI clients sign in with the hub itself").
 
+## On a server, kept current by itself
+
+`install.sh` does the steps above on a Debian or Ubuntu server, and more: Docker from
+Docker's repository if it is missing, `.env` from its flags (Postgres sized for the box), the
+image pinned by digest, and two systemd timers:
+
+- `devagotchi-hub-update.timer`, every 5 minutes, runs `update.sh`. When the track
+  (`DEVAGOTCHI_TRACK`, `:main` by default) points at a new digest, it backs the database up,
+  deploys that digest and keeps it only if `/healthz` answers healthy. Otherwise it goes back
+  to the digest that ran before, which migrations allow (they only add; an older hub opens a
+  newer store), and never tries that digest again. What it did is in
+  `journalctl -u devagotchi-hub-update`.
+- `devagotchi-hub-backup.timer`, nightly, runs `backup.sh`: a `pg_dump` of the database and
+  an archive of the state volume in `/var/backups/devagotchi-hub`, 14 days kept. Copy them
+  off the host too.
+
+```bash
+sudo ./install.sh --domain hub.example.com                   # with this stack's Caddy
+sudo ./install.sh --domain hub.example.com --edge external   # behind a proxy you run; it
+                                                             # reaches the hub on --hub-bind:--hub-port
+```
+
+In a Proxmox VE container, `deploy/proxmox/hub-up.sh` runs it for you (`deploy/proxmox/README.md`).
+
 ## The image
 
 GitHub builds the hub image from every commit that lands on `main` (and every release tag),

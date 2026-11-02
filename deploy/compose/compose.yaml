@@ -60,6 +60,11 @@ services:
     volumes:
       - hub-state:/var/lib/devagotchi
       - postgres-socket:/var/run/postgresql
+    # Plain HTTP for whatever terminates TLS: this stack's Caddy over the compose network,
+    # or an edge proxy elsewhere (DEVAGOTCHI_HUB_BIND set to an address it can reach).
+    # Loopback only by default.
+    ports:
+      - "${DEVAGOTCHI_HUB_BIND:-127.0.0.1}:${DEVAGOTCHI_HUB_PORT:-8787}:8787"
     # Runs as nonroot in an image with nothing else in it, so the only place it can write
     # is its state volume. (Not `read_only`: Compose writes the config below into the
     # container, which a read-only one refuses.)
@@ -88,7 +93,7 @@ configs:
       {
         "listen": "0.0.0.0:8787",
         "public_url": "${DEVAGOTCHI_PUBLIC_URL:-https://${DEVAGOTCHI_DOMAIN:?set DEVAGOTCHI_DOMAIN in .env}}",
-        "auth": { "mode": "hub" },
+        "auth": { "mode": "hub", "rp_id": "${DEVAGOTCHI_RP_ID:-${DEVAGOTCHI_DOMAIN}}" },
         "storage": { "url": "postgres://devagotchi@localhost/devagotchi?host=/var/run/postgresql" },
         "brokers": [],
         "grants": []
