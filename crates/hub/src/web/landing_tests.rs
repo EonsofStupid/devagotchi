@@ -1,12 +1,16 @@
 //! The landing page (`landing.rs`): every section is there for a claimed hub, a new hub
 //! offers only the claim, the MCP address is this hub's own, the comparison cites its
 //! sources, planned work says so, and nothing in it needs more than the plain pages' CSP.
+//! The pages snap under a bar that stays, every term has its tooltip, every popup opens from
+//! a button and names itself, and the AI's tool list is the hub's own.
+
+use std::collections::BTreeSet;
 
 use axum::{body::to_bytes, http::header, response::Response};
 
 use super::{
-    landing::page,
-    pages::{Front, home},
+    landing::{TOOLS, Term, page},
+    pages::{CSS, Front, home},
 };
 
 const URL: &str = "https://hub.example.org";
@@ -179,6 +183,205 @@ async fn the_page_needs_nothing_the_plain_csp_refuses() {
             );
         }
     }
+}
+
+#[test]
+fn every_term_carries_its_tooltip_and_every_tooltip_is_named_once() {
+    for front in [Front::Unclaimed, Front::Passkeys, Front::Shippin] {
+        let html = body(front);
+        let terms: Vec<&str> = html.split("<span class=\"term\" ").skip(1).collect();
+        assert!(!terms.is_empty());
+        let mut ids = BTreeSet::new();
+        for term in terms {
+            // Focusable, described by the tooltip that follows it, and that tooltip says so.
+            let id = attribute(term, "aria-describedby").unwrap_or_else(|| panic!("{term}"));
+            assert!(term.starts_with("tabindex=\"0\""), "{term}");
+            assert!(
+                term.contains(&format!(
+                    "<span class=\"tip\" role=\"tooltip\" id=\"{id}\">"
+                )),
+                "{term}"
+            );
+            assert!(ids.insert(id.to_string()), "{id} is used twice");
+        }
+    }
+    // Every glossary word is marked somewhere on the full page.
+    let html = body(Front::Passkeys);
+    for term in Term::ALL {
+        assert!(
+            html.contains(&format!("aria-describedby=\"tip-{}-", term.key())),
+            "{}",
+            term.key()
+        );
+    }
+    // The new hub explains its claim code and the passkey, and still opens with the claim.
+    let new = body(Front::Unclaimed);
+    assert!(new.contains("tip-claim-code-1") && new.contains("tip-passkey-1"));
+}
+
+#[test]
+fn every_popup_opens_from_a_button_names_itself_and_closes() {
+    for front in [Front::Unclaimed, Front::Passkeys, Front::Shippin] {
+        let html = body(front);
+        let popups: Vec<&str> = html.split("<div class=\"modal\" ").skip(1).collect();
+        let mut ids = BTreeSet::new();
+        for popup in &popups {
+            let id = attribute(popup, "id").unwrap();
+            assert!(popup.contains(" popover role=\"dialog\""), "{id}");
+            assert_eq!(
+                attribute(popup, "aria-labelledby"),
+                Some(format!("{id}-title").as_str())
+            );
+            assert!(popup.contains(&format!("<h2 id=\"{id}-title\">")), "{id}");
+            assert!(
+                popup.contains(&format!(
+                    "popovertarget=\"{id}\" popovertargetaction=\"hide\" autofocus>Close</button>"
+                )),
+                "{id}"
+            );
+            ids.insert(id.to_string());
+        }
+        // Each opener points at a popup on the page, and each popup has an opener besides
+        // its own Close.
+        let targets: BTreeSet<String> = html
+            .split("popovertarget=\"")
+            .skip(1)
+            .map(|rest| rest.split('"').next().unwrap().to_string())
+            .collect();
+        assert_eq!(targets, ids);
+        for id in &ids {
+            assert!(
+                html.contains(&format!("popovertarget=\"{id}\">")),
+                "{id} has no opener"
+            );
+        }
+        assert!(
+            ids.contains("m-claim") && ids.contains("m-watch"),
+            "{ids:?}"
+        );
+    }
+    let full = body(Front::Passkeys);
+    assert!(full.contains("id=\"m-tools\""));
+    // How claiming works never names the claim page on a hub that has an owner.
+    assert!(!full.contains("/claim"));
+}
+
+#[test]
+fn each_comparison_row_opens_its_evidence_from_the_teardown() {
+    let html = body(Front::Passkeys);
+    let compare = section(&html, "id=\"compare\"");
+    for n in 1..=11 {
+        let opener =
+            format!("<button type=\"button\" class=\"evidence\" popovertarget=\"ev-{n}\">");
+        assert!(compare.contains(&opener), "row {n} opens no evidence");
+        let popup = html
+            .split(&format!("<div class=\"modal\" id=\"ev-{n}\""))
+            .nth(1)
+            .and_then(|rest| rest.split("<div class=\"modal\" ").next())
+            .unwrap_or_else(|| panic!("no evidence popup {n}"));
+        // A file and line of Desktop Commander (the price row cites its pricing page), and
+        // the section it is read from.
+        let cited = popup.split("<code>").skip(1).any(|code| {
+            let code = code.split("</code>").next().unwrap();
+            code.rsplit_once(':')
+                .is_some_and(|(_, lines)| lines.starts_with(|c: char| c.is_ascii_digit()))
+        });
+        assert!(cited || popup.contains("pricing page"), "{popup}");
+        assert!(popup.contains("c2b8795"), "{popup}");
+        assert!(
+            popup.contains("/blob/main/docs/desktop-commander-teardown.md#")
+                || popup.contains("/blob/main/docs/product-and-platform-plan.md#14-"),
+            "{popup}"
+        );
+    }
+    assert!(!html.contains("id=\"ev-12\""));
+}
+
+#[test]
+fn the_tool_list_is_the_tools_the_hub_serves() {
+    let listed: Vec<&str> = TOOLS
+        .iter()
+        .flat_map(|(_, tools)| tools.iter().flat_map(|(names, _)| names.iter().copied()))
+        .collect();
+    let unique: BTreeSet<&str> = listed.iter().copied().collect();
+    assert_eq!(unique.len(), listed.len(), "a tool is listed twice");
+    let served: BTreeSet<String> = crate::hub::tool_names().into_iter().collect();
+    let listed: BTreeSet<String> = unique.into_iter().map(str::to_string).collect();
+    assert_eq!(listed, served);
+    let html = body(Front::Passkeys);
+    for name in &served {
+        assert!(html.contains(&format!("<code>{name}</code>")), "{name}");
+    }
+}
+
+#[test]
+fn the_rail_names_every_page_in_the_order_they_read() {
+    let html = body(Front::Passkeys);
+    let rail = html
+        .split("<nav class=\"rail\" aria-label=\"On this page\">")
+        .nth(1)
+        .and_then(|rest| rest.split("</nav>").next())
+        .expect("the rail");
+    let targets: Vec<&str> = rail
+        .split("href=\"#")
+        .skip(1)
+        .map(|rest| rest.split('"').next().unwrap())
+        .collect();
+    assert_eq!(targets.len(), 9, "{targets:?}");
+    let at: Vec<usize> = targets
+        .iter()
+        .map(|id| {
+            html.find(&format!(" id=\"{id}\""))
+                .unwrap_or_else(|| panic!("#{id}"))
+        })
+        .collect();
+    assert!(at.windows(2).all(|w| w[0] < w[1]), "{targets:?}");
+    // Each page the rail names is lit by its own view timeline in the stylesheet.
+    for id in targets {
+        assert!(
+            CSS.contains(&format!(
+                "#{id} {{ view-timeline: --p-{id} block, --page block; }}"
+            )),
+            "{id}"
+        );
+        assert!(
+            CSS.contains(&format!(
+                ".rail a[href=\"#{id}\"] {{ animation-timeline: --p-{id}; }}"
+            )),
+            "{id}"
+        );
+    }
+    // A new hub has two pages and no rail.
+    assert!(!body(Front::Unclaimed).contains("class=\"rail\""));
+}
+
+#[test]
+fn the_shell_stays_and_motion_is_optional_in_the_stylesheet() {
+    // The bar stays at the top of one viewport and keeps still between pages.
+    assert!(CSS.contains(".bar { position: sticky; top: 0;"));
+    assert!(CSS.contains("view-transition-name: shell-bar;"));
+    assert!(CSS.contains("@view-transition { navigation: auto; }"));
+    // The landing page's sections snap, and a section taller than the screen still scrolls.
+    assert!(CSS.contains("scroll-snap-type: y proximity;"));
+    assert!(CSS.contains("scroll-snap-align: start;"));
+    assert!(CSS.contains("min-height: calc(100svh - var(--bar-h));"));
+    // Page transitions and entrances run only for no-preference, behind feature checks.
+    let motion = CSS
+        .split("@media (prefers-reduced-motion: no-preference) {")
+        .skip(1);
+    let gated: String = motion.collect();
+    assert!(gated.contains("@view-transition") && gated.contains("animation-timeline: --page;"));
+    assert!(CSS.contains("@supports (animation-timeline: view())"));
+    // Nothing in it reaches another origin.
+    assert!(CSS.split("url(").skip(1).all(|rest| rest.starts_with('#')));
+    assert!(!CSS.contains("@import") && !CSS.contains("http"));
+}
+
+/// The value of `name="…"` in the first tag of `html`.
+fn attribute<'a>(html: &'a str, name: &str) -> Option<&'a str> {
+    let tag = html.split('>').next()?;
+    let rest = tag.split(&format!("{name}=\"")).nth(1)?;
+    rest.split('"').next()
 }
 
 /// The text of the `<section>` that carries `marker`.
