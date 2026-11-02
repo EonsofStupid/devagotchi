@@ -90,9 +90,24 @@ A linked broker that is not connected answers `broker_offline`; one that never e
 
 ## Authentication
 
+Two modes give the hub accounts of its own, side by side in the code; a hub runs the one its
+config names, and they share no tables or routes:
+
+- `auth.mode` `hub` (below): passkey accounts in SQLite or Postgres (`src/store.rs`), the
+  hub's own OAuth 2.1 server for AI clients at `/oauth/*` (32b), and the browser claim of a
+  new hub (`/claim`, 16c). This is the mode `deploy/compose/` runs.
+- `auth.mode` `devagotchi` (PR #79): the hub is the authorization server at `/register`,
+  `/authorize`, `/token` and `/device`, accounts (`dg_…`) live in `identities.sqlite3`, an AI
+  can open a provisional account that a person claims later, and Nomen is an optional
+  "sign in with". Operator detail is [docs/auth.md](../../docs/auth.md).
+
+Each mounts its own `/claim` and `/.well-known/oauth-authorization-server`; the router never
+mounts both (`app_builds_in_every_auth_mode` in `src/lib.rs`).
+
 | Mode | Bearer token | Who it is for |
 |---|---|---|
-| `hub` | None yet (the hub issues its own to AI clients in 32b); with an optional `nomen` block, Nomen tokens as in `nomen` mode. People sign in on the hub's own pages with passkeys | Any hub that should work with nothing else deployed (D25), devagotchi.com included |
+| `hub` | The hub's own `dgh_` tokens, issued to AI clients at `/oauth/token` (32b); with an optional `nomen` block, Nomen tokens as in `nomen` mode. People sign in on the hub's own pages with passkeys | Any hub that should work with nothing else deployed (D25), devagotchi.com included |
+| `devagotchi` | ES256 JWTs the hub signs and checks locally (`src/oauth.rs`); upstream OpenID Connect providers are optional sign-in buttons | A hub whose AIs open accounts for people who claim them later ([docs/auth.md](../../docs/auth.md)) |
 | `nomen` | Any Nomen access token, opaque or JWT, checked by asking Nomen (introspection) as the hub's own API application | Shippin: your sign-in at console.shippin.cloud, relayed by mcp.shippin.cloud; `shippin-bridge` sessions |
 | `oidc` | A JWT from any OpenID Connect issuer: `iss`, `exp`, `aud`, `sub` required; RS256/384/512 or ES256/384; keys from the issuer's JWKS, refreshed on an unknown `kid` at most once a minute | Self-hosters whose identity provider issues JWT access tokens |
 | `dev` | A static token from a 0600 file `{ "<token>": "<subject>" }` | Tests only (plan D21): accepted when `public_url` is loopback http; a hub at an address people reach refuses to start with it |
@@ -278,7 +293,7 @@ What running Shippin taught, and what the hub does about it:
 |---|---|
 | Two active accounts with the same display name stopped a deploy until one was chosen | Grants and `owner` take the account ID (`sub`) only; an email or a name with spaces is refused at start. `whoami` shows the ID, the login name and whether you are the owner |
 | A devspace created by a machine user locked its owner out, because only the creator could connect | Access comes from `owner` and grants, never from who created something |
-| `tenant_owners` drifted from Nomen and was silently re-created | The hub keeps no copy of who owns what; it asks Nomen on every new token |
+| `tenant_owners` drifted from Nomen and was silently re-created | In `nomen` mode the hub keeps no copy of who owns what; it asks Nomen on every new token. In `devagotchi` mode the account is the hub's own row, and a provider is only a linked sign-in |
 | A failed membership lookup in the console quietly meant "no roles" | Nomen down, slow, or refusing the hub's own key is `503 issuer_unavailable`, never a refusal, and is never remembered |
 | One way in (SSH keys) became a lockout | `owner` reaches every broker and can only be changed by editing this file. The hub starts without Nomen, and `enroll`, `revoke` and `devices` work on the host with Nomen down |
 | Nobody could test as the owner without borrowing a session | `tests/nomen_probe.py` runs the real binary against a fake Nomen; a live check uses a throwaway test identity |

@@ -112,9 +112,22 @@ impl Downloads {
         self.sums.get(name).map(String::as_str)
     }
 
-    /// Where a served file is, when it is one.
+    /// Where a served file is, when it is one. `SHA256SUMS` is not a payload file;
+    /// [`Self::sha256sums_text`] is what `/dist/SHA256SUMS` returns.
     pub fn path(&self, name: &str) -> Option<PathBuf> {
         self.sums.contains_key(name).then(|| self.dir.join(name))
+    }
+
+    /// The checksum list this hub checked at start, in the `sha256sum` form.
+    pub fn sha256sums_text(&self) -> String {
+        let mut out = String::new();
+        for (name, sum) in &self.sums {
+            out.push_str(sum);
+            out.push_str("  ");
+            out.push_str(name);
+            out.push('\n');
+        }
+        out
     }
 
     pub fn files(&self) -> impl Iterator<Item = &str> {
@@ -155,6 +168,13 @@ mod tests {
             Some(hex::encode(Sha256::digest(b"xz")).as_str())
         );
         assert!(downloads.path("install-devagotchi.sh").is_some());
+        let listed = downloads.sha256sums_text();
+        assert!(listed.contains("install-devagotchi.sh"), "{listed}");
+        assert!(
+            listed.contains(&hex::encode(Sha256::digest(b"xz"))),
+            "{listed}"
+        );
+        assert!(!listed.contains("SHA256SUMS"), "{listed}");
         for name in ["secret.txt", "SHA256SUMS", "VERSION", "../etc/passwd"] {
             assert!(downloads.path(name).is_none(), "{name}");
         }

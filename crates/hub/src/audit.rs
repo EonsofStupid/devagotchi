@@ -135,6 +135,18 @@ impl Audit {
             head: prev,
         })
     }
+
+    #[cfg(test)]
+    pub(crate) fn recorded(&self) -> Vec<(String, String, String)> {
+        let connection = self.connection.lock().expect("audit lock");
+        let mut statement = connection
+            .prepare("SELECT subject, tool, outcome FROM audit ORDER BY seq")
+            .expect("audit read");
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .expect("audit rows");
+        rows.map(|row| row.expect("audit row")).collect()
+    }
 }
 
 fn row_hash(prev: &str, at: &str, entry: &AuditEntry<'_>) -> String {

@@ -471,6 +471,39 @@ impl Devices {
         rows.collect::<Result<_, _>>().map_err(store_error)
     }
 
+    /// Rewrite machines, unused codes, and push subscriptions that still name `from`
+    /// (an identity-provider subject) so they name the Devagotchi account `to`.
+    pub fn reassign_owner(&self, from: &str, to: &str) -> BridgeResult<usize> {
+        if from.is_empty() || to.is_empty() || from == to {
+            return Ok(0);
+        }
+        let mut connection = self.connection.lock().expect("device lock");
+        let transaction = connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .map_err(store_error)?;
+        let mut moved = 0usize;
+        moved += transaction
+            .execute(
+                "UPDATE devices SET owner = ?1 WHERE owner = ?2",
+                params![to, from],
+            )
+            .map_err(store_error)?;
+        moved += transaction
+            .execute(
+                "UPDATE enroll_codes SET owner = ?1 WHERE owner = ?2",
+                params![to, from],
+            )
+            .map_err(store_error)?;
+        moved += transaction
+            .execute(
+                "UPDATE push_subscriptions SET subject = ?1 WHERE subject = ?2",
+                params![to, from],
+            )
+            .map_err(store_error)?;
+        transaction.commit().map_err(store_error)?;
+        Ok(moved)
+    }
+
     #[cfg(test)]
     fn expire_codes(&self) {
         let connection = self.connection.lock().unwrap();
@@ -696,13 +729,23 @@ mod tests {
     #[test]
     fn a_live_code_names_its_machine_until_it_is_spent_or_expires() {
         let (_dir, devices) = store();
-        let code = devices.issue_owned_code("acct-a", "platinum", [60; 16], OWNED_LIMIT).unwrap();
-        assert_eq!(devices.live_code(&code).unwrap().as_deref(), Some("platinum"));
+        let code = devices
+            .issue_owned_code("acct-a", "platinum", [60; 16], OWNED_LIMIT)
+            .unwrap();
+        assert_eq!(
+            devices.live_code(&code).unwrap().as_deref(),
+            Some("platinum")
+        );
         // Looking does not spend it.
-        assert_eq!(devices.live_code(&code).unwrap().as_deref(), Some("platinum"));
+        assert_eq!(
+            devices.live_code(&code).unwrap().as_deref(),
+            Some("platinum")
+        );
         devices.enroll("platinum", &code, "aa", false).unwrap();
         assert_eq!(devices.live_code(&code).unwrap(), None);
-        let other = devices.issue_owned_code("acct-a", "spare", [61; 16], OWNED_LIMIT).unwrap();
+        let other = devices
+            .issue_owned_code("acct-a", "spare", [61; 16], OWNED_LIMIT)
+            .unwrap();
         devices.expire_codes();
         assert_eq!(devices.live_code(&other).unwrap(), None);
         assert_eq!(devices.live_code("dvg-0000").unwrap(), None);
@@ -729,5 +772,29 @@ mod tests {
         drop(devices);
         // Opening again is a no-op, not a second ALTER.
         Devices::open(&path).unwrap();
+    }
+
+    #[test]
+    fn reassign_owner_moves_a_machine_onto_a_devagotchi_account() {
+        let (_dir, devices) = store();
+        let code = devices
+            .issue_owned_code("300000000000000001", "gus", [9; 16], OWNED_LIMIT)
+            .unwrap();
+        devices.enroll("gus", &code, "aa", false).unwrap();
+        let account = format!("dg_{}", "ab".repeat(16));
+        let moved = devices
+            .reassign_owner("300000000000000001", &account)
+            .unwrap();
+        assert!(moved >= 1);
+        assert_eq!(
+            devices.get("gus").unwrap().unwrap().owner.as_deref(),
+            Some(account.as_str())
+        );
+        assert_eq!(
+            devices
+                .reassign_owner("300000000000000001", &account)
+                .unwrap(),
+            0
+        );
     }
 }

@@ -12,7 +12,7 @@
     "prebuild": "npm run tokens:build",
     "build": "vinext build",
     "start": "vinext start",
-    "test": "node tests/reference-mcp.test.mjs",
+    "test": "node tests/reference-mcp.test.mjs && node --experimental-strip-types tests/hub-account.test.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "db:generate": "drizzle-kit generate"

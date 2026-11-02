@@ -38,6 +38,7 @@ export async function ensureSchema() {
       id TEXT PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
       display_name TEXT NOT NULL,
+      devagotchi_account_id TEXT,
       remember_until INTEGER,
       notifications_enabled INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL,
@@ -80,6 +81,11 @@ export async function ensureSchema() {
     db.prepare("CREATE INDEX IF NOT EXISTS pet_actions_owner_created_idx ON pet_actions(owner_id, created_at)"),
     db.prepare("CREATE INDEX IF NOT EXISTS push_owner_idx ON push_subscriptions(owner_id)"),
   ]);
+  try {
+    await db.prepare("ALTER TABLE profiles ADD COLUMN devagotchi_account_id TEXT").run();
+  } catch {
+    // The column is already there. SQLite has no ADD COLUMN IF NOT EXISTS.
+  }
   schemaReady = true;
 }
 

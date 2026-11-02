@@ -33,6 +33,16 @@ pub struct Subject {
     /// every member works them (B13). `None` when the token carries no org; the account's
     /// own boards are then its own.
     pub org: Option<String>,
+    /// Set when the account was opened by an agent and has not been claimed yet.
+    /// Unix seconds. `None` once a person has claimed it, or when this token is not provisional.
+    pub provisional_until: Option<u64>,
+    /// The agent seat that presented this token (`claude`, `cli`, …). Revocable on the account.
+    pub agent: Option<String>,
+    /// Claim code the agent can show the person, while the account is still provisional.
+    pub claim_code: Option<String>,
+    /// True when the time left on a provisional account is under one seventh of the
+    /// live ttl (at least an hour). Recomputed on each request from the current setting.
+    pub provisional_warning: bool,
 }
 
 /// The scopes a client asks Nomen for when it signs in to this hub: who the person is,
@@ -76,6 +86,9 @@ pub enum Verifier {
         issuer: String,
         nomen: Option<Box<Verifier>>,
     },
+    /// `auth.mode devagotchi`: tokens this hub issued, checked locally with the hub's own
+    /// signing key (`oauth.rs`).
+    Devagotchi(std::sync::Arc<crate::oauth::Authority>),
     /// A hub in `auth.mode hub` whose accounts were not opened (a test harness): takes no
     /// bearer token at all.
     Closed,
@@ -105,7 +118,7 @@ impl Verifier {
         state_dir: &Path,
         accounts: Option<std::sync::Arc<crate::accounts::Accounts>>,
     ) -> BridgeResult<Self> {
-        let mut primary = Self::primary(&config.auth, state_dir).await?;
+        let mut primary = Self::primary(&config.auth, state_dir, &config.public_url).await?;
         if let (true, Some(accounts)) = (config.has_accounts(), accounts) {
             let nomen = match primary {
                 Verifier::Closed => None,
@@ -132,16 +145,36 @@ impl Verifier {
 
     /// The verifier `auth` names. A Nomen verifier keeps the sign-ins Nomen confirmed
     /// in `state_dir`, so a restart during a Nomen outage signs nobody out.
-    async fn primary(config: &AuthConfig, state_dir: &Path) -> BridgeResult<Self> {
+    async fn primary(
+        config: &AuthConfig,
+        state_dir: &Path,
+        public_url: &str,
+    ) -> BridgeResult<Self> {
         match config {
             AuthConfig::Oidc { issuer, audiences } => Ok(Verifier::Oidc(
                 OidcVerifier::discover(issuer, audiences).await?,
             )),
             AuthConfig::Dev { tokens_file } => Ok(Verifier::Dev(read_dev_tokens(tokens_file)?)),
+            AuthConfig::Devagotchi {
+                upstream,
+                local,
+                provisional,
+                ..
+            } => {
+                let mut authority = crate::oauth::Authority::open(state_dir, public_url)?;
+                authority.configure_login(upstream.clone(), local.clone());
+                authority.apply_config_limits(provisional);
+                Ok(Verifier::Devagotchi(std::sync::Arc::new(authority)))
+            }
             AuthConfig::Nomen { .. } | AuthConfig::Hub { .. } => match config.nomen() {
                 Some(nomen) => Ok(Verifier::Nomen(
-                    NomenVerifier::new(nomen.issuer, nomen.audiences, nomen.clients, nomen.key_file)?
-                        .remembering(&state_dir.join("signins.sqlite3")),
+                    NomenVerifier::new(
+                        nomen.issuer,
+                        nomen.audiences,
+                        nomen.clients,
+                        nomen.key_file,
+                    )?
+                    .remembering(&state_dir.join("signins.sqlite3")),
                 )),
                 None => Ok(Verifier::Closed),
             },
@@ -166,11 +199,16 @@ impl Verifier {
                         via: "dev",
                         name: None,
                         org,
+                        provisional_until: None,
+                        agent: None,
+                        claim_code: None,
+                        provisional_warning: false,
                     }
                 })
                 .ok_or(AuthError::Invalid("unknown token")),
             Verifier::Nomen(nomen) => nomen.verify(bearer).await,
             Verifier::Oidc(oidc) => oidc.verify(bearer).await,
+            Verifier::Devagotchi(authority) => authority.verify_access(bearer),
             Verifier::Federated { primary, trusted } => {
                 let claimed = claimed_issuer(bearer);
                 let chosen = claimed.as_deref().and_then(|iss| {
@@ -194,6 +232,10 @@ impl Verifier {
                             via: "hub",
                             name: Some(grant.account.name),
                             org: None,
+                            provisional_until: None,
+                            agent: None,
+                            claim_code: None,
+                            provisional_warning: false,
                         }),
                         Ok(None) => Err(AuthError::Invalid(
                             "unknown, expired or revoked hub token",
@@ -224,7 +266,11 @@ impl Verifier {
             Verifier::Hub {
                 nomen: Some(nomen), ..
             } => nomen.issuer_health(),
-            _ => None,
+            Verifier::Hub { nomen: None, .. }
+            | Verifier::Devagotchi(_)
+            | Verifier::Oidc(_)
+            | Verifier::Dev(_)
+            | Verifier::Closed => None,
         }
     }
 
@@ -235,6 +281,15 @@ impl Verifier {
             Verifier::Dev(_) | Verifier::Closed => None,
             Verifier::Hub { issuer, .. } => Some(issuer),
             Verifier::Federated { primary, .. } => primary.issuer(),
+            Verifier::Devagotchi(authority) => Some(authority.issuer()),
+        }
+    }
+
+    pub fn authority(&self) -> Option<std::sync::Arc<crate::oauth::Authority>> {
+        match self {
+            Verifier::Devagotchi(authority) => Some(authority.clone()),
+            Verifier::Federated { primary, .. } => primary.authority(),
+            _ => None,
         }
     }
 }
@@ -401,6 +456,10 @@ impl OidcVerifier {
             via: "oidc",
             name: None,
             org: data.claims.org.filter(|org| valid_org(org)),
+            provisional_until: None,
+            agent: None,
+            claim_code: None,
+            provisional_warning: false,
         })
     }
 
@@ -464,6 +523,10 @@ mod tests {
                 via: "dev",
                 name: None,
                 org: None,
+                provisional_until: None,
+                agent: None,
+                claim_code: None,
+                provisional_warning: false,
             }
         );
         assert!(matches!(

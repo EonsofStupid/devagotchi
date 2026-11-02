@@ -158,6 +158,10 @@ impl HubSignIn {
                 via: "passkey",
                 name: Some(session.account.name),
                 org: None,
+                provisional_until: None,
+                agent: None,
+                claim_code: None,
+                provisional_warning: false,
             })),
             Ok(Ok(None)) => Ok(None),
             Ok(Err(error)) => {

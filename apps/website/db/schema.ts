@@ -5,6 +5,8 @@ export const profiles = sqliteTable("profiles", {
   id: text("id").primaryKey(),
   email: text("email").notNull(),
   displayName: text("display_name").notNull(),
+  /** Devagotchi account id (`dg_…`) once this profile has signed in through the hub. */
+  devagotchiAccountId: text("devagotchi_account_id"),
   rememberUntil: integer("remember_until"),
   notificationsEnabled: integer("notifications_enabled", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at").notNull(),

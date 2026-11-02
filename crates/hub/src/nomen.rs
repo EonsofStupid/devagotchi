@@ -290,7 +290,9 @@ impl NomenVerifier {
                 let mut cache = self.cache.lock().expect("nomen cache lock");
                 for row in rows.into_iter().take(CACHE_MAX) {
                     let asked = now
-                        .checked_sub(Duration::from_secs(now_unix.saturating_sub(row.confirmed_at)))
+                        .checked_sub(Duration::from_secs(
+                            now_unix.saturating_sub(row.confirmed_at),
+                        ))
                         .unwrap_or(now);
                     cache.insert(
                         row.digest,
@@ -299,7 +301,9 @@ impl NomenVerifier {
                             asked,
                             until: now,
                             honour_until: Some(
-                                now + Duration::from_secs(row.honour_until.saturating_sub(now_unix)),
+                                now + Duration::from_secs(
+                                    row.honour_until.saturating_sub(now_unix),
+                                ),
                             ),
                         },
                     );
@@ -311,7 +315,9 @@ impl NomenVerifier {
                     );
                 }
             }
-            Err(error) => eprintln!("devagotchi hub: kept sign-ins unreadable, starting without them: {error}"),
+            Err(error) => eprintln!(
+                "devagotchi hub: kept sign-ins unreadable, starting without them: {error}"
+            ),
         }
         self.kept = Some(store);
         self
@@ -337,7 +343,9 @@ impl NomenVerifier {
             }
             Err(error) => {
                 if !self.kept_failing.swap(true, Ordering::Relaxed) {
-                    eprintln!("devagotchi hub: could not keep a confirmed sign-in on disk: {error}");
+                    eprintln!(
+                        "devagotchi hub: could not keep a confirmed sign-in on disk: {error}"
+                    );
                 }
             }
         }
@@ -372,7 +380,11 @@ impl NomenVerifier {
         let permit = tokio::time::timeout(QUEUE_WAIT, self.in_flight.acquire()).await;
         let _permit = match permit {
             Ok(Ok(permit)) => permit,
-            Ok(Err(_)) => return Err(AuthError::Unavailable("sign-in checks are shutting down".into())),
+            Ok(Err(_)) => {
+                return Err(AuthError::Unavailable(
+                    "sign-in checks are shutting down".into(),
+                ));
+            }
             Err(_) => {
                 return self.honour(&digest).ok_or_else(|| {
                     AuthError::Unavailable("too many sign-in checks waiting on Nomen".into())
@@ -439,7 +451,9 @@ impl NomenVerifier {
             outage.retry_at = Some(now + outage.backoff);
             return None;
         }
-        let wait = outage.retry_at.map_or(0, |at| at.saturating_duration_since(now).as_secs() + 1);
+        let wait = outage
+            .retry_at
+            .map_or(0, |at| at.saturating_duration_since(now).as_secs() + 1);
         Some(format!(
             "Nomen has not answered for {} s (last: {}); trying again in {wait} s",
             since.elapsed().as_secs(),
@@ -665,6 +679,10 @@ fn assess(answer: &Introspection, accepts: &Accepts, now: u64) -> Result<Subject
             .map(str::trim)
             .filter(|org| crate::auth::valid_org(org))
             .map(str::to_string),
+        provisional_until: None,
+        agent: None,
+        claim_code: None,
+        provisional_warning: false,
     })
 }
 

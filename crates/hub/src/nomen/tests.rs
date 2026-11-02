@@ -171,6 +171,10 @@ async fn a_live_token_for_this_hub_signs_in_and_is_remembered() {
                 via: "nomen",
                 name: Some("jessay@example.test".into()),
                 org: Some(OWNER_ORG.into()),
+                provisional_until: None,
+                agent: None,
+                claim_code: None,
+                provisional_warning: false,
             }
         );
     }
@@ -249,7 +253,10 @@ async fn a_confirmed_sign_in_outlives_an_outage_and_an_unknown_one_waits() {
         let owner = active(iss, OWNER, json!(HUB_PROJECT));
         HashMap::from([
             ("tok-owner".into(), owner.clone()),
-            ("tok-brief".into(), with(owner, "exp", json!(unix_now() + 2))),
+            (
+                "tok-brief".into(),
+                with(owner, "exp", json!(unix_now() + 2)),
+            ),
         ])
     })
     .await;
@@ -265,24 +272,47 @@ async fn a_confirmed_sign_in_outlives_an_outage_and_an_unknown_one_waits() {
     // Past its minute, Nomen is asked again, fails, and the earlier confirmation stands.
     assert_eq!(nomen.verify("tok-owner").await.unwrap().id, OWNER);
     let health = nomen.health();
-    assert!(!health.reachable && health.down_since.is_some(), "{health:?}");
-    assert!(health.last_error.as_deref().is_some_and(|why| why.contains("503")), "{health:?}");
+    assert!(
+        !health.reachable && health.down_since.is_some(),
+        "{health:?}"
+    );
+    assert!(
+        health
+            .last_error
+            .as_deref()
+            .is_some_and(|why| why.contains("503")),
+        "{health:?}"
+    );
     // Further requests are answered from it without waiting on Nomen.
     let calls = fake.calls.load(SeqCst);
     for _ in 0..5 {
         assert_eq!(nomen.verify("tok-owner").await.unwrap().id, OWNER);
     }
-    assert_eq!(fake.calls.load(SeqCst), calls, "no request waits on a Nomen known to be down");
+    assert_eq!(
+        fake.calls.load(SeqCst),
+        calls,
+        "no request waits on a Nomen known to be down"
+    );
     assert!(nomen.health().honoured_during_outage >= 6);
     // A token Nomen never confirmed is refused as an outage, never as a sign-out.
-    assert!(matches!(nomen.verify("tok-never-seen").await, Err(AuthError::Unavailable(_))));
+    assert!(matches!(
+        nomen.verify("tok-never-seen").await,
+        Err(AuthError::Unavailable(_))
+    ));
     // A confirmation is not honoured past its own token's expiry.
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert!(matches!(nomen.verify("tok-brief").await, Err(AuthError::Unavailable(_))));
+    assert!(matches!(
+        nomen.verify("tok-brief").await,
+        Err(AuthError::Unavailable(_))
+    ));
 
     fake.status.store(200, SeqCst);
     tokio::time::sleep(nomen.retry.1).await;
-    assert_eq!(nomen.verify("tok-never-seen").await.ok(), None, "Nomen answers: inactive");
+    assert_eq!(
+        nomen.verify("tok-never-seen").await.ok(),
+        None,
+        "Nomen answers: inactive"
+    );
     assert!(nomen.health().reachable, "the first answer ends the outage");
 }
 
@@ -294,7 +324,10 @@ async fn confirmed_sign_ins_survive_a_restart_during_an_outage_and_a_sign_out_en
         HashMap::from([
             ("tok-owner".into(), owner.clone()),
             ("tok-signed-out".into(), owner.clone()),
-            ("tok-brief".into(), with(owner, "exp", json!(unix_now() + 2))),
+            (
+                "tok-brief".into(),
+                with(owner, "exp", json!(unix_now() + 2)),
+            ),
         ])
     })
     .await;
@@ -308,7 +341,10 @@ async fn confirmed_sign_ins_survive_a_restart_during_an_outage_and_a_sign_out_en
     // The store holds hashes of tokens, never a token.
     for file in std::fs::read_dir(dir.path()).unwrap() {
         let bytes = std::fs::read(file.unwrap().path()).unwrap();
-        assert!(!bytes.windows(9).any(|w| w == b"tok-owner"), "a token was written to disk");
+        assert!(
+            !bytes.windows(9).any(|w| w == b"tok-owner"),
+            "a token was written to disk"
+        );
     }
 
     // Nomen goes down and the hub restarts in the middle of it.
@@ -318,23 +354,42 @@ async fn confirmed_sign_ins_survive_a_restart_during_an_outage_and_a_sign_out_en
     nomen.retry = (Duration::from_millis(200), Duration::from_millis(400));
     let calls = fake.calls.load(SeqCst);
     let owner = nomen.verify("tok-owner").await.unwrap();
-    assert_eq!((owner.id.as_str(), owner.org.as_deref()), (OWNER, Some(OWNER_ORG)));
+    assert_eq!(
+        (owner.id.as_str(), owner.org.as_deref()),
+        (OWNER, Some(OWNER_ORG))
+    );
     assert_eq!(owner.name.as_deref(), Some("jessay@example.test"));
-    assert_eq!(fake.calls.load(SeqCst), calls + 1, "Nomen is asked first, then the kept sign-in honoured");
+    assert_eq!(
+        fake.calls.load(SeqCst),
+        calls + 1,
+        "Nomen is asked first, then the kept sign-in honoured"
+    );
     assert!(nomen.health().honoured_during_outage >= 1);
     // Nothing is honoured past its token's own expiry, and nothing never confirmed is.
-    assert!(matches!(nomen.verify("tok-brief").await, Err(AuthError::Unavailable(_))));
-    assert!(matches!(nomen.verify("tok-never-seen").await, Err(AuthError::Unavailable(_))));
+    assert!(matches!(
+        nomen.verify("tok-brief").await,
+        Err(AuthError::Unavailable(_))
+    ));
+    assert!(matches!(
+        nomen.verify("tok-never-seen").await,
+        Err(AuthError::Unavailable(_))
+    ));
 
     // Nomen returns, having signed one of them out: that one ends, on disk too.
     fake.answers.lock().unwrap().remove("tok-signed-out");
     fake.status.store(200, SeqCst);
     tokio::time::sleep(nomen.retry.1).await;
-    assert!(matches!(nomen.verify("tok-signed-out").await, Err(AuthError::Invalid(_))));
+    assert!(matches!(
+        nomen.verify("tok-signed-out").await,
+        Err(AuthError::Invalid(_))
+    ));
     drop(nomen);
     fake.status.store(503, SeqCst);
     let after = verifier(&fake.issuer, &key).remembering(&store);
-    assert!(matches!(after.verify("tok-signed-out").await, Err(AuthError::Unavailable(_))));
+    assert!(matches!(
+        after.verify("tok-signed-out").await,
+        Err(AuthError::Unavailable(_))
+    ));
     assert_eq!(after.verify("tok-owner").await.unwrap().id, OWNER);
 }
 
@@ -348,14 +403,27 @@ async fn a_nomen_that_accepts_and_never_answers_costs_seconds_once() {
     let nomen = verifier(&fake.issuer, &key);
     fake.hang.store(true, SeqCst);
     let began = std::time::Instant::now();
-    assert!(matches!(nomen.verify("tok-owner").await, Err(AuthError::Unavailable(_))));
+    assert!(matches!(
+        nomen.verify("tok-owner").await,
+        Err(AuthError::Unavailable(_))
+    ));
     let first = began.elapsed();
-    assert!(first >= ANSWER_TIMEOUT && first < ANSWER_TIMEOUT + Duration::from_secs(2), "{first:?}");
+    assert!(
+        first >= ANSWER_TIMEOUT && first < ANSWER_TIMEOUT + Duration::from_secs(2),
+        "{first:?}"
+    );
     let began = std::time::Instant::now();
     for _ in 0..10 {
-        assert!(matches!(nomen.verify("tok-owner").await, Err(AuthError::Unavailable(_))));
+        assert!(matches!(
+            nomen.verify("tok-owner").await,
+            Err(AuthError::Unavailable(_))
+        ));
     }
-    assert!(began.elapsed() < Duration::from_millis(500), "{:?}", began.elapsed());
+    assert!(
+        began.elapsed() < Duration::from_millis(500),
+        "{:?}",
+        began.elapsed()
+    );
     assert_eq!(fake.calls.load(SeqCst), 1);
 }
 
@@ -507,6 +575,10 @@ fn a_full_cache_never_evicts_a_confirmed_sign_in_and_late_answers_never_win() {
             via: "nomen",
             name: None,
             org: None,
+            provisional_until: None,
+            agent: None,
+            claim_code: None,
+            provisional_warning: false,
         })
     };
     let digest = |i: usize| -> [u8; 32] { Sha256::digest(i.to_le_bytes()).into() };
@@ -525,7 +597,13 @@ fn a_full_cache_never_evicts_a_confirmed_sign_in_and_late_answers_never_win() {
     let token = digest(usize::MAX);
     let later = Instant::now();
     nomen.remember(token, Err("signed out"), later, CACHE_TTL, None);
-    nomen.remember(token, owner(), later - Duration::from_secs(5), CACHE_TTL, None);
+    nomen.remember(
+        token,
+        owner(),
+        later - Duration::from_secs(5),
+        CACHE_TTL,
+        None,
+    );
     assert_eq!(nomen.recall(&token), Some(Err("signed out")));
 }
 
