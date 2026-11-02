@@ -7,6 +7,18 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### The landing page (increment 45)
+- `/` signed out is Devagotchi's product page on every hub (`crates/hub/src/web/landing.rs`):
+  the hero with a diagram of AI apps, the hub, the phone and machines dialing out; how it
+  works in three steps; Desktop Commander side by side, each of its facts cited to a section
+  of `docs/desktop-commander-teardown.md` (commit c2b8795) or the plan's §14; features; this
+  hub's own MCP address and the connector steps; self-hosting with Docker Compose; what is
+  coming (the Iroh mesh, secrets and devspaces), labelled as not built; questions; a closing
+  call to action. A hub nobody owns shares the hero and still offers only the claim.
+- Static HTML and inline SVG under the plain pages' CSP (no script, no inline style, nothing
+  from another origin), light and dark, phone to desktop. The top bar carries the app icon's
+  pet inline. `hub.css` gains the landing styles; the shared colors move a little cooler.
+
 ### Claim a new hub in the browser (increment 41, plan 16c)
 - A hub with its own accounts whose config names no owner, and whose owner has no passkey,
   prints a claim link to its log at each start (`/claim#XXXX-…`, 120 random bits, only its hash stored, a day by default:
