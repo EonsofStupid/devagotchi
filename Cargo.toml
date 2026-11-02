@@ -54,7 +54,7 @@ rusqlite = { version = "0.39", features = ["bundled", "fallible_uint"] }
 # The hub's store: Postgres for a hosted hub, SQLite built in for a standalone one, one
 # code path over both (`crates/hub/src/store.rs`).
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "postgres", "sqlite", "any", "migrate", "macros"] }
-sha2 = "0.10.9"
+sha2 = "0.11.1"
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 windows-sys = { version = "0.61.2", features = [
