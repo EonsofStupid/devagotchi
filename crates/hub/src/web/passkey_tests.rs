@@ -91,7 +91,7 @@ pub(super) async fn world_owned_by(owner: Option<&str>) -> World {
         passkeys: HubSignIn::new(config.clone(), accounts.clone()).map(Arc::new),
     };
     assert!(state.passkeys.is_some());
-    let app = router()
+    let app = router(true)
         .layer(axum::middleware::from_fn_with_state(state.clone(), bar))
         .with_state(state);
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });

@@ -22,8 +22,13 @@ use crate::{
     auth::{AuthError, Subject},
 };
 
-pub fn router() -> Router<AppState> {
-    Router::new()
+/// Every browser route. `hub_authorization` mounts the routes of the hub's own
+/// authorization server for AI clients (32b) and the browser claim of a new hub (16c):
+/// `/claim`, `/.well-known/oauth-authorization-server` and `/oauth/*`. It is false only in
+/// `auth.mode devagotchi`, whose own authorization server (`crate::oauth`) serves `/claim`
+/// and the metadata itself: axum refuses the same path twice when the router is built.
+pub fn router(hub_authorization: bool) -> Router<AppState> {
+    let router = Router::new()
         .route("/", get(root))
         .route("/account", get(account))
         .route("/signed-out", get(signed_out))
@@ -31,7 +36,6 @@ pub fn router() -> Router<AppState> {
         .route("/auth/callback", get(callback))
         .route("/auth/logout", post(logout))
         .route("/owner", get(passkeys::owner_page))
-        .route("/claim", get(claim::page).post(claim::claim))
         .route(
             "/passkey/register/options",
             post(passkeys::register_options),
@@ -40,17 +44,6 @@ pub fn router() -> Router<AppState> {
         .route("/passkey/sign-in/options", post(passkeys::sign_in_options))
         .route("/passkey/sign-in", post(passkeys::sign_in))
         .route("/assets/passkey.js", get(passkeys::script))
-        .route(
-            "/.well-known/oauth-authorization-server",
-            get(oauth::metadata).options(oauth::preflight),
-        )
-        .route(
-            "/oauth/register",
-            post(oauth::register).options(oauth::preflight),
-        )
-        .route("/oauth/authorize", get(oauth::authorize).post(oauth::decide))
-        .route("/oauth/token", post(oauth::token).options(oauth::preflight))
-        .route("/oauth/revoke", post(oauth::revoke).options(oauth::preflight))
         .route("/api/v1/me", get(me))
         .route("/api/v1/machines", post(machines::add_json))
         .route("/approvals", get(approvals::list))
@@ -67,7 +60,23 @@ pub fn router() -> Router<AppState> {
         .route("/privacy", get(public::privacy))
         .route("/terms", get(public::terms))
         .route("/support", get(public::support))
-        .route("/assets/hub.css", get(css))
+        .route("/assets/hub.css", get(css));
+    if !hub_authorization {
+        return router;
+    }
+    router
+        .route("/claim", get(claim::page).post(claim::claim))
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(oauth::metadata).options(oauth::preflight),
+        )
+        .route(
+            "/oauth/register",
+            post(oauth::register).options(oauth::preflight),
+        )
+        .route("/oauth/authorize", get(oauth::authorize).post(oauth::decide))
+        .route("/oauth/token", post(oauth::token).options(oauth::preflight))
+        .route("/oauth/revoke", post(oauth::revoke).options(oauth::preflight))
 }
 
 #[derive(Deserialize)]

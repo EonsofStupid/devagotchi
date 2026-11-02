@@ -15,9 +15,11 @@ mod devices;
 mod downloads;
 mod files;
 mod hub;
+mod identity;
 mod join;
 mod link;
 mod nomen;
+mod oauth;
 mod push;
 mod run;
 mod store;
@@ -31,9 +33,9 @@ use std::{
 };
 
 use axum::{
-    Router,
+    Json, Router,
     extract::{ConnectInfo, Request, State, ws::WebSocketUpgrade},
-    http::{HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::get,
@@ -42,6 +44,7 @@ use devagotchi_contracts::{BridgeError, BridgeResult};
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
+use serde::Deserialize;
 
 use crate::{
     audit::Audit,
@@ -52,21 +55,38 @@ use crate::{
     link::Links,
 };
 
-pub const USAGE: &str = "Usage:\n  devagotchi hub serve --state-dir ABS_PATH --config ABS_JSON\n  devagotchi hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi hub devices --state-dir ABS_PATH\n  devagotchi hub owner --state-dir ABS_PATH --config ABS_JSON [--name NAME] [--replace]\n  devagotchi hub connect-nomen --state-dir ABS_PATH --config ABS_JSON --client-id ID --project ID [--issuer URL]\n  devagotchi board <command> …            the agents' board in this project (board --help)\n\nserve starts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\nrun and operation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' `devagotchi link` connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.\n\nowner (auth.mode hub) prints a one-time link (15 minutes) that makes the owner's passkey:\nthe first time it makes the owner's account, with the config's owner id if it names one;\nagain, it adds a passkey to the owner and ends the owner's other sessions; with --replace the\nlink also removes every other passkey of the owner (to take the account back).\n\nconnect-nomen joins this hub to a Nomen with its owner's approval: it shows a code to confirm\non any device through the devagotchi-cli app (--client-id) of the Devagotchi project (--project),\nthen adds the hub's own apps to that project (the key Nomen makes is written to the state\ndirectory, owner-only, and nowhere else), sets auth, owner and web in the config, and keeps a\ncopy of the old one. Issuer: https://id.shippin.cloud unless --issuer.";
+pub const USAGE: &str = "Usage:\n  devagotchi hub serve --state-dir ABS_PATH --config ABS_JSON\n  devagotchi hub enroll --state-dir ABS_PATH --device NAME\n  devagotchi hub revoke --state-dir ABS_PATH --device NAME\n  devagotchi hub devices --state-dir ABS_PATH\n  devagotchi hub owner --state-dir ABS_PATH --config ABS_JSON [--name NAME] [--replace]\n  devagotchi hub setup-code --state-dir ABS_PATH --config ABS_JSON\n  devagotchi hub connect-nomen --state-dir ABS_PATH --config ABS_JSON --client-id ID --project ID [--issuer URL]\n  devagotchi board <command> …            the agents' board in this project (board --help)\n\nserve starts the bastion: an authenticated Streamable HTTP MCP endpoint at /mcp that routes\nrun and operation_start/get/read/cancel to brokers by name, with whoami, /healthz and RFC 9728\nprotected-resource metadata, and /link where machines' `devagotchi link` connects out.\nWith a `web` section, people sign in with Shippin at /account to see their machines;\n/api/v1/me returns the same view for a session or a bearer token. Put it behind the edge for TLS.\n\nenroll prints a one-time code (15 minutes) that binds one machine's key to NAME;\nrevoke cuts that machine off within seconds; devices lists enrolled machines.\n\nowner (auth.mode hub) prints a one-time link (15 minutes) that makes the owner's passkey:\nthe first time it makes the owner's account, with the config's owner id if it names one;\nagain, it adds a passkey to the owner and ends the owner's other sessions; with --replace the\nlink also removes every other passkey of the owner (to take the account back).\n\nsetup-code (auth.mode devagotchi) prints a one-time code (15 minutes) that makes the account\nclaimed with it the hub's owner at /claim, or the owner already on file.\n\nconnect-nomen joins this hub to a Nomen with its owner's approval: it shows a code to confirm\non any device through the devagotchi-cli app (--client-id) of the Devagotchi project (--project),\nthen adds the hub's own apps to that project (the key Nomen makes is written to the state\ndirectory, owner-only, and nowhere else), sets auth, owner and web in the config, and keeps a\ncopy of the old one. Issuer: https://id.shippin.cloud unless --issuer.";
 
 #[derive(Debug, PartialEq, Eq)]
 enum Command {
     Help,
-    Serve { state: PathBuf, config: PathBuf },
-    Enroll { state: PathBuf, device: String },
-    Revoke { state: PathBuf, device: String },
-    Devices { state: PathBuf },
+    Serve {
+        state: PathBuf,
+        config: PathBuf,
+    },
+    Enroll {
+        state: PathBuf,
+        device: String,
+    },
+    Revoke {
+        state: PathBuf,
+        device: String,
+    },
+    Devices {
+        state: PathBuf,
+    },
     Owner {
         state: PathBuf,
         config: PathBuf,
         name: Option<String>,
         /// The link removes every other passkey of the owner when used.
         replace: bool,
+    },
+    /// One-time code that makes the first claimed account the owner. Refuses when
+    /// `hub.json` already names an owner.
+    SetupCode {
+        state: PathBuf,
+        config: PathBuf,
     },
     ConnectNomen(connect::Connect),
 }
@@ -95,6 +115,9 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> BridgeResult<Command>
     }
     if args.first().is_some_and(|a| a == "owner") {
         return parse_owner(args.split_off(1));
+    }
+    if args.first().is_some_and(|a| a == "setup-code") {
+        return parse_setup_code(args.split_off(1));
     }
     let verb = match args.first().and_then(|a| a.to_str()) {
         Some(v @ ("enroll" | "revoke" | "devices")) => {
@@ -208,6 +231,60 @@ fn parse_owner(args: Vec<OsString>) -> BridgeResult<Command> {
     }
 }
 
+fn parse_setup_code(args: Vec<OsString>) -> BridgeResult<Command> {
+    let (mut state, mut config) = (None, None);
+    let mut iter = args.into_iter();
+    while let Some(flag) = iter.next() {
+        let value = iter
+            .next()
+            .ok_or_else(|| BridgeError::new("invalid_cli", "flag without a value"))?;
+        match flag.to_str() {
+            Some("--state-dir") if state.is_none() => state = Some(PathBuf::from(value)),
+            Some("--config") if config.is_none() => config = Some(PathBuf::from(value)),
+            _ => return Err(BridgeError::new("invalid_cli", "unexpected flag")),
+        }
+    }
+    match (state, config) {
+        (Some(state), Some(config)) if state.is_absolute() && config.is_absolute() => {
+            Ok(Command::SetupCode { state, config })
+        }
+        _ => Err(BridgeError::new(
+            "invalid_cli",
+            "setup-code needs --state-dir ABS_PATH --config ABS_JSON",
+        )),
+    }
+}
+
+/// Lines for `devagotchi hub setup-code`. An owner already on file is reported as
+/// the Devagotchi account id plus `{public_url}/claim`. A new hub gets a code and
+/// that same claim URL. The config file is not rewritten.
+fn setup_code_lines(
+    state: &std::path::Path,
+    config_path: &std::path::Path,
+) -> BridgeResult<Vec<String>> {
+    let mut config = read_config(config_path)?;
+    // Only `auth.mode devagotchi` spends a setup code (its `/claim`). A hub in `auth.mode hub`
+    // prints its own claim link to its log, and `devagotchi hub owner` works on its host.
+    if !matches!(config.auth, config::AuthConfig::Devagotchi { .. }) {
+        return Err(BridgeError::new(
+            "invalid_cli",
+            "setup-code is for auth.mode devagotchi; in auth.mode hub use the claim link in the hub's log or devagotchi hub owner",
+        ));
+    }
+    let store = identity::Store::open(&state.join("identities.sqlite3"))?;
+    let public = config.public_url.trim_end_matches('/').to_string();
+    let claim = format!("{public}/claim");
+    identity::rekey_config(&store, &mut config)?;
+    if let Some(owner) = config.owner.clone().or(store.hub_owner()?) {
+        eprintln!(
+            "devagotchi hub setup-code: owner {owner} already exists; no new code was issued"
+        );
+        return Ok(vec![format!("owner {owner}"), format!("claim {claim}")]);
+    }
+    let code = store.issue_setup_code()?;
+    Ok(vec![format!("code {code}"), format!("claim {claim}")])
+}
+
 fn read_config(path: &std::path::Path) -> BridgeResult<HubConfig> {
     let text = std::fs::read_to_string(path).map_err(|error| {
         BridgeError::new("invalid_config", format!("{}: {error}", path.display()))
@@ -314,6 +391,14 @@ fn manage(command: Command) -> BridgeResult<()> {
                 "{}",
                 serde_json::to_string_pretty(&list).unwrap_or_default()
             );
+        }
+        Command::SetupCode { state, config } => {
+            for line in setup_code_lines(&state, &config)? {
+                if let Some(code) = line.strip_prefix("code ") {
+                    eprintln!("devagotchi hub setup-code: {code}");
+                }
+                println!("{line}");
+            }
         }
         Command::Owner {
             state,
@@ -441,8 +526,29 @@ pub fn board_cli(args: Vec<OsString>, account_file: Option<PathBuf>) -> ExitCode
 }
 
 async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
-    let config = Arc::new(read_config(&config_path)?);
+    let mut config = read_config(&config_path)?;
+    // Old owner and grant subjects (identity-provider subs) become Devagotchi
+    // account ids in memory. The file is left as the operator wrote it.
+    let rekey = if matches!(config.auth, config::AuthConfig::Devagotchi { .. }) {
+        let store = identity::Store::open(&state_dir.join("identities.sqlite3"))?;
+        let pairs = identity::rekey_config(&store, &mut config)?;
+        Some(pairs)
+    } else {
+        None
+    };
+    let config = Arc::new(config);
     let devices = Arc::new(devices_at(&state_dir)?);
+    if let Some(pairs) = &rekey {
+        let boards = config
+            .account_boards
+            .as_ref()
+            .and_then(|accounts| accounts.dir.as_deref().map(std::path::PathBuf::from))
+            .unwrap_or_else(|| state_dir.join("account-boards"));
+        for (from, to) in pairs {
+            devices.reassign_owner(from, to)?;
+            identity::rename_account_dir(&boards, from, to)?;
+        }
+    }
     let audit = Arc::new(Audit::open(&state_dir.join("audit.sqlite3"))?);
     // A hub with its own accounts knows its owner from them, and refuses to start when its
     // config names someone else.
@@ -593,6 +699,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             config::AuthConfig::Nomen { issuer, .. } => format!("nomen {issuer}"),
             config::AuthConfig::Oidc { issuer, .. } => format!("oidc {issuer}"),
             config::AuthConfig::Dev { .. } => "dev tokens".to_string(),
+            config::AuthConfig::Devagotchi { .. } => "devagotchi".to_string(),
             config::AuthConfig::Hub { .. } => match config.auth.nomen() {
                 Some(nomen) => format!("hub accounts, and nomen {}", nomen.issuer),
                 None => "hub accounts".to_string(),
@@ -640,8 +747,14 @@ fn app(state: AppState) -> Router {
             mcp_config,
         )
     };
-    Router::new()
+    // `auth.mode devagotchi` is its own authorization server (`oauth.rs`), which serves
+    // `/claim`, `/.well-known/oauth-authorization-server` and the sign-in pages; every other
+    // mode gets the hub's (32b, `web/oauth.rs`) and the browser claim (16c). Each path is
+    // mounted once, so the router builds in every mode (`app_builds_in_every_auth_mode`).
+    let authority = state.verifier.authority();
+    let router = Router::new()
         .route("/healthz", get(healthz))
+        .route("/enroll", axum::routing::post(enroll_with_code))
         .route("/link", get(link_upgrade))
         .merge(join::routes())
         .route(
@@ -661,8 +774,143 @@ fn app(state: AppState) -> Router {
                     require_bearer,
                 )),
         )
-        .merge(web::router().layer(middleware::from_fn_with_state(state.clone(), web::bar)))
-        .with_state(state)
+        .merge(
+            web::router(authority.is_none())
+                .layer(middleware::from_fn_with_state(state.clone(), web::bar)),
+        );
+    let router = match authority {
+        Some(authority) => router
+            .merge(oauth::http_router(authority))
+            .route(
+                "/api/v1/admin/settings",
+                get(admin_settings_get).put(admin_settings_put),
+            ),
+        None => router,
+    };
+    router.with_state(state)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AdminSettingsBody {
+    provisional: oauth::ProvisionalPatch,
+}
+
+fn settings_error(status: StatusCode, error: &str, description: &str) -> Response {
+    (
+        status,
+        Json(serde_json::json!({
+            "error": error,
+            "error_description": description,
+        })),
+    )
+        .into_response()
+}
+
+fn bearer_token(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| {
+            value
+                .strip_prefix("Bearer ")
+                .or_else(|| value.strip_prefix("bearer "))
+        })
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .map(str::to_string)
+}
+
+fn audit_settings(state: &AppState, subject: &auth::Subject, outcome: &str) {
+    let _ = state.hub.audit.record(&audit::AuditEntry {
+        subject: &subject.id,
+        via: subject.via,
+        tool: "admin.settings",
+        broker: "",
+        operation_id: "",
+        outcome,
+    });
+}
+
+async fn require_operator(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<auth::Subject, Response> {
+    let Some(token) = bearer_token(headers) else {
+        return Err(settings_error(
+            StatusCode::UNAUTHORIZED,
+            "unauthorized",
+            "bearer token required",
+        ));
+    };
+    let subject = match state.verifier.verify(&token).await {
+        Ok(subject) => subject,
+        Err(_) => {
+            return Err(settings_error(
+                StatusCode::UNAUTHORIZED,
+                "invalid_token",
+                "bearer token was refused",
+            ));
+        }
+    };
+    if !state.hub.config.is_operator(&subject.id) {
+        audit_settings(state, &subject, "denied");
+        return Err(settings_error(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            "owner or an operator grant is required",
+        ));
+    }
+    Ok(subject)
+}
+
+async fn admin_settings_get(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(response) = require_operator(&state, &headers).await {
+        return response;
+    }
+    let Some(authority) = state.verifier.authority() else {
+        return settings_error(
+            StatusCode::NOT_FOUND,
+            "not_available",
+            "admin settings require auth.mode devagotchi",
+        );
+    };
+    Json(authority.operator_settings()).into_response()
+}
+
+async fn admin_settings_put(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AdminSettingsBody>,
+) -> Response {
+    let subject = match require_operator(&state, &headers).await {
+        Ok(subject) => subject,
+        Err(response) => return response,
+    };
+    let Some(authority) = state.verifier.authority() else {
+        return settings_error(
+            StatusCode::NOT_FOUND,
+            "not_available",
+            "admin settings require auth.mode devagotchi",
+        );
+    };
+    match authority.update_operator_settings(&body.provisional) {
+        Ok(settings) => {
+            let outcome = format!(
+                "ok ttl_days={} starts_per_hour={} unclaimed_cap={}",
+                settings.provisional.ttl_days,
+                settings.provisional.starts_per_hour,
+                settings.provisional.unclaimed_cap
+            );
+            audit_settings(&state, &subject, &outcome);
+            Json(settings).into_response()
+        }
+        Err(error) => {
+            let outcome = format!("rejected {}", error.message);
+            audit_settings(&state, &subject, &outcome);
+            settings_error(StatusCode::BAD_REQUEST, &error.code, &error.message)
+        }
+    }
 }
 
 async fn require_bearer(
@@ -670,20 +918,35 @@ async fn require_bearer(
     mut request: Request,
     next: Next,
 ) -> Response {
-    let scope = match state.hub.config.auth.nomen() {
-        _ if state.hub.config.has_accounts() => {
-            format!(", scope=\"{}\"", web::oauth::SCOPES.join(" "))
+    // `auth.mode devagotchi`: accounts merged since the last call take their machines along.
+    if let Some(authority) = state.verifier.authority() {
+        for (from, into) in authority.drain_merges() {
+            let _ = state.hub.links.reassign_owner(&from, &into);
         }
-        Some(nomen) => format!(
-            ", scope=\"{}\"",
-            crate::auth::sign_in_scopes(nomen.audiences)
-        ),
-        None => String::new(),
+    }
+    let origin = state.hub.config.public_url.trim_end_matches('/');
+    let (metadata_url, scope) = if state.verifier.authority().is_some() {
+        (
+            format!("{origin}/.well-known/oauth-protected-resource/mcp"),
+            ", scope=\"openid email profile offline_access mcp\"".to_string(),
+        )
+    } else {
+        let scope = match state.hub.config.auth.nomen() {
+            _ if state.hub.config.has_accounts() => {
+                format!(", scope=\"{}\"", web::oauth::SCOPES.join(" "))
+            }
+            Some(nomen) => format!(
+                ", scope=\"{}\"",
+                crate::auth::sign_in_scopes(nomen.audiences)
+            ),
+            None => String::new(),
+        };
+        (
+            format!("{origin}/.well-known/oauth-protected-resource"),
+            scope,
+        )
     };
-    let metadata = format!(
-        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"{scope}",
-        state.hub.config.public_url.trim_end_matches('/')
-    );
+    let metadata = format!("Bearer resource_metadata=\"{metadata_url}\"{scope}");
     let token = request
         .headers()
         .get(header::AUTHORIZATION)
@@ -792,6 +1055,9 @@ fn challenge(status: StatusCode, metadata: &str, error: Option<&str>) -> Respons
 }
 
 async fn protected_resource(State(state): State<AppState>) -> Response {
+    if let Some(authority) = state.verifier.authority() {
+        return axum::Json(authority.protected_resource(false)).into_response();
+    }
     let resource = state.hub.config.public_url.trim_end_matches('/').to_string();
     resource_metadata(&state, resource)
 }
@@ -799,6 +1065,9 @@ async fn protected_resource(State(state): State<AppState>) -> Response {
 /// RFC 9728 §3.1: the metadata at `/.well-known/oauth-protected-resource/mcp` is for the
 /// resource `<public_url>/mcp`, the URL an MCP client was given.
 async fn protected_resource_mcp(State(state): State<AppState>) -> Response {
+    if let Some(authority) = state.verifier.authority() {
+        return axum::Json(authority.protected_resource(true)).into_response();
+    }
     let resource = format!("{}/mcp", state.hub.config.public_url.trim_end_matches('/'));
     resource_metadata(&state, resource)
 }
@@ -846,6 +1115,39 @@ async fn link_upgrade(
         .on_upgrade(move |socket| links.serve(socket, peer, permit))
 }
 
+#[derive(serde::Deserialize)]
+struct EnrollBody {
+    name: String,
+    code: String,
+    public_key: String,
+}
+
+/// Bind a machine key to a one-time code from `machine_add`. The code is the secret.
+async fn enroll_with_code(
+    State(state): State<AppState>,
+    axum::Json(body): axum::Json<EnrollBody>,
+) -> Response {
+    match state
+        .hub
+        .links
+        .enroll_owned(&body.name, &body.code, &body.public_key)
+    {
+        Ok(device) => (
+            StatusCode::CREATED,
+            axum::Json(serde_json::json!({
+                "name": device.name,
+                "owner": device.owner,
+            })),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::BAD_REQUEST,
+            axum::Json(serde_json::json!({ "error": error.code, "message": error.message })),
+        )
+            .into_response(),
+    }
+}
+
 async fn healthz(State(state): State<AppState>) -> Response {
     let mut brokers = Vec::new();
     let mut all_up = true;
@@ -866,10 +1168,19 @@ async fn healthz(State(state): State<AppState>) -> Response {
     }
     let audit = state.hub.audit.verify();
     let chain_ok = audit.as_ref().map(|status| status.ok).unwrap_or(false);
+    let auth = if let Some(authority) = state.verifier.authority() {
+        authority.readiness().await
+    } else {
+        serde_json::Value::Null
+    };
+    let signing_ok = auth
+        .get("signing_key")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
     // The identity provider is reported, not counted: an outage there leaves the hub, its
     // links and confirmed sign-ins working (see nomen.rs).
-    let body = serde_json::json!({
-        "ok": all_up && chain_ok,
+    let mut body = serde_json::json!({
+        "ok": all_up && chain_ok && signing_ok,
         "brokers": brokers,
         "audit": audit.ok(),
         "issuer": state.verifier.issuer_health(),
@@ -879,7 +1190,11 @@ async fn healthz(State(state): State<AppState>) -> Response {
             (None, None) => serde_json::Value::Null,
         },
     });
-    let status = if all_up && chain_ok {
+    // Only `auth.mode devagotchi` reports its authorization server's readiness here.
+    if !auth.is_null() {
+        body["auth"] = auth;
+    }
+    let status = if all_up && chain_ok && signing_ok {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
@@ -1032,7 +1347,10 @@ mod tests {
         assert_eq!(run(None).unwrap_err().code, "invalid_cli");
 
         // The Texas case: the config's owner id becomes the owner's account.
-        write(serde_json::json!({ "mode": "hub" }), Some("395290028818825218"));
+        write(
+            serde_json::json!({ "mode": "hub" }),
+            Some("395290028818825218"),
+        );
         run(Some("Jesse")).unwrap();
         run(None).unwrap();
         let owner = tokio::runtime::Builder::new_current_thread()
@@ -1046,7 +1364,10 @@ mod tests {
                     .unwrap();
                 accounts.owner().await.unwrap().unwrap()
             });
-        assert_eq!((owner.id.as_str(), owner.name.as_str()), ("395290028818825218", "Jesse"));
+        assert_eq!(
+            (owner.id.as_str(), owner.name.as_str()),
+            ("395290028818825218", "Jesse")
+        );
         // Each run is on the audit chain, without the link.
         let audit = Audit::open(&state.join("audit.sqlite3")).unwrap();
         assert!(audit.verify().unwrap().ok);
@@ -1107,5 +1428,499 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn setup_code_reports_the_dg_account_and_the_claim_url() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("hub.json");
+        let subject = "395290028818825218";
+        std::fs::write(
+            &config_path,
+            serde_json::json!({
+                "listen": "127.0.0.1:9",
+                "public_url": "https://app.devagotchi.com",
+                "auth": {
+                    "mode": "devagotchi",
+                    "legacy": { "issuer": "https://id.shippin.cloud" }
+                },
+                "owner": subject,
+                "brokers": [],
+                "grants": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let lines = setup_code_lines(dir.path(), &config_path).unwrap();
+        let owner = lines
+            .iter()
+            .find_map(|line| line.strip_prefix("owner "))
+            .unwrap();
+        assert!(owner.starts_with("dg_"), "{lines:?}");
+        assert_ne!(owner, subject);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "claim https://app.devagotchi.com/claim"),
+            "{lines:?}"
+        );
+        let again = setup_code_lines(dir.path(), &config_path).unwrap();
+        assert_eq!(again[0], format!("owner {owner}"));
+
+        // A hub in auth.mode hub has its own claim; setup-code leaves its state alone.
+        let hub_state = dir.path().join("hub-mode");
+        std::fs::write(
+            &config_path,
+            serde_json::json!({
+                "listen": "127.0.0.1:9",
+                "public_url": "https://app.devagotchi.com",
+                "auth": { "mode": "hub" },
+                "brokers": [],
+                "grants": []
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            setup_code_lines(&hub_state, &config_path).unwrap_err().code,
+            "invalid_cli"
+        );
+        assert!(!hub_state.join("identities.sqlite3").exists());
+    }
+
+    fn dg(nibble: char) -> String {
+        format!("dg_{}", nibble.to_string().repeat(32))
+    }
+
+    fn access_for(authority: &oauth::Authority, account: &str) -> String {
+        let started = authority.start_device("devagotchi-cli").unwrap();
+        authority
+            .approve_device(started["user_code"].as_str().unwrap(), account)
+            .unwrap();
+        authority
+            .token(&oauth::TokenRequest {
+                grant_type: "urn:ietf:params:oauth:grant-type:device_code".into(),
+                code: None,
+                redirect_uri: None,
+                client_id: Some("devagotchi-cli".into()),
+                code_verifier: None,
+                refresh_token: None,
+                device_code: Some(started["device_code"].as_str().unwrap().into()),
+            })
+            .unwrap()
+            .access_token
+    }
+
+    /// Owner and an operator grant can read and change provisional limits. A stranger
+    /// cannot. Out-of-range values are refused. A saved value is what the next account
+    /// and the expiry warning use, and it survives a new open of the state directory.
+    #[tokio::test]
+    async fn admin_settings_are_authorized_bounded_audited_and_live() {
+        let owner = dg('a');
+        let operator = dg('b');
+        let stranger = dg('c');
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        let socket = "/tmp/devagotchi-admin-settings.sock";
+        #[cfg(windows)]
+        let socket = r"\\.\pipe\devagotchi-admin-settings";
+        let config = Arc::new(
+            config::HubConfig::parse(
+                &serde_json::json!({
+                    "listen": "127.0.0.1:1",
+                    "public_url": "http://127.0.0.1:9",
+                    "auth": { "mode": "devagotchi" },
+                    "owner": owner,
+                    "brokers": [{ "name": "lab", "socket": socket }],
+                    "grants": [{ "subject": operator, "operator": true }]
+                })
+                .to_string(),
+            )
+            .unwrap(),
+        );
+        let devices =
+            Arc::new(devices::Devices::open(&dir.path().join("devices.sqlite3")).unwrap());
+        let audit = Arc::new(Audit::open(&dir.path().join("audit.sqlite3")).unwrap());
+        let links = Arc::new(link::Links::new(config.clone(), devices, audit.clone()));
+        let authority = Arc::new(oauth::Authority::open(dir.path(), "http://127.0.0.1:9").unwrap());
+        let owner_token = access_for(&authority, &owner);
+        let operator_token = access_for(&authority, &operator);
+        let stranger_token = access_for(&authority, &stranger);
+        let state = AppState {
+            verifier: Arc::new(auth::Verifier::Devagotchi(authority.clone())),
+            hub: hub::Hub {
+                boards: Arc::new(board::mcp::Boards::from_config(&config, dir.path())),
+                config,
+                audit: audit.clone(),
+                links,
+                push: None,
+                downloads: None,
+            },
+            web: None,
+            passkeys: None,
+        };
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!(
+            "http://{}/api/v1/admin/settings",
+            listener.local_addr().unwrap()
+        );
+        let app = Router::new()
+            .route(
+                "/api/v1/admin/settings",
+                get(admin_settings_get).put(admin_settings_put),
+            )
+            .with_state(state);
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let http = reqwest::Client::new();
+
+        let call =
+            |method: reqwest::Method, token: Option<&str>, body: Option<serde_json::Value>| {
+                let http = http.clone();
+                let url = url.clone();
+                let token = token.map(str::to_string);
+                async move {
+                    let mut request = http.request(method, &url);
+                    if let Some(token) = token {
+                        request = request.bearer_auth(token);
+                    }
+                    if let Some(body) = body {
+                        request = request.json(&body);
+                    }
+                    let response = request.send().await.unwrap();
+                    let status = response.status().as_u16();
+                    let json: serde_json::Value =
+                        response.json().await.unwrap_or(serde_json::Value::Null);
+                    (status, json)
+                }
+            };
+
+        let (status, _) = call(reqwest::Method::GET, None, None).await;
+        assert_eq!(status, 401);
+        let (status, _) = call(reqwest::Method::GET, Some("not-a-token"), None).await;
+        assert_eq!(status, 401);
+        let (status, body) = call(reqwest::Method::GET, Some(&stranger_token), None).await;
+        assert_eq!(status, 403, "{body}");
+        let (status, body) = call(reqwest::Method::GET, Some(&owner_token), None).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["provisional"]["ttl_days"], 14);
+        assert_eq!(body["provisional"]["starts_per_hour"], 8);
+        assert_eq!(body["provisional"]["unclaimed_cap"], 500);
+
+        for (field, value) in [
+            ("ttl_days", 0),
+            ("ttl_days", 91),
+            ("starts_per_hour", 0),
+            ("unclaimed_cap", 1_000_001),
+        ] {
+            let (status, body) = call(
+                reqwest::Method::PUT,
+                Some(&owner_token),
+                Some(serde_json::json!({ "provisional": { field: value } })),
+            )
+            .await;
+            assert_eq!(status, 400, "{field}={value}: {body}");
+            assert_eq!(body["error"], "invalid_settings");
+        }
+        let (status, _) = call(
+            reqwest::Method::PUT,
+            Some(&owner_token),
+            Some(serde_json::json!({ "provisional": {} })),
+        )
+        .await;
+        assert_eq!(status, 400);
+        let (status, body) = call(reqwest::Method::GET, Some(&operator_token), None).await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(
+            body["provisional"]["ttl_days"], 14,
+            "a rejected write leaves the live value"
+        );
+
+        let (status, body) = call(
+            reqwest::Method::PUT,
+            Some(&operator_token),
+            Some(serde_json::json!({
+                "provisional": { "ttl_days": 1, "starts_per_hour": 2, "unclaimed_cap": 10 }
+            })),
+        )
+        .await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["provisional"]["ttl_days"], 1);
+
+        let first = authority
+            .agent_start("devagotchi-cli", "claude", "203.0.113.40")
+            .unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let left = first.provisional_until.saturating_sub(now);
+        assert!((86_390..=86_400).contains(&left), "left={left}");
+        authority
+            .agent_start("devagotchi-cli", "claude", "203.0.113.40")
+            .unwrap();
+        assert_eq!(
+            authority
+                .agent_start("devagotchi-cli", "claude", "203.0.113.40")
+                .unwrap_err()
+                .code,
+            "rate_limited"
+        );
+        let (status, _) = call(
+            reqwest::Method::PUT,
+            Some(&operator_token),
+            Some(serde_json::json!({ "provisional": { "unclaimed_cap": 2 } })),
+        )
+        .await;
+        assert_eq!(status, 200);
+        assert_eq!(
+            authority
+                .agent_start("devagotchi-cli", "claude", "203.0.113.41")
+                .unwrap_err()
+                .code,
+            "provisional_quota"
+        );
+        let before = authority.verify_access(&first.access_token).unwrap();
+        assert!(!before.provisional_warning);
+        let (status, _) = call(
+            reqwest::Method::PUT,
+            Some(&operator_token),
+            Some(serde_json::json!({ "provisional": { "ttl_days": 90 } })),
+        )
+        .await;
+        assert_eq!(status, 200);
+        let after = authority.verify_access(&first.access_token).unwrap();
+        assert!(after.provisional_warning);
+        assert_eq!(after.provisional_until, before.provisional_until);
+
+        let rows = audit.recorded();
+        assert!(
+            rows.iter().any(|(subject, tool, outcome)| {
+                subject == &stranger && tool == "admin.settings" && outcome == "denied"
+            }),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter()
+                .any(|(_, tool, outcome)| tool == "admin.settings"
+                    && outcome.starts_with("rejected")),
+            "{rows:?}"
+        );
+        assert!(
+            rows.iter().any(|(_, tool, outcome)| {
+                tool == "admin.settings"
+                    && outcome.contains("ttl_days=1")
+                    && outcome.contains("starts_per_hour=2")
+                    && outcome.contains("unclaimed_cap=10")
+            }),
+            "{rows:?}"
+        );
+        assert!(audit.verify().unwrap().ok);
+
+        let reloaded = oauth::Authority::open(dir.path(), "http://127.0.0.1:9").unwrap();
+        assert_eq!(reloaded.operator_settings().provisional.ttl_days, 90);
+        assert_eq!(reloaded.operator_settings().provisional.starts_per_hour, 2);
+        assert_eq!(reloaded.operator_settings().provisional.unclaimed_cap, 2);
+        reloaded.apply_config_limits(&config::ProvisionalPolicy::default());
+        assert_eq!(
+            reloaded.operator_settings().provisional.ttl_days,
+            90,
+            "a saved row wins over hub.json"
+        );
+    }
+
+    /// What `run` builds for an `auth` block, short of listening: the accounts and passkeys
+    /// of `auth.mode hub`, and the verifier (the authority of `auth.mode devagotchi`).
+    async fn state_for(
+        dir: &std::path::Path,
+        auth: serde_json::Value,
+        owner: Option<&str>,
+    ) -> AppState {
+        let mut value = serde_json::json!({
+            "listen": "127.0.0.1:1",
+            "public_url": "http://127.0.0.1:9",
+            "auth": auth,
+            "brokers": [],
+            "grants": []
+        });
+        if let Some(owner) = owner {
+            value["owner"] = owner.into();
+        }
+        let config = Arc::new(HubConfig::parse(&value.to_string()).unwrap());
+        prepare_state_dir(dir).unwrap();
+        let accounts = if config.has_accounts() {
+            let url = store::sqlite_url(&dir.join("accounts.sqlite3"));
+            Some(Arc::new(
+                accounts::Accounts::open(store::Store::open(&url).await.unwrap())
+                    .await
+                    .unwrap()
+                    .with_tokens(config.token_config()),
+            ))
+        } else {
+            None
+        };
+        let passkeys = accounts
+            .clone()
+            .and_then(|accounts| web::HubSignIn::new(config.clone(), accounts).map(Arc::new));
+        let devices = Arc::new(devices_at(dir).unwrap());
+        let audit = Arc::new(Audit::open(&dir.join("audit.sqlite3")).unwrap());
+        let links = Arc::new(Links::new(config.clone(), devices, audit.clone()));
+        AppState {
+            verifier: Arc::new(
+                Verifier::from_hub_config(&config, dir, accounts)
+                    .await
+                    .unwrap(),
+            ),
+            hub: Hub {
+                boards: Arc::new(board::mcp::Boards::from_config(&config, dir)),
+                config,
+                audit,
+                links,
+                push: None,
+                downloads: None,
+            },
+            web: None,
+            passkeys,
+        }
+    }
+
+    /// Both account systems mount `/claim` and `/.well-known/oauth-authorization-server`,
+    /// and axum panics on a path mounted twice when the router is built. Each mode mounts
+    /// its own: the hub's (32b, 16c) in every mode but devagotchi, the authority's
+    /// (`oauth.rs`) in devagotchi mode only, with its admin settings and `/healthz` `auth`.
+    #[tokio::test]
+    async fn app_builds_in_every_auth_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let private = |name: &str, text: String| -> String {
+            let path = dir.path().join(name);
+            std::fs::write(&path, text).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            path.to_string_lossy().into_owned()
+        };
+        let tokens = private(
+            "tokens.json",
+            serde_json::json!({ "dev-token-0123456789": "jesse" }).to_string(),
+        );
+        let key = test_keys::rsa();
+        let key_file = private(
+            "nomen-key.json",
+            serde_json::json!({
+                "type": "application", "keyId": "k", "key": key.pem, "appId": "1", "clientId": "c"
+            })
+            .to_string(),
+        );
+        let nomen = serde_json::json!({
+            "issuer": "https://id.example.test",
+            "audiences": ["project"],
+            "clients": ["client"],
+            "key_file": key_file
+        });
+        let mut nomen_mode = nomen.clone();
+        nomen_mode["mode"] = "nomen".into();
+        let cases = [
+            ("dev", serde_json::json!({ "mode": "dev", "tokens_file": tokens }), None),
+            ("nomen", nomen_mode, Some("300000000000000001")),
+            ("hub", serde_json::json!({ "mode": "hub" }), None),
+            ("hub-nomen", serde_json::json!({ "mode": "hub", "nomen": nomen }), None),
+            ("devagotchi", serde_json::json!({ "mode": "devagotchi" }), None),
+        ];
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap();
+        for (mode, auth, owner) in cases {
+            let state = state_for(&dir.path().join(mode), auth, owner).await;
+            let devagotchi = mode == "devagotchi";
+            let hub_mode = mode.starts_with("hub");
+            assert_eq!(state.verifier.authority().is_some(), devagotchi, "{mode}");
+            assert_eq!(state.passkeys.is_some(), hub_mode, "{mode}");
+            // Building the router is the check that matters: a path mounted twice panics.
+            let app = app(state);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                )
+                .await
+                .unwrap()
+            });
+
+            let health = http.get(format!("{base}/healthz")).send().await.unwrap();
+            assert_eq!(health.status(), StatusCode::OK, "{mode}");
+            let health: serde_json::Value = health.json().await.unwrap();
+            assert_eq!(health.get("auth").is_some(), devagotchi, "{mode}: {health}");
+
+            let metadata = http
+                .get(format!("{base}/.well-known/oauth-authorization-server"))
+                .send()
+                .await
+                .unwrap();
+            let status = metadata.status();
+            let metadata: serde_json::Value = metadata.json().await.unwrap();
+            let token_endpoint = metadata["token_endpoint"].as_str().unwrap_or_default();
+            if hub_mode {
+                assert_eq!(status, StatusCode::OK, "{mode}: {metadata}");
+                assert_eq!(token_endpoint, "http://127.0.0.1:9/oauth/token", "{mode}");
+            } else if devagotchi {
+                assert_eq!(status, StatusCode::OK, "{mode}: {metadata}");
+                assert_eq!(token_endpoint, "http://127.0.0.1:9/token", "{mode}");
+            } else {
+                assert_eq!(status, StatusCode::NOT_FOUND, "{mode}: {metadata}");
+            }
+
+            let claim = http.get(format!("{base}/claim")).send().await.unwrap();
+            let claim_status = claim.status();
+            let claim = claim.text().await.unwrap();
+            if hub_mode {
+                assert_eq!(claim_status, StatusCode::OK, "{mode}");
+                assert!(claim.contains("Claim this hub"), "{mode}: {claim}");
+            } else if devagotchi {
+                assert_eq!(claim_status, StatusCode::OK, "{mode}");
+                assert!(!claim.contains("Claim this hub"), "{mode}: {claim}");
+            }
+
+            // The hub's own token endpoint answers only in hub mode (elsewhere it is mounted
+            // and says not_found, as before); devagotchi mode has `/token` and no `/oauth/*`.
+            let token = http
+                .post(format!("{base}/oauth/token"))
+                .form(&[("grant_type", "authorization_code")])
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                token.status() != StatusCode::NOT_FOUND,
+                hub_mode,
+                "{mode}: /oauth/token {}",
+                token.status()
+            );
+            let token = http
+                .post(format!("{base}/token"))
+                .form(&[("grant_type", "authorization_code")])
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(
+                token.status() != StatusCode::NOT_FOUND,
+                devagotchi,
+                "{mode}: /token {}",
+                token.status()
+            );
+            let settings = http
+                .get(format!("{base}/api/v1/admin/settings"))
+                .send()
+                .await
+                .unwrap();
+            let expected = if devagotchi {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::NOT_FOUND
+            };
+            assert_eq!(settings.status(), expected, "{mode}: admin settings");
+        }
     }
 }
