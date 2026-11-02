@@ -11,6 +11,7 @@
 //! the one-time link.
 
 pub mod claim;
+pub mod email;
 pub mod identities;
 pub mod oauth;
 pub mod passkey;
@@ -280,6 +281,29 @@ impl Accounts {
         self.tenancy = tenancy;
         self.operators = operators;
         self
+    }
+
+    /// An HMAC under the store's key over `data`, for `purpose`: what makes a value the
+    /// hub hands a browser (a sign-in's state) its own.
+    pub fn mac(&self, purpose: &str, data: &[u8]) -> Vec<u8> {
+        let mut message = Vec::with_capacity(32 + purpose.len() + data.len());
+        message.extend_from_slice(b"devagotchi ");
+        message.extend_from_slice(purpose.as_bytes());
+        message.push(0);
+        message.extend_from_slice(data);
+        hmac::sign(&self.challenge_key.read().expect("challenge key"), &message)
+            .as_ref()
+            .to_vec()
+    }
+
+    /// Whether `tag` is `mac(purpose, data)`, compared in constant time.
+    pub fn mac_ok(&self, purpose: &str, data: &[u8], tag: &[u8]) -> bool {
+        let mut message = Vec::with_capacity(32 + purpose.len() + data.len());
+        message.extend_from_slice(b"devagotchi ");
+        message.extend_from_slice(purpose.as_bytes());
+        message.push(0);
+        message.extend_from_slice(data);
+        hmac::verify(&self.challenge_key.read().expect("challenge key"), &message, tag).is_ok()
     }
 
     /// The tenancy these accounts were opened with.

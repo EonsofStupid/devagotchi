@@ -711,6 +711,8 @@ async fn names_from_nomen_are_escaped_on_the_page() {
             hub_account: false,
             unsecured_until: None,
             events: &[],
+            ways: "",
+            linked: &[],
         },
         &[],
     );

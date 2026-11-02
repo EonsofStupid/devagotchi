@@ -27,8 +27,8 @@ pub const TENANCY_ENV: &str = "DEVAGOTCHI_HUB_TENANCY";
 /// The environment variable that sets `operators`, comma separated.
 pub const OPERATORS_ENV: &str = "DEVAGOTCHI_HUB_OPERATORS";
 
-/// The identity providers an operator entry may name, as `<provider>:<subject>`; `email:`
-/// names a verified address instead.
+/// The identity providers an operator entry usually names, as `<provider>:<subject>`
+/// (`email:` names a verified address instead); any configured provider's name works.
 pub const OPERATOR_PROVIDERS: [&str; 5] = ["email", "google", "github", "nomen", "oidc"];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -221,9 +221,9 @@ pub(crate) fn check_operator(entry: &str) -> Result<(), String> {
             "operators: {entry:?} is provider:subject (email:you@example.com, github:12345, google:…, nomen:…)"
         ));
     };
-    if !OPERATOR_PROVIDERS.contains(&provider) {
+    if !crate::config::valid_name(provider) || provider.len() > 32 {
         return Err(format!(
-            "operators: {provider:?} is not one of {}",
+            "operators: {provider:?} is not a provider's name (usually one of {})",
             OPERATOR_PROVIDERS.join(", ")
         ));
     }
@@ -319,7 +319,7 @@ mod tests {
         for bad in [
             "jesse",
             "email:jesse",
-            "twitter:1",
+            "Git Hub:1",
             "github:",
             "github: 1 2",
         ] {

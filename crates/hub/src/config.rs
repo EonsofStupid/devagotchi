@@ -11,7 +11,9 @@ use std::{
 use devagotchi_contracts::{BridgeError, BridgeResult};
 use serde::Deserialize;
 
+pub(crate) mod providers;
 pub(crate) mod tenancy;
+pub use providers::{EmailConfig, ProviderConfig, ProviderKind};
 pub use tenancy::{OPERATORS_ENV, TENANCY_ENV, TenancyConfig, TenancyMode, is_operator};
 use tenancy::check_operator;
 
@@ -218,6 +220,13 @@ pub enum AuthConfig {
         /// clients it keeps. Each has a default; set only what differs.
         #[serde(default)]
         tokens: TokenConfig,
+        /// Sign in with Google, GitHub, or any OpenID Connect provider (Shippin's Nomen),
+        /// besides a passkey (`config/providers.rs`).
+        #[serde(default)]
+        providers: Vec<ProviderConfig>,
+        /// Sign-in links by email, over this mail server.
+        #[serde(default)]
+        email: Option<EmailConfig>,
     },
 }
 
@@ -531,14 +540,14 @@ impl HubConfig {
                 .map(str::to_string)
                 .collect();
         }
-        config.validate()?;
+        config.validate(&env)?;
         if let Some(owner) = &config.owner {
             let _ = config.owner_cell.set(owner.clone());
         }
         Ok(config)
     }
 
-    fn validate(&self) -> BridgeResult<()> {
+    fn validate(&self, env: &dyn Fn(&str) -> Option<String>) -> BridgeResult<()> {
         let invalid = |message: String| BridgeError::new("invalid_config", message);
         if self.listen.parse::<std::net::SocketAddr>().is_err() {
             return Err(invalid(format!(
@@ -696,8 +705,27 @@ impl HubConfig {
                     )));
                 }
             }
-            AuthConfig::Hub { rp_id, tokens, .. } => {
+            AuthConfig::Hub {
+                rp_id,
+                tokens,
+                providers,
+                email,
+                ..
+            } => {
                 tokens.check().map_err(invalid)?;
+                let mut names = BTreeSet::new();
+                for provider in providers {
+                    provider.check(env).map_err(invalid)?;
+                    if !names.insert(provider.name()) {
+                        return Err(invalid(format!(
+                            "auth.providers: {} is listed twice",
+                            provider.name()
+                        )));
+                    }
+                }
+                if let Some(email) = email {
+                    email.check(env).map_err(invalid)?;
+                }
                 // Passkeys work only in a secure context: https, or this machine's loopback.
                 if !self.public_url.starts_with("https://") && !loopback_http(&self.public_url) {
                     return Err(invalid(
@@ -964,6 +992,16 @@ impl HubConfig {
     /// hub is never claimed; an operator set at deploy has decided who runs it.
     pub fn claim_allowed(&self) -> bool {
         !self.multi_tenant() && self.operators.is_empty() && self.owner.is_none()
+    }
+
+    /// The sign-in providers and the email link's server, in hub mode.
+    pub fn sign_ins(&self) -> (&[ProviderConfig], Option<&EmailConfig>) {
+        match &self.auth {
+            AuthConfig::Hub {
+                providers, email, ..
+            } => (providers, email.as_ref()),
+            _ => (&[], None),
+        }
     }
 
     /// Whether people sign in with the hub's own accounts (`auth.mode hub`).

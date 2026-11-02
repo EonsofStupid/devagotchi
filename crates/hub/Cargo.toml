@@ -39,6 +39,11 @@ aws-lc-rs = "1"
 http = "1"
 tower-service = "0.3"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
+# The email sign-in link's SMTP client (`mail.rs`): the same rustls, aws-lc-rs and platform
+# verifier reqwest already brings, so no new TLS stack.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false }
+rustls-platform-verifier = "0.7"
 # The machine link: verify device keys, mint nonces and enrollment codes.
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 getrandom = "0.4"

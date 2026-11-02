@@ -27,6 +27,7 @@
 mod approvals;
 mod claim;
 mod device;
+mod email;
 mod hosted;
 mod landing;
 #[cfg(test)]
@@ -39,6 +40,7 @@ mod notify;
 pub mod oauth;
 mod pages;
 mod passkeys;
+mod providers;
 mod public;
 mod routes;
 mod sessions;
@@ -67,6 +69,7 @@ pub(crate) fn utc(secs: u64) -> String {
 }
 
 pub use passkeys::HubSignIn;
+pub use providers::Providers;
 pub use routes::router;
 
 /// Every web page's top bar says whether the browser is signed in: the account and a
@@ -494,6 +497,12 @@ pub fn safe_return_to(path: &str) -> &str {
 }
 
 fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
+    cookie_value_up_to(headers, name, 128)
+}
+
+/// A cookie's value when it is at most `max` bytes (a sealed sign-in's state is longer
+/// than a session id).
+fn cookie_value_up_to(headers: &HeaderMap, name: &str, max: usize) -> Option<String> {
     headers
         .get_all(header::COOKIE)
         .iter()
@@ -502,7 +511,7 @@ fn cookie_value(headers: &HeaderMap, name: &str) -> Option<String> {
         .filter_map(|pair| pair.trim().split_once('='))
         .find(|(key, _)| *key == name)
         .map(|(_, value)| value.to_string())
-        .filter(|value| !value.is_empty() && value.len() <= 128)
+        .filter(|value| !value.is_empty() && value.len() <= max)
 }
 
 /// Percent-encode a query value (RFC 3986 unreserved characters pass through).

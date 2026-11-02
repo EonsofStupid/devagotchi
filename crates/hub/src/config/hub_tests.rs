@@ -296,3 +296,47 @@ fn a_hosted_hub_and_its_operators_come_from_the_config_or_the_environment() {
     proxies["tenancy"]["trusted_proxies"] = serde_json::json!(["not-an-address"]);
     assert!(refused(&proxies).contains("trusted_proxies"));
 }
+
+#[test]
+fn sign_in_providers_take_their_secrets_from_the_environment_or_a_file() {
+    let env = |name: &str| match name {
+        "GOOGLE_ID" => Some("1.apps.googleusercontent.com".to_string()),
+        "GOOGLE_SECRET" | "GITHUB_SECRET" | "SMTP_PASSWORD" => Some("S3CRET-VALUE".to_string()),
+        "SMTP_URL" => Some("smtps://sign-in@smtp.example.com".to_string()),
+        _ => None,
+    };
+    let with = |providers: serde_json::Value, email: Option<serde_json::Value>| {
+        let mut config = hub();
+        config["auth"]["providers"] = providers;
+        if let Some(email) = email {
+            config["auth"]["email"] = email;
+        }
+        HubConfig::parse_with(&config.to_string(), env)
+    };
+    let good = with(
+        serde_json::json!([
+            { "kind": "google", "client_id_env": "GOOGLE_ID", "client_secret_env": "GOOGLE_SECRET" },
+            { "kind": "github", "client_id": "Iv1.abc", "client_secret_env": "GITHUB_SECRET" },
+            { "kind": "oidc", "name": "nomen", "label": "Shippin", "issuer": "https://id.shippin.cloud", "client_id": "n" }
+        ]),
+        Some(serde_json::json!({ "smtp_url_env": "SMTP_URL", "password_env": "SMTP_PASSWORD", "from": "Devagotchi <sign-in@devagotchi.com>" })),
+    )
+    .unwrap();
+    let (providers, email) = good.sign_ins();
+    assert_eq!(providers.iter().map(|p| p.name()).collect::<Vec<_>>(), ["google", "github", "nomen"]);
+    assert_eq!(providers[2].label(), "Shippin");
+    assert!(email.is_some());
+    for (providers, email, why) in [
+        (serde_json::json!([{ "kind": "google", "client_id_env": "MISSING", "client_secret_env": "GOOGLE_SECRET" }]), None, "MISSING is not set"),
+        (serde_json::json!([{ "kind": "github", "client_id": "x" }]), None, "client_secret_env"),
+        (serde_json::json!([{ "kind": "oidc", "issuer": "https://id.example.com", "client_id": "x" }]), None, "needs a name"),
+        (serde_json::json!([{ "kind": "oidc", "name": "x", "issuer": "http://id.example.com", "client_id": "x" }]), None, "https"),
+        (serde_json::json!([{ "kind": "github", "client_id": "a", "client_secret_env": "GITHUB_SECRET" }, { "kind": "github", "client_id": "b", "client_secret_env": "GITHUB_SECRET" }]), None, "twice"),
+        (serde_json::json!([]), Some(serde_json::json!({ "smtp_url": "smtp://mail.example.com?tls=none", "from": "a@b.co" })), "loopback"),
+        (serde_json::json!([]), Some(serde_json::json!({ "smtp_url": "smtps://u:pw@mail.example.com", "from": "a@b.co" })), "password"),
+    ] {
+        let refused = with(providers, email).unwrap_err();
+        assert!(refused.message.contains(why), "{why}: {}", refused.message);
+        assert!(!refused.message.contains("S3CRET-VALUE"));
+    }
+}

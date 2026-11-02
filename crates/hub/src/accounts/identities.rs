@@ -142,6 +142,25 @@ impl Accounts {
     pub async fn sign_in_identity(&self, proven: &Proven) -> BridgeResult<Account> {
         self.sign_in_identity_at(
             proven,
+            None,
+            crate::link::random::<16>(),
+            crate::link::random::<16>(),
+            now_secs(),
+        )
+        .await
+    }
+
+    /// `sign_in_identity` from a browser already signed in to `current`: a sign-in that
+    /// reaches no account yet is linked to `current` when nobody has secured it (the
+    /// anonymous-then-link upgrade), rather than making another account.
+    pub async fn sign_in_identity_from(
+        &self,
+        proven: &Proven,
+        current: Option<&str>,
+    ) -> BridgeResult<Account> {
+        self.sign_in_identity_at(
+            proven,
+            current,
             crate::link::random::<16>(),
             crate::link::random::<16>(),
             now_secs(),
@@ -152,6 +171,7 @@ impl Accounts {
     pub(crate) async fn sign_in_identity_at(
         &self,
         proven: &Proven,
+        current: Option<&str>,
         tenant_random: [u8; 16],
         account_random: [u8; 16],
         now: u64,
@@ -202,6 +222,18 @@ impl Accounts {
                     insert_identity(connection, &account, proven, now).await?;
                     return Ok(account);
                 }
+            }
+            if let Some(current) = current
+                && let Some(account) = account_in(connection, current).await?
+                && account.provisional
+                && account.disabled_at.is_none()
+                && !self.lapsed(&account, now)
+            {
+                insert_identity(connection, &account, proven, now).await?;
+                return Ok(Account {
+                    provisional: false,
+                    ..account
+                });
             }
             if !multi {
                 return Err(BridgeError::new(
