@@ -4,6 +4,10 @@
 //! file is hashed and must match, so the hub never serves a byte its own list does not
 //! vouch for; only listed names are served (`/dist/<file>`). `/join/<code>` writes those
 //! sums into the script it serves, and the script checks each download against them.
+//!
+//! The hub image carries the Linux and Windows builds of its own commit in [`BUILT_IN`]
+//! (increment 71), so a hub from the image hands out builds with nothing configured;
+//! `downloads` in the config, or [`DOWNLOADS_ENV`] over it, names another directory.
 
 use std::{
     collections::BTreeMap,
@@ -13,6 +17,37 @@ use std::{
 
 use devagotchi_contracts::{BridgeError, BridgeResult};
 use sha2::{Digest, Sha256};
+
+/// Where the hub image keeps the builds of its own commit (`deploy/compose/Dockerfile`).
+/// Used when neither the config nor the environment names a directory and this one holds
+/// a `SHA256SUMS`; anywhere else it does not exist, and nothing changes.
+pub const BUILT_IN: &str = "/usr/share/devagotchi/downloads";
+
+/// The environment variable that names the downloads directory over the config's.
+pub const DOWNLOADS_ENV: &str = "DEVAGOTCHI_HUB_DOWNLOADS";
+
+/// The directory this hub hands builds out of: the environment's, else the config's, else
+/// `built_in` when it holds a `SHA256SUMS` (a hub from the image), else none.
+pub fn choose(
+    configured: Option<String>,
+    from_env: Option<String>,
+    built_in: Option<&Path>,
+) -> Option<String> {
+    from_env
+        .map(|dir| dir.trim().to_string())
+        .filter(|dir| !dir.is_empty())
+        .or(configured)
+        .or_else(|| {
+            built_in
+                .filter(|dir| dir.join("SHA256SUMS").is_file())
+                .map(|dir| dir.display().to_string())
+        })
+}
+
+/// [`BUILT_IN`] where the image runs (Linux); elsewhere there is none.
+pub fn built_in() -> Option<&'static Path> {
+    cfg!(unix).then(|| Path::new(BUILT_IN))
+}
 
 pub struct Downloads {
     dir: PathBuf,
@@ -178,6 +213,33 @@ mod tests {
         for name in ["secret.txt", "SHA256SUMS", "VERSION", "../etc/passwd"] {
             assert!(downloads.path(name).is_none(), "{name}");
         }
+    }
+
+    #[test]
+    fn the_environment_then_the_config_then_the_image_s_own_builds() {
+        let image = lay_down(&[("a", b"a")], "main-abc1234");
+        let built_in = Some(image.path());
+        let none = tempfile::tempdir().unwrap();
+        let some = |dir: &str| Some(dir.to_string());
+        // A hub from the image, nothing configured: the builds it carries.
+        assert_eq!(
+            choose(None, None, built_in).as_deref(),
+            image.path().to_str()
+        );
+        assert_eq!(
+            choose(None, some("  "), built_in),
+            choose(None, None, built_in)
+        );
+        // The config over the image's, and the environment over both.
+        assert_eq!(choose(some("/srv/dist"), None, built_in), some("/srv/dist"));
+        assert_eq!(
+            choose(some("/srv/dist"), some(" /run/dist "), built_in),
+            some("/run/dist")
+        );
+        // Anywhere without the image's directory (or with an empty one), nothing.
+        assert_eq!(choose(None, None, Some(none.path())), None);
+        assert_eq!(choose(None, None, Some(&none.path().join("missing"))), None);
+        assert_eq!(choose(None, None, None), None);
     }
 
     #[test]

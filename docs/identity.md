@@ -156,7 +156,7 @@ A join code is `dvg-` plus 32 lowercase hex, 15 minutes, single-use, bound to th
 | Proxmox or Incus host | `{hub}/join/{code}.host.sh` — the Linux installer on the host itself, not inside a guest, so the broker is the host's |
 | Manual | The tarball URL under `{hub}/dist/…`, the checksum, and `devagotchi link enroll` with the code on stdin |
 
-`/join` serves the script only when `/dist` has the archive and `SHA256SUMS` for this hub's version (`crates/hub/src/join.rs`). A pull-request commit has no GitHub Release, so a hub installed from a PR keeps serving whatever was copied into the downloads directory last. Promoting a build copies that build's archives into the downloads directory as part of the install. The script refuses a checksum mismatch and does not enroll.
+`/join` serves the script only when `/dist` has the archive and `SHA256SUMS` for this hub's version (`crates/hub/src/join.rs`). A pull-request commit has no GitHub Release, so a hub installed from a PR keeps serving whatever was copied into the downloads directory last. A hub from the image serves the builds of the image's own commit, which the image carries (`/usr/share/devagotchi/downloads`). Promoting a build copies that build's archives into the downloads directory as part of the install. The script refuses a checksum mismatch and does not enroll.
 
 Operator-configured brokers are not issued by `machine_add`. The free owned-machine cap stays 16 unless the account is the hub owner.
 

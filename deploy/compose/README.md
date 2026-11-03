@@ -151,7 +151,7 @@ sudo ./install.sh --domain app.example.com --rp-id example.com --tenancy multi \
 
 GitHub builds the hub image from every commit that lands on `main` (and every release tag),
 natively on x86_64 and ARM64, and publishes one multi-arch image to GHCR
-(`.github/workflows/image.yml`): `:main` and `:sha-<commit>` for main, the version and
+(`.github/workflows/image.yml`, run by `release.yml` once the release builds are done): `:main` and `:sha-<commit>` for main, the version and
 `:latest` for a release. Each carries a signed build-provenance attestation, so you can check
 the image you pulled was built by this repository's workflow from a given commit:
 
@@ -159,8 +159,17 @@ the image you pulled was built by this repository's workflow from a given commit
 gh attestation verify oci://ghcr.io/eonsofstupid/devagotchi:main --owner EonsofStupid
 ```
 
+The image also carries the builds the hub hands to the machines that join it: the Linux and
+Windows archives of the same commit, x86_64 and ARM64, and both installers, in
+`/usr/share/devagotchi/downloads`. A hub from it serves them at `/dist` with nothing
+configured, so the line an AI gets from `machine_add` (`curl -fsSL <hub>/join/<code> | sudo sh`,
+or `irm <hub>/join/<code>.ps1 | iex` on Windows) works on a fresh stack; `/healthz` names the
+version under `downloads`. CI builds each arch, brings this stack up from it and joins a
+machine with that line before anything is pushed.
+
 Pin a commit with `DEVAGOTCHI_IMAGE=ghcr.io/eonsofstupid/devagotchi:sha-<commit>`, or build
-from this checkout with `docker compose up --build`.
+from this checkout with `docker compose up --build` (such a build carries no builds to hand
+out: `/join` is off until the hub's config names a directory of them).
 
 ## What runs
 

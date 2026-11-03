@@ -240,6 +240,24 @@ jobs:
     with:
       plan: ${{ needs.plan.outputs.val }}
     secrets: inherit
+  custom-hub-image:
+    # Hand-added beyond dist's template, like custom-install-check above: the hub image built
+    # from this run's own archives, so every hub from it hands out the Linux and Windows
+    # builds of its commit at /join; a machine joins it before anything is pushed, and main and
+    # release tags publish it to GHCR (image.yml). It needs the packages and attestation
+    # permissions image.yml's jobs ask for. A release does not wait on it.
+    needs:
+      - plan
+      - build-local-artifacts
+    uses: ./.github/workflows/image.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    secrets: inherit
   # Determines if we should publish/announce
   host:
     needs:

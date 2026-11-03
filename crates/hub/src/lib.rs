@@ -676,7 +676,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         Some(dir) => match downloads::Downloads::open(std::path::Path::new(dir)) {
             Ok(downloads) => {
                 eprintln!(
-                    "devagotchi hub: handing out build {} to joining machines ({} files checked)",
+                    "devagotchi hub: handing out build {} to joining machines ({} files checked in {dir})",
                     downloads.version,
                     downloads.files().count()
                 );

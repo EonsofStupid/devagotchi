@@ -61,8 +61,10 @@ pub struct HubConfig {
     pub web: Option<WebConfig>,
     /// A directory of Devagotchi builds this hub hands to machines that join it
     /// (`/dist/<file>`, `/join/<code>`): `SHA256SUMS`, `VERSION` and the files they list,
-    /// laid down at deploy from the GitHub build the hub itself runs. Absent: no `/join`,
-    /// and "Add a machine" shows the installer lines instead.
+    /// laid down at deploy from the GitHub build the hub itself runs.
+    /// `DEVAGOTCHI_HUB_DOWNLOADS` overrides it. Absent: the builds the hub image carries
+    /// (`/usr/share/devagotchi/downloads`, `downloads.rs`); with neither, no `/join`, and
+    /// "Add a machine" shows the installer lines instead.
     #[serde(default)]
     pub downloads: Option<String>,
     /// Where the hub keeps its accounts (`store.rs`): a Postgres URL for a hosted hub, or a
@@ -543,10 +545,11 @@ impl HubConfig {
     }
 
     /// `parse`, with `DEVAGOTCHI_HUB_TENANCY`, `DEVAGOTCHI_HUB_OPERATORS`,
-    /// `DEVAGOTCHI_HUB_ANALYTICS`, `DEVAGOTCHI_HUB_ANALYTICS_RETENTION_DAYS` and
-    /// `DEVAGOTCHI_SITE_DIR` from `env` over the file's `tenancy.mode`, `operators`,
-    /// `analytics` and `site.dir`: how a deploy sets them from `.env` or the secret store. The site
-    /// directory is read and checked here, so a bad one stops the start.
+    /// `DEVAGOTCHI_HUB_ANALYTICS`, `DEVAGOTCHI_HUB_ANALYTICS_RETENTION_DAYS`,
+    /// `DEVAGOTCHI_HUB_DOWNLOADS` and `DEVAGOTCHI_SITE_DIR` from `env` over the file's
+    /// `tenancy.mode`, `operators`, `analytics`, `downloads` and `site.dir`: how a deploy sets
+    /// them from `.env` or the secret store. The site directory is read and checked here, so a
+    /// bad one stops the start.
     pub fn parse_with(text: &str, env: impl Fn(&str) -> Option<String>) -> BridgeResult<Self> {
         let mut config: HubConfig = serde_json::from_str(text)
             .map_err(|error| BridgeError::new("invalid_config", error.to_string()))?;
@@ -571,6 +574,11 @@ impl HubConfig {
                 .collect();
         }
         config.analytics = config.analytics.from_env(&env).map_err(invalid)?;
+        config.downloads = crate::downloads::choose(
+            config.downloads.take(),
+            env(crate::downloads::DOWNLOADS_ENV),
+            crate::downloads::built_in(),
+        );
         config.validate(&env)?;
         if let Some(dir) = env(crate::site::SITE_ENV).filter(|dir| !dir.trim().is_empty()) {
             config.site.dir = Some(dir.trim().to_string());
