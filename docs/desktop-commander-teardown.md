@@ -568,3 +568,50 @@ There is no `docs/` directory on main and no design document for the hosted serv
 | `get_config` exposes `clientHistory` (`src/server.ts:325`) | no producer in `src/` |
 | Docker catalog env `ALLOWED_DIRECTORIES` / `DISABLE_NETWORK` (`server.yaml:25-31`) | not read anywhere in `src/` |
 
+---
+
+## 8. How a person gets started: the exact flows (checked 2026-11-03)
+
+Sources:
+- Desktop Commander's own pages: `desktopcommander.app/mcp/`, `/mcp/claude-web/`, `/mcp/chatgpt/` (WebFetch, 2026-11-03).
+- The sign-in page at `mcp.desktopcommander.app`, opened in a real browser on 2026-11-03. It redirects to `auth.desktopcommander.app/?mcp_dashboard=true`.
+- The repo at `e701d2b` (2026-11-03): `README.md` "How to install"; `scripts/remote/README.md`; `src/remote-device/README.md`.
+
+### 8.1 Remote: ChatGPT, Claude web and other AI apps (their lead path)
+
+1. **Add it from the AI app's directory, one click.**
+   - The Claude page's button **"Add to Claude"** opens Desktop Commander's listing in Claude's connectors directory: `claude.ai/directory/connectors/218bbf02-d0dd-4aa9-8bdd-06bb2a8589af`.
+   - The ChatGPT page's **"Add to ChatGPT"** opens its listing in ChatGPT's directory.
+   - The connector URL behind both is `https://mcp.desktopcommander.app/mcp`.
+2. **Sign in: "Continue with Google", or "Continue with email" (email and password: Sign In / Sign Up / Forgot password?).** No passkey, no claim, no invite.
+3. **"Connect your machine: follow the instructions shown in Claude."** The AI gives one command, the person runs it in a terminal, "your machine appears in the chat". The page says "About three minutes" and "works on macOS and Windows".
+   - The commands (`scripts/remote/README.md`):
+     - macOS: `curl -fsSL https://raw.githubusercontent.com/wonderwhy-er/DesktopCommanderMCP/refs/heads/main/scripts/remote/remote-macos.sh | sh`
+     - Linux: `curl -fsSL https://raw.githubusercontent.com/wonderwhy-er/DesktopCommanderMCP/refs/heads/main/scripts/remote/remote-linux.sh | sh`
+     - PowerShell: `irm -ErrorAction Stop https://raw.githubusercontent.com/wonderwhy-er/DesktopCommanderMCP/main/scripts/remote/remote-windows.ps1 | iex`
+     - Command Prompt: the same, wrapped in `powershell.exe -NoProfile -Command "…"`.
+   - With no Node.js, the launcher asks **Yes/No**. Yes (or Enter) downloads Node 24 from nodejs.org, checks its SHA-256 and installs it. Only that step is elevated.
+   - It then runs `npx --yes @wonderwhy-er/desktop-commander@latest remote` as the user.
+4. **The machine approves itself in the browser.** On first run `remote` opens the verification page (OAuth device grant). The person checks that the code matches the terminal, is already signed in from step 2, and approves. The session is saved, so later runs need no browser.
+5. **Done.** `mcp.desktopcommander.app` lists the machines ("Manage devices"). Ctrl+C stops the device; running the same command reconnects.
+
+### 8.2 Local: the AI app on the same computer
+
+- Claude Desktop: `npx @wonderwhy-er/desktop-commander@latest setup` writes Claude's config and restarts Claude.
+- macOS: `curl -fsSL https://raw.githubusercontent.com/wonderwhy-er/DesktopCommanderMCP/refs/heads/main/install.sh | bash`.
+- Other apps get one line each:
+  - Claude Code: `claude mcp add --scope user desktop-commander -- npx -y @wonderwhy-er/desktop-commander@latest`
+  - Codex: `codex mcp add desktop-commander -- npx -y @wonderwhy-er/desktop-commander@latest`
+  - Cursor, Windsurf, VS Code, Gemini CLI, Qwen, Roo, Docker, Smithery: one config entry or command each.
+- Updates: every npx path is `@latest`, so a restart updates it.
+
+### 8.3 The same steps on Devagotchi today (app.devagotchi.com, checked 2026-11-03)
+
+| Step | Desktop Commander | Devagotchi now |
+|---|---|---|
+| Find and add | one click from Claude's and ChatGPT's directories | not listed anywhere; the person must paste `https://app.devagotchi.com/mcp` as a custom connector |
+| Sign in | Google, or email and password | the hub runs as a one-owner hub, so the sign-in is the owner's **passkey**, a dead end for anyone else. Hosted mode (`--tenancy multi`, a Connect button that makes the account) is built but not switched on. Google, GitHub and email sign-in are built, but no credentials are configured |
+| Connect a machine | one command from the AI; Node installed on Yes | the AI can produce the command (`machine_add`), but the hub answers it with `404 this hub hands out no builds` (`healthz`: `"downloads": null`), and the repo has **zero GitHub releases** |
+| macOS | yes | no build |
+| Time to a first command | about three minutes | not possible today |
+
