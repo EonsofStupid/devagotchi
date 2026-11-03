@@ -65,7 +65,7 @@ deploy/linux/promote-hub.sh --confirm
 
 Before the install it runs `pct snapshot <ct> devagotchi-pre-<version>` on the Proxmox host. If the install or the smoke fails, it runs `pct rollback <ct> <snap> --start`, so the container comes back up. It does not then install another version over that snapshot.
 
-`/join` serves the hub's downloads directory. Set `DEVAGOTCHI_DIST_DIR` to a directory of archives and `SHA256SUMS` for this commit, and `DEVAGOTCHI_DOWNLOADS_DIR` to the directory `hub.json` `downloads` names inside the container. Those files are copied in **before** the installer starts the hub, so the process does not need a second restart to see them. `/dist/SHA256SUMS` is the checksum list the hub checked.
+`/join` serves the hub's downloads directory. A hub from the image (deploy/compose, deploy/proxmox/hub-up.sh) already carries its own commit's builds and needs none of this. For this install, set `DEVAGOTCHI_DIST_DIR` to a directory of archives and `SHA256SUMS` for this commit, and `DEVAGOTCHI_DOWNLOADS_DIR` to the directory `hub.json` `downloads` names inside the container. Those files are copied in **before** the installer starts the hub, so the process does not need a second restart to see them. `/dist/SHA256SUMS` is the checksum list the hub checked.
 
 `--ssh-key FILE` and `--ssh-opts WORDS` are passed to `ssh`, as is the `SSH_OPTS` environment variable.
 

@@ -7,6 +7,25 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Every hub from the image hands out builds (increment 71)
+- The hub image carries the Linux and Windows builds of its own commit (x86_64 and ARM64),
+  both installers, `SHA256SUMS` and `VERSION` in `/usr/share/devagotchi/downloads`. A hub
+  uses that directory when its config names no `downloads`, so on a fresh stack from the
+  image `machine_add`'s `curl -fsSL <hub>/join/<code> | sudo sh` and
+  `irm <hub>/join/<code>.ps1 | iex` work with no extra step. `downloads` in the config, or
+  `DEVAGOTCHI_HUB_DOWNLOADS` over it, still names another directory; anywhere but the image
+  nothing changes.
+- CI: the image is now built by `release.yml` (`custom-hub-image`, calling `image.yml`) from
+  that run's own cargo-dist archives, which `scripts/stage-downloads.sh` checks against their
+  `.sha256` and lays down (every target or nothing) and the jobs pass on as an artifact. No
+  network fetch at hub runtime. Each arch is brought up as a hosted compose stack with no
+  downloads configured, and `tests/compose_join.py` has a person's AI connect, call
+  `machine_add`, run the Linux line exactly as given on the runner, and run a command on
+  the machine that joined; the Windows script is checked to name both Windows builds as
+  served. Only then are main and release tags pushed to GHCR.
+- A build from a checkout (`docker compose up --build`) carries no builds; `hub (compose)`
+  keeps proving that path.
+
 ### The operator's analytics page (increment 67)
 - `/operator/analytics` on a hosted hub, linked from `/operator`, for its operator only;
   anyone else, signed in or not, gets the 404 an unknown path gets (the CSV too).

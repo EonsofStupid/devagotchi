@@ -150,10 +150,15 @@ devagotchi hub devices --state-dir DIR                # enrolled machines, JSON
 
 ### Add a machine with one line
 
-With `"downloads": "/opt/devagotchi/current/dist"` in the config, a directory holding
-`VERSION`, `SHA256SUMS` and the files it lists (the GitHub build the hub runs: the archives
-for each target and both installers; `scripts/lay-down-dist.sh COMMIT DIR` lays it down),
-"Add a machine" on `/account` hands a signed-in person one line per OS:
+A hub hands out builds from a directory holding `VERSION`, `SHA256SUMS` and the files it
+lists: the archive for each target (Linux and Windows, x86_64 and ARM64) and both installers.
+The hub image carries the ones of its own commit in `/usr/share/devagotchi/downloads`
+(`scripts/stage-downloads.sh` lays them down from that commit's release artifacts in CI), and
+a hub uses that directory when its config names none, so a hub from the image hands out
+builds with nothing configured. `"downloads": "/opt/devagotchi/current/dist"` in the config
+names another (`scripts/lay-down-dist.sh COMMIT DIR` lays one down for a commit on main), and
+`DEVAGOTCHI_HUB_DOWNLOADS` names one over the config. With builds to hand out, "Add a machine"
+on `/account` and the AI's `machine_add` give one line per OS:
 
 ```bash
 curl -fsSL https://app.devagotchi.com/join/dvg-… | sudo sh      # Linux, x86_64 or aarch64
