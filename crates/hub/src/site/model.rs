@@ -820,6 +820,8 @@ pub struct Messages {
     pub access: AccessCopy,
     /// The operator page (`web/operator.rs`).
     pub operator: OperatorCopy,
+    /// The operator's analytics page (`web/analytics.rs`).
+    pub analytics: AnalyticsCopy,
 }
 
 /// The operator page's words. Inline markup where it says so; `{tenant}` is a tenant's id.
@@ -863,6 +865,112 @@ pub struct OperatorCopy {
     /// A limit's use: `{count}` and `{limit}` (the plan's, worded), or with no limit.
     pub usage_of: String,
     pub usage_unlimited: String,
+}
+
+/// The operator's analytics page (`web/analytics.rs`). Inline markup where it says so.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnalyticsCopy {
+    /// The page's title and heading.
+    pub title: String,
+    /// On the operator page, the way to it (inline markup).
+    pub operator_link: String,
+    /// Under the heading: what is counted and how (inline markup).
+    pub intro: String,
+    /// A hub that counts nothing (inline markup).
+    pub off: String,
+    /// The range links' label, and each one: `{n}` days.
+    pub range: String,
+    pub range_days: String,
+    /// The CSV link.
+    pub export: String,
+    /// How long raw visits are kept: `{days}` (inline markup).
+    pub kept: String,
+    /// Records dropped since the hub started: `{n}` (inline markup).
+    pub dropped: String,
+    pub traffic_title: String,
+    /// The chart: its title, its summary (`{views}`, `{visitors}`, `{n}` days) and each
+    /// day's tooltip (`{day}`, `{views}`, `{visitors}`).
+    pub chart_title: String,
+    pub chart_summary: String,
+    pub chart_day: String,
+    /// What opens the chart's numbers as a table.
+    pub table_summary: String,
+    pub pages_title: String,
+    pub referrers_title: String,
+    pub campaigns_title: String,
+    pub devices_title: String,
+    /// An empty list.
+    pub none: String,
+    pub funnel_title: String,
+    /// Under the funnel's heading: `{n}` days (inline markup).
+    pub funnel_intro: String,
+    pub accounts_title: String,
+    pub clients_title: String,
+    pub sign_ins_title: String,
+    /// Tenants waiting now: `{n}` (inline markup).
+    pub waiting_now: String,
+    /// Tenants with an operation lately: `{week}`, `{month}` (inline markup).
+    pub active: String,
+    /// The sign-in a passkey secured an account with (providers are named by the site).
+    pub passkey: String,
+    pub columns: AnalyticsColumns,
+    pub steps: AnalyticsSteps,
+    pub clients: AnalyticsClients,
+    pub devices: AnalyticsDevices,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnalyticsColumns {
+    pub day: String,
+    pub views: String,
+    pub visitors: String,
+    pub page: String,
+    pub referrer: String,
+    pub source: String,
+    pub medium: String,
+    pub campaign: String,
+    pub device: String,
+    pub share: String,
+    pub step: String,
+    pub count: String,
+    pub conversion: String,
+    pub client: String,
+    pub sign_in: String,
+    pub accounts: String,
+}
+
+/// The funnel's steps.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnalyticsSteps {
+    pub visitors: String,
+    pub made: String,
+    pub secured: String,
+    pub admitted: String,
+    pub machine: String,
+    pub operation: String,
+}
+
+/// The AI client families an account is made by (`analytics::funnel::FAMILIES`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnalyticsClients {
+    pub claude: String,
+    pub chatgpt: String,
+    pub grok: String,
+    pub cursor: String,
+    pub other: String,
+}
+
+/// The device classes (`analytics::visit::DEVICES`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnalyticsDevices {
+    pub mobile: String,
+    pub tablet: String,
+    pub desktop: String,
 }
 
 /// The operator page's column headings.

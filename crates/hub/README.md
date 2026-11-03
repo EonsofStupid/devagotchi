@@ -364,6 +364,20 @@ gets an account and a tenant (`t-<uuid>`) of their own, made on the spot:
 
   `DEVAGOTCHI_HUB_ANALYTICS` (`on`/`off`) and `DEVAGOTCHI_HUB_ANALYTICS_RETENTION_DAYS`
   override them (`install.sh --analytics off`, `--analytics-retention-days N`).
+- **The analytics page** (`/operator/analytics`, `web/analytics.rs`, linked from
+  `/operator`): the operator page's rule, a 404 for anyone else. A range of 7, 30 or 90
+  days as plain links (`?days=`). Traffic: visitors and page views per day as an inline SVG
+  chart (each day's numbers in its tooltip) with the same numbers in a table, the top
+  pages, referrers and campaigns, and the device split. The funnel: visitors, then the
+  accounts made in the range and how many of them were secured, let in, enrolled a machine
+  and ran a command, with the rate from each step to the next. Accounts: by AI app, by
+  sign-in, waiting now, and active (a command run) in the last 7 and 30 days.
+  `/operator/analytics.csv?days=N` downloads the daily totals behind it (`day,metric,item,
+  views,visitors`; a field a spreadsheet would read as a formula is written as text).
+  Finished days come from `hub_analytics_daily`, today (and a day not rolled up yet) from
+  the raw rows (`analytics/report.rs`). Server-rendered, no script, nothing third-party;
+  colours and fonts are the site's tokens through `hub.css`, light and dark; every word is
+  `content/messages.json` `analytics`.
 - **Operators, with no claim.** Someone who signs in with an identity `operators` names (a
   verified `email:`, or `google:`, `github:`, `nomen:` or `oidc:` and the provider's
   subject) is the hub's owner, the platform operator, in the first tenant (Jesse is tenant

@@ -27,6 +27,7 @@
 //! The tables are migration 0009's (`hub_analytics_*`): hub-scoped, like `hub_secrets`.
 
 pub mod funnel;
+pub mod report;
 pub mod visit;
 mod writer;
 
@@ -129,6 +130,16 @@ impl Analytics {
             retention_days: config.retention_days,
             own_host: visit::host_of(public_url).unwrap_or_default(),
         })
+    }
+
+    /// How many records were dropped because the queue was full, since the hub started.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    /// Days raw visits are kept (`analytics.retention_days`).
+    pub fn retention_days(&self) -> u32 {
+        self.retention_days
     }
 
     pub(crate) fn own_host(&self) -> &str {

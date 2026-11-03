@@ -24,6 +24,9 @@
 //!   (plain names without `Secure` only when the hub runs on loopback http, for tests).
 //! - Redirects are not followed when talking to Nomen.
 
+mod analytics;
+#[cfg(test)]
+mod analytics_tests;
 mod approvals;
 mod claim;
 pub(crate) mod counted;

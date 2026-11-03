@@ -440,3 +440,54 @@ async fn the_tables_are_the_hubs_own_on_both_engines_and_a_milestone_is_kept_onc
         );
     }
 }
+
+#[tokio::test]
+async fn the_report_reads_finished_days_from_the_totals_and_today_from_the_visits() {
+    for test in testing::stores().await {
+        let store = &test.store;
+        let now = crate::devices::now_secs();
+        let today = day_of(now);
+        let analytics = Analytics::start(
+            store.clone(),
+            AnalyticsConfig::default(),
+            "https://hub.example.org",
+        );
+        analytics.page_view(view(today - DAY, "/docs", "mobile", "a"));
+        analytics.page_view(view(today - DAY, "/docs", "mobile", "b"));
+        analytics.page_view(view(today, "/", "desktop", "c"));
+        analytics.flush().await;
+        writer::maintain(store, 90, u64::try_from(today + DAY / 2).unwrap())
+            .await
+            .unwrap();
+        // Yesterday's visits gone: its totals are what the report reads.
+        sqlx::query("DELETE FROM hub_analytics_views WHERE day < $1")
+            .bind(today)
+            .execute(store.admin())
+            .await
+            .unwrap();
+        let report = super::report::report(store, 7, now).await.unwrap();
+        assert_eq!(report.days.len(), 7);
+        assert_eq!(report.days[0].0, today - 6 * DAY);
+        assert_eq!(report.days[5], (today - DAY, 2, 2));
+        assert_eq!(report.days[6], (today, 1, 1));
+        let pages: Vec<(String, i64, i64)> = report
+            .pages
+            .iter()
+            .map(|row| (row.item.clone(), row.views, row.visitors))
+            .collect();
+        assert_eq!(pages, [("/docs".into(), 2, 2), ("/".into(), 1, 1)]);
+        let devices: Vec<(&str, i64)> = report
+            .devices
+            .iter()
+            .map(|row| (row.item.as_str(), row.views))
+            .collect();
+        assert_eq!(devices, [("mobile", 2), ("desktop", 1)]);
+        assert_eq!(report.funnel.visitors, 3);
+        assert_eq!(report.referrers[0].views, 3);
+        let csv = super::report::csv(store, 7, now).await.unwrap();
+        assert!(csv.contains(&format!(
+            "{},total,,2,2\r\n",
+            super::report::iso_day(today - DAY)
+        )));
+    }
+}

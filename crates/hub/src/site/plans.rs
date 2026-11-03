@@ -281,6 +281,7 @@ impl Site {
         ] {
             checks.push((what, text.as_str(), vars, inline));
         }
+        checks.extend(self.analytics_checks());
         checks
     }
 }
