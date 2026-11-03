@@ -123,6 +123,10 @@ seconds and served from the next request on, with no restart and no rebuild (the
 is revalidated, so new tokens reach open browsers too). A change that does not check out is
 refused the same way, and the hub keeps serving the site it had, saying why in its log.
 
+Deployed with Docker Compose, the site directory is mounted read-only and `install.sh --site
+DIR` checks and places it (`deploy/compose/README.md`, "The hub's site"); in a Proxmox
+container, `hub-up.sh --site DIR` pushes it in (`deploy/proxmox/README.md`).
+
 ## Machines on the link
 
 A broker on another machine (gus, dabo, a server) is reached through

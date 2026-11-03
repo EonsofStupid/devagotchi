@@ -33,3 +33,18 @@ curl -fsSL https://raw.githubusercontent.com/EonsofStupid/devagotchi/main/deploy
       --operators email:you@example.com --google --github --nomen https://id.shippin.cloud \
       --email-from "Devagotchi <sign-in@devagotchi.com>" --env-file /root/devagotchi-hub.env
 ```
+
+The hub's site (its name, copy, colours and pictures: `crates/hub/README.md`, "The site")
+is a directory on the Proxmox host. `--site DIR` packs it, pushes it into the container and
+has `install.sh` check it with the hub image and put it in place (a site that does not check
+out is refused and never reaches the hub); the copy pushed in is removed after. To change
+the site of a hub `hub-up.sh` set up, edit the directory and push it alone: no `--domain`,
+no snapshot, no reinstall, nothing else touched, and the running hub serves it within
+seconds:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/EonsofStupid/devagotchi/main/deploy/proxmox/hub-up.sh \
+  | bash -s -- --ct <id> --site /root/hub-site --site-only
+```
+
+A re-run of the whole install without `--site` keeps the site in place.
