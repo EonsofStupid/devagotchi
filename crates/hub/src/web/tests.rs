@@ -1190,7 +1190,7 @@ async fn a_new_board_says_how_to_start_and_one_tap_tests_the_phone() {
     let (_, board) = open_project(&w.board_dir).unwrap();
     let tickets = board.list(&Filter::default()).unwrap();
     assert_eq!(tickets.len(), 1);
-    assert_eq!(tickets[0].title, crate::board::welcome::TITLE);
+    assert_eq!(tickets[0].title, crate::site::builtin().welcome("").0);
     assert!(
         tickets[0]
             .description

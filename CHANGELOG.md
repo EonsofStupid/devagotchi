@@ -7,6 +7,33 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Nothing hardcoded: the hub's site is content and tokens, from a directory (increment 61)
+- Every word, name, link, colour and picture the hub shows comes from its site instead of the
+  code: the landing page, `/docs`, `/privacy`, `/terms`, `/support`, the bar and every page's
+  title, the sign-in email, the passkey prompt, the installed app's manifest, icon and
+  notifications, the board's getting-started ticket, the terminal's client name, and the MCP
+  server's name and instructions. `crates/hub/src` holds no brand, domain or operator; a test
+  walks its modules and fails on one (wire names such as `X-Devagotchi-Seat` excepted).
+- A site directory (`site.dir` in the config, or `DEVAGOTCHI_SITE_DIR`): `site.json`
+  (product, operator, links, sign-in order and labels, the landing page's sections in order
+  and on or off, the MCP display, plans, services, early access, which assets are used),
+  `tokens.json` (colours light and dark, type, radii, layout, self-hosted fonts, read by the
+  stylesheet as custom properties), `content/landing.json` (every section's copy, with a
+  little inline markup and placeholders), `content/messages.json`, the public pages in
+  Markdown, and `assets/` served from the hub at `/assets/<name>?v=<hash>`, so the CSP stays
+  `'self'`. Only `site.json` is required; anything left out is the built-in site's.
+- The hub checks the whole directory at start, rendering every page for every kind of hub:
+  a bad one stops the start with what is wrong and in which file. No HTML passes through
+  copy, an SVG may not script or fetch, a token may not leave its declaration.
+- Today's content is the built-in site (`crates/hub/site/default/`), compiled in: with no
+  directory the hub looks and reads as before. New: a Plans section rendered from `plans`
+  (the built-in site has the Free plan only, D21, and the section off), a Services section,
+  sections of a site's own, and radius tokens. The setup video moved to the built-in site.
+- `devagotchi login` and `devagotchi mcp --hub` default to the built-in site's
+  `links.hosted_hub` (app.devagotchi.com, as before).
+- Tests: a neutral site (`tests/fixtures/neutral-site`) drawn on every page of a running hub,
+  the email and the MCP display names nothing of the built-in one; bad directories fail start.
+
 ### `devagotchi login` against a hub with its own accounts (increment 53)
 - `devagotchi login --hub URL` (and plain `devagotchi login`, app.devagotchi.com) works
   against a hub in `auth.mode hub`: it failed there, since it spoke only the routes of

@@ -1,4 +1,5 @@
-//! Devagotchi as an OAuth 2.1 authorization server for its own MCP resource.
+//! The hub as an OAuth 2.1 authorization server for its own MCP resource (`auth.mode
+//! devagotchi`).
 //!
 //! Clients (claude.ai, ChatGPT, Cursor, the CLI) register here, send the person
 //! through this hub's sign-in, and receive a JWT this hub signed. The resource
@@ -88,6 +89,9 @@ CREATE TABLE IF NOT EXISTS browser_sessions (
 
 pub struct Authority {
     public_url: String,
+    /// The site its pages and resource metadata name (`site.rs`); the built-in one until
+    /// the hub's is set.
+    site: std::sync::Arc<crate::site::Site>,
     keys: Mutex<KeyRing>,
     key_path: std::path::PathBuf,
     connection: Mutex<Connection>,
@@ -349,6 +353,7 @@ impl Authority {
         };
         let authority = Self {
             public_url,
+            site: crate::site::builtin(),
             keys: Mutex::new(keys),
             key_path,
             connection: Mutex::new(connection),
@@ -368,6 +373,17 @@ impl Authority {
 
     pub fn issuer(&self) -> &str {
         &self.public_url
+    }
+
+    /// Name the hub's site on its pages and metadata, and on the terminal's sign-in.
+    pub fn configure_site(&mut self, site: std::sync::Arc<crate::site::Site>) -> BridgeResult<()> {
+        self.site = site;
+        self.seed_cli_client()
+    }
+
+    /// The product's name, as the site gives it.
+    pub fn product(&self) -> &str {
+        self.site.name()
     }
 
     pub fn configure_login(
@@ -836,7 +852,8 @@ impl Authority {
             })
             .unwrap_or_default();
         format!(
-            "<!doctype html><title>Sign in</title><h1>Sign in to Devagotchi</h1>{providers}{magic}{claim}"
+            "<!doctype html><title>Sign in</title><h1>Sign in to {}</h1>{providers}{magic}{claim}",
+            escape(self.site.name())
         )
     }
 
@@ -868,7 +885,7 @@ impl Authority {
             "authorization_servers": [self.public_url],
             "bearer_methods_supported": ["header"],
             "scopes_supported": ["openid", "email", "profile", "offline_access", "mcp"],
-            "resource_name": "Devagotchi",
+            "resource_name": self.site.name(),
         })
     }
 
@@ -1382,7 +1399,7 @@ impl Authority {
             AuthError::Invalid("signature, issuer, audience or expiry check failed")
         })?;
         if !is_account_id(&data.claims.sub) {
-            return Err(AuthError::Invalid("subject is not a Devagotchi account"));
+            return Err(AuthError::Invalid("subject is not an account of this hub"));
         }
         Ok(data.claims)
     }
@@ -1432,14 +1449,16 @@ impl Authority {
         );
     }
 
+    /// The terminal's own client (`devagotchi login`), named after the site's product.
     fn seed_cli_client(&self) -> BridgeResult<()> {
         let connection = self.connection.lock().expect("oauth lock");
         connection
             .execute(
-                "INSERT OR IGNORE INTO clients
+                "INSERT INTO clients
                  (client_id, client_name, redirect_uris, auth_method, created_at)
-                 VALUES ('devagotchi-cli', 'Devagotchi CLI', '[]', 'none', ?1)",
-                params![now() as i64],
+                 VALUES ('devagotchi-cli', ?1, '[]', 'none', ?2)
+                 ON CONFLICT(client_id) DO UPDATE SET client_name = excluded.client_name",
+                params![format!("{} CLI", self.site.name()), now() as i64],
             )
             .map_err(store_error)?;
         Ok(())
@@ -2152,11 +2171,12 @@ where
                             format!(
                                 "<!doctype html><title>Allow</title>\
                                  <h1>Allow this app</h1>\
-                                 <p>This opens a Devagotchi account for you. You can claim it later.</p>\
+                                 <p>This opens a {} account for you. You can claim it later.</p>\
                                  <form method=\"post\" action=\"/authorize/provisional\">\
                                  <input type=\"hidden\" name=\"request\" value=\"{}\">\
                                  <button type=\"submit\">Allow</button></form>\
                                  <p><a href=\"/login?resume={}\">I already have an account</a></p>",
+                                escape(auth.product()),
                                 escape(&pending),
                                 escape(&pending)
                             ),

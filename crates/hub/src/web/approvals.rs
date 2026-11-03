@@ -34,7 +34,7 @@ pub struct Shown {
 }
 
 const TEST_TITLE: &str = "Test: tap Approve";
-/// The board actor a test approval is asked by, shown as "Devagotchi asks".
+/// The board actor a test approval is asked by, shown as "<product> asks".
 const TEST_ASKER: &str = "devagotchi";
 
 #[derive(Deserialize)]
@@ -251,7 +251,7 @@ fn asker(requested_by: &str, viewer: &str) -> String {
     if requested_by == viewer {
         "Your AI asks".into()
     } else if requested_by == TEST_ASKER {
-        "Devagotchi asks".into()
+        format!("{} asks", escape(super::pages::site().name()))
     } else {
         format!("{} asks", escape(requested_by))
     }

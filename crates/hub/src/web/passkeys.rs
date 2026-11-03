@@ -96,7 +96,7 @@ impl HubSignIn {
     /// The other ways to secure the signed-in account this hub offers, as links and a form
     /// that add them to it: each provider, and the email link.
     pub(super) fn linking_ways(&self) -> String {
-        let buttons = self.providers.buttons("/account", true);
+        let buttons = self.providers.buttons(&self.site(), "/account", true);
         let mut ways = String::new();
         if !buttons.is_empty() {
             ways.push_str(&format!("<p class=\"ways\">Or add a sign-in you already have: {buttons}</p>"));
@@ -105,6 +105,11 @@ impl HubSignIn {
             ways.push_str(&super::email::form("/account", true));
         }
         ways
+    }
+
+    /// The site this hub's pages and messages read.
+    pub(super) fn site(&self) -> Arc<crate::site::Site> {
+        self.config.site()
     }
 
     /// Whether the hub is on https (its cookies `__Host-` and `Secure`).
@@ -385,7 +390,7 @@ pub(super) fn scripted(title: &str, body: &str) -> Response {
 /// every other way in this hub offers (`providers.rs`, `email.rs`).
 pub fn login_page(hub: &HubSignIn, return_to: &str) -> Response {
     let return_to = safe_return_to(return_to);
-    let others = hub.providers.buttons(return_to, false);
+    let others = hub.providers.buttons(&hub.site(), return_to, false);
     let others = if others.is_empty() {
         String::new()
     } else {
@@ -502,7 +507,7 @@ async fn securing(hub: Arc<HubSignIn>, headers: &HeaderMap) -> Response {
         &challenge,
         json!({
             "challenge": URL_SAFE_NO_PAD.encode(&challenge),
-            "rp": { "id": hub.rp_id, "name": "Devagotchi" },
+            "rp": { "id": hub.rp_id, "name": hub.config.site().name() },
             "user": {
                 "id": URL_SAFE_NO_PAD.encode(subject.id.as_bytes()),
                 "name": name,
@@ -562,7 +567,7 @@ pub(super) async fn registration(hub: Arc<HubSignIn>, link: String, hand_back: b
         .collect();
     let mut options = json!({
         "challenge": URL_SAFE_NO_PAD.encode(&challenge),
-        "rp": { "id": hub.rp_id, "name": "Devagotchi" },
+        "rp": { "id": hub.rp_id, "name": hub.config.site().name() },
         "user": {
             "id": URL_SAFE_NO_PAD.encode(account.id.as_bytes()),
             "name": account.name,

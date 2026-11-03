@@ -1,62 +1,35 @@
-//! The landing page's setup video and its poster (`/assets/turnkey.mp4`,
-//! `/assets/turnkey-poster.png`), rendered by `apps/turnkey-video/render.sh` and built into
-//! the binary. Pages name them with their content hash (`?v=`), so they are cached for a
-//! year; the hash is also their ETag. The video answers byte ranges, which Safari needs
+//! The site's files under `/assets/` (`site/assets.rs`): its logo, icon, pictures, setup
+//! video and fonts. Pages name them with their content hash (`?v=`), so they are cached for
+//! a year; the hash is also their ETag. The video answers byte ranges, which Safari needs
 //! before it plays anything: one range a request, `206` with `Content-Range`, `416` past
 //! the end, the whole file for a range it cannot read or an `If-Range` that no longer
 //! matches.
 
-use std::sync::OnceLock;
-
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
+    extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use sha2::{Digest, Sha256};
 
-pub const VIDEO: &[u8] = include_bytes!("landing/turnkey.mp4");
-pub const POSTER: &[u8] = include_bytes!("landing/turnkey-poster.png");
+use crate::AppState;
 
-/// The first 16 hex digits of the SHA-256 of both files: the `?v=` on their URLs.
-pub fn version() -> &'static str {
-    static VERSION: OnceLock<String> = OnceLock::new();
-    VERSION.get_or_init(|| {
-        let mut hash = Sha256::new();
-        hash.update(VIDEO);
-        hash.update(POSTER);
-        hex::encode(hash.finalize())[..16].to_string()
-    })
-}
-
-/// `/assets/turnkey.mp4?v=…` for this build.
-pub fn video_url() -> String {
-    format!("/assets/turnkey.mp4?v={}", version())
-}
-
-/// `/assets/turnkey-poster.png?v=…` for this build.
-pub fn poster_url() -> String {
-    format!("/assets/turnkey-poster.png?v={}", version())
-}
-
-pub async fn video(headers: HeaderMap) -> Response {
-    static TAG: OnceLock<String> = OnceLock::new();
-    serve(VIDEO, "video/mp4", tag(&TAG, VIDEO), &headers)
-}
-
-pub async fn poster(headers: HeaderMap) -> Response {
-    static TAG: OnceLock<String> = OnceLock::new();
-    serve(POSTER, "image/png", tag(&TAG, POSTER), &headers)
-}
-
-/// A strong ETag from the file's SHA-256, worked out once.
-fn tag(cell: &'static OnceLock<String>, bytes: &[u8]) -> &'static str {
-    cell.get_or_init(|| format!("\"{}\"", &hex::encode(Sha256::digest(bytes))[..32]))
+/// `/assets/<file>`: one of the site's files, or 404.
+pub async fn asset(
+    State(state): State<AppState>,
+    Path(file): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let site = state.hub.config.site();
+    match site.assets.get(&file) {
+        Some(asset) => serve(asset.bytes.clone(), asset.mime, &asset.etag, &headers),
+        None => StatusCode::NOT_FOUND.into_response(),
+    }
 }
 
 /// `bytes` as `kind`, whole, as the one range asked for, or not modified.
 pub fn serve(
-    bytes: &'static [u8],
+    bytes: Bytes,
     kind: &'static str,
     etag: &str,
     headers: &HeaderMap,
@@ -82,7 +55,7 @@ pub fn serve(
         {
             Some(Ranged::Within(start, end)) => (
                 StatusCode::PARTIAL_CONTENT,
-                Body::from(&bytes[start as usize..=end as usize]),
+                Body::from(bytes.slice(start as usize..=end as usize)),
                 Some(format!("bytes {start}-{end}/{total}")),
             ),
             Some(Ranged::Unsatisfiable) => (

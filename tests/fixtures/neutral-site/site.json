@@ -1,0 +1,134 @@
+{
+  "product": {
+    "name": "Lumen Relay",
+    "short_name": "Lumen",
+    "tagline": "A relay between your assistant and your computers",
+    "description": "Approve what your assistant does on your computers.",
+    "domain": "lumen.example.org"
+  },
+  "operator": {
+    "name": "Example Operator Ltd",
+    "contact": "mailto:hello@lumen.example.org",
+    "support_email": "help@lumen.example.org"
+  },
+  "links": {
+    "source": "https://git.example.org/lumen",
+    "issues": "https://git.example.org/lumen/issues",
+    "status": "https://status.example.org",
+    "hosted_hub": "https://relay.lumen.example.org"
+  },
+  "sign_in": {
+    "order": [
+      "github",
+      "google"
+    ],
+    "labels": {
+      "nomen": "Example ID",
+      "google": "Google Workspace"
+    }
+  },
+  "landing": {
+    "sections": [
+      {
+        "id": "how"
+      },
+      {
+        "id": "plans"
+      },
+      {
+        "id": "services"
+      },
+      {
+        "id": "why"
+      },
+      {
+        "id": "features"
+      },
+      {
+        "id": "compare",
+        "on": false
+      },
+      {
+        "id": "connect"
+      },
+      {
+        "id": "self-host"
+      },
+      {
+        "id": "next"
+      },
+      {
+        "id": "faq"
+      },
+      {
+        "id": "get-started"
+      }
+    ]
+  },
+  "mcp": {
+    "name": "lumen-relay",
+    "title": "{product}",
+    "instructions": "{product} reaches the user's own computers. Call machines first."
+  },
+  "plans": [
+    {
+      "id": "free",
+      "name": "Starter",
+      "price": "Free",
+      "limits": {
+        "projects": 1,
+        "machines": 2
+      },
+      "features": [
+        "One project",
+        "Approvals on your phone"
+      ],
+      "cta": {
+        "label": "Start",
+        "href": "#connect",
+        "primary": true
+      }
+    },
+    {
+      "id": "team",
+      "name": "Team",
+      "price": "Ask us",
+      "limits": {
+        "projects": "unlimited",
+        "clients": 10
+      },
+      "features": [
+        "Every project"
+      ],
+      "cta": {
+        "label": "Write to us",
+        "href": "mailto:hello@lumen.example.org"
+      }
+    }
+  ],
+  "services": [
+    {
+      "name": "Hosted relay",
+      "text": "We run it for you.",
+      "href": "https://relay.lumen.example.org",
+      "label": "Open it"
+    },
+    {
+      "name": "Setup help",
+      "text": "An hour with someone who has done it before."
+    }
+  ],
+  "early_access": {
+    "mode": "early_access",
+    "note": "Sign-up opens in waves.",
+    "cta": {
+      "label": "Join the list",
+      "href": "mailto:hello@lumen.example.org"
+    }
+  },
+  "assets": {
+    "logo": "logo.svg",
+    "icon": "icon.svg",
+    "diagram": "diagram.svg"
+  }
+}

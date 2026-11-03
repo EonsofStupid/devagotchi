@@ -503,7 +503,7 @@ fn bind(
         .flag("--hub")
         .map(str::to_string)
         .or_else(|| existing.as_ref().and_then(|c| c.hub.clone()))
-        .unwrap_or_else(|| account::client::DEFAULT_HUB.to_string());
+        .unwrap_or_else(account::client::default_hub);
     let Some(account_file) = &invocation.account_file else {
         return output.error(
             &BridgeError::new(
@@ -1306,7 +1306,7 @@ pub const HOOK_SCRIPTS: &[(&str, &str)] = &[
     (
         "session-start.sh",
         "#!/bin/sh
-# Devagotchi board: what to do now, as context for the session. Argument: the actor name.
+# devagotchi board: what to do now, as context for the session. Argument: the actor name.
 cd \"$(dirname \"$0\")/../..\" || exit 0
 actor=${1:-${DEVAGOTCHI_ACTOR:-}}
 [ -z \"$actor\" ] || export DEVAGOTCHI_ACTOR=\"$actor\"
@@ -1317,7 +1317,7 @@ exit 0
     (
         "beat.sh",
         "#!/bin/sh
-# Devagotchi board: extend every lease this actor holds, at most once a minute. Argument: the actor name.
+# devagotchi board: extend every lease this actor holds, at most once a minute. Argument: the actor name.
 cd \"$(dirname \"$0\")/../..\" || exit 0
 actor=${1:-${DEVAGOTCHI_ACTOR:-}}
 [ -z \"$actor\" ] || export DEVAGOTCHI_ACTOR=\"$actor\"
@@ -1331,7 +1331,7 @@ exit 0
     (
         "stop.sh",
         "#!/bin/sh
-# Devagotchi board: never stop while holding a ticket. Argument: the actor name.
+# devagotchi board: never stop while holding a ticket. Argument: the actor name.
 # Exit 2 refuses the stop once and tells the agent why; a second attempt is allowed so an
 # agent that cannot finish does not loop (the lease lapses and the reaper requeues the ticket).
 cd \"$(dirname \"$0\")/../..\" || exit 0

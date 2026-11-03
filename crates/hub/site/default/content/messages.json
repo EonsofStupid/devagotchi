@@ -1,0 +1,11 @@
+{
+  "email": {
+    "subject": "Your {product} sign-in link",
+    "body": "Open this link to sign in to {product}:\n\n{link}\n\nIt works once, for 15 minutes. If you did not ask for it, ignore this email: nobody can use it without this mailbox."
+  },
+  "welcome": {
+    "title": "Getting started: check {product} works for you",
+    "body": "{product} is connected. Four steps, about five minutes:\n\n1. Ask your AI: \"Which of my machines can you reach?\" It calls `machines` and lists each machine and whether it is online.\n2. On your phone, open {hub}/approvals. Tap **Notify this phone**, then **Send me a test approval**. Approve it from the notification.\n3. Ask your AI for something small on one machine, for example: \"Show me the free disk space on <machine>.\" Anything you should sign off on waits for you on your phone.\n4. Tell your AI it worked, and ask it to close this ticket.\n\nStuck on a step? Tell your AI which one; it can read this ticket."
+  },
+  "page_footer": "Last updated {updated}. [Docs](/docs) · [Privacy](/privacy) · [Terms](/terms) · [Support](/support)"
+}

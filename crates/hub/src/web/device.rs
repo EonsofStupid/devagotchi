@@ -29,13 +29,13 @@ use crate::{AppState, accounts::oauth::normalize_user_code};
 
 /// The CLI's own client id: `devagotchi login` needs no registration.
 pub const CLI_CLIENT: &str = "devagotchi-cli";
-const CLI_NAME: &str = "Devagotchi CLI";
 
 /// A client's name as the person sees it: the CLI's, or a registered client's. `Ok(None)`
 /// for a client this hub does not know.
 pub(super) async fn client_name(state: &AppState, id: &str) -> Result<Option<String>, ()> {
     if id == CLI_CLIENT {
-        return Ok(Some(CLI_NAME.to_string()));
+        // The terminal sign-in, by the site's name for it.
+        return Ok(Some(format!("{} CLI", state.hub.config.site().name())));
     }
     let Some(hub) = state.passkeys.clone() else {
         return Ok(None);
@@ -218,7 +218,7 @@ on the machines you reach, until you sign it out or it goes unused for {days} da
         app = pages::escape(&app),
         who = match &person {
             Some(person) => pages::escape(person.name.as_deref().unwrap_or(&person.id)),
-            None => "your new Devagotchi account".to_string(),
+            None => format!("your new {} account", pages::escape(state.hub.config.site().name())),
         },
         new = if person.is_none() {
             super::hosted::new_account_note(&sign_in)

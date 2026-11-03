@@ -82,10 +82,26 @@ pub struct HubConfig {
     /// here; never in the code.
     #[serde(default)]
     pub operators: Vec<String>,
+    /// The site the hub's pages, sign-in email and MCP display read (`site.rs`): `dir`, an
+    /// absolute site directory, or `DEVAGOTCHI_SITE_DIR` over it. Absent: the built-in one.
+    #[serde(default)]
+    pub site: SiteConfig,
     /// The owner every holder of this config sees: `owner` above, or in hub mode the
     /// one the accounts store names, learned once at start or when it is made.
     #[serde(skip)]
     owner_cell: Arc<OnceLock<String>>,
+    /// The site `site` names, read and checked when the config is parsed.
+    #[serde(skip, default = "crate::site::builtin")]
+    loaded_site: Arc<crate::site::Site>,
+}
+
+/// `site` in the hub's config.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SiteConfig {
+    /// An absolute path to the site directory.
+    #[serde(default)]
+    pub dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -514,9 +530,10 @@ impl HubConfig {
         Self::parse_with(text, |_| None)
     }
 
-    /// `parse`, with `DEVAGOTCHI_HUB_TENANCY` and `DEVAGOTCHI_HUB_OPERATORS` from `env`
-    /// over the file's `tenancy.mode` and `operators`: how a deploy sets them from `.env`
-    /// or the secret store.
+    /// `parse`, with `DEVAGOTCHI_HUB_TENANCY`, `DEVAGOTCHI_HUB_OPERATORS` and
+    /// `DEVAGOTCHI_SITE_DIR` from `env` over the file's `tenancy.mode`, `operators` and
+    /// `site.dir`: how a deploy sets them from `.env` or the secret store. The site
+    /// directory is read and checked here, so a bad one stops the start.
     pub fn parse_with(text: &str, env: impl Fn(&str) -> Option<String>) -> BridgeResult<Self> {
         let mut config: HubConfig = serde_json::from_str(text)
             .map_err(|error| BridgeError::new("invalid_config", error.to_string()))?;
@@ -541,10 +558,26 @@ impl HubConfig {
                 .collect();
         }
         config.validate(&env)?;
+        if let Some(dir) = env(crate::site::SITE_ENV).filter(|dir| !dir.trim().is_empty()) {
+            config.site.dir = Some(dir.trim().to_string());
+        }
+        if let Some(dir) = &config.site.dir {
+            // A site that does not check out stops the start, with what is wrong in it.
+            let site = crate::site::Site::load(Path::new(dir)).map_err(|why| {
+                invalid(format!("site.dir {dir}: {why}"))
+            })?;
+            config.loaded_site = Arc::new(site);
+        }
         if let Some(owner) = &config.owner {
             let _ = config.owner_cell.set(owner.clone());
         }
         Ok(config)
+    }
+
+    /// The site the hub's pages, email and MCP display read: the one `site.dir` names, or
+    /// the built-in one.
+    pub fn site(&self) -> Arc<crate::site::Site> {
+        self.loaded_site.clone()
     }
 
     fn validate(&self, env: &dyn Fn(&str) -> Option<String>) -> BridgeResult<()> {

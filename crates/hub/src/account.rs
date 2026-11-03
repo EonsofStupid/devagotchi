@@ -44,9 +44,9 @@ pub const USAGE: &str = "Usage:
 
 login shows a code and a URL; open the URL on any device, check or enter the code, approve
 it there (on a hub, signed in with your passkey), and the sign-in lands here (OAuth device
-authorization, RFC 8628). --hub defaults to https://app.devagotchi.com. Tokens are kept in account.json under
-the config directory, readable by you alone. The hosted hub (devagotchi.com, shippin.cloud)
-requires an account; a local or self-hosted run does not, and --local records that choice.
+authorization, RFC 8628). --hub defaults to @HUB@. Tokens are kept in account.json under
+the config directory, readable by you alone. A hosted hub requires an account; a local or
+self-hosted run does not, and --local records that choice.
 
 With --issuer, the client id is devagotchi-cli@shippin unless --client-id names another (the
 native application the operator registers in Nomen with device authorization and refresh
@@ -54,8 +54,10 @@ tokens).";
 
 pub const DEFAULT_ISSUER: &str = "https://id.shippin.cloud";
 pub const DEFAULT_CLIENT_ID: &str = "devagotchi-cli@shippin";
-/// The hub `devagotchi login` talks to, unless `--hub` or `--issuer` says otherwise.
-pub const DEFAULT_HUB: &str = "https://app.devagotchi.com";
+/// The help, with the hub `devagotchi login` signs in at by default.
+fn help() -> String {
+    USAGE.replace("@HUB@", &client::default_hub())
+}
 const DEVICE_GRANT_HUB: &str = "urn:ietf:params:oauth:grant-type:device_code";
 pub const FILE_NAME: &str = "account.json";
 const SCOPE: &str = "openid profile email offline_access urn:nomen:iam:user:resourceowner";
@@ -519,7 +521,7 @@ pub fn cli(verb: &str, args: Vec<std::ffi::OsString>, path: PathBuf) -> std::pro
         .map(|a| a.to_string_lossy().into_owned())
         .collect();
     if args.iter().any(|a| a == "--help" || a == "-h") {
-        println!("{USAGE}");
+        println!("{}", help());
         return ExitCode::SUCCESS;
     }
     let runtime = match tokio::runtime::Builder::new_current_thread()
@@ -543,7 +545,7 @@ pub fn cli(verb: &str, args: Vec<std::ffi::OsString>, path: PathBuf) -> std::pro
         Err((code, message)) => {
             eprintln!("devagotchi {verb}: {message}");
             if code == 64 {
-                eprintln!("\n{USAGE}");
+                eprintln!("\n{}", help());
             }
             ExitCode::from(code)
         }
@@ -557,7 +559,8 @@ fn usage(message: impl Into<String>) -> (u8, String) {
 }
 
 async fn login(args: &[String], path: &Path) -> Outcome {
-    let mut hub = DEFAULT_HUB.to_string();
+    // The hub `devagotchi login` talks to, unless `--hub` or `--issuer` says otherwise.
+    let mut hub = client::default_hub();
     let mut issuer: Option<String> = None;
     let mut client_id = DEFAULT_CLIENT_ID.to_string();
     let mut local = false;

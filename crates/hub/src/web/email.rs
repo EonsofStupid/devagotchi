@@ -77,18 +77,17 @@ impl Mailer {
         })
     }
 
-    async fn send(&self, to: &str, link: &str) -> Result<(), String> {
+    /// The site's sign-in email (`content/messages.json` `email`), with `link` in it.
+    async fn send(&self, site: &crate::site::Site, to: &str, link: &str) -> Result<(), String> {
+        let (subject, body) = site.sign_in_email(link);
         mail::send(
             &self.server,
             self.password.as_deref(),
             &mail::Message {
                 from: &self.from,
                 to,
-                subject: "Your Devagotchi sign-in link",
-                body: &format!(
-                    "Open this link to sign in to Devagotchi:\n\n{link}\n\nIt works once, for 15 minutes. \
-If you did not ask for it, ignore this email: nobody can use it without this mailbox."
-                ),
+                subject: &subject,
+                body: &body,
             },
         )
         .await
@@ -203,7 +202,7 @@ pub async fn ask(
     // Sent after the answer: how long the mail server takes says nothing to the asker.
     tokio::spawn(async move {
         if let Some(mailer) = hub_for_mail.providers.email.as_ref()
-            && let Err(why) = mailer.send(&email, &link).await
+            && let Err(why) = mailer.send(&hub_for_mail.site(), &email, &link).await
         {
             eprintln!("devagotchi-hub: a sign-in link was not sent: {why}");
         }

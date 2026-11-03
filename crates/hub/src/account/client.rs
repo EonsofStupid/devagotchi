@@ -20,9 +20,14 @@ use serde_json::Value;
 use super::{Standing, Stored, current, unix_now};
 use crate::board::mcp::SEAT_HEADER;
 
-/// The hosted hub (D22: devagotchi.com is the site, app.devagotchi.com the app and /mcp).
-/// devagotchi.com redirects there, and the relay never follows redirects.
-pub const DEFAULT_HUB: &str = "https://app.devagotchi.com";
+/// The hosted hub (D22): the built-in site's `links.hosted_hub`, the app and its /mcp, not
+/// the marketing site, which redirects there; the relay never follows redirects.
+pub fn default_hub() -> String {
+    crate::site::builtin()
+        .hosted_hub()
+        .unwrap_or_default()
+        .to_string()
+}
 const MAX_ANSWER_BYTES: usize = 16 * 1024 * 1024;
 const PROTOCOL_VERSION: &str = "2025-06-18";
 

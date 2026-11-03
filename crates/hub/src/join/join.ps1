@@ -1,4 +1,4 @@
-# Devagotchi: join this Windows PC to @HUB@ as "@DEVICE@".
+# devagotchi: join this Windows PC to @HUB@ as "@DEVICE@".
 # Served by the hub for one join code; the code works once and expires 15 minutes after it
 # was issued. Every download is checked against the checksum written here by the hub.
 # Run in PowerShell (no administrator needed): irm <this URL> | iex
@@ -12,7 +12,7 @@
     switch ($arch.ToUpperInvariant()) {
         'AMD64' { $target = 'x86_64-pc-windows-msvc'; $sum = '@SHA_WINDOWS_X86_64@' }
         'ARM64' { $target = 'aarch64-pc-windows-msvc'; $sum = '@SHA_WINDOWS_AARCH64@' }
-        default { throw "devagotchi join: no Devagotchi build for $arch" }
+        default { throw "devagotchi join: no devagotchi build for $arch" }
     }
     if (-not $sum) { throw "devagotchi join: $hub has no $target build" }
     $work = Join-Path ([IO.Path]::GetTempPath()) ('devagotchi-join-' + [Guid]::NewGuid().ToString('N'))
@@ -32,7 +32,7 @@
         [IO.File]::WriteAllText((Join-Path $work "$archive.sha256"), "$sum  $archive")
         # Jesse's machines keep everything on D:; elsewhere it goes under the user's local app data.
         if (Test-Path 'D:\localdev') { $root = 'D:\localdev\devagotchi' } else { $root = Join-Path $env:LOCALAPPDATA 'Devagotchi' }
-        Write-Host "devagotchi join: installing Devagotchi $version in $root and joining $hub as $device"
+        Write-Host "devagotchi join: installing devagotchi $version in $root and joining $hub as $device"
         $shell = (Get-Process -Id $PID).Path
         $env:DEVAGOTCHI_ENROLL_CODE = '@CODE@'
         try {

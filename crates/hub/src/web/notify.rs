@@ -1,5 +1,5 @@
 //! Turning a phone into an approval notifier: the service worker, the one page script,
-//! the app manifest and icon, and `POST /push/subscribe`, where a signed-in person's
+//! the app manifest (the icon is the site's, `media.rs`), and `POST /push/subscribe`, where a signed-in person's
 //! browser leaves the address and public keys the hub pushes to (`crate::push`).
 
 use axum::{
@@ -17,7 +17,7 @@ use super::{
 };
 use crate::AppState;
 
-fn asset(body: &'static str, content_type: &'static str, cache: &'static str) -> Response {
+fn asset(body: String, content_type: &'static str, cache: &'static str) -> Response {
     let mut response = body.into_response();
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));
@@ -29,9 +29,10 @@ fn asset(body: &'static str, content_type: &'static str, cache: &'static str) ->
     response
 }
 
-pub async fn service_worker() -> Response {
+/// The service worker, with the site's name and icon in its notifications.
+pub async fn service_worker(State(state): State<AppState>) -> Response {
     asset(
-        include_str!("assets/sw.js"),
+        state.hub.config.site().service_worker(),
         "text/javascript; charset=utf-8",
         "no-cache",
     )
@@ -39,25 +40,18 @@ pub async fn service_worker() -> Response {
 
 pub async fn script() -> Response {
     asset(
-        include_str!("assets/push.js"),
+        include_str!("assets/push.js").to_string(),
         "text/javascript; charset=utf-8",
         "no-cache",
     )
 }
 
-pub async fn manifest() -> Response {
+/// The installed app's manifest: the site's name, colours and icon.
+pub async fn manifest(State(state): State<AppState>) -> Response {
     asset(
-        include_str!("assets/manifest.webmanifest"),
+        state.hub.config.site().manifest(),
         "application/manifest+json",
         "public, max-age=3600",
-    )
-}
-
-pub async fn icon() -> Response {
-    asset(
-        include_str!("assets/icon.svg"),
-        "image/svg+xml",
-        "public, max-age=86400",
     )
 }
 
