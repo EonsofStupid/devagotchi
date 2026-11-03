@@ -58,6 +58,30 @@ fn everything(site: &Site) -> Vec<(String, String)> {
     out.push(("email".into(), format!("{subject}\n{body}")));
     let (title, steps) = site.welcome("https://hub.example.org");
     out.push(("welcome".into(), format!("{title}\n{steps}")));
+    // What early access and plans say: to an AI, on the account page, in the email.
+    let access = &site.messages.access;
+    out.push((
+        "access".into(),
+        format!(
+            "{}\n{}\n{}\n{}\n{}",
+            site.waiting_message("1 January 2026", "https://hub.example.org/account"),
+            access.waiting_title,
+            Ctx::new(site).with("since", "x").inline(&access.account_waiting),
+            Ctx::new(site)
+                .with("since", "x")
+                .with("plan", "y")
+                .inline(&access.account_admitted),
+            access.limit_title,
+        ),
+    ));
+    if let Some(plan) = site.default_plan() {
+        out.push((
+            "limit".into(),
+            site.limit_message(plan, "projects", 1, 1, "https://hub.example.org"),
+        ));
+    }
+    let (subject, body) = site.admitted_email("https://hub.example.org/account");
+    out.push(("admitted email".into(), format!("{subject}\n{body}")));
     let info = site.mcp_info();
     out.push((
         "mcp".into(),
@@ -184,6 +208,73 @@ fn a_neutral_site_names_nothing_of_the_built_in_one_anywhere() {
     assert_eq!(names, ["diagram.svg", "icon.svg", "logo.svg"]);
 }
 
+/// A site made from the neutral one, changed by `edit`, that checks out.
+pub(crate) fn neutral_with(edit: impl FnOnce(&Path)) -> Site {
+    let (_dir, loaded) = variant(edit);
+    loaded.expect("the edited neutral site checks out")
+}
+
+#[test]
+fn plans_say_which_one_a_tenant_starts_on_and_what_each_holds() {
+    use super::{Cap, SignUp};
+    // The neutral site: two plans, none marked default, early access on.
+    let site = neutral();
+    assert_eq!(site.sign_up(), SignUp::EarlyAccess);
+    assert_eq!(site.default_plan().unwrap().id, "free", "the first plan");
+    let team = site.plan("team").unwrap();
+    assert_eq!(team.cap("projects"), Cap::Unlimited);
+    assert_eq!(team.cap("clients"), Cap::AtMost(10));
+    assert_eq!(team.cap("machines"), Cap::Unset);
+    // Marked default: that one, whatever its place.
+    let site = neutral_with(|d| {
+        edit_json(&d.join("site.json"), |v| v["plans"][1]["default"] = true.into())
+    });
+    assert_eq!(site.default_plan().unwrap().id, "team");
+    // A plan id the site no longer lists reads as the default plan, and says it fell back.
+    let (plan, fell_back) = site.plan_for(Some("gone"));
+    assert_eq!((plan.unwrap().id.as_str(), fell_back), ("team", true));
+    let (plan, fell_back) = site.plan_for(Some("free"));
+    assert_eq!((plan.unwrap().id.as_str(), fell_back), ("free", false));
+    let (plan, fell_back) = site.plan_for(None);
+    assert_eq!((plan.unwrap().id.as_str(), fell_back), ("team", false));
+    // No plans: nothing holds a tenant.
+    let none = neutral_with(|d| edit_json(&d.join("site.json"), |v| v["plans"] = serde_json::json!([])));
+    assert!(none.default_plan().is_none() && none.plan_for(Some("free")).0.is_none());
+    // The limit message in the site's words: the plan, the limit, the count, the plans.
+    let message = neutral().limit_message(
+        neutral().plan("free").unwrap(),
+        "machines",
+        2,
+        2,
+        "https://hub.example.org/",
+    );
+    assert!(
+        message.contains("Starter")
+            && message.contains("2 computers")
+            && message.contains("https://hub.example.org/#plans"),
+        "{message}"
+    );
+    // links.plans, when the site names one, is where it points instead.
+    let linked = neutral_with(|d| {
+        edit_json(&d.join("site.json"), |v| {
+            v["links"]["plans"] = "https://lumen.example.org/pricing".into()
+        })
+    });
+    assert_eq!(
+        linked.plans_url("https://hub.example.org"),
+        "https://lumen.example.org/pricing"
+    );
+    // Words an earlier site gave a limit the hub no longer counts still load, unused.
+    let older = neutral_with(|d| {
+        edit_json(&d.join("content/landing.json"), |v| {
+            v["plans"]["limits"]["idle_days"] = serde_json::json!({
+                "one": "{n} day", "other": "{n} days", "unlimited": "Forever"
+            })
+        })
+    });
+    assert!(older.landing.plans.limits.contains_key("idle_days"));
+}
+
 #[test]
 fn tokens_and_messages_give_only_what_they_change() {
     let site = neutral();
@@ -278,8 +369,34 @@ fn a_site_that_does_not_check_out_says_what_and_where() {
             }),
             &[
                 "plans free.limits.seats",
-                "projects, machines, clients, idle_days",
+                "the hub enforces only projects, machines, clients",
             ],
+        ),
+        (
+            // A limit the hub does not count may not be claimed, though it once was.
+            Box::new(|d| {
+                edit_json(&d.join("site.json"), |v| {
+                    v["plans"][0]["limits"]["idle_days"] = 14.into()
+                })
+            }),
+            &["plans free.limits.idle_days", "the hub enforces only"],
+        ),
+        (
+            Box::new(|d| {
+                edit_json(&d.join("site.json"), |v| {
+                    v["plans"][0]["default"] = true.into();
+                    v["plans"][1]["default"] = true.into();
+                })
+            }),
+            &["site.json plans", "at most one plan is marked"],
+        ),
+        (
+            Box::new(|d| {
+                edit_json(&d.join("content/messages.json"), |v| {
+                    v["access"] = serde_json::json!({ "waiting": "Wait for {nobody}" })
+                })
+            }),
+            &["content/messages.json access.waiting", "nothing fills {nobody}"],
         ),
         (
             Box::new(|d| {

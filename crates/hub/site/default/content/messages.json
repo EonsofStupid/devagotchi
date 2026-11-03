@@ -7,5 +7,17 @@
     "title": "Getting started: check {product} works for you",
     "body": "{product} is connected. Four steps, about five minutes:\n\n1. Ask your AI: \"Which of my machines can you reach?\" It calls `machines` and lists each machine and whether it is online.\n2. On your phone, open {hub}/approvals. Tap **Notify this phone**, then **Send me a test approval**. Approve it from the notification.\n3. Ask your AI for something small on one machine, for example: \"Show me the free disk space on <machine>.\" Anything you should sign off on waits for you on your phone.\n4. Tell your AI it worked, and ask it to close this ticket.\n\nStuck on a step? Tell your AI which one; it can read this ticket."
   },
-  "page_footer": "Last updated {updated}. [Docs](/docs) · [Privacy](/privacy) · [Terms](/terms) · [Support](/support)"
+  "page_footer": "Last updated {updated}. [Docs](/docs) · [Privacy](/privacy) · [Terms](/terms) · [Support](/support)",
+  "access": {
+    "waiting": "You're on the {product} early-access list since {since}, and nothing runs for you here until you're in. You'll get an email when you're in. Your account: {account}",
+    "waiting_title": "You're on the early-access list",
+    "account_waiting": "**You're on the early-access list** since {since}. You'll get an email when you're in; until then your AI can sign in and ask who it is, and nothing else runs. Secure your account below so the email reaches you.",
+    "account_admitted": "You're in since {since}, on the **{plan}** plan.",
+    "limit": "Your {plan} plan holds {limit} here, and you have {count}. The plans: {plans}",
+    "limit_title": "Your plan's limit",
+    "admitted_email": {
+      "subject": "You're in: {product}",
+      "body": "You're in. Your {product} account is ready, and your AI can use it now.\n\nYour account: {account}\n\nIf you did not ask to join, ignore this email."
+    }
+  }
 }

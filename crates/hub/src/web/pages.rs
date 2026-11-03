@@ -86,6 +86,37 @@ pub struct Viewer<'a> {
     pub ways: &'a str,
     /// The sign-ins linked to the account (Google, GitHub, email, an OpenID Connect provider…).
     pub linked: &'a [crate::accounts::identities::Linked],
+    /// Its tenant's place on a hosted hub: waiting since when, or in since when.
+    pub access: Option<&'a crate::accounts::access::Access>,
+    /// The name of the plan its tenant is on, when a plan holds it.
+    pub plan: Option<&'a str>,
+}
+
+/// Where the account stands on a hosted hub: on the early-access list since when, or in
+/// since when and on which plan (`content/messages.json` `access`).
+fn access_note(viewer: &Viewer<'_>) -> String {
+    let Some(access) = viewer.access else {
+        return String::new();
+    };
+    let site = site();
+    let copy = &site.messages.access;
+    if access.waiting {
+        let since = access.waiting_since.map(utc).unwrap_or_default();
+        let text = crate::site::Ctx::new(&site)
+            .with("since", since)
+            .inline(&copy.account_waiting);
+        return format!("<p class=\"note\" id=\"access\" role=\"status\">{text}</p>");
+    }
+    match (viewer.plan, access.admitted_at) {
+        (Some(plan), Some(at)) => {
+            let text = crate::site::Ctx::new(&site)
+                .with("since", utc(at))
+                .with("plan", plan)
+                .inline(&copy.account_admitted);
+            format!("<p class=\"note\" id=\"access\">{text}</p>")
+        }
+        _ => String::new(),
+    }
 }
 
 pub fn html(status: StatusCode, title: &str, body: &str) -> Response {
@@ -316,11 +347,12 @@ autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"
     };
     let body = format!(
         "<h1>Signed in as {}</h1>\
-<p class=\"meta\">{kind} ID <code>{}</code></p>{owner}{secure}\
+<p class=\"meta\">{kind} ID <code>{}</code></p>{owner}{access}{secure}\
 <h2>Your machines</h2>{machines}{add}{sign_ins}{history}\
 <form method=\"post\" action=\"/auth/logout\"><button type=\"submit\">Sign out</button></form>",
         escape(shown),
         escape(viewer.subject),
+        access = access_note(viewer),
         kind = if viewer.hub_account {
             "Account".to_string()
         } else {

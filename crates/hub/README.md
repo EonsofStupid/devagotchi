@@ -96,12 +96,18 @@ string: `{ "default": …, "passkeys": …, "hosted": …, "nomen": …, "unclai
 and `###` headings, paragraphs, `-` and `1.` lists, pipe tables, and `::: passkeys hosted`
 … `:::` around what only some hubs show (`passkeys`, `hosted`, `nomen`, `other`).
 
-**Plans** use the hub's own limit names, so the numbers on the page are the ones its config
-sets: `projects` (`account_boards.free_limit`), `machines`, `clients` and `idle_days`
-(`tenancy.unsecured`); a limit is a number or `"unlimited"`, and `content/landing.json`
-`plans.limits` says how each reads. A plan's `price` is text, never computed. The built-in
-site ships the Free plan only (D21) with the Plans section off; `early_access.mode` is `open`
-or `early_access` (its note and button then show under the plans).
+**Plans** are what a hosted hub holds each tenant to, and what the Plans section shows. A
+plan's `limits` name only what the hub counts and refuses past, per tenant: `projects`
+(boards it binds), `machines` (machines it adds, enrolled or with a live code) and `clients`
+(AI apps and terminals connected at once); a limit is a number or `"unlimited"`, and one a
+plan leaves out stays the config's (`account_boards.free_limit`, the machine quota).
+`check-site` refuses any other limit, so a plan never claims one the hub does not enforce.
+`"default": true` marks the plan a new tenant starts on (else the first). A plan's `price` is
+text, never computed; there is no billing. `content/landing.json` `plans.limits` says how each
+limit reads, there and in the hub's refusals. The built-in site ships the Free plan only (D21)
+with the Plans section off. `early_access.mode` is `open` or `early_access` (its note and
+button then show under the plans): see "Early access and plans" below. `links.plans`, when
+given, is where a refusal points for the plans; otherwise the landing page's `/#plans`.
 
 **Assets** are served from the hub at `/assets/<name>?v=<hash>`, the first 16 hex digits of
 their SHA-256, cached for a year, so the pages' CSP stays `'self'` only; a site with fonts
@@ -303,6 +309,23 @@ gets an account and a tenant (`t-<uuid>`) of their own, made on the spot:
   account's own (`board_bind`), tokens die with their account, and configured brokers need a
   grant as before. `tenant_tests.rs` drives every MCP tool and every account page as one
   tenant with another's ids, on SQLite and Postgres.
+- **Early access and plans** (`accounts/access.rs`, `tenant_access.rs`). The site's
+  `early_access.mode` decides whether a new tenant is let in at once (`open`) or waits
+  (`early_access`). A waiting tenant's account is made and secured exactly as above, and its
+  AI connects and asks `whoami` (`access: waiting`, `waiting_since`, `access_note`); every
+  other tool answers with the site's one message (`content/messages.json` `access.waiting`:
+  since when, that an email comes when they are in, their account page) instead of acting,
+  and nothing enrolls, adds a machine or writes a board for it. Its account page says the
+  same. An operator lets people in (the operator page, increment 64); each admission and
+  plan change is on the tenant's chain and the home tenant's, the operator as actor, and a
+  tenant with a verified email gets the "you're in" email when `auth.email` can send it.
+  Switching `early_access` to `open` lets each waiting tenant in on its next request
+  (`open sign-up`); switching back never puts anyone back. The home tenant, and every tenant
+  from before early access, is in. Each tenant has a plan id (`tenancy_access`, migration
+  0008, under row-level security like its other rows); a plan the site no longer lists reads
+  as the default plan, said once in the log. Plans hold everyone but the owner; reaching a
+  limit is refused with `plan_limit`, naming the plan, the limit and the count and pointing
+  to the plans.
 - **Operators, with no claim.** Someone who signs in with an identity `operators` names (a
   verified `email:`, or `google:`, `github:`, `nomen:` or `oidc:` and the provider's
   subject) is the hub's owner, the platform operator, in the first tenant (Jesse is tenant

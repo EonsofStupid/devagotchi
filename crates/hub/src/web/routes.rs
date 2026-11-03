@@ -372,6 +372,12 @@ async fn account(State(state): State<AppState>, headers: HeaderMap) -> Response 
                 Some(hub) => hub.accounts().identities_of(&subject.id).await.unwrap_or_default(),
                 None => Vec::new(),
             };
+            // Early access and plans, on a hosted hub.
+            let access = subject
+                .access
+                .as_ref()
+                .filter(|_| state.hub.config.multi_tenant());
+            let plan = state.hub.held_plan(&subject);
             pages::account(
                 &Viewer {
                     subject: &subject.id,
@@ -384,6 +390,8 @@ async fn account(State(state): State<AppState>, headers: HeaderMap) -> Response 
                     events: &events,
                     ways: &ways,
                     linked: &linked,
+                    access,
+                    plan: plan.as_ref().map(|plan| plan.name.as_str()),
                 },
                 &machines,
             )
@@ -477,11 +485,19 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> Response {
         },
     };
     let machines = state.hub.machine_status(&subject).await;
+    let access = subject.access.as_ref().map(|access| {
+        serde_json::json!({
+            "state": if access.waiting { "waiting" } else { "admitted" },
+            "waiting_since": access.waiting_since.filter(|_| access.waiting),
+            "plan": state.hub.held_plan(&subject).map(|plan| plan.id),
+        })
+    });
     let mut response = axum::Json(serde_json::json!({
         "subject": subject.id,
         "via": subject.via,
         "name": subject.name,
         "owner": state.hub.config.is_owner(&subject.id),
+        "access": access,
         "machines": machines,
     }))
     .into_response();

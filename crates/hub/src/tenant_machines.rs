@@ -7,11 +7,12 @@
 //! A one-owner hub stores names as given, as before.
 //!
 //! Adding a machine checks the account's quota here too: an account nobody secured yet adds
-//! `tenancy.unsecured.machines` at most.
+//! `tenancy.unsecured.machines` at most, a tenant on a plan the plan's `machines`
+//! (`tenant_access.rs`), and a tenant waiting to be let in adds none.
 
 use devagotchi_contracts::{BridgeError, BridgeResult};
 
-use crate::{accounts::tenants, auth::Subject, devices::Device, hub::Hub};
+use crate::{accounts::tenants, auth::Subject, devices::Device, hub::Hub, site::Cap};
 
 /// The longest name a person can give a machine on a hosted hub: the stored name, with the
 /// tenant's 13-character tag and a dash before it, is 63 characters at most.
@@ -75,12 +76,15 @@ impl Hub {
 
     /// A one-time code for a machine of `subject`'s called `name`: the name it is stored
     /// under, and the code. An account nobody secured adds `tenancy.unsecured.machines` at
-    /// most.
+    /// most; a tenant on a plan, the plan's `machines`; a tenant waiting to be let in, none.
     pub(crate) fn add_own_machine(
         &self,
         subject: &Subject,
         name: &str,
     ) -> BridgeResult<(String, String)> {
+        if let Some(refused) = self.waiting_refusal(subject) {
+            return Err(refused);
+        }
         if self.tenant_tag(subject).is_some() && name.len() > HOSTED_NAME_MAX {
             return Err(BridgeError::new(
                 "invalid_name",
@@ -94,11 +98,31 @@ impl Hub {
             ));
         }
         let stored = self.stored_name(subject, name);
-        let limit = (self.config.multi_tenant() && subject.provisional_until.is_some())
+        let unsecured = (self.config.multi_tenant() && subject.provisional_until.is_some())
             .then_some(self.config.tenancy.unsecured.machines as usize);
-        let code = self
-            .links
-            .issue_owned_code_within(&subject.id, &stored, limit)?;
+        let plan = self.plan_cap(subject, "machines");
+        let planned = match &plan {
+            Some((_, Cap::AtMost(most))) => Some(*most as usize),
+            Some((_, Cap::Unlimited)) => Some(usize::MAX),
+            Some((_, Cap::Unset)) | None => None,
+        };
+        let limit = match (unsecured, planned) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        let code = match self.links.issue_owned_code_within(&subject.id, &stored, limit) {
+            // The plan's limit, when it is the one reached, says so in the site's words.
+            Err(error) if error.code == "machine_limit" => match plan {
+                Some((plan, Cap::AtMost(most)))
+                    if unsecured.is_none_or(|quota| most as usize <= quota) =>
+                {
+                    let held = self.links.held(&subject.id).unwrap_or(most as usize);
+                    return Err(self.plan_limit(&plan, "machines", most, held));
+                }
+                _ => return Err(error),
+            },
+            other => other?,
+        };
         Ok((stored, code))
     }
 

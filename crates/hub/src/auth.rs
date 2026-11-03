@@ -46,6 +46,17 @@ pub struct Subject {
     /// True when the time left on a provisional account is under one seventh of the
     /// live ttl (at least an hour). Recomputed on each request from the current setting.
     pub provisional_warning: bool,
+    /// Its tenant's place on a hub with its own accounts (`accounts/access.rs`): let in or
+    /// waiting, and its plan. `None` where the hub keeps no tenants for it.
+    pub access: Option<crate::accounts::access::Access>,
+}
+
+impl Subject {
+    /// Whether this caller's tenant waits for an operator to let it in (early access):
+    /// then nothing but `whoami` runs for it.
+    pub fn waiting(&self) -> bool {
+        self.access.as_ref().is_some_and(|access| access.waiting)
+    }
 }
 
 /// The scopes a client asks Nomen for when it signs in to this hub: who the person is,
@@ -210,6 +221,7 @@ impl Verifier {
                         agent: None,
                         claim_code: None,
                         provisional_warning: false,
+                        access: None,
                     }
                 })
                 .ok_or(AuthError::Invalid("unknown token")),
@@ -459,6 +471,7 @@ impl OidcVerifier {
             agent: None,
             claim_code: None,
             provisional_warning: false,
+            access: None,
         })
     }
 
@@ -527,6 +540,7 @@ mod tests {
                 agent: None,
                 claim_code: None,
                 provisional_warning: false,
+                access: None,
             }
         );
         assert!(matches!(

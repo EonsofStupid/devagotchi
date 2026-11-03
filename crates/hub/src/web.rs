@@ -70,6 +70,7 @@ pub(crate) fn utc(secs: u64) -> String {
     pages::utc(secs)
 }
 
+pub(crate) use email::announce_admissions;
 pub use passkeys::HubSignIn;
 pub use providers::Providers;
 pub use routes::router;

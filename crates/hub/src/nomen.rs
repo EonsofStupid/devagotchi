@@ -684,6 +684,7 @@ fn assess(answer: &Introspection, accepts: &Accepts, now: u64) -> Result<Subject
         agent: None,
         claim_code: None,
         provisional_warning: false,
+        access: None,
     })
 }
 

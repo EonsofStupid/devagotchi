@@ -125,6 +125,10 @@ pub async fn test(State(state): State<AppState>, headers: HeaderMap) -> Response
         Who::Unavailable => return unavailable(),
         Who::NotSetUp => return not_set_up(),
     };
+    // A tenant waiting to be let in writes no board (`tenant_access.rs`).
+    if let Some(refused) = state.hub.waiting_refusal(&subject) {
+        return waiting_page(&refused);
+    }
     let Some(push) = state.hub.push.clone() else {
         return see_other("/approvals", &[]);
     };
@@ -197,6 +201,10 @@ pub async fn decide(
         Who::Unavailable => return unavailable(),
         Who::NotSetUp => return not_set_up(),
     };
+    // A tenant waiting to be let in writes no board (`tenant_access.rs`).
+    if let Some(refused) = state.hub.waiting_refusal(&subject) {
+        return waiting_page(&refused);
+    }
     let human = state.hub.config.is_human(&subject.id);
     let granted = state
         .hub
@@ -328,5 +336,15 @@ Send me a test approval</button></p></form>"
         StatusCode::OK,
         "Approvals",
         &format!("<h1>Approvals</h1>{notify}{flash}{body}"),
+    )
+}
+
+/// What a tenant waiting to be let in sees instead of a board change.
+fn waiting_page(refused: &devagotchi_contracts::BridgeError) -> Response {
+    pages::message(
+        StatusCode::FORBIDDEN,
+        &pages::site().messages.access.waiting_title,
+        &refused.message,
+        Some(("/account", "Your account")),
     )
 }

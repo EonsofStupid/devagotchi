@@ -436,7 +436,7 @@ impl Accounts {
             return Ok(None);
         }
         let key = hash(token);
-        transaction!(&self.store, |connection| {
+        let verified = transaction!(&self.store, |connection| {
             if self.enter(connection, Lookup::Token(&key)).await?.is_none() {
                 return Ok(None);
             }
@@ -467,8 +467,14 @@ impl Accounts {
                 return Ok(None);
             }
             tenants::touch(connection, &mut grant.account, now).await?;
-            Ok(Some(grant))
-        })
+            // Its tenant's access, settled now: let in, if sign-up opened while it waited.
+            let admitted = self.settle_in(connection, &mut grant.account, now).await?;
+            Ok(Some((grant, admitted)))
+        })?;
+        Ok(verified.map(|(grant, admitted)| {
+            self.announce(admitted);
+            grant
+        }))
     }
 
     /// Revoke a token (RFC 7009): its whole family ends. Unknown tokens are fine.
@@ -577,7 +583,8 @@ impl Accounts {
     }
 
     /// Refuse a new AI connection for an account nobody secured once it has
-    /// `tenancy.unsecured.clients` live ones (each refresh family is one).
+    /// `tenancy.unsecured.clients` live ones (each refresh family is one), and for a tenant
+    /// on a hosted hub once it has as many as its plan's `clients` (`access.rs`).
     pub(super) async fn room_for_a_client(
         &self,
         connection: &mut AnyConnection,
@@ -587,6 +594,9 @@ impl Accounts {
         let Some(holder) = account_in(connection, account).await? else {
             return Ok(());
         };
+        if self.tenancy.multi() && !holder.owner {
+            self.room_on_the_plan(connection, &holder.tenant, now).await?;
+        }
         if !holder.provisional {
             return Ok(());
         }

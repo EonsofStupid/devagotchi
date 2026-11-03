@@ -295,8 +295,10 @@ impl Session {
         };
         if result.get("isError").and_then(Value::as_bool) == Some(true) {
             let code = content["code"].as_str().unwrap_or("refused").to_string();
+            // A refusal in plain words (early access) is the message itself.
             let message = content["message"]
                 .as_str()
+                .or_else(|| result["content"][0]["text"].as_str())
                 .unwrap_or("the hub refused the call")
                 .to_string();
             return Err(BridgeError::new(&code, message));

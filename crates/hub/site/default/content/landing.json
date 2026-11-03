@@ -345,11 +345,6 @@
         "one": "{n} AI app at a time",
         "other": "{n} AI apps at a time",
         "unlimited": "Unlimited AI apps"
-      },
-      "idle_days": {
-        "one": "Kept {n} day unused",
-        "other": "Kept {n} days unused",
-        "unlimited": "Kept however long it sits unused"
       }
     }
   },

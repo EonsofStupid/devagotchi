@@ -84,6 +84,8 @@ pub(super) async fn settle_in(
     .await?;
     let home = home_in(connection).await?;
     store.scope(connection, &home).await?;
+    // The operator's tenant is always in (`access.rs`).
+    super::access::home_in(connection, &home, now).await?;
     let told = sqlx::query("SELECT 1 FROM tenancy_events WHERE tenant_id = $1 LIMIT 1")
         .bind(&home)
         .fetch_optional(&mut *connection)
@@ -278,6 +280,7 @@ impl Accounts {
             claim_code: None,
             provisional_warning: lapses
                 .is_some_and(|until| until.saturating_sub(now_secs()) < (idle / 7).max(3600)),
+            access: account.access.clone(),
         }
     }
 
@@ -383,6 +386,7 @@ impl Accounts {
                 now,
             )
             .await?;
+            let access = super::access::begin_in(connection, &tenant, &self.site(), now).await?;
             sqlx::query(
                 "INSERT INTO auth_accounts (id, name, owner, created_at, tenant_id, provisional, last_active)
                  VALUES ($1, $2, 0, $3, $4, 1, $3)",
@@ -414,8 +418,9 @@ impl Accounts {
                 now,
             )
             .await?;
-            Ok(token)
+            Ok((token, access))
         })?;
+        let (token, access) = token;
         Ok((
             Account {
                 id,
@@ -423,6 +428,7 @@ impl Accounts {
                 tenant,
                 provisional: true,
                 last_active: Some(now),
+                access: Some(access),
                 ..Account::default()
             },
             token,

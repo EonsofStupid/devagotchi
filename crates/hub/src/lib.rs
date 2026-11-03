@@ -25,6 +25,9 @@ mod push;
 mod run;
 mod site;
 mod store;
+#[cfg(test)]
+mod access_tests;
+mod tenant_access;
 mod tenant_machines;
 #[cfg(test)]
 mod provider_tests;
@@ -333,7 +336,8 @@ async fn accounts_at(
     Ok(accounts::Accounts::open(store)
         .await?
         .with_tokens(config.token_config())
-        .with_tenancy(config.tenancy.clone(), config.operators.clone()))
+        .with_tenancy(config.tenancy.clone(), config.operators.clone())
+        .with_site(config.site_cell(), &config.public_url))
 }
 
 fn prepare_state_dir(state_dir: &std::path::Path) -> BridgeResult<()> {
@@ -615,6 +619,13 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     } else {
         None
     };
+    // A tenant let in hears so by email when the hub can send mail (early access).
+    if let (Some(accounts), Some(mailer)) = (
+        &accounts,
+        providers.as_ref().and_then(|providers| providers.email.clone()),
+    ) {
+        accounts.on_admitted(web::announce_admissions(mailer, config.clone()));
+    }
     let passkeys = accounts.clone().and_then(|accounts| {
         web::HubSignIn::new(config.clone(), accounts)
             .map(|hub| match providers {
@@ -638,9 +649,12 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             devices.clone(),
         )?)),
     };
-    let links = Arc::new(
-        Links::new(config.clone(), devices.clone(), audit.clone()).notifying(push.clone()),
-    );
+    let links = Links::new(config.clone(), devices.clone(), audit.clone()).notifying(push.clone());
+    // A machine joins for an account only once its tenant is let in (early access).
+    let links = Arc::new(match &accounts {
+        Some(accounts) => links.gated(accounts.enroll_gate()),
+        None => links,
+    });
     // A downloads directory that does not check out is logged and left out: the hub still
     // serves everything else, and /healthz says why /join is off.
     let downloads = match &config.downloads {
@@ -1192,6 +1206,14 @@ async fn enroll_with_code(
     State(state): State<AppState>,
     axum::Json(body): axum::Json<EnrollBody>,
 ) -> Response {
+    // An account waiting to be let in enrolls nothing (`tenant_access.rs`).
+    if let Err(error) = state.hub.links.may_enroll(&body.code).await {
+        return (
+            StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({ "error": error.code, "message": error.message })),
+        )
+            .into_response();
+    }
     match state
         .hub
         .links

@@ -197,9 +197,10 @@ pub struct Mcp {
     pub instructions: String,
 }
 
-/// A plan as the Plans section shows it. `limits` uses the hub's own limit names, so the
-/// numbers it shows are the ones the hub's config sets: `projects` (`account_boards.
-/// free_limit`), `machines`, `clients` and `idle_days` (`tenancy.unsecured`).
+/// A plan: what the Plans section shows, and what a hosted hub holds each tenant on that
+/// plan to (`accounts/access.rs`). `limits` names only what the hub counts and enforces
+/// ([`LIMIT_KEYS`]); a limit a plan leaves out is the hub config's (`account_boards.
+/// free_limit`, the machine quota, `tenancy.unsecured`).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
@@ -207,6 +208,9 @@ pub struct Plan {
     pub name: String,
     /// The price as it reads: "Free", "$12 a month". Text, never computed.
     pub price: String,
+    /// The plan a new tenant starts on; without one marked, the first plan.
+    #[serde(default)]
+    pub default: bool,
     #[serde(default)]
     pub limits: BTreeMap<String, Limit>,
     #[serde(default)]
@@ -215,8 +219,15 @@ pub struct Plan {
     pub cta: Option<Action>,
 }
 
-/// The limit names a plan may set.
-pub const LIMIT_KEYS: [&str; 4] = ["projects", "machines", "clients", "idle_days"];
+/// The limits a plan may set: each one the hub counts per tenant and refuses past
+/// (`access.rs`). `projects`: boards a tenant binds (`board_bind`); `machines`: machines it
+/// adds (`machine_add`, Add a machine), enrolled or with a live code; `clients`: AI apps
+/// and terminals connected at once (each live refresh-token family).
+pub const LIMIT_KEYS: [&str; 3] = ["projects", "machines", "clients"];
+
+/// Limit names an earlier site could word in `content/landing.json` but no plan may set
+/// any more, because the hub does not count them: their words are accepted, never drawn.
+const RETIRED_LIMIT_WORDS: [&str; 1] = ["idle_days"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
@@ -344,6 +355,9 @@ impl SiteFile {
             return bad("mcp.instructions", "1 byte to 16 KiB");
         }
         let mut ids = BTreeSet::new();
+        if self.plans.iter().filter(|plan| plan.default).count() > 1 {
+            return bad("plans", "at most one plan is marked \"default\": true");
+        }
         for plan in &self.plans {
             if !valid_key(&plan.id) || !ids.insert(plan.id.as_str()) {
                 return bad(&format!("plans {}", plan.id), "ids are unique, [a-z0-9_-]");
@@ -355,7 +369,10 @@ impl SiteFile {
                 if !LIMIT_KEYS.contains(&key.as_str()) {
                     return bad(
                         &format!("plans {}.limits.{key}", plan.id),
-                        &format!("a limit is one of {}", LIMIT_KEYS.join(", ")),
+                        &format!(
+                            "the hub enforces only {}; a plan names no limit it does not count",
+                            LIMIT_KEYS.join(", ")
+                        ),
                     );
                 }
             }
@@ -740,6 +757,9 @@ impl Landing {
         self.closing.lead.check(&what("closing.lead"))?;
         self.closing.actions.check(&what("closing.actions"))?;
         for (key, words) in &self.plans.limits {
+            if RETIRED_LIMIT_WORDS.contains(&key.as_str()) {
+                continue;
+            }
             if !LIMIT_KEYS.contains(&key.as_str()) {
                 return Err(format!(
                     "{}: a limit is one of {}",
@@ -796,6 +816,32 @@ pub struct Messages {
     pub welcome: Welcome,
     /// Under every public page (inline markup; `{updated}` is the page's date).
     pub page_footer: String,
+    /// Early access and plans on a hosted hub (`accounts/access.rs`).
+    pub access: AccessCopy,
+}
+
+/// What a hosted hub says about early access and plans. `{since}` is a date, `{account}`
+/// the person's account page.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AccessCopy {
+    /// What every tool call but `whoami` answers while the tenant waits to be let in:
+    /// `{since}`, `{account}`.
+    pub waiting: String,
+    /// The heading over that on a page (adding a machine, deciding an approval).
+    pub waiting_title: String,
+    /// The account page while it waits (inline markup): `{since}`.
+    pub account_waiting: String,
+    /// The account page once it is in (inline markup): `{since}`, `{plan}` (its name).
+    pub account_admitted: String,
+    /// A plan's limit reached: `{plan}`, `{limit}` and `{count}` (worded as the Plans
+    /// section words them), `{plans}` (where the plans are: `links.plans`, else this hub's
+    /// `/#plans`).
+    pub limit: String,
+    /// The heading over that on a page (an AI app past the plan's `clients`).
+    pub limit_title: String,
+    /// The email that says they are in: `{account}`.
+    pub admitted_email: Email,
 }
 
 /// The sign-in email: `{link}` is the one-time link.

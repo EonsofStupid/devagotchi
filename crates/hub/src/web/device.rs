@@ -343,6 +343,12 @@ within a few seconds.</p>{offer}"
             &error.message,
             Some(("/account#secure", "Secure my account")),
         ),
+        Err(error) if error.code == "plan_limit" => pages::message(
+            StatusCode::FORBIDDEN,
+            &pages::site().messages.access.limit_title,
+            &error.message,
+            Some(("/account", "Your account")),
+        ),
         Ok(true) => pages::message(
             StatusCode::OK,
             "Cancelled",

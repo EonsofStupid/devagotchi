@@ -10,6 +10,7 @@
 //! The hub's pages use it in `web/passkeys.rs`; `devagotchi hub owner` makes the owner and
 //! the one-time link.
 
+pub mod access;
 pub mod claim;
 pub mod email;
 pub mod identities;
@@ -140,6 +141,8 @@ pub struct Account {
     pub provisional: bool,
     /// When it was last used, kept for an account not secured yet.
     pub last_active: Option<u64>,
+    /// Its tenant's place on the hub (`access.rs`), where a request read it.
+    pub access: Option<access::Access>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +164,12 @@ pub struct Accounts {
     tenancy: crate::config::TenancyConfig,
     /// The identities whose sign-in is the hub's operator (`operators`).
     operators: Vec<String>,
+    /// The site early access and plans are read from (`access.rs`), as the hub serves it.
+    site: std::sync::Arc<crate::site::SiteCell>,
+    /// This hub's address, for the links its messages give.
+    public_url: String,
+    /// Who hears that tenants were let in (`access::Accounts::on_admitted`).
+    announce: std::sync::OnceLock<access::Announce>,
     /// Signs the passkey challenges this process makes: the store's key as last read. The
     /// store's copy is the one that counts: every ceremony checks against it, read in its
     /// own transaction, and refreshes this one. It changes only when a clock is found set
@@ -181,6 +190,7 @@ fn account_row(row: &AnyRow) -> Result<Account, sqlx::Error> {
         tenant: row.try_get::<Option<String>, _>(4)?.unwrap_or_default(),
         provisional: row.try_get::<i64, _>(5)? == 1,
         last_active: row.try_get::<Option<i64>, _>(6)?.map(unsecs),
+        access: None,
     })
 }
 
@@ -276,8 +286,23 @@ impl Accounts {
             tokens: crate::config::TokenConfig::default(),
             tenancy: crate::config::TenancyConfig::default(),
             operators: Vec::new(),
+            site: std::sync::Arc::new(crate::site::SiteCell::new(crate::site::builtin())),
+            public_url: String::new(),
+            announce: std::sync::OnceLock::new(),
             challenge_key: std::sync::RwLock::new(key),
         })
+    }
+
+    /// These accounts reading early access and plans from `site` (the hub's, which follows
+    /// its site directory), with `public_url` in the links their messages give.
+    pub fn with_site(
+        mut self,
+        site: std::sync::Arc<crate::site::SiteCell>,
+        public_url: &str,
+    ) -> Self {
+        self.site = site;
+        self.public_url = public_url.trim_end_matches('/').to_string();
+        self
     }
 
     /// These accounts with the config's lifetimes and limits for AI connections.
