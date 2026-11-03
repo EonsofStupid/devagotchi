@@ -229,12 +229,16 @@ def main() -> int:
     #     file is pushed 0600 for install.sh alone and removed after it, and no claim.
     hosted = ["--tenancy", "multi", "--operators", "email:ops@example.com", "--google",
               "--nomen", "https://id.example.com", "--email-from", "Hub <sign-in@example.com>",
+              "--analytics", "off", "--analytics-retention-days", "30",
               "--env-file", "@secrets"]
     code, out, s = run("hosted", config=UNPRIVILEGED, host_proxy=True, hosted=True, extra=hosted)
     install = s["install"]
     check("hosted", code == 0, out)
     check("hosted: flags passed on", all(flag in install for flag in
           ["--google", "multi", "email:ops@example.com", "https://id.example.com", "Hub <sign-in@example.com>"]), out)
+    check("hosted: analytics settings passed on",
+          install[install.index("--analytics") + 1] == "off"
+          and install[install.index("--analytics-retention-days") + 1] == "30", out)
     check("hosted: secrets pushed 0600 and named to install.sh",
           s["perms"].get("secrets.env") == "0600"
           and install[install.index("--env-file") + 1] == "/root/devagotchi-hub-src/secrets.env"

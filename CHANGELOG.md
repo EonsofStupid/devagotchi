@@ -7,6 +7,42 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### First-party analytics, counted by the hub itself (increment 66)
+- A hosted hub (`tenancy.mode multi`) counts visits to its public pages (`/`, `/docs`,
+  `/privacy`, `/terms`, `/support`) in its own request handling: no script, no cookie, no
+  beacon, nothing third-party. Each `GET` answered `200` keeps the UTC day and hour, the
+  path, the link's `utm_source`, `utm_medium` and `utm_campaign` (the rest of the query is
+  dropped), the referring host (never the hub's own) and the device class (mobile, tablet,
+  desktop). The visitor is an HMAC of the client address (`tenancy.trusted_proxies`
+  decides which) and User-Agent under a key held only in memory and replaced each UTC day,
+  so ids never link across days; no address or User-Agent is stored.
+- Not counted: `Sec-GPC: 1`, `DNT: 1`, robots (a maintained list in
+  `src/analytics/bots.txt`) and requests with no User-Agent, assets, `/healthz`, the APIs,
+  anything not answered `200`, and the signed-in operator (the web bar marks their
+  requests).
+- Each tenant's milestones, once each with its tenant id, where each happens: made (with the
+  AI client family from the OAuth client's name: claude, chatgpt for ChatGPT and Codex,
+  grok, cursor, other), secured (with the sign-in), waiting and admitted, written in the
+  account store's own transaction; the first machine enrolled (`link.rs`), the first
+  operation (`operation_start` or `run` that started, with its latest kept a day at a
+  time) and the first board (`board_bind`) through the queue. Never for the home tenant.
+- Migration 0009 on both engines, add-only: `hub_analytics_views` (raw visits),
+  `hub_analytics_events` (milestones, keyed by tenant and kind), `hub_analytics_daily`
+  (daily totals, kept). Hub-scoped like `hub_secrets`, granted to `devagotchi_hub`.
+- Writes never slow or fail a page: a bounded queue, one writer in batches, a full queue
+  drops and counts (said in the log). Every hour the writer rolls each finished day into
+  daily totals and deletes raw visits older than `analytics.retention_days`.
+- Config: `analytics.enabled` (default true) and `analytics.retention_days` (default 90, 1
+  to 3650); `DEVAGOTCHI_HUB_ANALYTICS` (`on`/`off`) and
+  `DEVAGOTCHI_HUB_ANALYTICS_RETENTION_DAYS` override them, passed through by
+  `deploy/compose` and set by `install.sh --analytics`/`--analytics-retention-days` (and
+  `hub-up.sh`).
+- Pages may hold `::: analytics` and `::: no-analytics` blocks (shown only where the hub
+  counts, or does not) and `{retention_days}`. The default privacy page now says exactly
+  what is counted (no cookies, no third-party scripts, no address or User-Agent kept, a
+  daily-rotating id, GPC and DNT honoured, the retention, each account's milestones) and
+  keeps its "no analytics" sentence only for a hub that counts nothing.
+
 ### The default privacy page says how people actually sign in (increment 65)
 - `site/default/content/privacy.md` no longer says everyone signs in through Shippin
   (id.shippin.cloud). It names every way a hub may offer (passkey, Google, GitHub, an email

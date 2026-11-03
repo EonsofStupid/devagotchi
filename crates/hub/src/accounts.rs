@@ -171,6 +171,9 @@ pub struct Accounts {
     public_url: String,
     /// Who hears that tenants were let in (`access::Accounts::on_admitted`).
     announce: std::sync::OnceLock<access::Announce>,
+    /// Whether each tenant's milestones are recorded (`analytics::funnel`), in the
+    /// transaction that does each: on a hosted hub that counts.
+    counting: bool,
     /// Signs the passkey challenges this process makes: the store's key as last read. The
     /// store's copy is the one that counts: every ceremony checks against it, read in its
     /// own transaction, and refreshes this one. It changes only when a clock is found set
@@ -290,6 +293,7 @@ impl Accounts {
             site: std::sync::Arc::new(crate::site::SiteCell::new(crate::site::builtin())),
             public_url: String::new(),
             announce: std::sync::OnceLock::new(),
+            counting: false,
             challenge_key: std::sync::RwLock::new(key),
         })
     }
@@ -309,6 +313,13 @@ impl Accounts {
     /// These accounts with the config's lifetimes and limits for AI connections.
     pub fn with_tokens(mut self, tokens: crate::config::TokenConfig) -> Self {
         self.tokens = tokens;
+        self
+    }
+
+    /// These accounts recording each tenant's milestones when `counting`
+    /// (`HubConfig::counts_visits`).
+    pub fn with_analytics(mut self, counting: bool) -> Self {
+        self.counting = counting;
         self
     }
 
@@ -692,7 +703,7 @@ impl Accounts {
                 .execute(&mut *connection)
                 .await?;
                 // An account made on first connect is secured by its first passkey.
-                tenants::secure_in(connection, &holder, "passkey", now).await?;
+                tenants::secure_in(connection, &holder, "passkey", self.counting, now).await?;
                 // The owner can sign in now: the hub is claimed, and no claim code it
                 // printed works any more (`claim.rs`).
                 if holder.owner {

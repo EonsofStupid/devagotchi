@@ -26,6 +26,7 @@
 
 mod approvals;
 mod claim;
+pub(crate) mod counted;
 mod device;
 mod email;
 mod hosted;
@@ -83,9 +84,12 @@ pub(crate) use landing::render as landing_for;
 /// one-tap Sign out, or Sign in back to this page (`pages::Bar`). On a hub waiting to be
 /// claimed, nobody can sign in, so it offers nothing. The page is drawn with the hub's site
 /// (`pages::SITE`).
+///
+/// It also marks a request from the signed-in operator of a hosted hub (`OperatorVisit`),
+/// so the operator's own visits are not counted (`counted.rs`).
 pub async fn bar(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
-    request: axum::extract::Request,
+    mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     let unclaimed = match &state.passkeys {
@@ -95,7 +99,14 @@ pub async fn bar(
     let signed_in = match &state.passkeys {
         // An account nobody secured gets a line under the bar on every page.
         Some(hub) if !unclaimed => match hub.who(request.headers()).await {
-            Ok(Some(subject)) => Some(subject.provisional_until.is_some()),
+            Ok(Some(subject)) => {
+                if state.hub.config.multi_tenant() && state.hub.config.is_owner(&subject.id) {
+                    request
+                        .extensions_mut()
+                        .insert(crate::analytics::OperatorVisit);
+                }
+                Some(subject.provisional_until.is_some())
+            }
             _ => None,
         },
         _ if routes::signed_in(&state, request.headers()).await => Some(false),

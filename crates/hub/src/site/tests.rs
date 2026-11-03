@@ -5,7 +5,10 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{Ctx, Front, Site, builtin, markdown::DOC_FRONTS};
+use super::{
+    Ctx, Front, Site, builtin,
+    markdown::{DOC_FRONTS, SWITCHES},
+};
 
 /// What the neutral site must never show.
 pub(crate) const BRANDS: [&str; 3] = ["Devagotchi", "devagotchi.com", "AngryVibes"];
@@ -45,13 +48,16 @@ fn everything(site: &Site) -> Vec<(String, String)> {
     }
     for (name, page) in &site.pages {
         for front in DOC_FRONTS {
-            let ctx = Ctx::new(site)
-                .with("mcp", "https://hub.example.org/mcp")
-                .with("updated", page.updated.clone());
-            out.push((
-                format!("{name} ({front})"),
-                format!("{}\n{}", page.title, page.render(&ctx, front)),
-            ));
+            for switch in SWITCHES {
+                let ctx = Ctx::new(site)
+                    .with("mcp", "https://hub.example.org/mcp")
+                    .with("updated", page.updated.clone())
+                    .with("retention_days", "90");
+                out.push((
+                    format!("{name} ({front}, {switch})"),
+                    format!("{}\n{}", page.title, page.render(&ctx, &[front, switch])),
+                ));
+            }
         }
     }
     let (subject, body) = site.sign_in_email("https://hub.example.org/auth/email#t");
@@ -604,7 +610,7 @@ fn pages_are_a_small_strict_markdown() {
     assert_eq!(page.updated, "today");
     let site = builtin();
     let ctx = Ctx::new(&site);
-    let html = page.render(&ctx, "passkeys");
+    let html = page.render(&ctx, &["passkeys"]);
     assert_eq!(
         html,
         "<h1>Head Devagotchi</h1><p>One line and the next.</p>\
@@ -614,10 +620,53 @@ fn pages_are_a_small_strict_markdown() {
 <p>Only with passkeys.</p>"
     );
     assert!(
-        page.render(&ctx, "nomen")
+        page.render(&ctx, &["nomen"])
             .contains("<p>Only on Nomen hubs.</p>")
     );
-    assert!(!page.render(&ctx, "other").contains("Only"));
+    assert!(!page.render(&ctx, &["other"]).contains("Only"));
+}
+
+#[test]
+fn a_page_says_what_the_hub_counts_only_where_it_counts() {
+    let page = super::Page::parse(
+        "---\ntitle: T\nupdated: today\n---\n::: analytics\nCounted, {retention_days} days.\n:::\n\n\
+::: no-analytics\nNothing counted.\n:::\n\n::: hosted\n::: analytics\nHosted and counted.\n:::\n:::\n",
+    )
+    .unwrap();
+    let site = builtin();
+    let ctx = Ctx::new(&site).with("retention_days", "30");
+    assert_eq!(
+        page.render(&ctx, &["hosted", "analytics"]),
+        "<p>Counted, 30 days.</p><p>Hosted and counted.</p>"
+    );
+    assert_eq!(page.render(&ctx, &["hosted", "no-analytics"]), "<p>Nothing counted.</p>");
+    assert_eq!(page.render(&ctx, &["passkeys", "analytics"]), "<p>Counted, 30 days.</p>");
+    let unknown = super::Page::parse("---\ntitle: T\n---\n::: counted\nx\n:::\n").unwrap_err();
+    assert!(unknown.contains("analytics, no-analytics"), "{unknown}");
+    // The built-in privacy page says exactly what a counting hub counts, and a hub that
+    // does not count says it counts nothing.
+    let privacy = &site.pages["privacy"];
+    let ctx = Ctx::new(&site)
+        .with("retention_days", "45")
+        .with("updated", privacy.updated.clone());
+    let counting = privacy.render(&ctx, &["hosted", "analytics"]);
+    for said in [
+        "no cookie",
+        "no script",
+        "<code>utm_source</code>",
+        "changes every day",
+        "never kept",
+        "Global Privacy Control",
+        "Do Not Track",
+        "45 days",
+        "once for each account",
+    ] {
+        assert!(counting.contains(said), "{said}: {counting}");
+    }
+    assert!(!counting.contains("no analytics"), "{counting}");
+    let quiet = privacy.render(&ctx, &["hosted", "no-analytics"]);
+    assert!(quiet.contains("no analytics"), "{quiet}");
+    assert!(!quiet.contains("45 days"), "{quiet}");
 }
 
 #[test]

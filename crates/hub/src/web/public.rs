@@ -2,7 +2,9 @@
 //! the privacy policy, the terms and where to get help. They are what the AI directories
 //! link to (Claude's Connectors Directory, OpenAI's plugin directory), so they describe this
 //! hub as it runs, never planned behavior. Their words are the site's (`content/*.md`,
-//! `site/markdown.rs`); no sign-in, no script.
+//! `site/markdown.rs`); no sign-in, no script. A page's `::: analytics` blocks show only
+//! where this hub counts visits (`crate::analytics`), `::: no-analytics` ones elsewhere,
+//! with `{retention_days}` its `analytics.retention_days`.
 
 use axum::{extract::State, http::StatusCode, response::Response};
 
@@ -26,8 +28,12 @@ fn page(state: &AppState, name: &str) -> Response {
             "mcp",
             format!("{}/mcp", state.hub.config.public_url.trim_end_matches('/')),
         )
-        .with("updated", page.updated.clone());
-    let body = page.render(&ctx, kind(state));
+        .with("updated", page.updated.clone())
+        .with(
+            "retention_days",
+            state.hub.config.analytics.retention_days.to_string(),
+        );
+    let body = page.render(&ctx, &[kind(state), switch(state)]);
     pages::html(
         StatusCode::OK,
         &ctx.plain(&page.title),
@@ -56,6 +62,16 @@ fn kind(state: &AppState) -> &'static str {
     }
 }
 
+/// Whether this hub counts visits: which of a page's `::: analytics` and
+/// `::: no-analytics` blocks it shows.
+fn switch(state: &AppState) -> &'static str {
+    if state.hub.analytics.is_some() {
+        "analytics"
+    } else {
+        "no-analytics"
+    }
+}
+
 /// `/docs`: what the product is and how to connect an AI to this hub, at this hub's own
 /// address and with the sign-in it runs.
 pub async fn docs(State(state): State<AppState>) -> Response {
@@ -74,16 +90,24 @@ pub async fn support(State(state): State<AppState>) -> Response {
     page(&state, "support")
 }
 
-/// The site's public page `name` as one hub of `kind` would draw it, for tests.
+/// The site's public page `name` as one hub of `kind` would draw it, counting visits
+/// (`switch` `analytics`) or not, for tests.
 #[cfg(test)]
-pub fn render(site: &crate::site::Site, name: &str, kind: &str, public_url: &str) -> String {
+pub fn render(
+    site: &crate::site::Site,
+    name: &str,
+    kind: &str,
+    switch: &str,
+    public_url: &str,
+) -> String {
     let page = &site.pages[name];
     let ctx = Ctx::new(site)
         .with("mcp", format!("{}/mcp", public_url.trim_end_matches('/')))
-        .with("updated", page.updated.clone());
+        .with("updated", page.updated.clone())
+        .with("retention_days", "90");
     format!(
         "{}<p class=\"meta\">{}</p>",
-        page.render(&ctx, kind),
+        page.render(&ctx, &[kind, switch]),
         ctx.inline(&site.messages.page_footer)
     )
 }

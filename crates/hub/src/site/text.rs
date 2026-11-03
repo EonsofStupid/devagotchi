@@ -10,7 +10,7 @@
 //! - `{term:<key>}` or `{term:<key>|shown}`: a glossary word with its tooltip.
 //!   `{pop:<claim|tools|watch>|label}`: a button that opens that popup.
 //! - Whatever the page adds where it draws the copy: `{mcp}` (this hub's MCP address),
-//!   `{sign_in}`, `{sign_in_url}`, `{updated}`, `{link}`, `{hub}`, `{n}`.
+//!   `{sign_in}`, `{sign_in_url}`, `{updated}`, `{retention_days}`, `{link}`, `{hub}`, `{n}`.
 //!
 //! A placeholder the copy names but nothing fills is an error when the site is checked at
 //! start (`Ctx::checking`); drawing a page never fails.

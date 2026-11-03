@@ -31,6 +31,7 @@ use std::{
 
 use super::*;
 use crate::{
+    analytics::funnel,
     site::{Plan, SignUp, Site},
     store::Lookup,
 };
@@ -121,11 +122,13 @@ async fn insert_in(
 }
 
 /// A new tenant's row: in, or waiting since `now`, as the site's sign-up is now; on its
-/// default plan. Inside the transaction that makes the tenant, scoped to it.
+/// default plan; and, `counting`, its waiting or admitted milestone. Inside the transaction
+/// that makes the tenant, scoped to it.
 pub(super) async fn begin_in(
     connection: &mut AnyConnection,
     tenant: &str,
     site: &Site,
+    counting: bool,
     now: u64,
 ) -> Result<Access, Failed> {
     let waiting = site.sign_up() == SignUp::EarlyAccess;
@@ -143,6 +146,14 @@ pub(super) async fn begin_in(
         ("tenant.admitted", OPEN_SIGN_UP)
     };
     tenants::record_in(connection, tenant, "hub", event, detail, now).await?;
+    if counting {
+        let kind = if waiting {
+            funnel::WAITING
+        } else {
+            funnel::ADMITTED
+        };
+        funnel::note_in(connection, tenant, kind, "", now).await?;
+    }
     Ok(access)
 }
 
@@ -228,6 +239,9 @@ impl Accounts {
             operator => (operator, format!("plan {}", plan.unwrap_or("kept"))),
         };
         tenants::record_in(connection, tenant, actor, "tenant.admitted", &detail, now).await?;
+        if self.counting {
+            funnel::note_in(connection, tenant, funnel::ADMITTED, "", now).await?;
+        }
         let email = verified_email_in(connection, tenant).await?;
         let home = tenants::home_in(connection).await?;
         if home != tenant {

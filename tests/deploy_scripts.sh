@@ -127,10 +127,12 @@ DEVAGOTCHI_GOOGLE_CLIENT_SECRET='test-secret-not-real'
 EOF
 out=$("$root/deploy/compose/install.sh" --domain hub.test.example --rp-id test.example \
   --edge external --hub-bind 127.0.0.1 --hub-port "$port" --dir "$dir" --no-timer \
-  --tenancy multi --operators email:ops@test.example --google --env-file "$work/hub.env" 2>&1) \
+  --tenancy multi --operators email:ops@test.example --google --env-file "$work/hub.env" \
+  --analytics-retention-days 30 2>&1) \
   || { printf '%s\n' "$out" >&2; fail "install.sh re-runs the stack as a hosted hub"; }
 [[ "$(stat -c %a "$dir/.env")" == 600 ]] || fail ".env is root's alone"
 [[ "$(env_get DEVAGOTCHI_HUB_TENANCY)" == multi ]] || fail ".env names the tenancy"
+[[ "$(env_get DEVAGOTCHI_HUB_ANALYTICS_RETENTION_DAYS)" == 30 ]] || fail ".env names how long raw visits are kept"
 grep -q "test-secret-not-real" <<<"$out" && fail "install.sh printed a secret"
 grep -q "/claim#" <<<"$out" && fail "a hosted hub prints no claim link"
 grep -q "nobody claims it" <<<"$out" || fail "install.sh says a hosted hub is not claimed"

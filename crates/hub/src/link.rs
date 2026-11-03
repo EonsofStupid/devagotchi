@@ -88,6 +88,8 @@ pub struct Links {
     push: Option<Arc<crate::push::Push>>,
     /// Whether the account that issued a code may enroll a machine with it now.
     gate: Option<EnrollGate>,
+    /// Where an account's first machine is counted (`analytics::funnel`), on a hub that counts.
+    analytics: Option<Arc<crate::analytics::Analytics>>,
 }
 
 /// Whether an account may enroll a machine now: false while its tenant waits to be let in
@@ -150,6 +152,20 @@ impl Links {
             next: AtomicU64::new(1),
             push: None,
             gate: None,
+            analytics: None,
+        }
+    }
+
+    /// Count each account's first machine in `analytics`.
+    pub fn counting(mut self, analytics: Option<Arc<crate::analytics::Analytics>>) -> Self {
+        self.analytics = analytics;
+        self
+    }
+
+    /// A machine enrolled with `owner`'s code: its tenant's machine milestone.
+    fn joined(&self, owner: Option<&str>) {
+        if let (Some(analytics), Some(owner)) = (&self.analytics, owner) {
+            analytics.account_event(owner, crate::analytics::funnel::MACHINE);
         }
     }
 
@@ -224,6 +240,7 @@ impl Links {
             "",
             "ok",
         );
+        self.joined(device.owner.as_deref());
         Ok(device)
     }
 
@@ -675,6 +692,7 @@ impl Links {
                     None => "ok".into(),
                 },
             );
+            self.joined(bound.owner.as_deref());
             return Ok(Admitted {
                 device,
                 key: public_key,

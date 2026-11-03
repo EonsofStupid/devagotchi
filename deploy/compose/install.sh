@@ -44,6 +44,10 @@ A hosted hub, who runs it, and how people sign in (see crates/hub/README.md):
                        operator is set; multi: a hosted service, an account for everyone who
                        connects, never claimed
   --operators LIST     who operates it, comma separated: email:ADDRESS or PROVIDER:SUBJECT
+  --analytics on|off   a hosted hub counts visits and its accounts' milestones for its
+                       operator page (default on)
+  --analytics-retention-days N
+                       days raw visits are kept before only daily totals remain (default 90)
   --trusted-proxies LIST
                        proxies whose X-Forwarded-For names the client, comma separated
                        (default: private and loopback addresses)
@@ -63,6 +67,7 @@ domain="" public_url="" rp_id="" edge=caddy hub_bind=127.0.0.1 hub_port=8787
 track=ghcr.io/eonsofstupid/devagotchi:main dir=/opt/devagotchi-hub source=""
 repo=EonsofStupid/devagotchi ref=main timer=true site="" site_only=false no_site=false
 tenancy="" operators="" proxies="" google=false github=false nomen="" email_from="" env_file=""
+analytics="" analytics_days=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --domain) domain="$2"; shift 2 ;;
@@ -82,6 +87,8 @@ while [[ $# -gt 0 ]]; do
     --no-site) no_site=true; shift ;;
     --tenancy) tenancy="$2"; shift 2 ;;
     --operators) operators="$2"; shift 2 ;;
+    --analytics) analytics="$2"; shift 2 ;;
+    --analytics-retention-days) analytics_days="$2"; shift 2 ;;
     --trusted-proxies) proxies="$2"; shift 2 ;;
     --google) google=true; shift ;;
     --github) github=true; shift ;;
@@ -98,6 +105,8 @@ if [[ -n "$site" ]]; then
   [[ -d "$site" && -f "$site/site.json" ]] || die "--site $site is not a site directory (it has no site.json)"
   site="$(cd "$site" && pwd -P)"
 fi
+[[ -z "$analytics" || "$analytics" == on || "$analytics" == off ]] || die "--analytics is on or off"
+[[ -z "$analytics_days" || "$analytics_days" =~ ^[0-9]+$ ]] || die "--analytics-retention-days is a number of days"
 $no_site && [[ -n "$site" ]] && die "--site and --no-site, not both"
 if $site_only; then
   [[ -n "$site" ]] || die "--site-only needs --site DIR"
@@ -272,6 +281,8 @@ DEVAGOTCHI_IMAGE=${pinned:-$track}
 # The hub: one owner's or hosted, its operators, its sign-ins (install.sh's flags).
 DEVAGOTCHI_HUB_TENANCY=${tenancy:-single}
 DEVAGOTCHI_HUB_OPERATORS=$operators
+DEVAGOTCHI_HUB_ANALYTICS=$analytics
+DEVAGOTCHI_HUB_ANALYTICS_RETENTION_DAYS=$analytics_days
 DEVAGOTCHI_HUB_PROVIDERS='$(json_list "${providers[@]}")'
 DEVAGOTCHI_HUB_EMAIL='$email'
 # The hub's site directory (install.sh --site); empty: its built-in site.

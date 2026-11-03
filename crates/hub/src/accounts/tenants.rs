@@ -20,6 +20,8 @@
 
 use std::net::IpAddr;
 
+use crate::analytics::funnel;
+
 use super::*;
 
 const TENANT_PREFIX: &str = "t-";
@@ -214,11 +216,13 @@ pub(super) async fn touch(
 }
 
 /// The account is secured now (`how`: a passkey, or a linked sign-in): it is no longer
-/// provisional, and its tenant's chain says so. Nothing for an account that already was.
+/// provisional, and its tenant's chain says so (and, `counting`, its secured milestone).
+/// Nothing for an account that already was.
 pub(super) async fn secure_in(
     connection: &mut AnyConnection,
     account: &Account,
     how: &str,
+    counting: bool,
     now: u64,
 ) -> Result<(), Failed> {
     let secured =
@@ -237,6 +241,9 @@ pub(super) async fn secure_in(
             now,
         )
         .await?;
+        if counting {
+            funnel::note_in(connection, &account.tenant, funnel::SECURED, how, now).await?;
+        }
     }
     Ok(())
 }
@@ -386,7 +393,9 @@ impl Accounts {
                 now,
             )
             .await?;
-            let access = super::access::begin_in(connection, &tenant, &self.site(), now).await?;
+            let access =
+                super::access::begin_in(connection, &tenant, &self.site(), self.counting, now)
+                    .await?;
             sqlx::query(
                 "INSERT INTO auth_accounts (id, name, owner, created_at, tenant_id, provisional, last_active)
                  VALUES ($1, $2, 0, $3, $4, 1, $3)",
@@ -406,6 +415,10 @@ impl Accounts {
                 now,
             )
             .await?;
+            if self.counting {
+                let family = funnel::client_family(&client);
+                funnel::note_in(connection, &tenant, funnel::MADE, family, now).await?;
+            }
             let token =
                 sessions::insert_session(connection, &tenant, &id, None, session_random, now)
                     .await?;

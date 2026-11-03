@@ -305,15 +305,18 @@ impl Site {
         }
         for (name, page) in &self.pages {
             for front in markdown::DOC_FRONTS {
-                let ctx = Ctx::checking(self)
-                    .with("mcp", "https://hub.example.org/mcp")
-                    .with("updated", page.updated.clone());
-                page.render(&ctx, front);
-                errors.extend(
-                    ctx.errors()
-                        .into_iter()
-                        .map(|e| format!("content/{name}.md: {e}")),
-                );
+                for switch in markdown::SWITCHES {
+                    let ctx = Ctx::checking(self)
+                        .with("mcp", "https://hub.example.org/mcp")
+                        .with("updated", page.updated.clone())
+                        .with("retention_days", "90");
+                    page.render(&ctx, &[front, switch]);
+                    errors.extend(
+                        ctx.errors()
+                            .into_iter()
+                            .map(|e| format!("content/{name}.md: {e}")),
+                    );
+                }
             }
         }
         // Each message with what fills it where it is sent.

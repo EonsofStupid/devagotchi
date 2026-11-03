@@ -1795,6 +1795,13 @@ impl Hub {
             Ok(_) => "ok".to_string(),
             Err(error) => error.code.clone(),
         };
+        // A board made is its tenant's board milestone (`analytics::funnel`).
+        if let (Ok(bound), Some(analytics), Some(tenant)) =
+            (&result, &self.analytics, &subject.tenant)
+            && bound.created
+        {
+            analytics.tenant_event(tenant, crate::analytics::funnel::BOARD);
+        }
         if let Err(error) = self.audit.record(&AuditEntry {
             subject: &subject.id,
             via: subject.via,
