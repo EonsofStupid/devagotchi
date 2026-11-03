@@ -93,6 +93,8 @@ pub enum Lookup<'a> {
     Email(&'a str),
     /// The hub's owner.
     Owner,
+    /// A workflow's link (`/go/<token>`), by its token's SHA-256 (migration 0010).
+    Workflow(&'a str),
 }
 
 /// The role the hub's queries run as on Postgres (migration 0007).
@@ -465,6 +467,12 @@ impl Store {
         lookup: Lookup<'_>,
     ) -> Result<Option<String>, sqlx::Error> {
         if self.backend == Backend::Postgres {
+            if let Lookup::Workflow(hash) = lookup {
+                return sqlx::query_scalar("SELECT devagotchi.workflow_tenant($1)")
+                    .bind(hash)
+                    .fetch_one(&mut *connection)
+                    .await;
+            }
             let (kind, key, extra): (&str, String, Option<&str>) = match lookup {
                 Lookup::Account(id) => ("account", id.to_string(), None),
                 Lookup::Session(hash) => ("session", hash.to_string(), None),
@@ -475,6 +483,7 @@ impl Store {
                 Lookup::Identity(provider, subject) => ("identity", provider.to_string(), Some(subject)),
                 Lookup::Email(email) => ("email", email.to_string(), None),
                 Lookup::Owner => ("owner", String::new(), None),
+                Lookup::Workflow(_) => unreachable!("answered above"),
             };
             return sqlx::query_scalar("SELECT devagotchi.tenant_of($1, $2, $3)")
                 .bind(kind)
@@ -501,6 +510,10 @@ impl Store {
             )
             .bind(email),
             Lookup::Owner => sqlx::query_scalar("SELECT tenant_id FROM auth_accounts WHERE owner = 1"),
+            Lookup::Workflow(hash) => {
+                sqlx::query_scalar("SELECT tenant_id FROM tenancy_workflows WHERE link_hash = $1")
+                    .bind(hash)
+            }
         };
         query.fetch_optional(&mut *connection).await
     }

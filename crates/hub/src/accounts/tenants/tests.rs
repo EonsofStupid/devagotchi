@@ -477,7 +477,7 @@ async fn a_one_owner_hub_makes_no_account_for_a_strangers_sign_in() {
 }
 
 /// The tables row-level security holds to one tenant (migration 0007).
-const TENANT_TABLES: [&str; 9] = [
+const TENANT_TABLES: [&str; 10] = [
     "auth_accounts",
     "auth_passkeys",
     "auth_sessions",
@@ -487,6 +487,7 @@ const TENANT_TABLES: [&str; 9] = [
     "oauth_tokens",
     "tenancy_events",
     "tenancy_access",
+    "tenancy_workflows",
 ];
 
 #[tokio::test]
@@ -578,6 +579,21 @@ async fn on_postgres_the_hubs_role_reads_and_writes_one_tenants_rows_only() {
                 &challenge,
                 resource,
                 "mcp",
+            )
+            .await
+            .unwrap();
+        // A workflow its AI started.
+        let site = crate::site::builtin();
+        let (_workflow, _link, _) = accounts
+            .start_workflow(
+                &account.tenant,
+                &account.id,
+                site.workflows.get("connect-linux").unwrap(),
+                None,
+                3600,
+                [n; 12],
+                [n; 32],
+                now_secs(),
             )
             .await
             .unwrap();

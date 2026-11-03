@@ -1,7 +1,7 @@
 //! The browser routes: the landing page and claiming a new hub (`/claim`), sign in, the
 //! account page, the operator page (`/operator`) and its analytics (`/operator/analytics`), sign out, `/api/v1/me` (which also takes a bearer token, so scripts and AI
-//! clients see the same view), `/approvals`, and the public pages the AI directories link to
-//! (`/docs`, `/privacy`, `/terms`, `/support`).
+//! clients see the same view), `/approvals`, a workflow's link (`/go/<token>`), and the public
+//! pages the AI directories link to (`/docs`, `/privacy`, `/terms`, `/support`).
 
 use axum::{
     Router,
@@ -16,7 +16,7 @@ use super::{
     Exchange, SessionToken, WebLogin, analytics, approvals, claim, device, email, machines,
     notify, oauth, operator,
     pages::{self, Viewer},
-    passkeys, providers, public,
+    passkeys, providers, public, workflow,
 };
 use crate::{
     AppState,
@@ -69,6 +69,13 @@ pub fn router(hub_authorization: bool) -> Router<AppState> {
         .route("/privacy", get(public::privacy))
         .route("/terms", get(public::terms))
         .route("/support", get(public::support))
+        // A workflow's link (`workflow.rs`).
+        .route("/go/{token}", get(workflow::page))
+        .route("/go/{token}/status", get(workflow::status))
+        .route("/go/{token}/command", post(workflow::command))
+        .route("/go/{token}/phone", post(workflow::phone))
+        .route("/go/{token}/keep", post(workflow::keep))
+        .route("/assets/workflow.js", get(workflow::script))
         .route("/assets/hub.css", get(css))
         // The site's own files: its logo, icon, pictures, video and fonts.
         .route("/assets/{file}", get(super::media::asset));

@@ -28,7 +28,7 @@
         return sub || reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytes(button.dataset.key) });
       });
     }).then(function (sub) {
-      return fetch("/push/subscribe", {
+      return fetch(button.dataset.subscribe || "/push/subscribe", {
         method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
@@ -38,8 +38,10 @@
       say(res.ok ? "Notifications are on for this phone." : "The hub did not save this phone (" + res.status + ").");
     });
   }
+  // A workflow's page (data-auto="off") saves only when its button is pressed: opening the
+  // link changes nothing.
   navigator.serviceWorker.register("/sw.js").then(function () {
-    if (Notification.permission === "granted") return subscribeAndSave();
+    if (Notification.permission === "granted" && button.dataset.auto !== "off") return subscribeAndSave();
     if (Notification.permission === "denied") say("Notifications are blocked for this site; allow them in the browser's site settings.");
   }).catch(function () {});
   button.addEventListener("click", function () {

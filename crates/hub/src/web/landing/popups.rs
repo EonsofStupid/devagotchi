@@ -83,6 +83,14 @@ pub const TOOLS: [(&str, &[(&[&str], &str)]); 5] = [
                 &["whoami"],
                 "Who it is signed in as, and the boards it may use.",
             ),
+            (
+                &["workflow_list", "workflow_start"],
+                "Offers a setup (a server, a PC, your phone) and starts it as one link you open: no sign-in, one button, one line to paste.",
+            ),
+            (
+                &["workflow_status", "workflow_wait", "workflow_cancel"],
+                "Follows that link's steps and carries on the moment each one is done, or cancels the link.",
+            ),
         ],
     ),
     (

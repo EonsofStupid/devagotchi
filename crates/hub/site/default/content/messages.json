@@ -123,5 +123,63 @@
       "tablet": "Tablet",
       "desktop": "Computer"
     }
+  },
+  "workflow": {
+    "step_of": "Step {n} of {total}",
+    "state_done": "Done",
+    "state_current": "Now",
+    "state_pending": "Next",
+    "state_unavailable": "Not available",
+    "state_optional": "Optional",
+    "dead_title": "This link no longer works",
+    "dead_text": "It expired, or what it was for was cancelled. Ask your AI for a new one: it takes it a moment.",
+    "finished": "All done. Go back to your AI: it carries on from here.",
+    "check_again": "Check again",
+    "copy": "Copy",
+    "copied": "Copied",
+    "get_command": "Get my command",
+    "make_passkey": "Make a passkey",
+    "keep_title": "Keep your account",
+    "keep_text": "Your AI made this account for you when you connected it, and nothing signs you in to it yet. Add a sign-in now to keep it and see your machines from anywhere. Optional: everything above works without it.",
+    "keep_done": "Your account is kept: sign in from anywhere with what you just added.",
+    "command_note": "Paste it on that machine as is. It works once, for 15 minutes; pressing the button again gives a new one and the old one stops working.",
+    "name_label": "Its name (lowercase letters, digits and dashes)",
+    "os_label": "What does it run?",
+    "os": {
+      "docker": "Docker",
+      "host": "Proxmox or Incus host",
+      "linux": "Linux",
+      "windows": "Windows"
+    },
+    "os_hint": {
+      "docker": "Paste it into a terminal on a Linux machine with Docker Compose and press Enter.",
+      "host": "Paste it into a root shell on the Proxmox or Incus host itself (not inside a guest) and press Enter.",
+      "linux": "Paste it into a terminal on the machine and press Enter; sudo may ask for your password.",
+      "windows": "Open PowerShell (Start, type PowerShell, Enter), paste it and press Enter. No administrator needed."
+    },
+    "default_names": {
+      "docker": "docker",
+      "host": "host",
+      "linux": "server",
+      "windows": "pc"
+    },
+    "mac": "**Mac:** not available yet. There is no Mac build of {product}, so there is nothing to install on one.",
+    "no_downloads": "This hub hands out no builds, so it has no one-line install to give. Its operator can turn that on.",
+    "no_build_for": "This hub has no {os} build to hand out yet, so there is no line for it.",
+    "no_push": "This hub sends no notifications, so there is no phone to turn on here.",
+    "notify": "Turn on notifications on this phone",
+    "phone_hint": "On a computer now? Open this same link on your phone and press the button there.",
+    "refused": "That came from another site, so nothing was changed. Use the button on this page.",
+    "facts": {
+      "secured": "Your account is secured.",
+      "not_secured": "Your account is not secured yet.",
+      "machine_none": "No line handed out yet.",
+      "machine_waiting": "Waiting for {machine} to join.",
+      "machine_offline": "{machine} joined but is offline.",
+      "machine_online": "{machine} is online.",
+      "phone_on": "Notifications are on for {n} phone or browser.",
+      "phone_off": "No phone has notifications on yet.",
+      "done": "All done."
+    }
   }
 }

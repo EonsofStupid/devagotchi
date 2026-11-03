@@ -310,7 +310,7 @@ fn variant(edit: impl FnOnce(&Path)) -> (tempfile::TempDir, Result<Site, String>
     (dir, loaded)
 }
 
-fn copy(from: &Path, to: &Path) {
+pub(crate) fn copy(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {
         let entry = entry.unwrap();

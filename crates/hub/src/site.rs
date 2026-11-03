@@ -10,7 +10,9 @@
 //!   tokens.json            colours, type, radii and sizes the stylesheet reads, and fonts
 //!   content/landing.json   every landing section's copy
 //!   content/messages.json  the sign-in email, the board's getting-started ticket, what
-//!                          early access and plans say (waiting, a limit, "you're in")
+//!                          early access and plans say (waiting, a limit, "you're in"),
+//!                          the workflow page's words
+//!   content/workflows.json the step-by-step setups an AI hands its person as one link
 //!   content/docs.md, privacy.md, terms.md, support.md   the public pages
 //!   assets/                logo, icon, diagram, video, poster, fonts (served from 'self')
 //! ```
@@ -34,6 +36,7 @@ mod style;
 pub(crate) mod tests;
 pub(crate) mod text;
 mod watch;
+pub(crate) mod workflows;
 
 use std::{
     collections::BTreeMap,
@@ -50,6 +53,7 @@ pub use model::{
 pub use plans::Cap;
 pub use text::Ctx;
 pub use watch::{EVERY as WATCH_EVERY, SiteCell, watch};
+pub use workflows::{Workflow, WorkflowsFile};
 
 /// The environment variable that names the site directory, over `site.dir` in the config.
 pub const SITE_ENV: &str = "DEVAGOTCHI_SITE_DIR";
@@ -58,11 +62,12 @@ pub const SITE_ENV: &str = "DEVAGOTCHI_SITE_DIR";
 pub const PAGES: [&str; 4] = ["docs", "privacy", "terms", "support"];
 
 /// The text files a site directory may hold, besides `assets/`.
-const TEXT_FILES: [&str; 8] = [
+const TEXT_FILES: [&str; 9] = [
     "site.json",
     "tokens.json",
     "content/landing.json",
     "content/messages.json",
+    "content/workflows.json",
     "content/docs.md",
     "content/privacy.md",
     "content/terms.md",
@@ -77,6 +82,8 @@ pub struct Site {
     pub info: SiteFile,
     pub landing: Landing,
     pub messages: Messages,
+    /// The workflows an AI can start for its person (`content/workflows.json`).
+    pub workflows: WorkflowsFile,
     pub pages: BTreeMap<String, Page>,
     pub assets: BTreeMap<String, Asset>,
     style: style::Style,
@@ -115,6 +122,7 @@ fn builtin_files() -> Files {
         "tokens.json",
         "content/landing.json",
         "content/messages.json",
+        "content/workflows.json",
         "content/docs.md",
         "content/privacy.md",
         "content/terms.md",
@@ -190,7 +198,7 @@ impl Site {
                     && !TEXT_FILES.contains(&format!("content/{name}").as_str())
                 {
                     return Err(format!(
-                        "content/{name} is not a file a site reads (landing.json, messages.json, docs.md, privacy.md, terms.md, support.md)"
+                        "content/{name} is not a file a site reads (landing.json, messages.json, workflows.json, docs.md, privacy.md, terms.md, support.md)"
                     ));
                 }
             }
@@ -240,6 +248,8 @@ impl Site {
         let landing: Landing = parse_json("content/landing.json", text("content/landing.json"))?;
         let messages: Messages =
             parse_json("content/messages.json", text("content/messages.json"))?;
+        let workflows: WorkflowsFile =
+            parse_json("content/workflows.json", text("content/workflows.json"))?;
         let tokens: style::Tokens = parse_json("tokens.json", text("tokens.json"))?;
         let mut pages = BTreeMap::new();
         for name in PAGES {
@@ -274,6 +284,7 @@ impl Site {
             info,
             landing,
             messages,
+            workflows,
             pages,
             assets: loaded,
             style,
@@ -369,6 +380,19 @@ impl Site {
                     .into_iter()
                     .map(|e| format!("content/messages.json {what}: {e}")),
             );
+        }
+        let workflow_checks = self.workflow_checks()?;
+        for (what, template, vars, inline) in workflow_checks {
+            let mut ctx = Ctx::checking(self);
+            for (var, value) in vars {
+                ctx.set(var, value);
+            }
+            if inline {
+                ctx.inline(template);
+            } else {
+                ctx.plain(template);
+            }
+            errors.extend(ctx.errors().into_iter().map(|e| format!("{what}: {e}")));
         }
         for (what, template, vars, inline) in self.message_checks() {
             let mut ctx = Ctx::checking(self);

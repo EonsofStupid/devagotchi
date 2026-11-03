@@ -822,6 +822,8 @@ pub struct Messages {
     pub operator: OperatorCopy,
     /// The operator's analytics page (`web/analytics.rs`).
     pub analytics: AnalyticsCopy,
+    /// The workflow page (`web/workflow.rs`) and what a workflow's steps stand at.
+    pub workflow: super::workflows::WorkflowCopy,
 }
 
 /// The operator page's words. Inline markup where it says so; `{tenant}` is a tenant's id.

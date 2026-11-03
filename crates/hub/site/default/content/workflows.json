@@ -1,0 +1,90 @@
+{
+  "workflows": [
+    {
+      "id": "get-started",
+      "title": "Get started",
+      "intro": "Connect a computer, then turn on approvals on your phone. A click and one pasted line each, no sign-in: your AI watches this page and carries on as each step is done.",
+      "steps": [
+        {
+          "kind": "machine",
+          "title": "Connect a computer",
+          "text": "Pick what it runs and press the button. You get one line to paste on that computer: it installs {product}, joins it to your account and starts it at boot."
+        },
+        {
+          "kind": "phone",
+          "title": "Turn on approvals on your phone",
+          "text": "Open this same link on your phone and turn notifications on there, so {product} can reach you when something needs you."
+        },
+        {
+          "kind": "secure_account",
+          "title": "Keep your account",
+          "text": "Optional: add a sign-in so you can come back to your account and its machines from anywhere."
+        },
+        {
+          "kind": "done",
+          "title": "All set",
+          "text": "Go back to your AI: it can work on your computer now."
+        }
+      ]
+    },
+    {
+      "id": "connect-linux",
+      "title": "Connect a Linux server",
+      "intro": "One line on your server installs {product}, joins it to your account and starts it at boot. Any Linux with systemd, on x86_64 or ARM64.",
+      "steps": [
+        {
+          "kind": "machine",
+          "os": "linux",
+          "title": "Run one line on your server",
+          "text": "Press the button for your line. Paste it into a terminal on the server and press Enter; sudo may ask for your password."
+        },
+        {
+          "kind": "done",
+          "title": "Connected",
+          "text": "Your server is online. Go back to your AI: it can work on it now."
+        }
+      ]
+    },
+    {
+      "id": "connect-windows",
+      "title": "Connect a Windows PC or laptop",
+      "intro": "One line in PowerShell installs {product} for your Windows account (no administrator needed), joins the PC to your account and starts it when you sign in to Windows. x64 or ARM64.",
+      "steps": [
+        {
+          "kind": "machine",
+          "os": "windows",
+          "title": "Run one line in PowerShell",
+          "text": "Press the button for your line. Open PowerShell on the PC (Start, type PowerShell, Enter), paste it and press Enter."
+        },
+        {
+          "kind": "done",
+          "title": "Connected",
+          "text": "Your PC is online. Go back to your AI: it can work on it now."
+        }
+      ]
+    },
+    {
+      "id": "connect-mac",
+      "title": "Connect a Mac",
+      "intro": "A Mac would join the same way as a Linux server or a Windows PC.",
+      "unavailable": "A Mac build of {product} is not available yet, so there is nothing to install on a Mac. Linux and Windows machines connect today."
+    },
+    {
+      "id": "phone-approvals",
+      "title": "Turn on approvals on your phone",
+      "intro": "Turn notifications on for {product} on your phone, so it can reach you when something needs you, like a step your AI wants you to approve.",
+      "steps": [
+        {
+          "kind": "phone",
+          "title": "Turn on notifications on your phone",
+          "text": "Open this link on your phone and press the button. On an iPhone, first add this page to your Home Screen (Share, then Add to Home Screen) and open it from there."
+        },
+        {
+          "kind": "done",
+          "title": "Your phone is on",
+          "text": "Go back to your AI."
+        }
+      ]
+    }
+  ]
+}

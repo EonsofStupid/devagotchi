@@ -19,6 +19,7 @@ pub mod operator;
 pub mod passkey;
 pub mod sessions;
 pub mod tenants;
+pub mod workflows;
 
 use aws_lc_rs::hmac;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
