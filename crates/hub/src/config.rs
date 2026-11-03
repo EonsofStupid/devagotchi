@@ -11,8 +11,10 @@ use std::{
 use devagotchi_contracts::{BridgeError, BridgeResult};
 use serde::Deserialize;
 
+pub(crate) mod analytics;
 pub(crate) mod providers;
 pub(crate) mod tenancy;
+pub use analytics::AnalyticsConfig;
 pub use providers::{EmailConfig, ProviderConfig, ProviderKind};
 pub use tenancy::{OPERATORS_ENV, TENANCY_ENV, TenancyConfig, TenancyMode, is_operator};
 use tenancy::check_operator;
@@ -86,6 +88,11 @@ pub struct HubConfig {
     /// absolute site directory, or `DEVAGOTCHI_SITE_DIR` over it. Absent: the built-in one.
     #[serde(default)]
     pub site: SiteConfig,
+    /// Whether a hosted hub counts visits to its public pages and its accounts' milestones
+    /// for its operator, and how long it keeps raw visits (`config/analytics.rs`).
+    /// `DEVAGOTCHI_HUB_ANALYTICS` and `DEVAGOTCHI_HUB_ANALYTICS_RETENTION_DAYS` override it.
+    #[serde(default)]
+    pub analytics: AnalyticsConfig,
     /// The owner every holder of this config sees: `owner` above, or in hub mode the
     /// one the accounts store names, learned once at start or when it is made.
     #[serde(skip)]
@@ -535,9 +542,10 @@ impl HubConfig {
         Self::parse_with(text, |_| None)
     }
 
-    /// `parse`, with `DEVAGOTCHI_HUB_TENANCY`, `DEVAGOTCHI_HUB_OPERATORS` and
-    /// `DEVAGOTCHI_SITE_DIR` from `env` over the file's `tenancy.mode`, `operators` and
-    /// `site.dir`: how a deploy sets them from `.env` or the secret store. The site
+    /// `parse`, with `DEVAGOTCHI_HUB_TENANCY`, `DEVAGOTCHI_HUB_OPERATORS`,
+    /// `DEVAGOTCHI_HUB_ANALYTICS`, `DEVAGOTCHI_HUB_ANALYTICS_RETENTION_DAYS` and
+    /// `DEVAGOTCHI_SITE_DIR` from `env` over the file's `tenancy.mode`, `operators`,
+    /// `analytics` and `site.dir`: how a deploy sets them from `.env` or the secret store. The site
     /// directory is read and checked here, so a bad one stops the start.
     pub fn parse_with(text: &str, env: impl Fn(&str) -> Option<String>) -> BridgeResult<Self> {
         let mut config: HubConfig = serde_json::from_str(text)
@@ -562,6 +570,7 @@ impl HubConfig {
                 .map(str::to_string)
                 .collect();
         }
+        config.analytics = config.analytics.from_env(&env).map_err(invalid)?;
         config.validate(&env)?;
         if let Some(dir) = env(crate::site::SITE_ENV).filter(|dir| !dir.trim().is_empty()) {
             config.site.dir = Some(dir.trim().to_string());
@@ -602,6 +611,7 @@ impl HubConfig {
             return Err(invalid("public_url must be an absolute http(s) URL".into()));
         }
         self.tenancy.check().map_err(invalid)?;
+        self.analytics.check().map_err(invalid)?;
         for operator in &self.operators {
             check_operator(operator).map_err(invalid)?;
         }
@@ -1028,6 +1038,12 @@ impl HubConfig {
     /// and a tenant of their own (`tenancy.mode multi`).
     pub fn multi_tenant(&self) -> bool {
         self.tenancy.multi()
+    }
+
+    /// Whether this hub counts visits and its accounts' milestones: a hosted hub, its
+    /// operator's page the one place they are read, with `analytics.enabled`.
+    pub fn counts_visits(&self) -> bool {
+        self.multi_tenant() && self.analytics.enabled
     }
 
     /// Whether a new hub may be claimed from the browser with the code in its log (16c):

@@ -34,6 +34,8 @@ pub struct Hub {
     pub push: Option<Arc<crate::push::Push>>,
     /// The build this hub hands to machines that join it (`/join`, `/dist`), when configured.
     pub downloads: Option<Arc<crate::downloads::Downloads>>,
+    /// What a hosted hub counts for its operator (`crate::analytics`), when it counts.
+    pub analytics: Option<Arc<crate::analytics::Analytics>>,
 }
 
 /// One machine as a person sees it on their page and in `/api/v1/me`, and as an AI sees it
@@ -310,7 +312,9 @@ impl Hub {
     }
 
     /// Record one call in the audit chain. A call that cannot be audited is not a call
-    /// this bastion made, so a failure here fails the call.
+    /// this bastion made, so a failure here fails the call. An operation that started
+    /// (`operation_start`, or `run`) is also its tenant's operation milestone
+    /// (`analytics::funnel`): the first, and the latest a day at a time.
     pub(crate) fn record(
         &self,
         subject: &Subject,
@@ -319,6 +323,14 @@ impl Hub {
         operation_id: &str,
         outcome: &str,
     ) -> Result<(), Json<BridgeError>> {
+        if let (Some(analytics), Some(tenant)) = (&self.analytics, &subject.tenant)
+            && matches!(
+                (tool, outcome),
+                ("operation_start", "ok") | ("run", "ok") | ("run", "running")
+            )
+        {
+            analytics.tenant_event(tenant, crate::analytics::funnel::OPERATION);
+        }
         self.audit
             .record(&AuditEntry {
                 subject: &subject.id,

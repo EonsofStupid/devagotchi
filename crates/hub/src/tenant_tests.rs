@@ -17,6 +17,8 @@ pub(crate) struct Hosted {
     pub(crate) accounts: Arc<accounts::Accounts>,
     pub(crate) devices: Arc<devices::Devices>,
     pub(crate) config: Arc<HubConfig>,
+    /// The hub as the router serves it, for what a test drives under HTTP.
+    pub(crate) hub: Hub,
     pub(crate) dir: tempfile::TempDir,
 }
 
@@ -75,12 +77,19 @@ pub(crate) async fn hosted_with(
             .unwrap()
             .with_tokens(config.token_config())
             .with_tenancy(config.tenancy.clone(), config.operators.clone())
-            .with_site(config.site_cell(), &url),
+            .with_site(config.site_cell(), &url)
+            .with_analytics(config.counts_visits()),
     );
+    // As `run` wires it: a hosted hub counts unless its config says not to.
+    let analytics = config.counts_visits().then(|| {
+        analytics::Analytics::start(accounts.store().clone(), config.analytics, &url)
+    });
     let devices = Arc::new(devices_at(dir.path()).unwrap());
     let audit = Arc::new(Audit::open(&dir.path().join("audit.sqlite3")).unwrap());
     let links = Arc::new(
-        Links::new(config.clone(), devices.clone(), audit.clone()).gated(accounts.enroll_gate()),
+        Links::new(config.clone(), devices.clone(), audit.clone())
+            .gated(accounts.enroll_gate())
+            .counting(analytics.clone()),
     );
     let state = AppState {
         verifier: Arc::new(
@@ -95,12 +104,14 @@ pub(crate) async fn hosted_with(
             links,
             push: None,
             downloads: None,
+            analytics,
         },
         web: None,
         passkeys: web::HubSignIn::new(config.clone(), accounts.clone())
             .map(|hub| hub.with_providers(web::Providers::from_config(&config).unwrap()))
             .map(Arc::new),
     };
+    let hub = state.hub.clone();
     let app = app(state);
     tokio::spawn(async move {
         axum::serve(
@@ -119,6 +130,7 @@ pub(crate) async fn hosted_with(
         accounts,
         devices,
         config,
+        hub,
         dir,
     }
 }

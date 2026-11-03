@@ -17,7 +17,7 @@
 //! An email counts only when the provider says it verified it; only verified ones are kept.
 
 use super::*;
-use crate::store::Lookup;
+use crate::{analytics::funnel, store::Lookup};
 
 /// A sign-in a provider proved.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,6 +115,7 @@ async fn insert_identity(
     connection: &mut AnyConnection,
     account: &Account,
     proven: &Proven,
+    counting: bool,
     now: u64,
 ) -> Result<(), Failed> {
     sqlx::query(
@@ -138,7 +139,7 @@ async fn insert_identity(
         now,
     )
     .await?;
-    tenants::secure_in(connection, account, &proven.provider, now).await?;
+    tenants::secure_in(connection, account, &proven.provider, counting, now).await?;
     Ok(())
 }
 
@@ -220,7 +221,7 @@ impl Accounts {
                         })?
                     }
                 };
-                insert_identity(connection, &owner, proven, now).await?;
+                insert_identity(connection, &owner, proven, self.counting, now).await?;
                 return Ok(owner);
             }
             // The first account a verified email reached, in whichever tenant holds it.
@@ -243,7 +244,7 @@ impl Accounts {
                     && let Some(account) = account_in(connection, &id).await?
                     && account.disabled_at.is_none()
                 {
-                    insert_identity(connection, &account, proven, now).await?;
+                    insert_identity(connection, &account, proven, self.counting, now).await?;
                     return Ok(account);
                 }
             }
@@ -257,7 +258,7 @@ impl Accounts {
                 && account.disabled_at.is_none()
                 && !self.lapsed(&account, now)
             {
-                insert_identity(connection, &account, proven, now).await?;
+                insert_identity(connection, &account, proven, self.counting, now).await?;
                 return Ok(Account {
                     provisional: false,
                     ..account
@@ -285,7 +286,8 @@ impl Accounts {
                 now,
             )
             .await?;
-            super::access::begin_in(connection, &fresh_tenant, &self.site(), now).await?;
+            super::access::begin_in(connection, &fresh_tenant, &self.site(), self.counting, now)
+                .await?;
             create_in(
                 &self.store,
                 connection,
@@ -299,7 +301,13 @@ impl Accounts {
             let account = account_in(connection, &fresh_id)
                 .await?
                 .ok_or_else(|| BridgeError::new("account_store", "the account vanished"))?;
-            insert_identity(connection, &account, proven, now).await?;
+            insert_identity(connection, &account, proven, self.counting, now).await?;
+            // Made by a sign-in, not an AI client, and secured by it from the start.
+            if self.counting {
+                funnel::note_in(connection, &fresh_tenant, funnel::MADE, "other", now).await?;
+                let how = &proven.provider;
+                funnel::note_in(connection, &fresh_tenant, funnel::SECURED, how, now).await?;
+            }
             Ok(account)
         })
     }
@@ -338,7 +346,7 @@ impl Accounts {
                 )
                 .into());
             }
-            insert_identity(connection, &holder, proven, now).await?;
+            insert_identity(connection, &holder, proven, self.counting, now).await?;
             Ok(Account {
                 provisional: false,
                 ..holder

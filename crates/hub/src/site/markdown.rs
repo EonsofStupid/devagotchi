@@ -12,7 +12,8 @@
 //! 1. a numbered item
 //! | Head | Head |                a table: a head row, a |---| row, then rows
 //! ::: passkeys hosted            only on these hubs (passkeys, hosted, nomen, other)
-//! :::                            ends it
+//! ::: analytics                  only where the hub counts visits (or: no-analytics)
+//! :::                            ends it (blocks nest: each must hold)
 //! ```
 
 use super::text::Ctx;
@@ -20,6 +21,10 @@ use super::text::Ctx;
 /// The kinds of hub a docs page tells apart (`::: …`): a hub with its own accounts, a
 /// hosted one, one that signs in through Nomen, any other.
 pub const DOC_FRONTS: [&str; 4] = ["passkeys", "hosted", "nomen", "other"];
+
+/// Whether the hub counts visits and its accounts' milestones (`crate::analytics`): a
+/// privacy page says what it counts only where it does.
+pub const SWITCHES: [&str; 2] = ["analytics", "no-analytics"];
 
 #[derive(Debug, Clone)]
 pub struct Page {
@@ -52,11 +57,12 @@ impl Page {
                     depth -= 1;
                 } else {
                     for front in fronts.split_whitespace() {
-                        if !DOC_FRONTS.contains(&front) {
+                        if !DOC_FRONTS.contains(&front) && !SWITCHES.contains(&front) {
                             return Err(format!(
-                                "line {}: ::: {front} is not one of {}",
+                                "line {}: ::: {front} is not one of {}, {}",
                                 n + 1,
-                                DOC_FRONTS.join(", ")
+                                DOC_FRONTS.join(", "),
+                                SWITCHES.join(", ")
                             ));
                         }
                     }
@@ -77,8 +83,9 @@ impl Page {
         })
     }
 
-    /// The page's HTML on a hub of kind `front` (one of [`DOC_FRONTS`]).
-    pub fn render(&self, ctx: &Ctx, front: &str) -> String {
+    /// The page's HTML on a hub that is each of `shown`: its kind (one of [`DOC_FRONTS`])
+    /// and, where it matters, one of [`SWITCHES`]. A block shows when it names one of them.
+    pub fn render(&self, ctx: &Ctx, shown_here: &[&str]) -> String {
         // Only what this hub shows.
         let mut lines = Vec::new();
         let mut shown = vec![true];
@@ -89,7 +96,7 @@ impl Page {
                         shown.pop();
                     }
                 } else {
-                    let here = fronts.split_whitespace().any(|f| f == front);
+                    let here = fronts.split_whitespace().any(|f| shown_here.contains(&f));
                     shown.push(here && *shown.last().unwrap_or(&true));
                 }
                 continue;

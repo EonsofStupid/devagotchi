@@ -56,6 +56,7 @@ hub-up.sh --ct ID --domain NAME [options]
 A hosted hub, who runs it, and how people sign in (passed to install.sh; see its --help):
   --tenancy single|multi  --operators LIST  --trusted-proxies LIST
   --google  --github  --nomen ISSUER  --email-from ADDRESS
+  --analytics on|off  --analytics-retention-days N
   --env-file FILE    on this host: the providers' ids and secrets (KEY=VALUE lines)
 The hub's site (crates/hub/README.md, "The site"):
   --site DIR         a site directory on this host, checked and put in place in the container
@@ -78,7 +79,8 @@ while [[ $# -gt 0 ]]; do
     --ref) ref="$2"; shift 2 ;;
     --no-snapshot) snapshot=false; shift ;;
     --tenancy) tenancy="$2"; hosted+=("$1" "$2"); shift 2 ;;
-    --operators|--trusted-proxies|--nomen|--email-from) hosted+=("$1" "$2"); shift 2 ;;
+    --operators|--trusted-proxies|--nomen|--email-from|--analytics|--analytics-retention-days)
+      hosted+=("$1" "$2"); shift 2 ;;
     --google|--github) hosted+=("$1"); shift ;;
     --env-file) env_file="$2"; shift 2 ;;
     --site) site="$2"; shift 2 ;;

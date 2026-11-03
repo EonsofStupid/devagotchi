@@ -6,6 +6,7 @@
 
 pub mod account;
 mod accounts;
+mod analytics;
 mod audit;
 mod auth;
 pub mod board;
@@ -27,6 +28,8 @@ mod site;
 mod store;
 #[cfg(test)]
 mod access_tests;
+#[cfg(test)]
+mod analytics_tests;
 mod tenant_access;
 mod tenant_machines;
 #[cfg(test)]
@@ -337,7 +340,8 @@ async fn accounts_at(
         .await?
         .with_tokens(config.token_config())
         .with_tenancy(config.tenancy.clone(), config.operators.clone())
-        .with_site(config.site_cell(), &config.public_url))
+        .with_site(config.site_cell(), &config.public_url)
+        .with_analytics(config.counts_visits()))
 }
 
 fn prepare_state_dir(state_dir: &std::path::Path) -> BridgeResult<()> {
@@ -649,7 +653,18 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             devices.clone(),
         )?)),
     };
-    let links = Links::new(config.clone(), devices.clone(), audit.clone()).notifying(push.clone());
+    // A hosted hub counts visits and its accounts' milestones for its operator, in its store.
+    let analytics = match &accounts {
+        Some(accounts) if config.counts_visits() => Some(analytics::Analytics::start(
+            accounts.store().clone(),
+            config.analytics,
+            &config.public_url,
+        )),
+        _ => None,
+    };
+    let links = Links::new(config.clone(), devices.clone(), audit.clone())
+        .notifying(push.clone())
+        .counting(analytics.clone());
     // A machine joins for an account only once its tenant is let in (early access).
     let links = Arc::new(match &accounts {
         Some(accounts) => links.gated(accounts.enroll_gate()),
@@ -709,6 +724,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             audit,
             links,
             boards,
+            analytics,
         },
         web,
         passkeys,
@@ -854,7 +870,12 @@ fn app(state: AppState) -> Router {
                 )),
         )
         .merge(
+            // The bar runs first: it marks the operator's requests, which are not counted.
             web::router(authority.is_none())
+                .layer(middleware::from_fn_with_state(
+                    state.clone(),
+                    web::counted::count,
+                ))
                 .layer(middleware::from_fn_with_state(state.clone(), web::bar)),
         );
     let router = match authority {
@@ -1647,6 +1668,7 @@ mod tests {
                 links,
                 push: None,
                 downloads: None,
+                analytics: None,
             },
             web: None,
             passkeys: None,
@@ -1869,6 +1891,7 @@ mod tests {
                 links,
                 push: None,
                 downloads: None,
+                analytics: None,
             },
             web: None,
             passkeys,

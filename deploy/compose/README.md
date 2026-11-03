@@ -189,6 +189,8 @@ Everything is in `.env`; each has a default (`.env.example` lists them).
 | `DEVAGOTCHI_PG_SLOW_MS` | `500` | Statements slower than this are logged. |
 | `DEVAGOTCHI_HUB_TENANCY` | `single` | `multi` for a hosted hub. |
 | `DEVAGOTCHI_HUB_OPERATORS` | (none) | Who operates the hub, comma separated. |
+| `DEVAGOTCHI_HUB_ANALYTICS` | `on` | A hosted hub counts visits to its public pages and its accounts' milestones for its operator page, itself: no cookie, no script, nothing third-party. `off` stops it; `install.sh --analytics off` writes it. |
+| `DEVAGOTCHI_HUB_ANALYTICS_RETENTION_DAYS` | `90` | Days raw visits are kept before only daily totals remain; `install.sh --analytics-retention-days N`. |
 | `DEVAGOTCHI_HUB_PROVIDERS` | `[]` | The sign-in providers, JSON as `auth.providers` takes it; `install.sh` writes it from `--google`, `--github`, `--nomen`. |
 | `DEVAGOTCHI_HUB_EMAIL` | `null` | The email link's mail server, JSON as `auth.email` takes it; `install.sh` writes it from `--email-from`. |
 | `DEVAGOTCHI_HUB_TRUSTED_PROXIES` | private and loopback | JSON list of addresses or CIDR ranges. |

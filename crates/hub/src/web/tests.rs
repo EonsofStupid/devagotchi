@@ -221,6 +221,7 @@ async fn world_with(downloads: Option<Arc<crate::downloads::Downloads>>) -> Worl
         verifier: Arc::new(verifier),
         hub: Hub {
             downloads,
+            analytics: None,
             push: Some(push),
             boards: Arc::new(crate::board::mcp::Boards::from_config(&config, dir.path())),
             config,

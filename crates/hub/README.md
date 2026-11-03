@@ -94,7 +94,9 @@ string: `{ "default": …, "passkeys": …, "hosted": …, "nomen": …, "unclai
 
 **Pages** are a small, strict Markdown: front matter (`title:`, `updated:`), then `#`, `##`
 and `###` headings, paragraphs, `-` and `1.` lists, pipe tables, and `::: passkeys hosted`
-… `:::` around what only some hubs show (`passkeys`, `hosted`, `nomen`, `other`).
+… `:::` around what only some hubs show (`passkeys`, `hosted`, `nomen`, `other`), and
+`::: analytics` or `::: no-analytics` around what a hub says only where it counts visits or
+does not (blocks nest; `{retention_days}` is its `analytics.retention_days`).
 
 **Plans** are what a hosted hub holds each tenant to, and what the Plans section shows. A
 plan's `limits` name only what the hub counts and refuses past, per tenant: `projects`
@@ -336,6 +338,32 @@ gets an account and a tenant (`t-<uuid>`) of their own, made on the spot:
   against the plan's limits, and when and by whom it was let in. Plain forms, no script,
   posts only from the hub's own page; every word from `content/messages.json` `operator`.
   The owner's account page links to it.
+- **First-party analytics** (`src/analytics.rs`, migration 0009): a hosted hub counts, for
+  its operator, what it serves itself: no script, no cookie, no beacon, nothing
+  third-party. Each `GET` of a public page (`/`, `/docs`, `/privacy`, `/terms`,
+  `/support`) answered `200` keeps the UTC day and hour, the path, the link's
+  `utm_source`/`utm_medium`/`utm_campaign` (the rest of the query is dropped), the
+  referring host (never its own), the device class and a visitor id: an HMAC of the client
+  address (`tenancy.trusted_proxies` decides which) and User-Agent under a key held only in
+  memory and replaced each UTC day, so ids never link across days; no address or
+  User-Agent is stored. `Sec-GPC: 1`, `DNT: 1`, robots (`analytics/bots.txt`), requests
+  with no User-Agent and the signed-in operator are not counted. Each tenant's milestones
+  are written once, where each happens: made (with the AI client family from the OAuth
+  client's name), secured (with the sign-in), waiting, admitted (in the account store's
+  transaction), first machine, first operation (with its latest, a day at a time) and first
+  board. Writes go through a bounded queue to one writer in batches (a full queue drops and
+  counts, said in the log); every hour it rolls each finished day into `hub_analytics_daily`
+  (kept) and deletes raw visits older than `analytics.retention_days`. The tables are
+  hub-scoped, like `hub_secrets`. The default privacy page says exactly this inside
+  `::: analytics` (shown only where the hub counts, with `{retention_days}`), and
+  `::: no-analytics` elsewhere.
+
+  ```jsonc
+  "analytics": { "enabled": true, "retention_days": 90 }  // the defaults
+  ```
+
+  `DEVAGOTCHI_HUB_ANALYTICS` (`on`/`off`) and `DEVAGOTCHI_HUB_ANALYTICS_RETENTION_DAYS`
+  override them (`install.sh --analytics off`, `--analytics-retention-days N`).
 - **Operators, with no claim.** Someone who signs in with an identity `operators` names (a
   verified `email:`, or `google:`, `github:`, `nomen:` or `oidc:` and the provider's
   subject) is the hub's owner, the platform operator, in the first tenant (Jesse is tenant

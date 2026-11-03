@@ -41,14 +41,39 @@ what the service keeps about you, why, and for how long.
   account. If you sign in through an organization (for example on Shippin), it belongs to
   that organization instead: its other members, and their agents, see and work it. Nobody
   else does.
+::: analytics
+- **Visits to these pages.** The hub counts visits to its public pages (home, docs,
+  privacy, terms and support) itself, as it serves them: no cookie, no script, and nothing
+  from anyone else. For each visit it keeps the day and hour (UTC), the page, the
+  `utm_source`, `utm_medium` and `utm_campaign` of the link that brought you (the rest of
+  the address is dropped), the name of the site you came from (its host name only), and
+  whether you use a phone, a tablet or a computer. To tell visitors apart it keeps a keyed
+  hash of your network address and browser that changes every day: its key is held only in
+  the hub's memory and replaced at midnight UTC, so a visit cannot be linked to your visits
+  on other days. Your network address and your browser's identifying string (its user
+  agent) are never kept. Nothing is counted when your browser sends Global Privacy Control
+  or Do Not Track, for known robots, or for the hub's operator.
+- **Milestones of your account.** The hub notes once for each account when it was made
+  (and which kind of AI app made it: Claude, ChatGPT or Codex, Grok, Cursor, or another),
+  when it was secured (and with which sign-in), when it joined the early-access list and
+  when it was let in, and when it first enrolled a machine, first ran a command and first
+  made a board, with the last day it ran one. We use these to see how the service is used.
+:::
 
 The output of a job passes through the hub to your AI app and is not stored by the hub. It
 is kept by the broker on your own machine, under your control.
 
 ## What we do not do
 
+::: no-analytics
 No advertising, no selling or renting of data, no analytics or tracking scripts on these
 pages, and no use of your data to train models.
+:::
+::: analytics
+No advertising, no selling or renting of data, no tracking cookies, no third-party scripts
+or analytics services on these pages (the hub counts visits itself, as above), and no use
+of your data to train models.
+:::
 
 ## Who else sees it
 
@@ -65,6 +90,11 @@ kept as a security record while the service runs. A temporary account ends after
 unused, and a sign-in session as described above. Machine records and boards are kept until
 you or your hub's operator delete them. Ask us to delete your data and we remove everything
 that is not needed for that security record.
+::: analytics
+
+Visit records are kept for {retention_days} days; after that only daily totals remain, and
+they name no visitor. An account's milestones are kept with the account.
+:::
 
 ## Contact
 

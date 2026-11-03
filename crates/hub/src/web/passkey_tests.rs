@@ -93,6 +93,7 @@ async fn world_configured(owner: Option<&str>, site: Option<&std::path::Path>) -
         ),
         hub: Hub {
             downloads: None,
+            analytics: None,
             push: Some(push),
             boards: Arc::new(crate::board::mcp::Boards::from_config(&config, dir.path())),
             config: config.clone(),

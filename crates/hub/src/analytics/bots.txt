@@ -1,0 +1,107 @@
+# Robots: a User-Agent that contains any line below (ignoring case) is not counted as a
+# visit (src/analytics/visit.rs). One substring per line; `#` starts a comment. Keep it
+# to what no person's browser sends. A request with no User-Agent is never counted either.
+#
+# Crawlers, spiders and fetchers that say so.
+bot
+crawl
+spider
+slurp
+archiver
+ia_archiver
+scrapy
+mediapartners-google
+feedfetcher
+google-inspectiontool
+google-read-aloud
+googleother
+google-extended
+storebot-google
+facebookexternalhit
+facebookcatalog
+meta-externalagent
+meta-externalfetcher
+embedly
+skypeuripreview
+whatsapp
+iframely
+outbrain
+quora link preview
+vkshare
+w3c_validator
+validator.nu
+# AI agents and their fetchers.
+chatgpt-user
+oai-searchbot
+anthropic-ai
+claude-web
+claude-user
+claude-searchbot
+cohere-ai
+perplexity
+diffbot
+omgili
+imagesift
+# Libraries and command-line clients.
+curl/
+wget/
+python-requests
+python-urllib
+python-httpx
+aiohttp
+go-http-client
+java/
+okhttp
+libwww
+httpclient
+http_request
+axios/
+node-fetch
+undici
+got (
+guzzle
+restsharp
+postmanruntime
+insomnia
+httpie
+powershell
+winhttp
+# Headless and automated browsers.
+headless
+phantomjs
+puppeteer
+playwright
+selenium
+webdriver
+lighthouse
+pagespeed
+gtmetrix
+# Uptime checks, monitors and scanners.
+pingdom
+uptime
+monitor
+statuscake
+site24x7
+datadog
+newrelic
+check_http
+nagios
+zabbix
+prometheus
+blackbox
+zgrab
+masscan
+nmap
+nikto
+sqlmap
+nuclei
+censys
+shodan
+expanse
+netcraft
+semrush
+ahrefs
+mj12
+dataforseo
+screaming frog
+sitebulb
