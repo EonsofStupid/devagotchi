@@ -7,6 +7,24 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Deploying the hub's site directory (increment 62)
+- Compose mounts the site directory `DEVAGOTCHI_SITE_DIR` names on the host into the hub,
+  read-only, and tells the hub only when it is set (an empty `site/` stands in otherwise,
+  and the hub serves its built-in site). The hub follows the directory, so a change is
+  served on `docker compose up -d hub` (or on its own, within seconds) with no rebuild.
+- `install.sh --site DIR` checks the site with the hub image (`devagotchi hub check-site`)
+  before anything goes live, then puts it in `site/` under `--dir` in place and names it in
+  `.env`; a re-run keeps it. `--site-only` puts a site alone on a hub already installed;
+  `--no-site` goes back to the built-in one.
+- `hub-up.sh --site DIR` packs a site on the Proxmox host, pushes it into the container for
+  `install.sh` and removes it after; `--site DIR --site-only` pushes a site change alone
+  (no `--domain`, no snapshot, no reinstall).
+- Tests: `tests/deploy_scripts.sh` (real Docker, CI) puts the neutral site in place, serves a
+  change after `docker compose up -d hub`, refuses a broken change while the hub keeps its
+  site, refuses a bad `--site` before it is live, keeps the site on a re-run and goes back
+  with `--no-site`; `tests/proxmox_hub_up.py` checks the site goes into the container and
+  out again, and that `--site-only` touches nothing else.
+
 ### Nothing hardcoded: the hub's site is content and tokens, from a directory (increment 61)
 - Every word, name, link, colour and picture the hub shows comes from its site instead of the
   code: the landing page, `/docs`, `/privacy`, `/terms`, `/support`, the bar and every page's

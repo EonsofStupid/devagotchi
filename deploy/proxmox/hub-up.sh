@@ -31,6 +31,13 @@
 # secrets as KEY=VALUE lines; it is pushed into the container 0600 for install.sh and
 # removed once it ran. install.sh keeps them in the stack's .env (0600).
 #
+# The hub's site (its name, copy, colours, pictures: crates/hub/README.md, "The site") is a
+# directory on this host: --site DIR pushes it into the container, where install.sh checks
+# it with the hub image and puts it in place. To change the site of a hub this script set
+# up, edit DIR and push it alone; nothing else is touched, and the hub serves it in seconds:
+#
+#   ... | bash -s -- --ct 110 --site /root/hub-site --site-only
+#
 # Re-running it is safe. Nothing here names a host, a domain or a container of its own.
 set -euo pipefail
 
@@ -50,12 +57,16 @@ A hosted hub, who runs it, and how people sign in (passed to install.sh; see its
   --tenancy single|multi  --operators LIST  --trusted-proxies LIST
   --google  --github  --nomen ISSUER  --email-from ADDRESS
   --env-file FILE    on this host: the providers' ids and secrets (KEY=VALUE lines)
+The hub's site (crates/hub/README.md, "The site"):
+  --site DIR         a site directory on this host, checked and put in place in the container
+  --site-only        with --site: push the site to the hub already there, and nothing else
+                     (no --domain, no snapshot, no reinstall)
 EOF
 }
 
 ct="" domain="" rp_id="" port=8787 track=ghcr.io/eonsofstupid/devagotchi:main
 repo=EonsofStupid/devagotchi ref=main snapshot=true
-hosted=() env_file="" tenancy=""
+hosted=() env_file="" tenancy="" site="" site_only=false
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --ct) ct="$2"; shift 2 ;;
@@ -70,6 +81,8 @@ while [[ $# -gt 0 ]]; do
     --operators|--trusted-proxies|--nomen|--email-from) hosted+=("$1" "$2"); shift 2 ;;
     --google|--github) hosted+=("$1"); shift ;;
     --env-file) env_file="$2"; shift 2 ;;
+    --site) site="$2"; shift 2 ;;
+    --site-only) site_only=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "hub-up.sh: unknown option $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -83,9 +96,11 @@ say() { printf '\n==> %s\n' "$*"; }
 note() { printf '    %s\n' "$*"; }
 die() { printf '\nhub-up.sh: %s\n(log: %s)\n' "$*" "$log_file" >&2; exit 1; }
 
-[[ -n "$ct" && -n "$domain" ]] || { usage >&2; exit 2; }
+[[ -n "$ct" ]] && { $site_only || [[ -n "$domain" ]]; } || { usage >&2; exit 2; }
 [[ "$ct" =~ ^[0-9]+$ ]] || die "--ct $ct is not a container id"
-[[ "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || die "--domain $domain is not a host name"
+$site_only || [[ "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || die "--domain $domain is not a host name"
+[[ -z "$site" || -f "$site/site.json" ]] || die "--site $site is not a site directory on this host (it has no site.json)"
+$site_only && [[ -z "$site" ]] && die "--site-only needs --site DIR"
 [[ "$port" =~ ^[0-9]+$ ]] || die "--port is a number"
 [[ -z "$env_file" || -f "$env_file" ]] || die "--env-file $env_file is not a file on this host"
 [[ $EUID -eq 0 || -n "${DEVAGOTCHI_ALLOW_NONROOT:-}" ]] || die "run it as root on the Proxmox host"
@@ -96,6 +111,43 @@ domain="${domain,,}"; rp_id="${rp_id,,}"
 rp_id="${rp_id:-$domain}"
 in_ct() { pct exec "$ct" -- "$@"; }
 config=$(pct config "$ct" 2>/dev/null) || die "there is no container $ct on this host"
+
+# The deploy files of one commit, and the site, pushed into the container for install.sh.
+src=/root/devagotchi-hub-src
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+push_files() {
+  local sha
+  sha=$(curl -fsSL "https://api.github.com/repos/$repo/commits/$ref" | sed -n 's/^  "sha": "\([0-9a-f]\{40\}\)".*/\1/p' | head -1)
+  [[ -n "$sha" ]] || die "could not resolve $repo@$ref"
+  say "the deploy files from $repo@${sha:0:12}"
+  for file in install.sh compose.yaml update.sh backup.sh; do
+    curl -fsSL "https://raw.githubusercontent.com/$repo/$sha/deploy/compose/$file" -o "$work/$file"
+  done
+  in_ct mkdir -p "$src"
+  for file in install.sh compose.yaml update.sh backup.sh; do
+    pct push "$ct" "$work/$file" "$src/$file" --perms 0755
+  done
+  if [[ -n "$site" ]]; then
+    tar -C "$site" -czf "$work/site.tgz" .
+    pct push "$ct" "$work/site.tgz" "$src/site.tgz" --perms 0600
+    in_ct sh -c "rm -rf $src/site && mkdir -p $src/site && tar -xzf $src/site.tgz -C $src/site && rm -f $src/site.tgz"
+  fi
+}
+site_args=()
+[[ -n "$site" ]] && site_args=(--site "$src/site")
+
+if $site_only; then
+  # A site change for the hub this script set up: nothing else is touched.
+  pct status "$ct" | grep -q running || die "CT $ct is not running"
+  push_files
+  installed=0
+  in_ct "$src/install.sh" "${site_args[@]}" --site-only || installed=$?
+  in_ct rm -rf "$src/site"
+  [[ $installed -eq 0 ]] || die "the site was not put in place in CT $ct (above); the hub serves the site it had"
+  say "done: CT $ct's hub serves the site from $site"
+  exit 0
+fi
 
 # 1. A way back.
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
@@ -147,8 +199,6 @@ if in_ct sh -c "ss -Hltn 'sport = :$port' | grep -q ." 2>/dev/null; then
 fi
 
 # 4. The stack, from one commit of the deploy files.
-sha=$(curl -fsSL "https://api.github.com/repos/$repo/commits/$ref" | sed -n 's/^  "sha": "\([0-9a-f]\{40\}\)".*/\1/p' | head -1)
-[[ -n "$sha" ]] || die "could not resolve $repo@$ref"
 # Who terminates TLS for the domain today: a proxy on this Proxmox host (it reaches the
 # container's address, so the hub listens there), the container's own Caddy (loopback is
 # enough), or nobody (the stack's own Caddy takes ports 80 and 443 in the container).
@@ -161,17 +211,9 @@ elif in_ct sh -c "command -v caddy >/dev/null && grep -rlsqF -- '$domain' /etc/c
   edge=external
   note "CT $ct's Caddy already serves $domain: the hub takes 127.0.0.1:$port behind it"
 fi
-say "installing the hub in CT $ct from $repo@${sha:0:12}"
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-for file in install.sh compose.yaml update.sh backup.sh; do
-  curl -fsSL "https://raw.githubusercontent.com/$repo/$sha/deploy/compose/$file" -o "$work/$file"
-done
+say "installing the hub in CT $ct"
 in_ct sh -c 'command -v curl >/dev/null || { apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -yq curl ca-certificates; }' >/dev/null
-in_ct mkdir -p /root/devagotchi-hub-src
-for file in install.sh compose.yaml update.sh backup.sh; do
-  pct push "$ct" "$work/$file" "/root/devagotchi-hub-src/$file" --perms 0755
-done
+push_files
 # The providers' secrets: into the container for install.sh alone (0600), and out again
 # whatever install.sh does.
 secrets=()
@@ -181,8 +223,10 @@ if [[ -n "$env_file" ]]; then
 fi
 installed=0
 in_ct /root/devagotchi-hub-src/install.sh --domain "$domain" --rp-id "$rp_id" --edge "$edge" \
-  --hub-bind "$bind" --hub-port "$port" --track "$track" "${hosted[@]}" "${secrets[@]}" || installed=$?
+  --hub-bind "$bind" --hub-port "$port" --track "$track" "${hosted[@]}" "${secrets[@]}" \
+  "${site_args[@]}" || installed=$?
 [[ -n "$env_file" ]] && in_ct rm -f /root/devagotchi-hub-src/secrets.env
+[[ -n "$site" ]] && in_ct rm -rf "$src/site"
 [[ $installed -eq 0 ]] || die "install.sh did not finish in CT $ct"
 
 # 5. The public name answers from the new hub.

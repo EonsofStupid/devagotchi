@@ -8,6 +8,8 @@
 #        --hub-bind 10.0.0.20                                     # behind a proxy you run
 #   sudo ./install.sh --domain app.example.com --tenancy multi \
 #        --operators email:you@example.com --google --env-file /run/hub.env   # hosted
+#   sudo ./install.sh --domain hub.example.com --site /srv/my-site        # its own site
+#   sudo ./install.sh --site /srv/my-site --site-only                     # a site change
 #
 # Re-running it is safe: it rewrites .env from the flags, keeps the volumes, and deploys
 # the image the track points at now. Nothing here is specific to one host or domain.
@@ -30,6 +32,12 @@ install.sh --domain NAME [options]
                        script, else https://raw.githubusercontent.com/<repo>/<ref>/deploy/compose)
   --repo OWNER/NAME    (default EonsofStupid/devagotchi)   --ref REF  (default main)
   --no-timer           do not install the update and backup timers
+The hub's site: its name, copy, colours and pictures (crates/hub/README.md, "The site"):
+  --site DIR           check the site directory DIR with the hub image and put it in place
+                       (DIR/../site under --dir); the running hub serves it within seconds.
+                       A re-run without --site keeps the site in place
+  --site-only          with --site: only that, on a hub this script installed (no --domain)
+  --no-site            back to the hub's built-in site
 A hosted hub, who runs it, and how people sign in (see crates/hub/README.md):
   --tenancy single|multi
                        single (default): one owner's hub, claimed from its log when no
@@ -53,7 +61,7 @@ EOF
 
 domain="" public_url="" rp_id="" edge=caddy hub_bind=127.0.0.1 hub_port=8787
 track=ghcr.io/eonsofstupid/devagotchi:main dir=/opt/devagotchi-hub source=""
-repo=EonsofStupid/devagotchi ref=main timer=true
+repo=EonsofStupid/devagotchi ref=main timer=true site="" site_only=false no_site=false
 tenancy="" operators="" proxies="" google=false github=false nomen="" email_from="" env_file=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -69,6 +77,9 @@ while [[ $# -gt 0 ]]; do
     --repo) repo="$2"; shift 2 ;;
     --ref) ref="$2"; shift 2 ;;
     --no-timer) timer=false; shift ;;
+    --site) site="$2"; shift 2 ;;
+    --site-only) site_only=true; shift ;;
+    --no-site) no_site=true; shift ;;
     --tenancy) tenancy="$2"; shift 2 ;;
     --operators) operators="$2"; shift 2 ;;
     --trusted-proxies) proxies="$2"; shift 2 ;;
@@ -83,6 +94,51 @@ while [[ $# -gt 0 ]]; do
 done
 say() { printf '==> %s\n' "$*"; }
 die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
+if [[ -n "$site" ]]; then
+  [[ -d "$site" && -f "$site/site.json" ]] || die "--site $site is not a site directory (it has no site.json)"
+  site="$(cd "$site" && pwd -P)"
+fi
+$no_site && [[ -n "$site" ]] && die "--site and --no-site, not both"
+if $site_only; then
+  [[ -n "$site" ]] || die "--site-only needs --site DIR"
+  [[ $EUID -eq 0 ]] || die "run it as root"
+  [[ -f "$dir/.env" && -f "$dir/compose.yaml" ]] || die "no hub installed in $dir: run install.sh with --domain first"
+fi
+
+# The site: copied beside the live one, readable by the hub's unprivileged user, checked
+# there with the hub image (a bad one never reaches the hub), then put in place under --dir.
+# The live directory is changed in place, never replaced: the hub's container holds it by a
+# bind mount, which would keep the old one.
+place_site() {
+  local image="$1" live="$dir/site" stage="$dir/site.new" checked
+  docker image inspect "$image" >/dev/null 2>&1 || docker pull -q "$image" >/dev/null \
+    || die "could not pull $image to check the site"
+  rm -rf "$stage"
+  install -d -m 0755 "$stage"
+  cp -R "$site/." "$stage/"
+  chmod -R u=rwX,go=rX "$stage"
+  checked=$(docker run --rm --network none -v "$stage:/site:ro" "$image" hub check-site /site 2>&1) || {
+    printf '%s\n' "$checked" >&2
+    rm -rf "$stage"
+    die "--site $site does not check out (above); the hub keeps the site it has"
+  }
+  install -d -m 0755 "$live"
+  find "$live" -mindepth 1 -delete
+  cp -R "$stage/." "$live/"
+  rm -rf "$stage"
+  say "${checked%: /site}: $live"
+}
+if $site_only; then
+  place_site "$(sed -n 's/^DEVAGOTCHI_IMAGE=//p' "$dir/.env" | tail -1)"
+  if ! grep -q "^DEVAGOTCHI_SITE_DIR=$dir/site\$" "$dir/.env"; then
+    # The hub did not serve a site of its own yet: name it, and start the hub with it.
+    sed -i '/^DEVAGOTCHI_SITE_DIR=/d' "$dir/.env"
+    printf 'DEVAGOTCHI_SITE_DIR=%s\n' "$dir/site" >> "$dir/.env"
+    (cd "$dir" && docker compose up -d --wait --wait-timeout 180 hub) || die "the hub did not come up with the site; see: cd $dir && docker compose logs hub"
+  fi
+  say "done: the hub serves the site from $dir/site (it follows the directory; no restart needed)"
+  exit 0
+fi
 [[ -n "$domain" ]] || { usage >&2; exit 2; }
 [[ "$domain" =~ ^[A-Za-z0-9.-]+$ ]] || die "--domain $domain is not a host name"
 [[ "$edge" == caddy || "$edge" == external ]] || die "--edge is caddy or external"
@@ -147,6 +203,15 @@ cache=$(( mem_mb * 3 / 4 ))
 # .env: rewritten from the flags each run; the image stays pinned to the digest that runs.
 pinned=""
 [[ -f "$dir/.env" ]] && pinned=$(sed -n 's/^DEVAGOTCHI_IMAGE=//p' "$dir/.env" | tail -1)
+# The site: --site puts one in place, --no-site goes back to the built-in one, neither keeps
+# what .env named.
+site_dir=""
+[[ -f "$dir/.env" ]] && site_dir=$(sed -n 's/^DEVAGOTCHI_SITE_DIR=//p' "$dir/.env" | tail -1)
+if [[ -n "$site" ]]; then
+  place_site "${pinned:-$track}"
+  site_dir="$dir/site"
+fi
+$no_site && site_dir=""
 
 # The sign-in providers' ids and secrets: from --env-file, else this command's environment,
 # else what .env already holds (a re-run). Never printed; written single-quoted to .env (0600).
@@ -209,6 +274,8 @@ DEVAGOTCHI_HUB_TENANCY=${tenancy:-single}
 DEVAGOTCHI_HUB_OPERATORS=$operators
 DEVAGOTCHI_HUB_PROVIDERS='$(json_list "${providers[@]}")'
 DEVAGOTCHI_HUB_EMAIL='$email'
+# The hub's site directory (install.sh --site); empty: its built-in site.
+DEVAGOTCHI_SITE_DIR=$site_dir
 EOF
 if [[ ${#proxy_list[@]} -gt 0 ]]; then
   printf "DEVAGOTCHI_HUB_TRUSTED_PROXIES='%s'\n" "$(json_list "${proxy_list[@]}")" >> "$dir/.env.new"

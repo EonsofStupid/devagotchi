@@ -6,7 +6,10 @@
 # as a hosted hub (tenancy, an operator, Google from a secrets file), and the deploy files
 # coming with each new image from the commit it names (a local registry and file server
 # stand in for GHCR and GitHub): swapped in with a healthy image, rolled back with an
-# unhealthy one, and not deployed at all when that commit's files cannot be had.
+# unhealthy one, and not deployed at all when that commit's files cannot be had. Between
+# them, the hub's site: a directory checked with the hub image and put in place, a change
+# to it served after `docker compose up -d hub` with no rebuild, a bad one refused while
+# the hub keeps the site it had, and the built-in site back with --no-site.
 #   sudo bash tests/deploy_scripts.sh
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -53,6 +56,68 @@ ls "$work"/backups/db-*.dump "$work"/backups/state-*.tgz >/dev/null || fail "bac
 listed=$(tar -tzf "$work"/backups/state-*.tgz) || fail "the state archive reads back"
 [[ -n "$listed" ]] || fail "the state archive has the hub's files"
 echo "PASS backup.sh: database dump and state archive"
+
+# The hub's site (tests/fixtures/neutral-site): checked with the hub image, put in place,
+# served; nothing of the built-in site shows.
+# (Output captured, never piped to grep -q: an early exit would fail the pipe under pipefail.)
+page() { curl -fsS "http://127.0.0.1:$port/$1"; }
+has() { [[ "$(page "$1" 2>/dev/null)" == *"$2"* ]]; }
+wait_page() { for _ in $(seq 1 30); do has "$1" "$2" && return 0; sleep 1; done; return 1; }
+hub_log() { (cd "$dir" && docker compose logs --no-color hub 2>/dev/null) || true; }
+install_site() {
+  "$root/deploy/compose/install.sh" --domain hub.test.example --rp-id test.example \
+    --edge external --hub-bind 127.0.0.1 --hub-port "$port" --dir "$dir" --no-timer "$@"
+}
+cp -R "$root/tests/fixtures/neutral-site" "$work/site"
+out=$(install_site --site "$work/site" 2>&1) || { printf '%s\n' "$out" >&2; fail "install.sh --site puts a site in place"; }
+grep -q "site Lumen Relay (lumen-relay) checks out" <<<"$out" || fail "install.sh checks the site with the hub image"
+[[ "$(env_get DEVAGOTCHI_SITE_DIR)" == "$dir/site" ]] || fail ".env names the site directory"
+[[ -f "$dir/site/site.json" && "$(stat -c %a "$dir/site/site.json")" == 644 ]] || fail "the site is in place, readable by the hub"
+wait_page "" "<title>A new Lumen Relay · Lumen Relay</title>" || fail "the hub serves the site"
+has "" Devagotchi && fail "nothing of the built-in site shows"
+has docs "<h1>Lumen Relay</h1>" || fail "the public pages are the site's"
+echo "PASS install.sh --site: checked, in place, served"
+
+# A change to the directory, then `docker compose up -d hub`: served, no rebuild.
+sed -i 's/"name": "Lumen Relay"/"name": "Lumen Relay Two"/' "$dir/site/site.json"
+(cd "$dir" && docker compose up -d hub >/dev/null 2>&1) || fail "docker compose up -d hub"
+wait_page "" "<title>A new Lumen Relay Two · Lumen Relay Two</title>" || fail "a change to the site is served"
+echo "PASS a change to the site directory is served on docker compose up -d hub, no rebuild"
+
+# A change that does not check out is refused, and the hub keeps the site it had.
+cp "$dir/site/site.json" "$work/site-two.json"
+printf '{ broken' > "$dir/site/site.json"
+for _ in $(seq 1 30); do
+  [[ "$(hub_log)" == *"still serving the site it had"* ]] && break
+  sleep 1
+done
+grep -q "site.json:.*still serving the site it had" <<<"$(hub_log)" || fail "the hub says why it refused the site"
+has "" "Lumen Relay Two" || fail "the hub keeps the site it had"
+curl -fsS "http://127.0.0.1:$port/healthz" | grep -q '"ok":true' || fail "the hub stays healthy"
+cp "$work/site-two.json" "$dir/site/site.json"
+echo "PASS a site change that does not check out is refused; the hub keeps its site"
+
+# A bad site from install.sh never reaches the hub; a good one alone, with --site-only.
+cp -R "$work/site" "$work/bad-site"
+printf '{"colors": {"acent": "red"}}\n' > "$work/bad-site/tokens.json"
+if out=$("$root/deploy/compose/install.sh" --dir "$dir" --site "$work/bad-site" --site-only 2>&1); then
+  fail "install.sh refuses a site that does not check out"
+fi
+grep -q "tokens.json colors.acent" <<<"$out" || { printf '%s\n' "$out" >&2; fail "it says what is wrong"; }
+grep -q acent "$dir/site/tokens.json" && fail "the bad site never reached the hub's directory"
+"$root/deploy/compose/install.sh" --dir "$dir" --site "$work/site" --site-only >/dev/null 2>&1 \
+  || fail "install.sh --site-only puts a good site in place"
+wait_page "" "<title>A new Lumen Relay · Lumen Relay</title>" || fail "the site from --site-only is served"
+echo "PASS install.sh --site-only: a bad site refused before it is live, a good one served"
+
+# A re-run without --site keeps the site; --no-site goes back to the built-in one.
+out=$(install_site 2>&1) || { printf '%s\n' "$out" >&2; fail "install.sh re-runs"; }
+[[ "$(env_get DEVAGOTCHI_SITE_DIR)" == "$dir/site" ]] || fail "a re-run keeps the site"
+wait_page "" "Lumen Relay" || fail "the site is still served"
+out=$(install_site --no-site 2>&1) || { printf '%s\n' "$out" >&2; fail "install.sh --no-site"; }
+[[ -z "$(env_get DEVAGOTCHI_SITE_DIR)" ]] || fail "--no-site clears the site directory"
+wait_page "" "<title>A new Devagotchi hub · Devagotchi</title>" || fail "the built-in site is back"
+echo "PASS install.sh: a re-run keeps the site, --no-site restores the built-in one"
 
 # A hosted hub: install.sh again with the tenancy, an operator and Sign in with Google, its
 # client id and secret from a secrets file (as the secret store writes one).

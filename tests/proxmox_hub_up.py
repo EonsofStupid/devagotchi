@@ -51,6 +51,7 @@ if cmd in ("reboot", "start"):
     save(); sys.exit(0)
 if cmd == "push":
     shutil.copy(args[2], os.path.join(fake, "pushed", os.path.basename(args[3])))
+    state.setdefault("push_order", []).append(os.path.basename(args[3]))
     state.setdefault("perms", {})[os.path.basename(args[3])] = args[args.index("--perms") + 1]
     save(); sys.exit(0)
 if cmd == "exec":
@@ -67,12 +68,17 @@ if cmd == "exec":
         sys.exit(1)
     if "command -v caddy" in line: sys.exit(0 if state.get("edge") else 1)
     if "command -v curl" in line or inner[0] == "mkdir": sys.exit(0)
+    if "tar -xzf" in line:
+        state["site_unpacked"] = line; save(); sys.exit(0)
     if inner[0].endswith("/install.sh"):
         state["install"] = inner[1:]
+        state["site_there"] = bool(state.get("site_unpacked")) and not state.get("site_removed")
         state["secrets_there"] = os.path.exists(os.path.join(fake, "pushed", "secrets.env")) and not state.get("removed")
         save(); sys.exit(state.get("install_fails", 0))
     if inner[:2] == ["rm", "-f"]:
         state["removed"] = inner[2]; save(); sys.exit(0)
+    if inner[:2] == ["rm", "-rf"]:
+        state["site_removed"] = inner[2]; save(); sys.exit(0)
     if "hostname -I" in line:
         print("10.0.0.110"); sys.exit(0)
     if inner[0] == "curl" and "/healthz" in line:
@@ -139,6 +145,11 @@ def run(case: str, *, config: str, extra=(), **state) -> tuple[int, str, dict]:
         for name in result["pushed"]:
             if name == "secrets.env":
                 result["secrets"] = (fake / "pushed" / name).read_text()
+                continue
+            if name == "site.tgz":
+                import tarfile
+                with tarfile.open(fake / "pushed" / name) as archive:
+                    result["site_files"] = sorted(archive.getnames())
                 continue
             same = (fake / "pushed" / name).read_bytes() == (ROOT / "deploy/compose" / name).read_bytes()
             assert same, f"{case}: pushed {name} is not this checkout's"
@@ -238,6 +249,42 @@ def main() -> int:
     check("hosted fails", code == 1 and "install.sh did not finish" in out
           and s.get("removed") == "/root/devagotchi-hub-src/secrets.env", out)
     print("PASS a failed install still takes the secrets file out of the container")
+
+    # 5c. A site directory on this host: packed, pushed into the container after the deploy
+    #     files, unpacked there for install.sh, named to it, and removed after it ran.
+    site = ROOT / "tests" / "fixtures" / "neutral-site"
+    code, out, s = run("site", config=UNPRIVILEGED, host_proxy=True, extra=["--site", str(site)])
+    install = s["install"]
+    check("site", code == 0, out)
+    check("site: pushed after the deploy files", s["push_order"][-1] == "site.tgz"
+          and s["perms"]["site.tgz"] == "0600", out)
+    check("site: the whole directory", "./site.json" in s["site_files"]
+          and "./content/landing.json" in s["site_files"] and "./assets/logo.svg" in s["site_files"], out)
+    check("site: unpacked for install.sh, named to it",
+          s.get("site_there") and install[install.index("--site") + 1] == "/root/devagotchi-hub-src/site"
+          and "--site-only" not in install, out)
+    check("site: removed after", s.get("site_removed") == "/root/devagotchi-hub-src/site", out)
+    print("PASS a site directory goes into the container for install.sh, and out again")
+
+    # 5d. A site change alone: no domain, no snapshot, no features, no reinstall; the site
+    #     goes in and install.sh puts it in place with --site-only.
+    code, out, s = run("site only", config=UNPRIVILEGED, site_only_run=True,
+                       extra=["--site", str(site), "--site-only"])
+    calls = [c[0] for c in s["calls"]]
+    install = s["install"]
+    check("site only", code == 0, out)
+    check("site only: nothing else touched", "snapshot" not in calls and "set" not in calls
+          and "reboot" not in calls and not s.get("stopped"), out)
+    check("site only: install.sh puts the site alone in place",
+          install == ["--site", "/root/devagotchi-hub-src/site", "--site-only"], out)
+    check("site only: removed after", s.get("site_removed") == "/root/devagotchi-hub-src/site", out)
+    print("PASS a site change alone pushes the site and touches nothing else")
+
+    code, out, s = run("site missing", config=UNPRIVILEGED, extra=["--site", str(ROOT / "tests"), "--site-only"])
+    check("site missing", code == 1 and "is not a site directory" in out and len(s["calls"]) == 0, out)
+    code, out, s = run("site only, no site", config=UNPRIVILEGED, extra=["--site-only"])
+    check("site only, no site", code == 1 and "--site-only needs --site" in out, out)
+    print("PASS a directory that is not a site stops it before anything changes")
 
     # 6. No such container.
     code, out, s = run("missing", config=UNPRIVILEGED, ct="111")

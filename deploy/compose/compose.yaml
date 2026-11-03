@@ -64,6 +64,10 @@ services:
     volumes:
       - hub-state:/var/lib/devagotchi
       - postgres-socket:/var/run/postgresql
+      # The hub's site (crates/hub/README.md, "The site"): DEVAGOTCHI_SITE_DIR on this host,
+      # read-only. The hub follows it: a change is served once it checks out, no rebuild.
+      # Unset, the empty ./site beside this file stands in and the hub serves its built-in site.
+      - ${DEVAGOTCHI_SITE_DIR:-./site}:/etc/devagotchi/site:ro
     # Plain HTTP for whatever terminates TLS: this stack's Caddy over the compose network,
     # or an edge proxy elsewhere (DEVAGOTCHI_HUB_BIND set to an address it can reach).
     # Loopback only by default.
@@ -78,6 +82,8 @@ services:
     # the sign-in providers' ids and secrets: from .env, which install.sh writes 0600 from
     # its flags and the secret store. Empty means unset. Nothing here names a provider.
     environment:
+      # Set only when the host names a site directory.
+      DEVAGOTCHI_SITE_DIR: ${DEVAGOTCHI_SITE_DIR:+/etc/devagotchi/site}
       DEVAGOTCHI_HUB_TENANCY: ${DEVAGOTCHI_HUB_TENANCY:-}
       DEVAGOTCHI_HUB_OPERATORS: ${DEVAGOTCHI_HUB_OPERATORS:-}
       DEVAGOTCHI_GOOGLE_CLIENT_ID: ${DEVAGOTCHI_GOOGLE_CLIENT_ID:-}

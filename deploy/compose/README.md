@@ -65,6 +65,31 @@ sudo ./install.sh --domain hub.example.com --edge external   # behind a proxy yo
 
 In a Proxmox VE container, `deploy/proxmox/hub-up.sh` runs it for you (`deploy/proxmox/README.md`).
 
+### The hub's site
+
+What the hub's pages say and look like (its name, copy, colours, pictures, the sign-in email
+and the name AI clients see) is its site, a directory (`crates/hub/README.md`, "The site"):
+
+```bash
+sudo ./install.sh --domain hub.example.com --site /srv/hub-site    # install with it
+sudo ./install.sh --site /srv/hub-site --site-only                 # later: the site alone
+sudo ./install.sh --domain hub.example.com --no-site               # back to the built-in one
+```
+
+`--site DIR` copies DIR beside the live site, readable by the hub's unprivileged user, and
+checks it with the hub image itself (`devagotchi hub check-site`). One that does not check
+out is refused with what is wrong and where, and never reaches the hub. One that does goes
+into `site/` under `--dir` (changed in place, so the running container sees it), and `.env`
+names it in `DEVAGOTCHI_SITE_DIR`. A re-run without `--site` keeps it. `--site-only` puts a
+site in place on a hub already installed and touches nothing else; `--no-site` goes back to
+the site built into the image.
+
+The hub follows the directory: edit a file in `site/` (or put a new site in with
+`--site-only`) and it is served within a few seconds once it checks out, with no rebuild and
+no restart. `docker compose up -d hub` applies it too, and picks up a changed
+`DEVAGOTCHI_SITE_DIR`. A change that does not check out is refused: the hub keeps serving
+the site it had and says why in `docker compose logs hub`.
+
 ### Rolling back across the tenant migration (0007)
 
 Migration 0007 (increment 60) moves the hub's tables into the `devagotchi` schema, renames
@@ -168,14 +193,14 @@ Everything is in `.env`; each has a default (`.env.example` lists them).
 | `DEVAGOTCHI_HUB_EMAIL` | `null` | The email link's mail server, JSON as `auth.email` takes it; `install.sh` writes it from `--email-from`. |
 | `DEVAGOTCHI_HUB_TRUSTED_PROXIES` | private and loopback | JSON list of addresses or CIDR ranges. |
 | `DEVAGOTCHI_GOOGLE_CLIENT_ID` … `DEVAGOTCHI_SMTP_PASSWORD` | (none) | The providers' ids and secrets, from the secret store. |
+| `DEVAGOTCHI_SITE_DIR` | (none: the built-in site) | The hub's site directory on this host, mounted read-only; `install.sh --site` sets it. |
 
 The defaults suit a 2 GB box. The hub's own settings (token lifetimes, the claim code's, limits) go in its config,
 `configs.hub` in `compose.yaml` (`crates/hub/README.md`).
 
-What the hub's pages say and look like (its name, copy, colours, pictures, the sign-in email
-and the name AI clients see) is its site, not its code: the image carries the built-in one,
-and a site directory the hub is pointed at (`DEVAGOTCHI_SITE_DIR`) replaces it
-(`crates/hub/README.md`, "The site").
+The hub's site is the directory `DEVAGOTCHI_SITE_DIR` names, mounted read-only; with it
+unset, the empty `site/` beside `compose.yaml` stands in and the hub serves the site built
+into the image ("The hub's site", above).
 
 ## Checking it
 
