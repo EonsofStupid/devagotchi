@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Renders the landing page's setup video and its poster into crates/hub/src/web/landing/,
-# where the hub embeds them (/assets/turnkey.mp4, /assets/turnkey-poster.png).
+# Renders the landing page's setup video and its poster into the built-in site, crates/hub/site/default/assets/,
+# where the hub embeds them (/assets/turnkey.mp4 and /assets/turnkey-poster.png, with their hash as ?v=).
 #
 #   apps/turnkey-video/render.sh            # CRF=14 by default: about 1.7 MB
 #
@@ -9,7 +9,7 @@
 # about 4 MB (1280x720, 30 fps): raise CRF if it grows past that, lower it while it fits.
 set -euo pipefail
 here="$(cd "$(dirname "$0")" && pwd)"
-out="$here/../../crates/hub/src/web/landing"
+out="$here/../../crates/hub/site/default/assets"
 cd "$here"
 npm ci --no-audit --no-fund
 browser="${REMOTION_BROWSER:-}"

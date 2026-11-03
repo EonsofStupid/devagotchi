@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use axum::{body::to_bytes, http::header, response::Response};
 
 use super::{
-    landing::{TOOLS, Term, page},
+    landing::{TOOLS, page},
     pages::{CSS, Front, home},
 };
 
@@ -78,7 +78,7 @@ fn a_claimed_hub_shows_the_whole_product_page() {
 
 #[test]
 fn ai_apps_connect_at_this_hubs_own_address_and_nothing_else_is_hard_coded() {
-    for front in [Front::Passkeys, Front::Shippin] {
+    for front in [Front::Passkeys, Front::Nomen] {
         let html = body(front);
         assert!(html.contains(&format!("<code>{URL}/mcp</code>")), "{html}");
         assert!(!html.contains("app.devagotchi.com"));
@@ -166,8 +166,8 @@ fn a_new_hub_leads_with_the_claim_and_offers_nothing_else() {
 }
 
 #[test]
-fn shippin_hubs_sign_in_with_shippin() {
-    let html = body(Front::Shippin);
+fn nomen_hubs_sign_in_with_their_providers_label() {
+    let html = body(Front::Nomen);
     assert!(html.contains("href=\"/auth/login?return_to=/account\">Sign in with Shippin</a>"));
     assert!(html.contains("A Shippin account is free."));
     assert!(!html.contains("/claim"));
@@ -175,7 +175,7 @@ fn shippin_hubs_sign_in_with_shippin() {
 
 #[tokio::test]
 async fn the_page_needs_nothing_the_plain_csp_refuses() {
-    for front in [Front::Unclaimed, Front::Passkeys, Front::Shippin, Front::Hosted] {
+    for front in [Front::Unclaimed, Front::Passkeys, Front::Nomen, Front::Hosted] {
         let (csp, html) = served(home(front, URL)).await;
         assert!(
             csp.starts_with("default-src 'none'; style-src 'self';") && !csp.contains("script-src"),
@@ -218,7 +218,7 @@ async fn the_page_needs_nothing_the_plain_csp_refuses() {
 
 #[test]
 fn every_term_carries_its_tooltip_and_every_tooltip_is_named_once() {
-    for front in [Front::Unclaimed, Front::Passkeys, Front::Shippin, Front::Hosted] {
+    for front in [Front::Unclaimed, Front::Passkeys, Front::Nomen, Front::Hosted] {
         let html = body(front);
         let terms: Vec<&str> = html.split("<span class=\"term\" ").skip(1).collect();
         assert!(!terms.is_empty());
@@ -238,11 +238,10 @@ fn every_term_carries_its_tooltip_and_every_tooltip_is_named_once() {
     }
     // Every glossary word is marked somewhere on the full page.
     let html = body(Front::Passkeys);
-    for term in Term::ALL {
+    for key in crate::site::builtin().landing.glossary.keys() {
         assert!(
-            html.contains(&format!("aria-describedby=\"tip-{}-", term.key())),
-            "{}",
-            term.key()
+            html.contains(&format!("aria-describedby=\"tip-{key}-")),
+            "{key}"
         );
     }
     // The new hub explains its claim code and the passkey, and still opens with the claim.
@@ -252,7 +251,7 @@ fn every_term_carries_its_tooltip_and_every_tooltip_is_named_once() {
 
 #[test]
 fn every_popup_opens_from_a_button_names_itself_and_closes() {
-    for front in [Front::Unclaimed, Front::Passkeys, Front::Shippin, Front::Hosted] {
+    for front in [Front::Unclaimed, Front::Passkeys, Front::Nomen, Front::Hosted] {
         let html = body(front);
         let popups: Vec<&str> = html.split("<div class=\"modal\" ").skip(1).collect();
         let mut ids = BTreeSet::new();
@@ -410,7 +409,7 @@ fn the_shell_stays_and_motion_is_optional_in_the_stylesheet() {
 
 #[test]
 fn the_video_plays_only_when_asked_and_every_id_is_unique() {
-    for front in [Front::Unclaimed, Front::Passkeys, Front::Shippin, Front::Hosted] {
+    for front in [Front::Unclaimed, Front::Passkeys, Front::Nomen, Front::Hosted] {
         let html = body(front);
         // In the hero (wide screens) and in the Watch it set up popup; click to play.
         let videos: Vec<&str> = html.split("<video ").skip(1).collect();

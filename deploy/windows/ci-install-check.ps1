@@ -122,7 +122,7 @@ for ($i = 0; $i -lt 300; $i++) {
     Start-Sleep -Milliseconds 100
     if ((Test-Path $joinLog) -and (Select-String -Path $joinLog -Pattern 'devagotchi hub ready:' -Quiet)) { break }
 }
-if (-not (Select-String -Path $joinLog -Pattern 'handing out Devagotchi ci-join' -Quiet)) { Get-Content $joinLog; throw 'the join hub did not take the downloads directory' }
+if (-not (Select-String -Path $joinLog -Pattern 'handing out build ci-join' -Quiet)) { Get-Content $joinLog; throw 'the join hub did not take the downloads directory' }
 $ErrorActionPreference = 'Continue'
 $code = "$(& $hubExe hub enroll --state-dir $joinState --device ci-joined 2>$null)".Trim()
 $ErrorActionPreference = 'Stop'

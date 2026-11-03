@@ -172,6 +172,11 @@ Everything is in `.env`; each has a default (`.env.example` lists them).
 The defaults suit a 2 GB box. The hub's own settings (token lifetimes, the claim code's, limits) go in its config,
 `configs.hub` in `compose.yaml` (`crates/hub/README.md`).
 
+What the hub's pages say and look like (its name, copy, colours, pictures, the sign-in email
+and the name AI clients see) is its site, not its code: the image carries the built-in one,
+and a site directory the hub is pointed at (`DEVAGOTCHI_SITE_DIR`) replaces it
+(`crates/hub/README.md`, "The site").
+
 ## Checking it
 
 ```bash

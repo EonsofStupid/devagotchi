@@ -1,5 +1,5 @@
-//! Sign in with Google, GitHub or an OpenID Connect provider (Sign in with Shippin is Nomen
-//! as one), on a hub with its own accounts: the OAuth 2.0 authorization code flow with PKCE
+//! Sign in with Google, GitHub or an OpenID Connect provider (Nomen is one), on a hub with
+//! its own accounts: the OAuth 2.0 authorization code flow with PKCE
 //! (RFC 7636), the hub a confidential client of the provider. What the provider proves
 //! becomes a linked sign-in of an account (`accounts/identities.rs`), so every way in
 //! reaches the same account.
@@ -137,17 +137,20 @@ impl Providers {
         self.list.iter().find(|p| p.config.name() == name)
     }
 
-    /// The buttons a sign-in page offers: each provider's path and label.
-    pub fn buttons(&self, return_to: &str, link: bool) -> String {
-        self.list
-            .iter()
+    /// The buttons a sign-in page offers: each provider's path and label, in the site's
+    /// order (`sign_in.order`) and with its label (`sign_in.labels`) over the config's.
+    pub fn buttons(&self, site: &crate::site::Site, return_to: &str, link: bool) -> String {
+        let mut ordered: Vec<&Provider> = self.list.iter().collect();
+        ordered.sort_by_key(|provider| site.sign_in_rank(provider.config.name()));
+        ordered
+            .into_iter()
             .map(|provider| {
                 format!(
                     "<a class=\"button\" href=\"/auth/provider/{}?return_to={}{}\">Continue with {}</a> ",
                     pages::escape(provider.config.name()),
                     pages::escape(&encode(return_to)),
                     if link { "&amp;link=1" } else { "" },
-                    pages::escape(&provider.config.label())
+                    pages::escape(site.label(provider.config.name(), &provider.config.label()))
                 )
             })
             .collect()

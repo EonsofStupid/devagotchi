@@ -1,0 +1,10 @@
+{
+  "email": {
+    "subject": "Your {product} link",
+    "body": "Sign in to {product}: {link}"
+  },
+  "welcome": {
+    "title": "Welcome to {product}",
+    "body": "Open {hub}/approvals on your phone."
+  }
+}

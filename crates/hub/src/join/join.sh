@@ -1,5 +1,5 @@
 #!/bin/sh
-# Devagotchi: join this Linux machine to @HUB@ as "@DEVICE@".
+# devagotchi: join this Linux machine to @HUB@ as "@DEVICE@".
 # Served by the hub for one join code; the code works once and expires 15 minutes after it
 # was issued. Every download is checked against the checksum written here by the hub.
 # Extra arguments go to install-devagotchi.sh: curl -fsSL <url> | sudo sh -s -- --workspace /srv/work
@@ -16,7 +16,7 @@ done
 case "$(uname -m)" in
     x86_64|amd64) target=x86_64-unknown-linux-gnu; sum='@SHA_LINUX_X86_64@' ;;
     aarch64|arm64) target=aarch64-unknown-linux-gnu; sum='@SHA_LINUX_AARCH64@' ;;
-    *) say "no Devagotchi build for $(uname -m)"; exit 1 ;;
+    *) say "no devagotchi build for $(uname -m)"; exit 1 ;;
 esac
 [ -n "$sum" ] || { say "$hub has no $target build"; exit 1; }
 work=$(mktemp -d)
@@ -29,7 +29,7 @@ archive=devagotchi-$target.tar.xz
 get install-devagotchi.sh '@SHA_INSTALLER@'
 get "$archive" "$sum"
 echo "$sum  $archive" > "$work/$archive.sha256"
-say "installing Devagotchi $version and joining $hub as $device"
+say "installing devagotchi $version and joining $hub as $device"
 printf '%s\n' '@CODE@' | bash "$work/install-devagotchi.sh" --version "$version" --artifact-dir "$work" \
     --hub "$hub" --device "$device" --enroll --exec-policy account "$@"
 say "done: $device is on $hub. Tell your AI to use it by that name."

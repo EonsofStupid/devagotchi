@@ -206,7 +206,7 @@ fn compose(state: &AppState, code: &str) -> Response {
         StatusCode::OK,
         format!(
             "# Same single-use join code as the Linux one-liner.\n\
-             # A host that should run Devagotchi under systemd should use that one-liner.\n\
+             # A host that should run devagotchi under systemd should use that one-liner.\n\
              services:\n  enroll:\n    image: docker.io/library/debian:stable-slim\n    network_mode: host\n    volumes:\n      - devagotchi-state:/var/lib/devagotchi\n    command:\n      - sh\n      - -c\n      - apt-get update && apt-get install -y curl ca-certificates && curl -fsSL {hub}/join/{code} | sh\nvolumes:\n  devagotchi-state: {{}}\n"
         ),
     )

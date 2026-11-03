@@ -390,7 +390,7 @@ pub async fn authorize(
     };
     let who = match &person {
         Some(person) => pages::escape(person.name.as_deref().unwrap_or(&person.id)),
-        None => "your new Devagotchi account".to_string(),
+        None => format!("your new {} account", pages::escape(state.hub.config.site().name())),
     };
     let body = format!(
         "<h1>Connect {app}?</h1>\

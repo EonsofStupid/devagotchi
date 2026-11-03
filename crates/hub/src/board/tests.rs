@@ -1431,7 +1431,7 @@ mod bound {
                 assert_eq!(claimed["holder"], "claude");
                 assert!(
                     open.iter()
-                        .any(|t| t["title"] == crate::board::welcome::TITLE
+                        .any(|t| t["title"] == crate::site::builtin().welcome("").0
                             && t["state"] == "needs_attention"),
                     "a new account board starts with the getting-started steps (B12): {open:?}"
                 );
@@ -1489,16 +1489,17 @@ mod bound {
 fn a_new_board_starts_with_the_getting_started_steps_once() {
     let f = fixture();
     let hub = Actor::agent("devagotchi");
+    let (title, steps) = crate::site::builtin().welcome("https://app.devagotchi.com/");
     let id = f
         .board
-        .welcome_if_new(&hub, "https://app.devagotchi.com/")
+        .welcome_if_new(&hub, &title, &steps)
         .expect("welcome")
         .expect("a new board is welcomed");
     let tickets = f.board.list(&Filter::default()).expect("list");
     assert_eq!(tickets.len(), 1);
     let welcome = &tickets[0];
     assert_eq!(welcome.id, id);
-    assert_eq!(welcome.title, super::welcome::TITLE);
+    assert_eq!(welcome.title, title);
     assert_eq!(welcome.state, "needs_attention");
     assert_eq!(welcome.labels, vec![super::welcome::LABEL.to_string()]);
     assert!(
@@ -1525,13 +1526,13 @@ fn a_new_board_starts_with_the_getting_started_steps_once() {
 
     // Once only, and never on a board that has tickets.
     assert_eq!(
-        f.board.welcome_if_new(&hub, "https://x").expect("again"),
+        f.board.welcome_if_new(&hub, &title, &steps).expect("again"),
         None
     );
     let used = fixture();
     used.new_ticket(&claude, "real work");
     assert_eq!(
-        used.board.welcome_if_new(&hub, "https://x").expect("used"),
+        used.board.welcome_if_new(&hub, &title, &steps).expect("used"),
         None
     );
     assert_eq!(used.board.list(&Filter::default()).expect("list").len(), 1);

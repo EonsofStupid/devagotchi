@@ -49,6 +49,8 @@ mod claim_tests;
 #[cfg(test)]
 mod passkey_tests;
 #[cfg(test)]
+mod site_tests;
+#[cfg(test)]
 mod tests;
 
 use std::{
@@ -71,10 +73,12 @@ pub(crate) fn utc(secs: u64) -> String {
 pub use passkeys::HubSignIn;
 pub use providers::Providers;
 pub use routes::router;
+pub(crate) use landing::render as landing_for;
 
 /// Every web page's top bar says whether the browser is signed in: the account and a
 /// one-tap Sign out, or Sign in back to this page (`pages::Bar`). On a hub waiting to be
-/// claimed, nobody can sign in, so it offers nothing.
+/// claimed, nobody can sign in, so it offers nothing. The page is drawn with the hub's site
+/// (`pages::SITE`).
 pub async fn bar(
     axum::extract::State(state): axum::extract::State<crate::AppState>,
     request: axum::extract::Request,
@@ -109,7 +113,10 @@ pub async fn bar(
             .to_string(),
         }
     };
-    pages::BAR.scope(bar, next.run(request)).await
+    let site = state.hub.config.site();
+    pages::BAR
+        .scope(bar, pages::SITE.scope(site, next.run(request)))
+        .await
 }
 
 /// The longest a browser session lasts when Nomen gives no refresh token, however long

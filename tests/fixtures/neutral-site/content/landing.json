@@ -1,0 +1,264 @@
+{
+  "title": {
+    "unclaimed": "A new {product}",
+    "default": "{tagline}"
+  },
+  "rail_label": "Sections",
+  "sign_in": {
+    "default": "Log in",
+    "nomen": "Log in with {label:nomen}"
+  },
+  "hero": {
+    "rail": "Start",
+    "title": "Your assistant, on your computers, with you in charge.",
+    "status": {
+      "unclaimed": "Nobody has this relay yet"
+    },
+    "lead": {
+      "unclaimed": "Claim it to become its {term:owner}.",
+      "default": "{product} lets your assistant work on the computers you choose."
+    },
+    "actions": {
+      "unclaimed": [
+        {
+          "label": "Claim it",
+          "href": "/claim",
+          "primary": true
+        }
+      ],
+      "hosted": [
+        {
+          "label": "Begin",
+          "href": "#connect",
+          "primary": true
+        }
+      ],
+      "default": [
+        {
+          "label": "{sign_in}",
+          "href": "{sign_in_url}",
+          "primary": true
+        },
+        {
+          "label": "Plans",
+          "href": "#plans"
+        }
+      ]
+    },
+    "note": {
+      "unclaimed": "{pop:claim|What claiming does}",
+      "default": "Run by {operator}."
+    },
+    "video_label": "",
+    "video_caption": ""
+  },
+  "claim": {
+    "title": "Claim it",
+    "steps": [
+      {
+        "title": "Read the log",
+        "text": "It prints a link.",
+        "terminal": [
+          "docker compose logs relay   # the link"
+        ]
+      }
+    ],
+    "meta": ""
+  },
+  "how": {
+    "rail": "How",
+    "title": "How it works",
+    "steps": [
+      {
+        "title": "Add a computer",
+        "text": "One line on it."
+      },
+      {
+        "title": "Connect your assistant",
+        "text": {
+          "default": "At {mcp}.",
+          "nomen": "At {mcp}, with {label:nomen}."
+        }
+      }
+    ]
+  },
+  "compare": {
+    "rail": "Compare",
+    "title": "Compared",
+    "intro": "",
+    "what": "What",
+    "them": "Others",
+    "us": "{product}",
+    "evidence_for": "why",
+    "rows": [],
+    "source_note": "",
+    "footnote": ""
+  },
+  "features": {
+    "rail": "Features",
+    "title": "What it does",
+    "pillars": [
+      {
+        "title": "Safe",
+        "items": [
+          {
+            "term": "Approvals",
+            "text": "You say yes first."
+          }
+        ]
+      }
+    ]
+  },
+  "plans": {
+    "rail": "Plans",
+    "title": "Plans",
+    "intro": "Pick one.",
+    "limits": {
+      "projects": {
+        "one": "{n} project",
+        "other": "{n} projects",
+        "unlimited": "Every project"
+      },
+      "machines": {
+        "one": "{n} computer",
+        "other": "{n} computers",
+        "unlimited": "Every computer"
+      },
+      "clients": {
+        "one": "{n} assistant",
+        "other": "{n} assistants",
+        "unlimited": "Every assistant"
+      }
+    }
+  },
+  "services": {
+    "rail": "Services",
+    "title": "Services",
+    "intro": "Help when you want it."
+  },
+  "connect": {
+    "rail": "Connect",
+    "title": "Connect",
+    "intro": "Point your assistant at this address:",
+    "clients": [
+      {
+        "term": "Any assistant",
+        "text": "Add it as a remote {term:mcp} server."
+      }
+    ],
+    "meta": "{pop:tools|Its tools}"
+  },
+  "self_host": {
+    "rail": "Run it",
+    "title": "Run it yourself",
+    "intro": "On any Linux server.",
+    "terminal": [
+      "# get it",
+      "git clone {link:source}"
+    ],
+    "facts": [
+      "Claim it with its {term:owner} link."
+    ],
+    "hosted": ""
+  },
+  "next": {
+    "rail": "Next",
+    "title": "Next",
+    "intro": "",
+    "items": [
+      "More computers."
+    ]
+  },
+  "faq": {
+    "rail": "FAQ",
+    "title": "FAQ",
+    "questions": [
+      {
+        "q": "Who runs {product}?",
+        "a": "{operator}. Status: [{link:status}]({link:status})."
+      }
+    ],
+    "meta": ""
+  },
+  "closing": {
+    "rail": "Go",
+    "title": "Try it",
+    "lead": "Sign in or run your own.",
+    "actions": [
+      {
+        "label": "{sign_in}",
+        "href": "{sign_in_url}",
+        "primary": true
+      }
+    ]
+  },
+  "footer": {
+    "label": "About",
+    "links": [
+      {
+        "label": "Docs",
+        "href": "/docs"
+      },
+      {
+        "label": "Privacy",
+        "href": "/privacy"
+      },
+      {
+        "label": "Terms",
+        "href": "/terms"
+      },
+      {
+        "label": "Support",
+        "href": "/support"
+      },
+      {
+        "label": "Code",
+        "href": "{link:source}"
+      }
+    ]
+  },
+  "popups": {
+    "claim": {
+      "title": "What claiming does",
+      "steps": [
+        {
+          "term": "You get a link.",
+          "text": "Open it."
+        }
+      ],
+      "paragraphs": [],
+      "source": ""
+    },
+    "tools": {
+      "title": "Its tools",
+      "intro": "What your assistant can call."
+    },
+    "watch": {
+      "title": "Watch",
+      "button": "Watch",
+      "caption": "",
+      "steps": []
+    }
+  },
+  "glossary": {
+    "owner": {
+      "word": "owner",
+      "definition": "Whoever claimed it."
+    },
+    "mcp": {
+      "word": "MCP",
+      "definition": "How assistants call tools."
+    }
+  },
+  "custom": {
+    "why": {
+      "rail": "Why",
+      "title": "Why {product}",
+      "intro": "Because your computers are yours.",
+      "items": [
+        "No open ports.",
+        "Every call recorded."
+      ]
+    }
+  }
+}

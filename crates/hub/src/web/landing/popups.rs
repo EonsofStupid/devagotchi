@@ -1,36 +1,72 @@
 //! The landing page's popups beside the comparison's evidence (`compare.rs`): how claiming
 //! works, every tool the AI gets, and the setup walkthrough. Each is a `popover` opened by a
-//! `popovertarget` button: no script, light dismiss, Escape closes it.
+//! `popovertarget` button: no script, light dismiss, Escape closes it. A popup is on the
+//! page only when something on it opens it.
 
-use super::modal;
+use super::{Ctx, modal, video};
+
+/// The popups something on this page opens, in the order they close the page.
+pub fn all(ctx: &Ctx) -> String {
+    let mut out = String::new();
+    if ctx.opens("claim") {
+        out.push_str(&claim(ctx));
+    }
+    if ctx.opens("tools") {
+        out.push_str(&tools(ctx));
+    }
+    if ctx.opens("watch") {
+        match video(ctx) {
+            Some(video) => out.push_str(&watch(ctx, &video)),
+            None => ctx
+                .problem("{pop:watch} opens the setup video, and site.json names no assets.video"),
+        }
+    }
+    out
+}
+
+/// `<li><strong>Title.</strong> Text</li>` for each step.
+fn steps(ctx: &Ctx, steps: &[crate::site::Item]) -> String {
+    let items: String = steps
+        .iter()
+        .map(|step| {
+            let text = step
+                .text
+                .pick("default")
+                .map(|t| ctx.inline(t))
+                .unwrap_or_default();
+            let text = if text.is_empty() {
+                text
+            } else {
+                format!(" {text}")
+            };
+            format!("<li><strong>{}</strong>{text}</li>", ctx.inline(&step.term))
+        })
+        .collect();
+    format!("<ol class=\"modal-steps\">{items}</ol>")
+}
 
 /// How a hub with no owner is claimed (`accounts/claim.rs`, `web/claim.rs`), in plain words.
-/// Never names the claim page's path: a claimed hub's page offers no claim.
-pub fn claim() -> String {
+fn claim(ctx: &Ctx) -> String {
+    let copy = &ctx.site.landing.popups.claim;
+    let paragraphs: String = copy
+        .paragraphs
+        .iter()
+        .map(|p| format!("<p>{}</p>", ctx.inline(p)))
+        .collect();
+    let source = if copy.source.is_empty() {
+        String::new()
+    } else {
+        format!("<p class=\"modal-source\">{}</p>", ctx.inline(&copy.source))
+    };
     modal(
         "m-claim",
-        "How claiming works",
-        "<ol class=\"modal-steps\">\
-<li><strong>The hub prints a claim link.</strong> A hub with no owner prints one to its own log \
-each time it starts. Reading that log takes the server, or the platform its container runs on, \
-so someone who only found the address cannot claim it.</li>\
-<li><strong>Open it where your passkey will live.</strong> On your phone or your computer. The \
-code rides after the <code>#</code> in the link, which a browser never sends, so it stays out of \
-every request and every log. You can also type the code in.</li>\
-<li><strong>Name the owner and make the passkey.</strong> One button does both, and you are \
-signed in as the hub's owner.</li>\
-<li><strong>The code is gone.</strong> It is deleted in the same step that stores your passkey, \
-and from then on the hub refuses every claim.</li></ol>\
-<p>The code is 120 random bits, and the hub keeps only its SHA-256. It works for a day; \
-restarting the hub prints a new one, and only the newest works. A cancelled passkey prompt is \
-retried with the same code.</p>\
-<p class=\"modal-source\">After that: add your machines from your account, and approve each AI \
-app once with your passkey. The rest is in the <a href=\"/docs\">docs</a>.</p>",
+        &ctx.inline(&copy.title),
+        &format!("{}{paragraphs}{source}", steps(ctx, &copy.steps)),
     )
 }
 
-/// The hub's MCP tools, grouped by what they are for. A test holds this to the tools the hub
-/// serves (`hub::tool_names`).
+/// The hub's MCP tools, grouped by what they are for. They are the hub's own, so they stay
+/// with its code: a test holds this to the tools the hub serves (`hub::tool_names`).
 pub const TOOLS: [(&str, &[(&[&str], &str)]); 5] = [
     (
         "Find your machines",
@@ -131,7 +167,8 @@ pub const TOOLS: [(&str, &[(&[&str], &str)]); 5] = [
     ),
 ];
 
-pub fn tools() -> String {
+fn tools(ctx: &Ctx) -> String {
+    let copy = &ctx.site.landing.popups.tools;
     let groups: String = TOOLS
         .iter()
         .map(|(group, tools)| {
@@ -151,33 +188,22 @@ pub fn tools() -> String {
         .collect();
     modal(
         "m-tools",
-        "What the AI can do",
-        &format!(
-            "<p>Every tool your AI gets from this hub. Each machine still decides what may run \
-there: only the programs you granted, or anything its own account can.</p>{groups}"
-        ),
+        &ctx.inline(&copy.title),
+        &format!("<p>{}</p>{groups}", ctx.inline(&copy.intro)),
     )
 }
 
-/// The setup video, and the same steps as text: what the video shows. Only what is built.
-pub fn watch(video: &str) -> String {
+/// The setup video, and the same steps as text: what the video shows.
+fn watch(ctx: &Ctx, video: &str) -> String {
+    let copy = &ctx.site.landing.popups.watch;
     modal(
         "m-watch",
-        "Watch it set up",
+        &ctx.inline(&copy.title),
         &format!(
             "<div class=\"video-frame\">{video}</div>\
-<p class=\"modal-source\">57 seconds, captions on screen, no sound. The same steps, in words:</p>\
-<ol class=\"modal-steps\">\
-<li><strong>One command on a server.</strong> <code>docker compose up -d</code>, or \
-<code>install.sh</code> on Debian and Ubuntu.</li>\
-<li><strong>The log prints a claim link.</strong></li>\
-<li><strong>Your phone opens it.</strong> Name yourself, make your passkey, and you are signed \
-in as the owner.</li>\
-<li><strong>Claude connects.</strong> Add a custom connector at your hub's MCP address, approve \
-it on the hub's consent page, and it is connected.</li>\
-<li><strong>Add a machine.</strong> One line on that machine, and it shows up online.</li>\
-<li><strong>Your AI asks first.</strong> It asks to restart a service; the approval reaches your \
-phone; you approve, and it is done.</li></ol>"
+<p class=\"modal-source\">{}</p>{}",
+            ctx.inline(&copy.caption),
+            steps(ctx, &copy.steps)
         ),
     )
 }

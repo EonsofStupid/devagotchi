@@ -1,6 +1,6 @@
-//! The setup video and its poster (`media.rs`): served whole with `Accept-Ranges`, one byte
-//! range as `206`, `416` past the end, `304` for the ETag the browser holds, and cached for a
-//! year under URLs that carry their content hash.
+//! The site's files (`media.rs`), here the built-in setup video and its poster: served whole
+//! with `Accept-Ranges`, one byte range as `206`, `416` past the end, `304` for the ETag the
+//! browser holds, and cached for a year under URLs that carry their content hash.
 
 use axum::{
     body::to_bytes,
@@ -8,7 +8,22 @@ use axum::{
     response::Response,
 };
 
-use super::media::{POSTER, Ranged, VIDEO, parse, poster, poster_url, version, video, video_url};
+use super::media::{Ranged, parse, serve};
+use crate::site::Asset;
+
+fn asset(name: &str) -> Asset {
+    crate::site::builtin().assets[name].clone()
+}
+
+async fn video(headers: HeaderMap) -> Response {
+    let video = asset("turnkey.mp4");
+    serve(video.bytes.clone(), video.mime, &video.etag, &headers)
+}
+
+async fn poster(headers: HeaderMap) -> Response {
+    let poster = asset("turnkey-poster.png");
+    serve(poster.bytes.clone(), poster.mime, &poster.etag, &headers)
+}
 
 fn with(pairs: &[(header::HeaderName, &str)]) -> HeaderMap {
     let mut headers = HeaderMap::new();
@@ -31,15 +46,27 @@ async fn body(response: Response) -> Vec<u8> {
 
 #[test]
 fn the_files_are_an_mp4_and_a_png_small_enough_to_build_in() {
-    assert_eq!(&VIDEO[4..8], b"ftyp", "an MP4");
-    assert!(VIDEO.len() <= 4_500_000, "{} bytes", VIDEO.len());
-    assert_eq!(&POSTER[..8], b"\x89PNG\r\n\x1a\n");
-    assert!(POSTER.len() <= 600_000, "{} bytes", POSTER.len());
-    assert_eq!(version().len(), 16);
-    assert_eq!(video_url(), format!("/assets/turnkey.mp4?v={}", version()));
+    let (video, poster) = (asset("turnkey.mp4"), asset("turnkey-poster.png"));
+    assert_eq!(&video.bytes[4..8], b"ftyp", "an MP4");
+    assert!(
+        video.bytes.len() <= 4_500_000,
+        "{} bytes",
+        video.bytes.len()
+    );
+    assert_eq!(&poster.bytes[..8], b"\x89PNG\r\n\x1a\n");
+    assert!(
+        poster.bytes.len() <= 600_000,
+        "{} bytes",
+        poster.bytes.len()
+    );
+    assert_eq!(video.version.len(), 16);
     assert_eq!(
-        poster_url(),
-        format!("/assets/turnkey-poster.png?v={}", version())
+        video.url(),
+        format!("/assets/turnkey.mp4?v={}", video.version)
+    );
+    assert_eq!(
+        poster.url(),
+        format!("/assets/turnkey-poster.png?v={}", poster.version)
     );
 }
 
@@ -62,7 +89,7 @@ async fn the_whole_video_says_it_takes_ranges_and_is_cached_by_its_hash() {
         etag.starts_with('"') && etag.ends_with('"') && etag.len() == 34,
         "{etag}"
     );
-    assert_eq!(body(response).await, VIDEO);
+    assert_eq!(body(response).await, asset("turnkey.mp4").bytes);
 
     // The browser's copy is current: nothing to send.
     let again = video(with(&[(header::IF_NONE_MATCH, &etag)])).await;
@@ -72,7 +99,8 @@ async fn the_whole_video_says_it_takes_ranges_and_is_cached_by_its_hash() {
 
 #[tokio::test]
 async fn safari_gets_the_byte_ranges_it_asks_for() {
-    let total = VIDEO.len();
+    let video_bytes = asset("turnkey.mp4").bytes;
+    let total = video_bytes.len();
     // Safari's first probe: two bytes.
     let probe = video(with(&[(header::RANGE, "bytes=0-1")])).await;
     assert_eq!(probe.status(), StatusCode::PARTIAL_CONTENT);
@@ -81,7 +109,7 @@ async fn safari_gets_the_byte_ranges_it_asks_for() {
         Some(format!("bytes 0-1/{total}").as_str())
     );
     assert_eq!(get(&probe, header::CONTENT_TYPE), Some("video/mp4"));
-    assert_eq!(body(probe).await, &VIDEO[..2]);
+    assert_eq!(body(probe).await, &video_bytes[..2]);
 
     // From an offset to the end, and the last bytes.
     let rest = video(with(&[(header::RANGE, "bytes=1000-")])).await;
@@ -90,9 +118,9 @@ async fn safari_gets_the_byte_ranges_it_asks_for() {
         get(&rest, header::CONTENT_RANGE),
         Some(format!("bytes 1000-{}/{total}", total - 1).as_str())
     );
-    assert_eq!(body(rest).await, &VIDEO[1000..]);
+    assert_eq!(body(rest).await, &video_bytes[1000..]);
     let tail = video(with(&[(header::RANGE, "bytes=-500")])).await;
-    assert_eq!(body(tail).await, &VIDEO[total - 500..]);
+    assert_eq!(body(tail).await, &video_bytes[total - 500..]);
 
     // An end past the file is cut to the file.
     let over = video(with(&[(
@@ -117,7 +145,7 @@ async fn safari_gets_the_byte_ranges_it_asks_for() {
 
 #[tokio::test]
 async fn a_range_it_cannot_serve_or_one_for_an_old_version_gets_the_whole_file() {
-    let total = VIDEO.len();
+    let total = asset("turnkey.mp4").bytes.len();
     for range in ["bytes=0-1,4-5", "items=0-1", "bytes=9-3", "bytes=x-"] {
         let response = video(with(&[(header::RANGE, range)])).await;
         assert_eq!(response.status(), StatusCode::OK, "{range}");
@@ -162,5 +190,5 @@ async fn the_poster_is_a_png_under_the_same_rules() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(get(&response, header::CONTENT_TYPE), Some("image/png"));
     assert!(get(&response, header::ETAG).is_some());
-    assert_eq!(body(response).await, POSTER);
+    assert_eq!(body(response).await, asset("turnkey-poster.png").bytes);
 }

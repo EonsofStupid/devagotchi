@@ -1,17 +1,18 @@
 // The hub's service worker: shows approval notifications and opens the approval when tapped.
+// The default title and the icon below are filled in from the hub's site when it serves this file.
 // It caches nothing; the approvals page is always fetched fresh.
 self.addEventListener("install", function () { self.skipWaiting(); });
 self.addEventListener("activate", function (event) { event.waitUntil(self.clients.claim()); });
 self.addEventListener("push", function (event) {
   var data = {};
   try { data = event.data ? event.data.json() : {}; } catch (e) { data = {}; }
-  event.waitUntil(self.registration.showNotification(data.title || "Devagotchi", {
+  event.waitUntil(self.registration.showNotification(data.title || @TITLE@, {
     body: data.body || "Something is waiting for your approval.",
     data: { url: data.url || "/approvals" },
     tag: data.tag || "devagotchi-approval",
     renotify: true,
     requireInteraction: true,
-    icon: "/assets/icon.svg",
+    icon: @ICON@,
   }));
 });
 // The push service replaced this phone's subscription: subscribe again with the same key and

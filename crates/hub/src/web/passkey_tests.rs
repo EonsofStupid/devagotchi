@@ -38,6 +38,15 @@ pub(super) async fn world() -> World {
 
 /// A hub whose config names `owner`, as the Texas hub's names its Nomen subject.
 pub(super) async fn world_owned_by(owner: Option<&str>) -> World {
+    world_configured(owner, None).await
+}
+
+/// A hub drawn with the site directory `site` (`site.dir`).
+pub(super) async fn world_with_site(site: &std::path::Path) -> World {
+    world_configured(None, Some(site)).await
+}
+
+async fn world_configured(owner: Option<&str>, site: Option<&std::path::Path>) -> World {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let dir = tempfile::tempdir().unwrap();
@@ -53,6 +62,9 @@ pub(super) async fn world_owned_by(owner: Option<&str>) -> World {
                 });
                 if let Some(owner) = owner {
                     value["owner"] = owner.into();
+                }
+                if let Some(site) = site {
+                    value["site"] = json!({ "dir": site });
                 }
                 value
             }
@@ -162,7 +174,7 @@ impl World {
     }
 
     /// The owner's link, used: returns the session cookie.
-    async fn make_passkey(&self, phone: &Authenticator, link: &str) -> String {
+    pub(super) async fn make_passkey(&self, phone: &Authenticator, link: &str) -> String {
         let (challenge, jar, options) = self
             .options("/passkey/register/options", json!({ "link": link }))
             .await;

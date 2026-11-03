@@ -59,14 +59,13 @@ pub fn router(hub_authorization: bool) -> Router<AppState> {
         .route("/sw.js", get(notify::service_worker))
         .route("/manifest.webmanifest", get(notify::manifest))
         .route("/assets/push.js", get(notify::script))
-        .route("/assets/icon.svg", get(notify::icon))
         .route("/docs", get(public::docs))
         .route("/privacy", get(public::privacy))
         .route("/terms", get(public::terms))
         .route("/support", get(public::support))
         .route("/assets/hub.css", get(css))
-        .route("/assets/turnkey.mp4", get(super::media::video))
-        .route("/assets/turnkey-poster.png", get(super::media::poster));
+        // The site's own files: its logo, icon, pictures, video and fonts.
+        .route("/assets/{file}", get(super::media::asset));
     if !hub_authorization {
         return router;
     }
@@ -186,8 +185,8 @@ async fn nomen_who(state: &AppState, web: &WebLogin, headers: &HeaderMap) -> Who
 }
 
 /// `/`: the landing page. A hub that can be claimed offers only the claim; otherwise it says
-/// what Devagotchi is and where AIs connect, and offers one Sign in instead of sending a
-/// stranger straight to an identity provider. Signed in, it is your account.
+/// what the site's product is and where AIs connect, and offers one Sign in instead of
+/// sending a stranger straight to an identity provider. Signed in, it is your account.
 async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let public_url = state.hub.config.public_url.clone();
     if let Some(hub) = &state.passkeys
@@ -211,23 +210,35 @@ async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if signed_in(&state, &headers).await {
         see_other("/account", &[])
     } else if state.web.is_some() {
-        pages::home(pages::Front::Shippin, &public_url)
+        pages::home(pages::Front::Nomen, &public_url)
     } else {
         see_other("/docs", &[])
     }
 }
 
-async fn css() -> Response {
-    let mut response = pages::CSS.into_response();
+/// The site's stylesheet. Revalidated on every use (a `304` while it is the same), so a
+/// site read again restyles every page at once.
+async fn css(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let site = state.hub.config.site();
+    let etag = site.stylesheet_etag();
+    let current = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.split(',').any(|tag| tag.trim() == etag));
+    let mut response = if current {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        site.stylesheet().to_string().into_response()
+    };
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/css; charset=utf-8"),
     );
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=3600"),
-    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    if let Ok(value) = HeaderValue::from_str(etag) {
+        headers.insert(header::ETAG, value);
+    }
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -270,7 +281,10 @@ async fn callback(
         return pages::message(
             StatusCode::BAD_REQUEST,
             "Sign-in did not finish",
-            &format!("Shippin ended the sign-in ({error})."),
+            &format!(
+                "{} ended the sign-in ({error}).",
+                state.hub.config.site().label("nomen", "Nomen")
+            ),
             start_again,
         );
     }
@@ -310,7 +324,10 @@ async fn callback(
             return pages::message(
                 StatusCode::FORBIDDEN,
                 "This sign-in is not accepted here",
-                "Your Shippin account signed in, but this hub does not accept that sign-in. Ask the hub's owner.",
+                &format!(
+                    "Your {} account signed in, but this hub does not accept that sign-in. Ask the hub's owner.",
+                    state.hub.config.site().label("nomen", "Nomen")
+                ),
                 None,
             );
         }
@@ -399,15 +416,23 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
 }
 
 async fn signed_out(State(state): State<AppState>) -> Response {
+    let site = state.hub.config.site();
     let text = if state.passkeys.is_some() {
-        "You are signed out of this Devagotchi hub. Your passkey stays on your device for next time."
+        format!(
+            "You are signed out of this {} hub. Your passkey stays on your device for next time.",
+            site.name()
+        )
     } else {
-        "You are signed out of this Devagotchi hub. Your Shippin account stays signed in at Shippin."
+        let provider = site.label("nomen", "Nomen");
+        format!(
+            "You are signed out of this {} hub. Your {provider} account stays signed in at {provider}.",
+            site.name()
+        )
     };
     pages::message(
         StatusCode::OK,
         "You are signed out",
-        text,
+        &text,
         Some(("/auth/login", "Sign in again")),
     )
 }

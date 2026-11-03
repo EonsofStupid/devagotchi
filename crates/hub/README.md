@@ -49,6 +49,80 @@ terminates TLS at `public_url`, which is also the RFC 9728 resource identifier. 
 either local (`socket`: the hub must run as the same OS user, since the IPC refuses
 endpoints owned by anyone else) or linked (`"link": true`: a machine that dials out to `/link`).
 
+## The site
+
+Every word, name, link, colour and picture the hub shows comes from its **site**, not its
+code: the landing page and the public pages (`/docs`, `/privacy`, `/terms`, `/support`), the
+name in the bar and in every page's title, the sign-in email, the passkey prompt, the
+installed app's name and icon, the board's getting-started ticket, and the MCP server's name
+and instructions every AI client is given. Design tokens and content are kept apart from the
+code that lays them out, so one hub binary serves any brand.
+
+With no site configured the hub serves the built-in one, compiled in from
+[`site/default/`](site/default/). To serve your own, point `site.dir` at a directory, or set
+`DEVAGOTCHI_SITE_DIR` (it wins over the file):
+
+```json
+"site": { "dir": "/etc/devagotchi/site" }
+```
+
+The directory holds:
+
+| File | What it holds |
+|---|---|
+| `site.json` | **Required.** `product` (name, short name, tagline, description, marketing domain), `operator` (the legal name the privacy policy and terms use, contact, support email), `links` (public links by name; `hosted_hub` is the hub `devagotchi login` signs in at by default), `sign_in` (`order`: the order of the sign-in buttons by provider name; `labels`: what each provider is called, `nomen` for Nomen sign-in), `landing.sections` (the landing page's sections in order, each `"on": true` or `false`), `mcp` (`name`, optional `title`, `instructions`), `plans`, `services`, `early_access`, and `assets` (which files are the logo, icon, mascot, diagram, video and poster) |
+| `tokens.json` | The design tokens the stylesheet reads as custom properties: `colors` and `dark` (`--bg`, `--accent`, …), `fonts` (`--font-ui`, `--font-display`, `--font-mono`), `radii` (`--radius-s` … `--radius-pill`), `layout` (`--bar-h`, `--gutter`, `--wide`, `--narrow`), `theme_color` and `background_color` for the installed app, and `font_files` to serve fonts from the hub itself |
+| `content/landing.json` | Every landing section's copy: the hero, how claiming works, How it works, the comparison and its evidence, features, plans and services, connecting an AI, self-hosting, what is coming, the questions, the closing, the footer, the popups, the glossary, and `custom` sections of your own |
+| `content/messages.json` | The sign-in email (`email.subject`, `email.body`, `{link}` is the one-time link), the getting-started ticket (`welcome.title`, `welcome.body`, `{hub}` is the hub's address), and the line under every public page |
+| `content/docs.md`, `privacy.md`, `terms.md`, `support.md` | The public pages, in Markdown |
+| `assets/` | The logo, icon, mascot, diagram, video, poster and fonts: SVG, PNG, JPEG, WebP, GIF, ICO, MP4, WebM, WOFF2, WOFF |
+
+Only `site.json` is required: any other file left out is the built-in one's, and
+`tokens.json` and `messages.json` may give only the values they change. The simplest start is
+a copy of `site/default/`.
+
+**Copy** takes a little markup: `**strong**`, `*emphasis*`, `` `code` ``, `[text](href)`
+(a path on the hub, `#anchor`, `https:` or `mailto:`), and `\` before a character to take it
+as it is. No HTML passes through: `<` and `>` are text, so copy can never add a script, a style
+or another origin to a page. Placeholders fill in the rest: `{product}`, `{tagline}`,
+`{domain}`, `{operator}`, `{operator_contact}`, `{support_email}`, `{link:<name>}`,
+`{label:<provider>}`, `{term:<key>}` (a glossary word with its tooltip; `{term:<key>|shown}`
+shows other words), `{pop:claim|…}`, `{pop:tools|…}`, `{pop:watch|…}` (a button that opens
+that popup), and where the page has them `{mcp}` (this hub's MCP address), `{sign_in}`,
+`{sign_in_url}` and `{updated}`. Copy that differs by kind of hub is an object instead of a
+string: `{ "default": …, "passkeys": …, "hosted": …, "nomen": …, "unclaimed": … }`.
+
+**Pages** are a small, strict Markdown: front matter (`title:`, `updated:`), then `#`, `##`
+and `###` headings, paragraphs, `-` and `1.` lists, pipe tables, and `::: passkeys hosted`
+… `:::` around what only some hubs show (`passkeys`, `hosted`, `nomen`, `other`).
+
+**Plans** use the hub's own limit names, so the numbers on the page are the ones its config
+sets: `projects` (`account_boards.free_limit`), `machines`, `clients` and `idle_days`
+(`tenancy.unsecured`); a limit is a number or `"unlimited"`, and `content/landing.json`
+`plans.limits` says how each reads. A plan's `price` is text, never computed. The built-in
+site ships the Free plan only (D21) with the Plans section off; `early_access.mode` is `open`
+or `early_access` (its note and button then show under the plans).
+
+**Assets** are served from the hub at `/assets/<name>?v=<hash>`, the first 16 hex digits of
+their SHA-256, cached for a year, so the pages' CSP stays `'self'` only; a site with fonts
+adds `font-src 'self'`. Only the files `site.json` and `font_files` name are served. An SVG
+may hold no script, event handler, embedded page or reference to another file; one drawn
+inline (logo, mascot, diagram) may hold no `<style>` or `style=` either, which the CSP would
+refuse: colour it with presentation attributes or the stylesheet's classes. A diagram's ids
+start with `dg-`, so the page can hold it twice.
+
+The hub reads and checks the whole directory when it starts, rendering every page for every
+kind of hub once: an unknown field, a placeholder nothing fills, a link that goes anywhere
+else, a missing or unsafe asset or an unknown token stops the start with what is wrong and in
+which file (`invalid_config: site.dir /etc/devagotchi/site: content/landing.json (passkeys):
+nothing fills {prodcut}`). `devagotchi hub check-site DIR` runs the same check without a hub,
+so a deploy can refuse a bad site before it goes live.
+
+The running hub follows its site directory: a change is read and checked within a few
+seconds and served from the next request on, with no restart and no rebuild (the stylesheet
+is revalidated, so new tokens reach open browsers too). A change that does not check out is
+refused the same way, and the hub keeps serving the site it had, saying why in its log.
+
 ## Machines on the link
 
 A broker on another machine (gus, dabo, a server) is reached through

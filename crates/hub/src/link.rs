@@ -451,11 +451,12 @@ impl Links {
         if let (Some(owner), Some(push)) = (joined_for, self.push.clone()) {
             let print = fingerprint(&key);
             let name = device.clone();
+            let product = self.config.site().name().to_string();
             tokio::spawn(async move {
                 push.notify(
                     &[owner],
                     &serde_json::json!({
-                        "title": format!("{name} joined Devagotchi"),
+                        "title": format!("{name} joined {product}"),
                         "body": format!("Key {print}. Not you? Open Machines and revoke it."),
                         "url": "/account",
                         "tag": format!("devagotchi-machine-{name}"),

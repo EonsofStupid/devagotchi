@@ -1,16 +1,25 @@
 //! The hub's few HTML pages: one stylesheet from the hub itself, every value escaped, and
 //! script only where a page needs it (push on the approvals page, passkeys on sign-in),
-//! always the hub's own file. A strict Content-Security-Policy backs that up.
+//! always the hub's own file. A strict Content-Security-Policy backs that up. The name in
+//! the bar and the titles, the mark, the colours and the fonts are the site's (`site.rs`),
+//! set per request beside the bar (`web::bar`).
+
+use std::sync::Arc;
 
 use axum::{
     http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 
-/// The hub's one stylesheet: the pages' shell (`hub.css`) and the landing page (`landing.css`).
-pub const CSS: &str = concat!(include_str!("hub.css"), include_str!("landing.css"));
+/// The built-in site's stylesheet: the tokens, the pages' shell (`hub.css`) and the landing
+/// page (`landing.css`). A hub serves its own site's (`Site::stylesheet`).
+#[cfg(test)]
+pub static CSS: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| crate::site::builtin().stylesheet().to_string());
 
 pub use crate::hub::Machine;
+pub use crate::site::Front;
+use crate::site::Site;
 
 /// What the top bar of a page offers, set per request by `web::bar`.
 #[derive(Clone)]
@@ -26,9 +35,17 @@ pub enum Bar {
 
 tokio::task_local! {
     pub static BAR: Bar;
+    /// The site this request is drawn with: the hub's (`web::bar` sets it).
+    pub static SITE: Arc<Site>;
 }
 
-fn bar_html(bar: &Bar) -> String {
+/// The site the current request is drawn with; the built-in one outside a request.
+pub fn site() -> Arc<Site> {
+    SITE.try_with(Arc::clone)
+        .unwrap_or_else(|_| crate::site::builtin())
+}
+
+fn bar_html(bar: &Bar, site: &Site) -> String {
     let links = match bar {
         Bar::Plain => String::new(),
         Bar::SignedIn { .. } => "<nav><a href=\"/approvals\">Approvals</a><a href=\"/account\">Machines</a>\
@@ -44,22 +61,22 @@ fn bar_html(bar: &Bar) -> String {
 secured yet: nothing can recover it if you lose this browser. <a href=\"/account#secure\">Secure it</a></p>",
         _ => "",
     };
+    // The site's mark, inline: the pages' CSP loads no images, and CSS colours it per theme.
+    let mark = site
+        .named(site.info.assets.logo.as_ref())
+        .map(|logo| logo.text())
+        .unwrap_or_default();
     format!(
-        "<header class=\"bar\"><a class=\"brand\" href=\"/\">{MARK}<span class=\"brand-name\">Devagotchi</span></a>{links}</header>{nudge}"
+        "<header class=\"bar\"><a class=\"brand\" href=\"/\">{mark}<span class=\"brand-name\">{}</span></a>{links}</header>{nudge}",
+        escape(site.name())
     )
 }
-
-/// The app icon's pet, inline: the pages' CSP loads no images, and CSS colors it per theme.
-const MARK: &str = "<svg class=\"mark\" viewBox=\"0 0 32 32\" aria-hidden=\"true\" focusable=\"false\">\
-<rect class=\"mark-bg\" width=\"32\" height=\"32\" rx=\"8\"/><ellipse class=\"mark-egg\" cx=\"16\" cy=\"17.3\" rx=\"9.4\" ry=\"10.6\"/>\
-<circle class=\"mark-face\" cx=\"12.9\" cy=\"15.6\" r=\"1.4\"/><circle class=\"mark-face\" cx=\"19.1\" cy=\"15.6\" r=\"1.4\"/>\
-<path class=\"mark-smile\" d=\"M13.5 20.1q2.5 1.9 5 0\"/></svg>";
 
 pub struct Viewer<'a> {
     pub subject: &'a str,
     pub name: Option<&'a str>,
     pub owner: bool,
-    /// Signed in with the hub's own account (a passkey), not through Shippin.
+    /// Signed in with the hub's own account (a passkey), not through Nomen.
     pub hub_account: bool,
     /// When an account nobody secured yet ends if unused: the page offers to secure it.
     pub unsecured_until: Option<u64>,
@@ -67,7 +84,7 @@ pub struct Viewer<'a> {
     pub events: &'a [crate::accounts::tenants::Event],
     /// The other sign-ins the offer to secure the account lists, ready to link.
     pub ways: &'a str,
-    /// The sign-ins linked to the account (Google, GitHub, email, Shippin…).
+    /// The sign-ins linked to the account (Google, GitHub, email, an OpenID Connect provider…).
     pub linked: &'a [crate::accounts::identities::Linked],
 }
 
@@ -98,26 +115,36 @@ enum Kind {
 }
 
 fn render(status: StatusCode, title: &str, body: &str, kind: Kind) -> Response {
+    let site = site();
     let head = match kind {
         Kind::Plain | Kind::Landing => String::new(),
-        Kind::App => "<link rel=\"manifest\" href=\"/manifest.webmanifest\"><link rel=\"icon\" href=\"/assets/icon.svg\">\
-<meta name=\"theme-color\" content=\"#2f6b4f\"><script src=\"/assets/push.js\" defer></script>"
-            .to_string(),
+        Kind::App => {
+            let icon = site
+                .named(site.info.assets.icon.as_ref())
+                .map(|icon| format!("<link rel=\"icon\" href=\"{}\">", escape(&icon.url())))
+                .unwrap_or_default();
+            format!(
+                "<link rel=\"manifest\" href=\"/manifest.webmanifest\">{icon}\
+<meta name=\"theme-color\" content=\"{}\"><script src=\"/assets/push.js\" defer></script>",
+                escape(site.theme_color())
+            )
+        }
         Kind::Script(script) => format!("<script src=\"{script}\" defer></script>"),
     };
     let page = format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-<title>{} · Devagotchi</title><link rel=\"stylesheet\" href=\"/assets/hub.css\">{head}</head>\
+<title>{} · {}</title><link rel=\"stylesheet\" href=\"/assets/hub.css\">{head}</head>\
 <body{class}>{bar}<main>{body}</main></body></html>\n",
         escape(title),
+        escape(site.name()),
         class = match kind {
             Kind::Landing => " class=\"landing\"",
             _ => "",
         },
         bar = BAR
-            .try_with(bar_html)
-            .unwrap_or_else(|_| bar_html(&Bar::Plain)),
+            .try_with(|bar| bar_html(bar, &site))
+            .unwrap_or_else(|_| bar_html(&Bar::Plain, &site)),
     );
     let mut response = (status, page).into_response();
     let headers = response.headers_mut();
@@ -126,27 +153,33 @@ fn render(status: StatusCode, title: &str, body: &str, kind: Kind) -> Response {
         HeaderValue::from_static("text/html; charset=utf-8"),
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    headers.insert(
-        header::CONTENT_SECURITY_POLICY,
-        HeaderValue::from_static(match kind {
-            Kind::App => {
-                "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; worker-src 'self'; \
+    let policy = match kind {
+        Kind::App => {
+            "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; worker-src 'self'; \
 manifest-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
-            }
-            Kind::Script(_) => {
-                "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; \
+        }
+        Kind::Script(_) => {
+            "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; \
 form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
-            }
-            Kind::Plain => {
-                "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
-            }
-            // The setup video and its poster, from this hub only.
-            Kind::Landing => {
-                "default-src 'none'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self'; \
+        }
+        Kind::Plain => {
+            "default-src 'none'; style-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+        }
+        // The setup video and its poster, from this hub only.
+        Kind::Landing => {
+            "default-src 'none'; style-src 'self'; img-src 'self'; media-src 'self'; form-action 'self'; \
 frame-ancestors 'none'; base-uri 'none'"
-            }
-        }),
-    );
+        }
+    };
+    // A site that serves its own fonts: from this hub only.
+    let policy = if site.has_fonts() {
+        format!("{policy}; font-src 'self'")
+    } else {
+        policy.to_string()
+    };
+    if let Ok(value) = HeaderValue::from_str(&policy) {
+        headers.insert(header::CONTENT_SECURITY_POLICY, value);
+    }
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),
@@ -181,23 +214,11 @@ pub fn message(
     )
 }
 
-/// What `/` shows someone not signed in.
-pub enum Front {
-    /// A hub with its own accounts whose owner cannot sign in yet: claim it.
-    Unclaimed,
-    /// A hub with its own accounts: sign in with a passkey.
-    Passkeys,
-    /// A hub that signs people in with Shippin (Nomen).
-    Shippin,
-    /// A hosted hub (`tenancy.mode multi`): accounts are made on first connect.
-    Hosted,
-}
-
 /// `/` for someone not signed in: the product page (`landing.rs`). A hub nobody owns offers
 /// only the claim. The MCP address is this hub's own `public_url`, never a hosted one.
 pub fn home(front: Front, public_url: &str) -> Response {
     let (title, body) = super::landing::page(&front, public_url);
-    render(StatusCode::OK, title, &body, Kind::Landing)
+    render(StatusCode::OK, &title, &body, Kind::Landing)
 }
 
 pub fn account(viewer: &Viewer<'_>, machines: &[Machine]) -> Response {
@@ -301,9 +322,9 @@ autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"
         escape(shown),
         escape(viewer.subject),
         kind = if viewer.hub_account {
-            "Account"
+            "Account".to_string()
         } else {
-            "Shippin account"
+            format!("{} account", escape(site().label("nomen", "Nomen")))
         },
     );
     // The offer to secure the account makes its passkey on this page: the hub's one

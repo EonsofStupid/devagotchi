@@ -104,11 +104,12 @@ pub async fn revoke(
 /// downloads directory the hub hands out its own build: one line per OS (`/join`).
 fn code_page(hub: &str, name: &str, stored: &str, code: &str, joinable: bool) -> Response {
     let until = pages::utc(devices::now_secs() + devices::CODE_TTL_SECS);
+    let product = escape(pages::site().name());
     let hub = hub.trim_end_matches('/');
     let (hub, name, stored, code) = (escape(hub), escape(name), escape(stored), escape(code));
     let how = if joinable {
         format!(
-            "<p>Paste one line on that machine. It installs Devagotchi, gives the machine its own \
+            "<p>Paste one line on that machine. It installs {product}, gives the machine its own \
 key, joins it as <strong>{name}</strong> and starts it, now and after every restart. The line \
 works once, until {until}; this page is the only place it is shown.</p>\
 <h2>Linux</h2><pre class=\"what\">curl -fsSL {hub}/join/{code} | sudo sh</pre>\
@@ -119,7 +120,7 @@ works once, until {until}; this page is the only place it is shown.</p>\
         format!(
             "<p>This code adds one machine as <strong>{name}</strong>. It works once, until {until}, and \
 this page is the only place it is shown.</p><pre class=\"what\">{code}</pre>\
-<h2>Linux</h2><p class=\"meta\">With the Devagotchi installer on that machine:</p>\
+<h2>Linux</h2><p class=\"meta\">With the {product} installer on that machine:</p>\
 <pre class=\"what\">echo {code} | sudo ./install-devagotchi.sh --hub {hub} --device {stored} --enroll --exec-policy account</pre>\
 <h2>Windows</h2><p class=\"meta\">In PowerShell, next to the installer:</p>\
 <pre class=\"what\">.\\install-devagotchi.ps1 -Autostart -ExecPolicy account -Hub {hub} -Device {stored} -EnrollCode {code}</pre>"
@@ -148,7 +149,7 @@ fn json_reply(status: StatusCode, body: serde_json::Value) -> Response {
 
 /// `POST /api/v1/machines` `{ "name": "..." }` with `Authorization: Bearer <token>`: the
 /// same one-time code "Add a machine" issues, for an app the person is signed in to (the
-/// devagotchi.com Connect page). Bearer only, never the hub's cookie, so another site cannot
+/// site's Connect page). Bearer only, never the hub's cookie, so another site cannot
 /// make a signed-in browser issue codes. The code is in this response once and nowhere else.
 pub async fn add_json(
     State(state): State<AppState>,
