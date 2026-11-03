@@ -352,8 +352,12 @@ gets an account and a tenant (`t-<uuid>`) of their own, made on the spot:
   client's name), secured (with the sign-in), waiting, admitted (in the account store's
   transaction), first machine, first operation (with its latest, a day at a time) and first
   board. Writes go through a bounded queue to one writer in batches (a full queue drops and
-  counts, said in the log); every hour it rolls each finished day into `hub_analytics_daily`
-  (kept) and deletes raw visits older than `analytics.retention_days`. The tables are
+  counts, said in the log). Every hour it rolls the finished days into `hub_analytics_daily`
+  (kept): each day inside `analytics.retention_days` again from its raw visits, so a visit
+  written late (a backlog, another instance's queue) is counted the next pass; a day past
+  the retention once more, its raw visits deleted in the same transaction. A pass that
+  finds a day's visits gone keeps the totals they made, and a visit older than the
+  retention is never written. The tables are
   hub-scoped, like `hub_secrets`. The default privacy page says exactly this inside
   `::: analytics` (shown only where the hub counts, with `{retention_days}`), and
   `::: no-analytics` elsewhere.

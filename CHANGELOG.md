@@ -28,6 +28,14 @@ heading. Agents draft the fragments below; they never tag.
 - Server-rendered, working without JavaScript, nothing third-party; colours and fonts from
   the site's `tokens.json` through `hub.css`, in light and dark (and forced colours).
   Every word from `content/messages.json` `analytics`, with defaults in `site/default/`.
+- Fix to increment 66's writer: a day rolled up before all its visits were written (a
+  queue backlog, a slow store, another hub instance) kept the short count forever, and a
+  pass that ran while another let a day's visits go could replace that day's totals with
+  zeros. Every pass now rolls each day inside the retention again from its raw visits; a
+  day past it is rolled once more and its visits deleted in the same transaction; a pass
+  that finds a day's visits gone keeps their totals and counts only the milestones again;
+  a visit older than the retention is never written. Tests run the daily pass themselves
+  (the writer's pass at start is skipped under test), so it no longer races them.
 - `tests/analytics_browser.py` (CI, in Chrome): a visitor reads public pages, a person
   connects an AI client, enrolls a machine through `devagotchi link` and runs a command;
   the operator's page shows the counts and the funnel move, and the CSV holds them; anyone

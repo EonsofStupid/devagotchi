@@ -285,21 +285,38 @@ async fn raw_days(store: &crate::store::Store) -> Vec<i64> {
     days
 }
 
+/// A raw visit, as the writer writes one, straight into the store.
+async fn insert(store: &crate::store::Store, view: View) {
+    sqlx::query(
+        "INSERT INTO hub_analytics_views
+           (day, hour, path, utm_source, utm_medium, utm_campaign, referrer, device, visitor)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind(view.day)
+    .bind(view.hour)
+    .bind(view.path)
+    .bind(&view.utm[0])
+    .bind(&view.utm[1])
+    .bind(&view.utm[2])
+    .bind(&view.referrer)
+    .bind(view.device)
+    .bind(&view.visitor)
+    .execute(store.pool())
+    .await
+    .unwrap();
+}
+
+/// Noon today, and today.
+fn noon() -> (u64, i64) {
+    let today = day_of(crate::devices::now_secs());
+    (u64::try_from(today + DAY / 2).unwrap(), today)
+}
+
 #[tokio::test]
 async fn finished_days_roll_into_daily_totals_and_raw_visits_go_after_the_retention() {
     for test in testing::stores().await {
         let store = &test.store;
-        // Noon today: the writer's own pass (at its start, with the clock) sees the same days.
-        let today = day_of(crate::devices::now_secs());
-        let now = u64::try_from(today + DAY / 2).unwrap();
-        let analytics = Analytics::start(
-            store.clone(),
-            AnalyticsConfig {
-                enabled: true,
-                retention_days: 2,
-            },
-            "https://hub.example.org",
-        );
+        let (now, today) = noon();
         // Four days ago, three days ago, yesterday and today.
         for (day, path, device, visitor) in [
             (today - 4 * DAY, "/", "desktop", "a"),
@@ -309,7 +326,7 @@ async fn finished_days_roll_into_daily_totals_and_raw_visits_go_after_the_retent
             (today - DAY, "/", "desktop", "c"),
             (today, "/", "tablet", "d"),
         ] {
-            analytics.page_view(view(day, path, device, visitor));
+            insert(store, view(day, path, device, visitor)).await;
         }
         // A tenant's milestones, yesterday: made by Claude, secured with GitHub.
         let tenant = crate::accounts::tenants::new_tenant_id([5; 16]);
@@ -324,17 +341,10 @@ async fn finished_days_roll_into_daily_totals_and_raw_visits_go_after_the_retent
         funnel::note_in(&mut connection, &tenant, funnel::MADE, "claude", yesterday)
             .await
             .unwrap();
-        funnel::note_in(
-            &mut connection,
-            &tenant,
-            funnel::SECURED,
-            "github",
-            yesterday,
-        )
-        .await
-        .unwrap();
+        funnel::note_in(&mut connection, &tenant, funnel::SECURED, "github", yesterday)
+            .await
+            .unwrap();
         drop(connection);
-        analytics.flush().await;
         writer::maintain(store, 2, now).await.unwrap();
         assert_eq!(
             daily(store, today - DAY).await,
@@ -352,24 +362,32 @@ async fn finished_days_roll_into_daily_totals_and_raw_visits_go_after_the_retent
                 "total/=3/2",
             ]
         );
-        assert_eq!(
-            daily(store, today - 4 * DAY).await,
-            [
-                "campaign/news|email|launch=1/1",
-                "device/desktop=1/1",
-                "path//=1/1",
-                "referrer/news.example.net=1/1",
-                "total/=1/1",
-            ]
-        );
+        let four_days_ago = [
+            "campaign/news|email|launch=1/1",
+            "device/desktop=1/1",
+            "path//=1/1",
+            "referrer/news.example.net=1/1",
+            "total/=1/1",
+        ];
+        assert_eq!(daily(store, today - 4 * DAY).await, four_days_ago);
         // A day with nothing has its zero; today is not finished, so it has none yet.
         assert_eq!(daily(store, today - 2 * DAY).await, ["total/=0/0"]);
         assert!(daily(store, today).await.is_empty());
         // Raw visits two days old and older are gone; their totals stay.
         assert_eq!(raw_days(store).await, [today - DAY, today]);
-        // Again, and from another instance: the same totals, nothing doubled.
-        writer::maintain(store, 2, now).await.unwrap();
-        assert_eq!(daily(store, today - 4 * DAY).await.len(), 5);
+        // Again, and from two instances at once: the same totals, nothing doubled.
+        let (one, two) = tokio::join!(
+            writer::maintain(store, 2, now),
+            writer::maintain(store, 2, now)
+        );
+        one.unwrap();
+        two.unwrap();
+        assert_eq!(daily(store, today - 4 * DAY).await, four_days_ago);
+        assert_eq!(daily(store, today - DAY).await.len(), 11);
+        // An instance whose clock still has four days ago inside the retention finds its
+        // visits gone: their totals stay as they were, never zero.
+        writer::maintain(store, 5, now).await.unwrap();
+        assert_eq!(daily(store, today - 4 * DAY).await, four_days_ago);
         assert_eq!(daily(store, today - DAY).await.len(), 11);
         // The next day, once it has settled: yesterday's today is rolled up too.
         writer::maintain(store, 2, now + DAY as u64 - 3 * 3600)
@@ -386,6 +404,60 @@ async fn finished_days_roll_into_daily_totals_and_raw_visits_go_after_the_retent
             ]
         );
         assert_eq!(raw_days(store).await, [today - DAY, today]);
+    }
+}
+
+#[tokio::test]
+async fn a_visit_written_after_its_day_was_rolled_up_is_counted_the_next_pass() {
+    // A visit still queued when its day was first rolled up (a backlog, a slow store,
+    // another hub instance's queue) is counted by the next pass; one older than the
+    // retention is never written.
+    for test in testing::stores().await {
+        let store = &test.store;
+        let (now, today) = noon();
+        let analytics = Analytics::start(
+            store.clone(),
+            AnalyticsConfig {
+                enabled: true,
+                retention_days: 2,
+            },
+            "https://hub.example.org",
+        );
+        // Yesterday has a milestone, so it is rolled up, before its visit is written.
+        let tenant = crate::accounts::tenants::new_tenant_id([6; 16]);
+        sqlx::query("INSERT INTO tenancy_tenants (id, created_at) VALUES ($1, 1)")
+            .bind(&tenant)
+            .execute(store.admin())
+            .await
+            .unwrap();
+        let mut connection = store.pool().acquire().await.unwrap();
+        let yesterday = u64::try_from(today - DAY + 60).unwrap();
+        funnel::note_in(&mut connection, &tenant, funnel::MADE, "cursor", yesterday)
+            .await
+            .unwrap();
+        drop(connection);
+        writer::maintain(store, 2, now).await.unwrap();
+        assert_eq!(
+            daily(store, today - DAY).await,
+            ["client/cursor=1/0", "event/made=1/0", "total/=0/0"]
+        );
+        analytics.page_view(view(today - DAY, "/docs", "mobile", "late"));
+        analytics.page_view(view(today - 3 * DAY, "/docs", "mobile", "too-old"));
+        analytics.flush().await;
+        writer::maintain(store, 2, now).await.unwrap();
+        assert_eq!(
+            daily(store, today - DAY).await,
+            [
+                "campaign/news|email|launch=1/1",
+                "client/cursor=1/0",
+                "device/mobile=1/1",
+                "event/made=1/0",
+                "path//docs=1/1",
+                "referrer/news.example.net=1/1",
+                "total/=1/1",
+            ]
+        );
+        assert_eq!(raw_days(store).await, [today - DAY], "the too-old one never kept");
     }
 }
 
