@@ -52,9 +52,10 @@ pub const SEAT_HEADER: &str = "x-devagotchi-seat";
 pub struct Boards {
     dirs: BTreeMap<String, PathBuf>,
     accounts: Option<Accounts>,
-    /// A new board's getting-started ticket: the site's title and steps, with this hub's
-    /// address in them.
-    welcome: (String, String),
+    /// The site a new board's getting-started ticket comes from, and the hub's address
+    /// in its steps.
+    site: Arc<crate::site::SiteCell>,
+    public_url: String,
     open: Mutex<BTreeMap<String, Arc<Board>>>,
     fences: Mutex<HashMap<(String, String, String), i64>>,
     /// Told of every change any open board commits; the lease reaper waits on it.
@@ -116,7 +117,8 @@ impl Boards {
                 .map(|b| (b.project.clone(), PathBuf::from(&b.dir)))
                 .collect(),
             accounts,
-            welcome: config.site().welcome(&config.public_url),
+            site: config.site_cell(),
+            public_url: config.public_url.clone(),
             open: Mutex::new(BTreeMap::new()),
             fences: Mutex::new(HashMap::new()),
             activity: Arc::new(tokio::sync::Notify::new()),
@@ -263,9 +265,8 @@ impl Boards {
             let file = Self::account_file(accounts, subject, project);
             let board = Board::open(&file, project)?.reporting_to(self.activity.clone());
             // A new account board starts with the getting-started steps (B12).
-            if let Err(error) =
-                board.welcome_if_new(&Actor::agent("devagotchi"), &self.welcome.0, &self.welcome.1)
-            {
+            let (title, steps) = self.site.get().welcome(&self.public_url);
+            if let Err(error) = board.welcome_if_new(&Actor::agent("devagotchi"), &title, &steps) {
                 eprintln!(
                     "devagotchi hub: board {project}: getting-started ticket: {}",
                     error.message
@@ -314,9 +315,8 @@ impl Boards {
         }
         // A board that has never had a ticket starts with the steps to check that the hub
         // works, so the first session never finds it empty.
-        if let Err(error) =
-            board.welcome_if_new(&Actor::agent("devagotchi"), &self.welcome.0, &self.welcome.1)
-        {
+        let (title, steps) = self.site.get().welcome(&self.public_url);
+        if let Err(error) = board.welcome_if_new(&Actor::agent("devagotchi"), &title, &steps) {
             eprintln!(
                 "devagotchi hub: board {project}: getting-started ticket: {}",
                 error.message

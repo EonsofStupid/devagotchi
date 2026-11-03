@@ -90,9 +90,14 @@ pub struct HubConfig {
     /// one the accounts store names, learned once at start or when it is made.
     #[serde(skip)]
     owner_cell: Arc<OnceLock<String>>,
-    /// The site `site` names, read and checked when the config is parsed.
-    #[serde(skip, default = "crate::site::builtin")]
-    loaded_site: Arc<crate::site::Site>,
+    /// The site `site` names, read and checked when the config is parsed, and again by
+    /// the running hub whenever its directory changes (`site::watch`).
+    #[serde(skip, default = "default_site")]
+    loaded_site: Arc<crate::site::SiteCell>,
+}
+
+fn default_site() -> Arc<crate::site::SiteCell> {
+    Arc::new(crate::site::SiteCell::new(crate::site::builtin()))
 }
 
 /// `site` in the hub's config.
@@ -566,7 +571,7 @@ impl HubConfig {
             let site = crate::site::Site::load(Path::new(dir)).map_err(|why| {
                 invalid(format!("site.dir {dir}: {why}"))
             })?;
-            config.loaded_site = Arc::new(site);
+            config.loaded_site = Arc::new(crate::site::SiteCell::new(Arc::new(site)));
         }
         if let Some(owner) = &config.owner {
             let _ = config.owner_cell.set(owner.clone());
@@ -577,6 +582,11 @@ impl HubConfig {
     /// The site the hub's pages, email and MCP display read: the one `site.dir` names, or
     /// the built-in one.
     pub fn site(&self) -> Arc<crate::site::Site> {
+        self.loaded_site.get()
+    }
+
+    /// Where the site the hub serves now is kept: the site watcher replaces it there.
+    pub fn site_cell(&self) -> Arc<crate::site::SiteCell> {
         self.loaded_site.clone()
     }
 

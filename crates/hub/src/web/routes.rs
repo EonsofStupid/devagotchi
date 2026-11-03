@@ -216,17 +216,29 @@ async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
     }
 }
 
-async fn css(State(state): State<AppState>) -> Response {
-    let mut response = state.hub.config.site().stylesheet().to_string().into_response();
+/// The site's stylesheet. Revalidated on every use (a `304` while it is the same), so a
+/// site read again restyles every page at once.
+async fn css(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let site = state.hub.config.site();
+    let etag = site.stylesheet_etag();
+    let current = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.split(',').any(|tag| tag.trim() == etag));
+    let mut response = if current {
+        StatusCode::NOT_MODIFIED.into_response()
+    } else {
+        site.stylesheet().to_string().into_response()
+    };
     let headers = response.headers_mut();
     headers.insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/css; charset=utf-8"),
     );
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=3600"),
-    );
+    headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    if let Ok(value) = HeaderValue::from_str(etag) {
+        headers.insert(header::ETAG, value);
+    }
     headers.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         HeaderValue::from_static("nosniff"),

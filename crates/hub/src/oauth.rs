@@ -91,7 +91,7 @@ pub struct Authority {
     public_url: String,
     /// The site its pages and resource metadata name (`site.rs`); the built-in one until
     /// the hub's is set.
-    site: std::sync::Arc<crate::site::Site>,
+    site: std::sync::Arc<crate::site::SiteCell>,
     keys: Mutex<KeyRing>,
     key_path: std::path::PathBuf,
     connection: Mutex<Connection>,
@@ -353,7 +353,7 @@ impl Authority {
         };
         let authority = Self {
             public_url,
-            site: crate::site::builtin(),
+            site: std::sync::Arc::new(crate::site::SiteCell::new(crate::site::builtin())),
             keys: Mutex::new(keys),
             key_path,
             connection: Mutex::new(connection),
@@ -376,14 +376,17 @@ impl Authority {
     }
 
     /// Name the hub's site on its pages and metadata, and on the terminal's sign-in.
-    pub fn configure_site(&mut self, site: std::sync::Arc<crate::site::Site>) -> BridgeResult<()> {
+    pub fn configure_site(
+        &mut self,
+        site: std::sync::Arc<crate::site::SiteCell>,
+    ) -> BridgeResult<()> {
         self.site = site;
         self.seed_cli_client()
     }
 
     /// The product's name, as the site gives it.
-    pub fn product(&self) -> &str {
-        self.site.name()
+    pub fn product(&self) -> String {
+        self.site.get().name().to_string()
     }
 
     pub fn configure_login(
@@ -853,7 +856,7 @@ impl Authority {
             .unwrap_or_default();
         format!(
             "<!doctype html><title>Sign in</title><h1>Sign in to {}</h1>{providers}{magic}{claim}",
-            escape(self.site.name())
+            escape(&self.product())
         )
     }
 
@@ -885,7 +888,7 @@ impl Authority {
             "authorization_servers": [self.public_url],
             "bearer_methods_supported": ["header"],
             "scopes_supported": ["openid", "email", "profile", "offline_access", "mcp"],
-            "resource_name": self.site.name(),
+            "resource_name": self.product(),
         })
     }
 
@@ -1458,7 +1461,7 @@ impl Authority {
                  (client_id, client_name, redirect_uris, auth_method, created_at)
                  VALUES ('devagotchi-cli', ?1, '[]', 'none', ?2)
                  ON CONFLICT(client_id) DO UPDATE SET client_name = excluded.client_name",
-                params![format!("{} CLI", self.site.name()), now() as i64],
+                params![format!("{} CLI", self.product()), now() as i64],
             )
             .map_err(store_error)?;
         Ok(())
@@ -2176,7 +2179,7 @@ where
                                  <input type=\"hidden\" name=\"request\" value=\"{}\">\
                                  <button type=\"submit\">Allow</button></form>\
                                  <p><a href=\"/login?resume={}\">I already have an account</a></p>",
-                                escape(auth.product()),
+                                escape(&auth.product()),
                                 escape(&pending),
                                 escape(&pending)
                             ),

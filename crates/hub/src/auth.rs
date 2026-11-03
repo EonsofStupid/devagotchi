@@ -122,7 +122,7 @@ impl Verifier {
         accounts: Option<std::sync::Arc<crate::accounts::Accounts>>,
     ) -> BridgeResult<Self> {
         let mut primary =
-            Self::primary(&config.auth, state_dir, &config.public_url, config.site()).await?;
+            Self::primary(&config.auth, state_dir, &config.public_url, config.site_cell()).await?;
         if let (true, Some(accounts)) = (config.has_accounts(), accounts) {
             let nomen = match primary {
                 Verifier::Closed => None,
@@ -153,7 +153,7 @@ impl Verifier {
         config: &AuthConfig,
         state_dir: &Path,
         public_url: &str,
-        site: std::sync::Arc<crate::site::Site>,
+        site: std::sync::Arc<crate::site::SiteCell>,
     ) -> BridgeResult<Self> {
         match config {
             AuthConfig::Oidc { issuer, audiences } => Ok(Verifier::Oidc(

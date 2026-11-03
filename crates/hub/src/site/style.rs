@@ -67,6 +67,7 @@ fn normal_style() -> String {
 
 pub struct Style {
     pub css: String,
+    pub etag: String,
     pub fonts: bool,
     pub theme_color: String,
     pub background_color: String,
@@ -215,8 +216,14 @@ impl Style {
         }
         css.push_str(BASE);
         css.push_str(&rail(site));
+        use sha2::Digest;
+        let etag = format!(
+            "\"{}\"",
+            &hex::encode(sha2::Sha256::digest(css.as_bytes()))[..32]
+        );
         Ok(Self {
             css,
+            etag,
             fonts: !tokens.font_files.is_empty(),
             theme_color: tokens.theme_color.clone(),
             background_color: tokens.background_color.clone(),

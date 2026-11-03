@@ -25,6 +25,10 @@ heading. Agents draft the fragments below; they never tag.
 - The hub checks the whole directory at start, rendering every page for every kind of hub:
   a bad one stops the start with what is wrong and in which file. No HTML passes through
   copy, an SVG may not script or fetch, a token may not leave its declaration.
+- The running hub follows the directory: a change is served within seconds once it checks
+  out; one that does not is refused while the site it had stays. `devagotchi hub check-site
+  DIR` runs the check alone. The stylesheet and manifest are revalidated (`no-cache`, ETag)
+  instead of cached for an hour.
 - Today's content is the built-in site (`crates/hub/site/default/`), compiled in: with no
   directory the hub looks and reads as before. New: a Plans section rendered from `plans`
   (the built-in site has the Free plan only, D21, and the section off), a Services section,

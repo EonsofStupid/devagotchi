@@ -30,6 +30,7 @@ mod style;
 #[cfg(test)]
 pub(crate) mod tests;
 pub(crate) mod text;
+mod watch;
 
 use std::{
     collections::BTreeMap,
@@ -44,6 +45,7 @@ pub use model::{
     safe_href,
 };
 pub use text::Ctx;
+pub use watch::{EVERY as WATCH_EVERY, SiteCell, watch};
 
 /// The environment variable that names the site directory, over `site.dir` in the config.
 pub const SITE_ENV: &str = "DEVAGOTCHI_SITE_DIR";
@@ -454,6 +456,12 @@ impl Site {
     /// page's rail for this site's sections.
     pub fn stylesheet(&self) -> &str {
         &self.style.css
+    }
+
+    /// The stylesheet's strong ETag: it is revalidated, so a site read again restyles
+    /// every page at once.
+    pub fn stylesheet_etag(&self) -> &str {
+        &self.style.etag
     }
 
     /// Whether the pages load fonts (their CSP then allows `font-src 'self'`).

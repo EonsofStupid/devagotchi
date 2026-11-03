@@ -548,3 +548,71 @@ fn the_hubs_config_names_its_site_and_the_environment_can_too() {
         error.message
     );
 }
+
+#[test]
+fn a_running_hub_follows_its_site_directory_and_keeps_a_good_site_over_a_bad_one() {
+    let dir = tempfile::tempdir().unwrap();
+    copy(&neutral_dir(), dir.path());
+    let cell = std::sync::Arc::new(super::SiteCell::new(std::sync::Arc::new(
+        Site::load(dir.path()).unwrap(),
+    )));
+    super::watch(
+        cell.clone(),
+        dir.path().to_path_buf(),
+        std::time::Duration::from_millis(100),
+    );
+    let wait_for = |name: &str| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        while cell.get().name() != name {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "still {}",
+                cell.get().name()
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    };
+    // A change is served once it checks out.
+    edit_json(&dir.path().join("site.json"), |v| {
+        v["product"]["name"] = "Lumen Relay Two".into()
+    });
+    wait_for("Lumen Relay Two");
+    // One that does not check out is refused, and the site it had stays.
+    std::fs::write(dir.path().join("site.json"), "{ broken").unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    assert_eq!(cell.get().name(), "Lumen Relay Two");
+    // Fixed again, it is served again.
+    std::fs::copy(
+        neutral_dir().join("site.json"),
+        dir.path().join("site.json"),
+    )
+    .unwrap();
+    wait_for("Lumen Relay");
+}
+
+#[test]
+fn check_site_says_whether_a_directory_checks_out() {
+    let dir = neutral_dir();
+    let command = crate::parse_args(["check-site".into(), dir.clone().into_os_string()]).unwrap();
+    assert!(crate::manage(command).is_ok());
+    let bad = tempfile::tempdir().unwrap();
+    copy(&dir, bad.path());
+    std::fs::write(
+        bad.path().join("tokens.json"),
+        r#"{"colors": {"acent": "red"}}"#,
+    )
+    .unwrap();
+    let command =
+        crate::parse_args(["check-site".into(), bad.path().as_os_str().to_owned()]).unwrap();
+    let error = crate::manage(command).unwrap_err();
+    assert_eq!(error.code, "invalid_site");
+    assert!(
+        error.message.contains("tokens.json colors.acent"),
+        "{}",
+        error.message
+    );
+    for args in [vec!["check-site"], vec!["check-site", "relative/site"]] {
+        let args: Vec<std::ffi::OsString> = args.into_iter().map(Into::into).collect();
+        assert!(crate::parse_args(args).is_err());
+    }
+}

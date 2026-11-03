@@ -51,7 +51,7 @@ pub async fn manifest(State(state): State<AppState>) -> Response {
     asset(
         state.hub.config.site().manifest(),
         "application/manifest+json",
-        "public, max-age=3600",
+        "no-cache",
     )
 }
 

@@ -115,7 +115,13 @@ The hub reads and checks the whole directory when it starts, rendering every pag
 kind of hub once: an unknown field, a placeholder nothing fills, a link that goes anywhere
 else, a missing or unsafe asset or an unknown token stops the start with what is wrong and in
 which file (`invalid_config: site.dir /etc/devagotchi/site: content/landing.json (passkeys):
-nothing fills {prodcut}`). A change takes effect when the hub restarts.
+nothing fills {prodcut}`). `devagotchi hub check-site DIR` runs the same check without a hub,
+so a deploy can refuse a bad site before it goes live.
+
+The running hub follows its site directory: a change is read and checked within a few
+seconds and served from the next request on, with no restart and no rebuild (the stylesheet
+is revalidated, so new tokens reach open browsers too). A change that does not check out is
+refused the same way, and the hub keeps serving the site it had, saying why in its log.
 
 ## Machines on the link
 
