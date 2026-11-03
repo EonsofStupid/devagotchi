@@ -186,7 +186,7 @@ joined_connected() {
         'import json,sys; b=[x for x in json.load(sys.stdin)["brokers"] if x["name"]=="ci-joined"]; sys.exit(0 if b and b[0].get("connected") else 1)'
 }
 wait_for 20 "join hub ready" join_hub_ready
-grep -q 'handing out Devagotchi ci-join' "$WORK/join-hub.log" || fail "the hub did not take the downloads directory"
+grep -q 'handing out build ci-join' "$WORK/join-hub.log" || fail "the hub did not take the downloads directory"
 code=$("$BIN/devagotchi" hub enroll --state-dir "$WORK/join-state" --device ci-joined 2>/dev/null)
 [[ $code == dvg-* ]] || fail "no enrollment code"
 # Fetching the script twice (a link preview, a second look) does not spend the code.
