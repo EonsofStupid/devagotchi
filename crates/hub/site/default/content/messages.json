@@ -56,5 +56,72 @@
     "admitted_line": "{when}, by {by}",
     "usage_of": "{count} of {limit}",
     "usage_unlimited": "{count}, no limit"
+  },
+  "analytics": {
+    "title": "Analytics",
+    "operator_link": "How people find and use this hub: [analytics](/operator/analytics).",
+    "intro": "Counted by this hub itself, as it serves its pages: no cookie, no script, nothing third-party. A visitor counts once a day, so the same person on two days counts twice.",
+    "off": "This hub counts nothing: `analytics.enabled` is false in its config (or `DEVAGOTCHI_HUB_ANALYTICS=off`).",
+    "range": "Show",
+    "range_days": "{n} days",
+    "export": "Download the daily totals (CSV)",
+    "kept": "Raw visits are kept {days} days; the daily totals are kept.",
+    "dropped": "{n} records were not kept because the hub's queue was full.",
+    "traffic_title": "Traffic",
+    "chart_title": "Visitors and page views per day",
+    "chart_summary": "{views} page views and {visitors} visitors over {n} days.",
+    "chart_day": "{day}: {views} page views, {visitors} visitors",
+    "table_summary": "The numbers, day by day",
+    "pages_title": "Top pages",
+    "referrers_title": "Top referrers",
+    "campaigns_title": "Campaigns",
+    "devices_title": "Devices",
+    "none": "Nothing yet.",
+    "funnel_title": "Funnel",
+    "funnel_intro": "Visitors over these {n} days, and the accounts made in them: how far each got so far.",
+    "accounts_title": "Accounts",
+    "clients_title": "Made by",
+    "sign_ins_title": "Secured with",
+    "waiting_now": "Waiting for early access now: **{n}**.",
+    "active": "Active, with a command run: **{week}** in the last 7 days, **{month}** in the last 30.",
+    "passkey": "Passkey",
+    "columns": {
+      "day": "Day",
+      "views": "Page views",
+      "visitors": "Visitors",
+      "page": "Page",
+      "referrer": "From",
+      "source": "Source",
+      "medium": "Medium",
+      "campaign": "Campaign",
+      "device": "Device",
+      "share": "Share",
+      "step": "Step",
+      "count": "Count",
+      "conversion": "From the step before",
+      "client": "AI app",
+      "sign_in": "Sign-in",
+      "accounts": "Accounts"
+    },
+    "steps": {
+      "visitors": "Visitors",
+      "made": "Accounts made",
+      "secured": "Secured",
+      "admitted": "Let in",
+      "machine": "First machine",
+      "operation": "First command run"
+    },
+    "clients": {
+      "claude": "Claude",
+      "chatgpt": "ChatGPT or Codex",
+      "grok": "Grok",
+      "cursor": "Cursor",
+      "other": "Another app or a browser"
+    },
+    "devices": {
+      "mobile": "Phone",
+      "tablet": "Tablet",
+      "desktop": "Computer"
+    }
   }
 }

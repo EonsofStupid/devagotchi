@@ -11,6 +11,7 @@
 //!   row), its use against the plan's limits, and when and by whom it was let in.
 //! - A status line says what `early_access.mode` is now and how to change it: in the site,
 //!   never here.
+//! - Its analytics (`/operator/analytics`, `analytics.rs`) are a link away.
 //! - Server-rendered forms, no script; posts are taken only from this hub's own pages
 //!   (`same_origin`), like the approvals and machines pages. Every word is the site's
 //!   (`content/messages.json` `operator`).
@@ -44,7 +45,7 @@ use crate::{
 const MOST: u32 = 200;
 
 /// The signed-in operator behind this request, if it is one.
-async fn operator(state: &AppState, headers: &HeaderMap) -> Option<Subject> {
+pub(super) async fn operator(state: &AppState, headers: &HeaderMap) -> Option<Subject> {
     let hub = state.passkeys.as_ref()?;
     if !state.hub.config.multi_tenant() {
         return None;
@@ -54,7 +55,7 @@ async fn operator(state: &AppState, headers: &HeaderMap) -> Option<Subject> {
 }
 
 /// What anyone but the operator gets: an unknown path's answer.
-fn hidden() -> Response {
+pub(super) fn hidden() -> Response {
     StatusCode::NOT_FOUND.into_response()
 }
 
@@ -123,10 +124,12 @@ pub async fn page(
         usage.push(usage_of(&state, &site, view));
     }
     let body = format!(
-        "<h1>{}</h1><p class=\"meta\" id=\"sign-up\">{} {}</p>{done}{}{}",
+        "<h1>{}</h1><p class=\"meta\" id=\"sign-up\">{} {}</p>\
+<p class=\"meta\" id=\"analytics-link\">{}</p>{done}{}{}",
         escape(&copy.title),
         Ctx::new(&site).inline(status),
         Ctx::new(&site).inline(&copy.how_to_change),
+        Ctx::new(&site).inline(&site.messages.analytics.operator_link),
         waiting_list(&site, &waiting),
         admitted_list(&site, &admitted, &usage),
     );

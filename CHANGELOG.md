@@ -7,6 +7,40 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### The operator's analytics page (increment 67)
+- `/operator/analytics` on a hosted hub, linked from `/operator`, for its operator only;
+  anyone else, signed in or not, gets the 404 an unknown path gets (the CSV too).
+- A range of 7, 30 or 90 days, as plain links (`?days=`; anything else is 30).
+- Traffic: visitors and page views per day as a server-rendered inline SVG chart (one hue
+  from the site's accent: pale bars for page views, the solid part for visitors; each
+  day's numbers in its tooltip), the same numbers in a table, the top pages, referrers and
+  UTM campaigns, and the device split.
+- Funnel: visitors, then the accounts made in the range and how many of them were secured,
+  let in, enrolled their first machine and ran their first command, each with the rate
+  from the step before.
+- Accounts: made by Claude, ChatGPT or Codex, Grok, Cursor or another app; the sign-ins
+  that secured them; how many wait for early access now; how many tenants ran a command in
+  the last 7 and 30 days. How long raw visits are kept, and any records dropped.
+- `/operator/analytics.csv?days=N`: the daily totals behind the page
+  (`day,metric,item,views,visitors`), formula-looking fields written as text.
+- Finished days are read from `hub_analytics_daily`, today and any day not rolled up yet
+  from the raw rows, as the writer would roll them (`analytics/report.rs`).
+- Server-rendered, working without JavaScript, nothing third-party; colours and fonts from
+  the site's `tokens.json` through `hub.css`, in light and dark (and forced colours).
+  Every word from `content/messages.json` `analytics`, with defaults in `site/default/`.
+- Fix to increment 66's writer: a day rolled up before all its visits were written (a
+  queue backlog, a slow store, another hub instance) kept the short count forever, and a
+  pass that ran while another let a day's visits go could replace that day's totals with
+  zeros. Every pass now rolls each day inside the retention again from its raw visits; a
+  day past it is rolled once more and its visits deleted in the same transaction; a pass
+  that finds a day's visits gone keeps their totals and counts only the milestones again;
+  a visit older than the retention is never written. Tests run the daily pass themselves
+  (the writer's pass at start is skipped under test), so it no longer races them.
+- `tests/analytics_browser.py` (CI, in Chrome): a visitor reads public pages, a person
+  connects an AI client, enrolls a machine through `devagotchi link` and runs a command;
+  the operator's page shows the counts and the funnel move, and the CSV holds them; anyone
+  else gets 404.
+
 ### First-party analytics, counted by the hub itself (increment 66)
 - A hosted hub (`tenancy.mode multi`) counts visits to its public pages (`/`, `/docs`,
   `/privacy`, `/terms`, `/support`) in its own request handling: no script, no cookie, no

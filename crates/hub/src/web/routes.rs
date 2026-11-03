@@ -1,5 +1,5 @@
 //! The browser routes: the landing page and claiming a new hub (`/claim`), sign in, the
-//! account page, the operator page (`/operator`), sign out, `/api/v1/me` (which also takes a bearer token, so scripts and AI
+//! account page, the operator page (`/operator`) and its analytics (`/operator/analytics`), sign out, `/api/v1/me` (which also takes a bearer token, so scripts and AI
 //! clients see the same view), `/approvals`, and the public pages the AI directories link to
 //! (`/docs`, `/privacy`, `/terms`, `/support`).
 
@@ -13,8 +13,8 @@ use axum::{
 use serde::Deserialize;
 
 use super::{
-    Exchange, SessionToken, WebLogin, approvals, claim, device, email, machines, notify, oauth,
-    operator,
+    Exchange, SessionToken, WebLogin, analytics, approvals, claim, device, email, machines,
+    notify, oauth, operator,
     pages::{self, Viewer},
     passkeys, providers, public,
 };
@@ -54,6 +54,8 @@ pub fn router(hub_authorization: bool) -> Router<AppState> {
         .route("/operator", get(operator::page))
         .route("/operator/admit", post(operator::admit))
         .route("/operator/plan", post(operator::plan))
+        .route("/operator/analytics", get(analytics::page))
+        .route("/operator/analytics.csv", get(analytics::csv))
         .route("/approvals", get(approvals::list))
         .route("/approvals/decide", post(approvals::decide))
         .route("/approvals/test", post(approvals::test))

@@ -22,6 +22,7 @@
 //! that does not check out stops the start with what is wrong and where. With no directory
 //! the built-in default serves, compiled into the binary.
 
+mod analytics_copy;
 mod assets;
 #[cfg(test)]
 mod brand_tests;

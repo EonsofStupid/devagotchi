@@ -90,6 +90,41 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
   .wide th:nth-child(4), .wide td:nth-child(4) { display: table-cell; }
 }
 
+/* The operator's analytics (`web/analytics.rs`): one hue, the site's accent. Page views are
+   its pale bars, visitors the solid part of each; the grid and labels stay in muted ink. */
+.range { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 16px 0 8px; }
+.range span { color: var(--muted); }
+.range a[aria-current="page"] { color: var(--text); font-weight: 700; text-decoration: none; }
+h3 { font-size: 1rem; margin: 24px 0 8px; }
+td.n { font-variant-numeric: tabular-nums; }
+.report tbody th { font-size: inherit; font-weight: 400; color: var(--text); }
+.chart { margin: 8px 0 0; }
+.chart > svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .axis { stroke: var(--muted); stroke-width: 1; }
+.chart .tick { fill: var(--muted); font: 11px var(--font-ui); font-variant-numeric: tabular-nums; }
+.chart .views, .swatch .views { fill: var(--accent); fill-opacity: .3; }
+.chart .visitors, .swatch .visitors { fill: var(--accent); }
+.chart .hit { fill: transparent; }
+/* The chart scales with the page: on a phone its labels are drawn larger to stay legible. */
+@media (max-width: 560px) { .chart .tick { font-size: 20px; } }
+.chart .day:hover .views { fill-opacity: .5; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 8px 0 0; color: var(--muted);
+  font-size: .9rem; }
+.key { display: inline-flex; align-items: center; gap: 6px; }
+.swatch { width: 12px; height: 12px; flex: none; }
+details { margin: 12px 0; }
+summary { cursor: pointer; color: var(--accent); }
+details table { margin-top: 8px; }
+.funnel td:last-child { width: 35%; }
+.meter { display: block; width: 100%; height: 10px; }
+.meter .track { fill: var(--sunk); }
+.meter .fill { fill: var(--accent); }
+@media (forced-colors: active) {
+  .chart .views, .chart .visitors, .swatch rect, .meter .fill { fill: CanvasText; }
+  .chart .views, .swatch .views { fill-opacity: .4; }
+}
+
 /* Moving between the hub's pages: the bar stays, the page slides in beneath it. The whole
    viewport is the moving snapshot, so a page scrolled far down leaves from where it was.
    Only with scripting on: in Chrome a page reached by a cross-document view transition with
