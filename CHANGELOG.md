@@ -7,6 +7,18 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### The default privacy page says how people actually sign in (increment 65)
+- `site/default/content/privacy.md` no longer says everyone signs in through Shippin
+  (id.shippin.cloud). It names every way a hub may offer (passkey, Google, GitHub, an email
+  link, Shippin) and what the hub keeps for each: a passkey's public key; the account ID and
+  email from Google, GitHub or Shippin, never their tokens; an email link only as a hash; and
+  Shippin's tokens, encrypted, only on a hub that uses Shippin for every sign-in.
+- It now also covers what the hub keeps since the hosted hub: the account made at first
+  connect (temporary until secured, ending after 14 days unused), its plan and early-access
+  state, the record of changes to it, the one-hour keyed hash of a network address for rate
+  limits, the push address for phone notifications, and that a board belongs to the account
+  unless it signs in through an organization. Content only; no code changed.
+
 ### The operator page: letting people in (increment 64)
 - `/operator` on a hosted hub, for its operator (the hub's owner, signed in) only; anyone
   else, signed in or not, gets the same 404 an unknown path gets.
