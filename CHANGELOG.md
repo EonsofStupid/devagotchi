@@ -24,11 +24,17 @@ heading. Agents draft the fragments below; they never tag.
 - The operator's reads go through `devagotchi.tenants_in` (ids in one state) and then one
   transaction scoped to each tenant (`accounts/operator.rs`); admissions and plan changes go
   through `admit` and `set_plan` (increment 63), on both tenants' chains.
+- The hub's pages without JavaScript, in Chrome: page transitions (`@view-transition`) are
+  declared only with scripting on, since a page reached by one with JavaScript off kept the
+  transition's layer over it and every click landed on that layer; smooth scrolling, meant
+  for the landing page, no longer animates every page's scrolling (it made controls in a
+  scrolled table move under the pointer). The operator page's tables wrap long ids instead of
+  scrolling sideways on a desktop screen.
 - Tests: `web/operator_tests.rs` (404 for everyone else, the lists, letting in on a plan,
   the next MCP call working, plan changes, foreign posts refused, SQLite and Postgres; a
   neutral site's operator page names no brand) and `tests/operator_browser.py` (Chrome,
-  JavaScript off for the operator page: an operator lets a waiting person in, and the
-  person's next MCP call works).
+  JavaScript off and a phone's width for the operator page: an operator lets a waiting
+  person in, and the person's next MCP call works).
 
 ### Early access and plans, enforced by the hub (increment 63)
 - `site.json` `early_access.mode` now decides who gets in on a hosted hub

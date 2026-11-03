@@ -82,7 +82,7 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
 /* The operator page: wide tables scroll inside their box, every column kept. */
 .wide { overflow-x: auto; margin: 8px 0; }
 .wide table { min-width: 640px; }
-.wide td code { overflow-wrap: normal; white-space: nowrap; }
+.wide td { overflow-wrap: anywhere; }
 .row-form { margin: 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .usage { margin: 0; padding-left: 18px; }
 @media (max-width: 560px) {
@@ -91,8 +91,11 @@ input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
 }
 
 /* Moving between the hub's pages: the bar stays, the page slides in beneath it. The whole
-   viewport is the moving snapshot, so a page scrolled far down leaves from where it was. */
-@media (prefers-reduced-motion: no-preference) {
+   viewport is the moving snapshot, so a page scrolled far down leaves from where it was.
+   Only with scripting on: in Chrome a page reached by a cross-document view transition with
+   JavaScript off never finishes it, and the transition's layer stays over the page and takes
+   every click (the pages work without JavaScript, so that would strand someone on them). */
+@media (prefers-reduced-motion: no-preference) and (scripting: enabled) {
   @view-transition { navigation: auto; }
   ::view-transition-group(shell-bar) { animation: none; }
   ::view-transition-old(root) { animation: 150ms cubic-bezier(.4, 0, 1, 1) both page-leave; }

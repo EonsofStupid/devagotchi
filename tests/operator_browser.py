@@ -10,9 +10,9 @@ http://localhost (a secure context, so WebAuthn works without TLS), with a site 
 2. A person's AI client connects as one does (dynamic registration, the consent page's
    Connect, PKCE): their account and tenant are made, and they wait. Their MCP call
    answers with the early-access message instead of acting; `/operator` is a 404 for them.
-3. In a browser with JavaScript off (the page needs none), the operator's page shows the
-   mode and the person waiting. The operator checks them, picks the Pro plan on their row
-   and presses the one button.
+3. In a browser with JavaScript off (the page needs none), on a screen narrower than its
+   tables, the operator's page shows the mode and the person waiting. The operator checks
+   them, picks the Pro plan on their row and presses the one button.
 4. The person's next MCP call works, on the Pro plan.
 5. The operator changes their plan from their row; `whoami` says Free.
 
@@ -251,8 +251,10 @@ def main() -> int:
             assert call(f"{url}/operator")[0] == 404
             print("PASS the person waits, and the operator page is a 404 to them")
 
-            # 3. The operator's page, with JavaScript off: let them in on the Pro plan.
-            plain = browser.new_context(java_script_enabled=False)
+            # 3. The operator's page, with JavaScript off, on a screen narrower than its
+            # tables (they scroll in their box): let them in on the Pro plan.
+            plain = browser.new_context(java_script_enabled=False,
+                                        viewport={"width": 390, "height": 800})
             plain.add_cookies(signing.cookies())
             page = plain.new_page()
             page.goto(f"{url}/operator")
