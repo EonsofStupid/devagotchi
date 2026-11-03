@@ -715,6 +715,7 @@ async fn names_from_nomen_are_escaped_on_the_page() {
             linked: &[],
             access: None,
             plan: None,
+            operator: false,
         },
         &[],
     );

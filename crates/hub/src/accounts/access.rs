@@ -83,7 +83,7 @@ fn access_row(row: &AnyRow) -> Result<(Access, bool), sqlx::Error> {
 
 /// `tenant`'s access as kept, and whether it is the home tenant; `None` for a tenant with
 /// no row yet. Inside a transaction scoped to `tenant`.
-async fn read_in(
+pub(super) async fn read_in(
     connection: &mut AnyConnection,
     tenant: &str,
 ) -> Result<Option<(Access, bool)>, sqlx::Error> {
@@ -324,7 +324,6 @@ impl Accounts {
     }
 
     /// `tenant`'s access as kept, or `None` for a tenant this hub does not have.
-    #[cfg_attr(not(test), allow(dead_code))] // the operator page (increment 64)
     pub async fn access_of(&self, tenant: &str) -> BridgeResult<Option<Access>> {
         transaction!(&self.store, |connection| {
             self.store.scope(connection, tenant).await?;
@@ -334,7 +333,6 @@ impl Accounts {
 
     /// The tenants in `state` ([`ADMITTED`] or [`WAITING`]), at most `most`: the longest
     /// waiting first, the latest let in first.
-    #[cfg_attr(not(test), allow(dead_code))] // the operator page (increment 64)
     pub async fn tenants_in(&self, state: &str, most: u32) -> BridgeResult<Vec<String>> {
         transaction!(&self.store, |connection| {
             Ok(self
@@ -347,7 +345,6 @@ impl Accounts {
     /// An operator lets `tenants` in, each on `plan` when given (a plan the site lists).
     /// Tenants already in are left as they are. The operator's account is the actor in each
     /// tenant's chain and in the home tenant's; whoever listens hears of each one let in.
-    #[cfg_attr(not(test), allow(dead_code))] // the operator page (increment 64)
     pub async fn admit(
         &self,
         tenants: &[String],
@@ -385,7 +382,6 @@ impl Accounts {
 
     /// An operator puts `tenant` on `plan` (a plan the site lists), recorded in its chain and
     /// the home tenant's.
-    #[cfg_attr(not(test), allow(dead_code))] // the operator page (increment 64)
     pub async fn set_plan(&self, tenant: &str, plan: &str, operator: &str) -> BridgeResult<()> {
         self.known_plan(plan)?;
         let now = now_secs();
@@ -455,7 +451,6 @@ impl Accounts {
         Ok(())
     }
 
-    #[cfg_attr(not(test), allow(dead_code))] // the operator page (increment 64)
     fn known_plan(&self, plan: &str) -> BridgeResult<()> {
         if self.site().plan(plan).is_none() {
             return Err(BridgeError::new(

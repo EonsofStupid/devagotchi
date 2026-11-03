@@ -38,6 +38,9 @@ mod media;
 mod media_tests;
 mod notify;
 pub mod oauth;
+mod operator;
+#[cfg(test)]
+mod operator_tests;
 mod pages;
 mod passkeys;
 mod providers;

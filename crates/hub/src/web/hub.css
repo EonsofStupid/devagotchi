@@ -76,8 +76,18 @@ button.approve { background: var(--online); border-color: var(--online); color: 
 button.deny { color: var(--revoked); border-color: var(--revoked); }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden;
   clip: rect(0 0 0 0); white-space: nowrap; }
+select { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-s);
+  background: var(--bg); color: var(--text); }
+input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
+/* The operator page: wide tables scroll inside their box, every column kept. */
+.wide { overflow-x: auto; margin: 8px 0; }
+.wide table { min-width: 640px; }
+.wide td code { overflow-wrap: normal; white-space: nowrap; }
+.row-form { margin: 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.usage { margin: 0; padding-left: 18px; }
 @media (max-width: 560px) {
   th:nth-child(4), td:nth-child(4) { display: none; }
+  .wide th:nth-child(4), .wide td:nth-child(4) { display: table-cell; }
 }
 
 /* Moving between the hub's pages: the bar stays, the page slides in beneath it. The whole

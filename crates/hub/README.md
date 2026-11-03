@@ -316,7 +316,7 @@ gets an account and a tenant (`t-<uuid>`) of their own, made on the spot:
   other tool answers with the site's one message (`content/messages.json` `access.waiting`:
   since when, that an email comes when they are in, their account page) instead of acting,
   and nothing enrolls, adds a machine or writes a board for it. Its account page says the
-  same. An operator lets people in (the operator page, increment 64); each admission and
+  same. An operator lets people in on `/operator` (below); each admission and
   plan change is on the tenant's chain and the home tenant's, the operator as actor, and a
   tenant with a verified email gets the "you're in" email when `auth.email` can send it.
   Switching `early_access` to `open` lets each waiting tenant in on its next request
@@ -326,6 +326,16 @@ gets an account and a tenant (`t-<uuid>`) of their own, made on the spot:
   as the default plan, said once in the log. Plans hold everyone but the owner; reaching a
   limit is refused with `plan_limit`, naming the plan, the limit and the count and pointing
   to the plans.
+- **The operator page** (`/operator`, `web/operator.rs`): served only to the hub's owner,
+  signed in, on a hosted hub; anyone else gets the 404 an unknown path gets. It says what
+  `early_access.mode` is and how to change it (edit `site.json`, then
+  `hub-up.sh --site DIR --site-only`; the mode is never a switch on the page). The waiting
+  list shows each tenant's joining, sign-ins, whether it is secured, the AI app that made it
+  and its last activity: check any number, pick each one's plan on its row, and one button
+  lets them in. The list of those let in shows each one's plan (changed on its row), its use
+  against the plan's limits, and when and by whom it was let in. Plain forms, no script,
+  posts only from the hub's own page; every word from `content/messages.json` `operator`.
+  The owner's account page links to it.
 - **Operators, with no claim.** Someone who signs in with an identity `operators` names (a
   verified `email:`, or `google:`, `github:`, `nomen:` or `oidc:` and the provider's
   subject) is the hub's owner, the platform operator, in the first tenant (Jesse is tenant

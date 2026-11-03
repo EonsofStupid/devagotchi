@@ -15,6 +15,7 @@ pub mod claim;
 pub mod email;
 pub mod identities;
 pub mod oauth;
+pub mod operator;
 pub mod passkey;
 pub mod sessions;
 pub mod tenants;

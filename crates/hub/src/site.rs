@@ -366,7 +366,7 @@ impl Site {
                     .map(|e| format!("content/messages.json {what}: {e}")),
             );
         }
-        for (what, template, vars, inline) in self.access_checks() {
+        for (what, template, vars, inline) in self.message_checks() {
             let mut ctx = Ctx::checking(self);
             for (var, value) in vars {
                 ctx.set(var, value);
