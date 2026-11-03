@@ -42,6 +42,7 @@ use crate::{
     auth::Subject,
     config::{DEFAULT_FREE_LIMIT, HubConfig, valid_name},
     hub::Hub,
+    site::Cap,
 };
 
 /// The header a caller names its seat in: the account's own agent on that machine.
@@ -209,6 +210,20 @@ impl Boards {
         project: &str,
         shared: &[String],
     ) -> BridgeResult<Bound> {
+        self.bind_held(subject, who, project, shared, None)
+    }
+
+    /// `bind_for`, with the limit a plan sets in place of the free limit (`planned`:
+    /// `Some(Some(n))` at most `n`, `Some(None)` none; `tenant_access.rs`). The owner and the
+    /// `unlimited` accounts have none either way.
+    pub fn bind_held(
+        &self,
+        subject: &str,
+        who: &[&str],
+        project: &str,
+        shared: &[String],
+        planned: Option<Option<usize>>,
+    ) -> BridgeResult<Bound> {
         let Some(accounts) = &self.accounts else {
             return Err(BridgeError::new(
                 "not_offered",
@@ -233,20 +248,23 @@ impl Boards {
         let limit = (!who.iter().any(|id| {
             accounts.unlimited.contains(*id) || accounts.owner.get().is_some_and(|o| o == id)
         }))
-        .then_some(accounts.free_limit);
+        .then_some(planned.unwrap_or(Some(accounts.free_limit)))
+        .flatten();
         let existed = held.iter().any(|name| name == project);
-        if !existed && limit.is_some_and(|limit| held.len() >= limit) {
+        if let Some(limit) = limit
+            && !existed
+            && held.len() >= limit
+        {
             return Err(BridgeError::new(
                 "plan_limit",
                 format!(
-                    "a free {} holds {} project{} on this hub and this one already has {}; unbind one, or ask the operator",
+                    "a free {} holds {limit} project{} on this hub and this one already has {}; unbind one, or ask the operator",
                     if subject.starts_with("org-") {
                         "org"
                     } else {
                         "account"
                     },
-                    accounts.free_limit,
-                    if accounts.free_limit == 1 { "" } else { "s" },
+                    if limit == 1 { "" } else { "s" },
                     held.join(", ")
                 ),
             ));
@@ -1746,9 +1764,17 @@ impl Hub {
             .chain(subject.org.clone())
             .collect();
         let project = input.project.clone();
+        // A tenant on a plan binds as many projects as the plan says (`tenant_access.rs`).
+        let plan = self.plan_cap(&subject, "projects");
+        let planned = match &plan {
+            Some((_, Cap::AtMost(most))) => Some(Some(*most as usize)),
+            Some((_, Cap::Unlimited)) => Some(None),
+            Some((_, Cap::Unset)) | None => None,
+        };
+        let held_by = owner.clone();
         let result = tokio::task::spawn_blocking(move || {
             let who: Vec<&str> = who.iter().map(String::as_str).collect();
-            boards.bind_for(&owner, &who, &project, &shared)
+            boards.bind_held(&owner, &who, &project, &shared, planned)
         })
         .await
         .unwrap_or_else(|join| {
@@ -1757,6 +1783,13 @@ impl Hub {
                 format!("board call did not complete: {join}"),
             ))
         });
+        let result = match (result, plan) {
+            (Err(error), Some((plan, Cap::AtMost(most)))) if error.code == "plan_limit" => {
+                let held = self.boards.account_boards(&held_by).len();
+                Err(self.plan_limit(&plan, "projects", most, held))
+            }
+            (result, _) => result,
+        };
         let outcome = match &result {
             Ok(bound) if bound.created => "created".to_string(),
             Ok(_) => "ok".to_string(),
@@ -1891,6 +1924,7 @@ mod tests {
             agent: None,
             claim_code: None,
             provisional_warning: false,
+            access: None,
         };
         let (alice, bob) = (
             member("300000000000000011", Some("395263680805142530")),

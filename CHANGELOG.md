@@ -7,6 +7,41 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Early access and plans, enforced by the hub (increment 63)
+- `site.json` `early_access.mode` now decides who gets in on a hosted hub
+  (`tenancy.mode multi`). `open`: a new tenant is let in when it is made. `early_access`: a
+  new person still gets their account on first connect and can secure it as before, but
+  their tenant waits until an operator lets them in. While it waits, `whoami` answers
+  (`access: waiting`, `waiting_since`, `access_note`) and every other MCP tool answers with
+  one message from `content/messages.json` `access.waiting` instead of acting; no machine is
+  added or enrolled (`machine_add`, Add a machine, `/api/v1/machines`, `/enroll`, the link)
+  and no board is written. `/account` and `/api/v1/me` show the waiting state and when they
+  joined.
+- Switching `early_access` to `open` lets every waiting tenant in on its next request,
+  recorded as `open sign-up`; switching back never puts anyone back. The home tenant and
+  every tenant from before this change are in.
+- Each tenant has a plan: the plan `site.json` marks `"default": true`, else the first. The
+  hub enforces `plans[].limits` per tenant: `projects` (boards bound), `machines` (machines
+  added, enrolled or with a live code) and `clients` (AI apps connected at once). Reaching
+  one is refused with `plan_limit`, naming the plan, the limit and the count and pointing to
+  the plans (`links.plans`, else `/#plans`). `check-site` refuses any other limit name
+  (`idle_days` included: the hub does not count it), and more than one default plan. A plan
+  id the site no longer lists reads as the default plan, logged once. `price` stays text.
+- Storage: migration 0008 (add-only, Postgres and SQLite in step) adds `tenancy_access`
+  (state, `waiting_since`, `admitted_at`, `admitted_by`, plan), one row per tenant, under
+  forced row-level security like the tenant's other rows. The operator's lists go through
+  `devagotchi.tenants_in`, which answers the ids of the tenants in one state and nothing
+  else; each tenant's details are read scoped to that tenant.
+- Every admission and plan change is recorded in the tenant's chain and the home tenant's,
+  the operator as actor. A tenant let in gets the "you're in" email
+  (`access.admitted_email`) at its first verified address when `auth.email` is configured;
+  otherwise its account page says it.
+- Tests: waiting tenants refused on every MCP tool, `/enroll`, `/api/v1/machines`, Add a
+  machine and the board, then let in and served; both mode switches; limits at the
+  boundary; default and fallback plans; the migration on both engines with row-level
+  security; the email; `check-site` refusing unknown limits; the neutral site's new copy
+  names no brand.
+
 ### Deploying the hub's site directory (increment 62)
 - Compose mounts the site directory `DEVAGOTCHI_SITE_DIR` names on the host into the hub,
   read-only, and tells the hub only when it is set (an empty `site/` stands in otherwise,

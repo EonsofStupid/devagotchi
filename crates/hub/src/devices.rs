@@ -94,6 +94,14 @@ fn device_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Device> {
     })
 }
 
+/// The machines an owner holds: enrolled and not revoked, or with a live code (`?3` is a
+/// machine not to count, the one being added).
+const HELD: &str = "SELECT (SELECT COUNT(*) FROM devices WHERE owner = ?1 AND revoked_at IS NULL)
+      + (SELECT COUNT(DISTINCT device) FROM enroll_codes
+           WHERE owner = ?1 AND used_at IS NULL AND expires_at >= ?2
+             AND device != ?3
+             AND device NOT IN (SELECT name FROM devices WHERE owner = ?1))";
+
 fn code_hash(code: &str) -> String {
     hex::encode(Sha256::digest(code.trim().as_bytes()))
 }
@@ -262,15 +270,7 @@ impl Devices {
         }
         if new_place {
             let held: i64 = transaction
-                .query_row(
-                    "SELECT (SELECT COUNT(*) FROM devices WHERE owner = ?1 AND revoked_at IS NULL)
-                          + (SELECT COUNT(DISTINCT device) FROM enroll_codes
-                               WHERE owner = ?1 AND used_at IS NULL AND expires_at >= ?2
-                                 AND device != ?3
-                                 AND device NOT IN (SELECT name FROM devices WHERE owner = ?1))",
-                    params![owner, now, device],
-                    |row| row.get(0),
-                )
+                .query_row(HELD, params![owner, now, device], |row| row.get(0))
                 .map_err(store_error)?;
             if held as usize >= limit {
                 return Err(BridgeError::new(
@@ -351,6 +351,33 @@ impl Devices {
             revoked_at: None,
             owner,
         })
+    }
+
+    /// How many machines `owner` holds: enrolled and not revoked, or with a live code.
+    pub fn held(&self, owner: &str) -> BridgeResult<usize> {
+        let held: i64 = self
+            .connection
+            .lock()
+            .expect("device lock")
+            .query_row(HELD, params![owner, now_secs(), ""], |row| row.get(0))
+            .map_err(store_error)?;
+        Ok(usize::try_from(held).unwrap_or(0))
+    }
+
+    /// The account a live code (unused, unexpired) was issued to, if an account issued it.
+    pub fn code_owner(&self, code: &str) -> BridgeResult<Option<String>> {
+        Ok(self
+            .connection
+            .lock()
+            .expect("device lock")
+            .query_row(
+                "SELECT owner FROM enroll_codes WHERE code_hash = ?1 AND used_at IS NULL AND expires_at >= ?2",
+                params![code_hash(code), now_secs()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()
+            .map_err(store_error)?
+            .flatten())
     }
 
     /// The device a live code (unused, unexpired) is for, without spending it: the join

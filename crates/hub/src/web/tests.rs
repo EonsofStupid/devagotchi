@@ -713,6 +713,8 @@ async fn names_from_nomen_are_escaped_on_the_page() {
             events: &[],
             ways: "",
             linked: &[],
+            access: None,
+            plan: None,
         },
         &[],
     );
@@ -1368,6 +1370,7 @@ async fn a_person_adds_a_machine_of_their_own_and_revokes_it() {
         agent: None,
         claim_code: None,
         provisional_warning: false,
+        access: None,
     };
     assert!(matches!(
         w.hub.route(&subject(OTHER), "platinum"),

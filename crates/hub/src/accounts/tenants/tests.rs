@@ -179,7 +179,12 @@ async fn the_first_connect_makes_an_account_its_own_tenant_and_a_session() {
             .collect();
         assert_eq!(
             steps,
-            ["tenant.created", "account.created", "session.opened"]
+            [
+                "tenant.created",
+                "tenant.admitted",
+                "account.created",
+                "session.opened"
+            ]
         );
         assert!(accounts.chain_intact(&alice.tenant).await.unwrap());
         assert!(
@@ -472,7 +477,7 @@ async fn a_one_owner_hub_makes_no_account_for_a_strangers_sign_in() {
 }
 
 /// The tables row-level security holds to one tenant (migration 0007).
-const TENANT_TABLES: [&str; 8] = [
+const TENANT_TABLES: [&str; 9] = [
     "auth_accounts",
     "auth_passkeys",
     "auth_sessions",
@@ -481,6 +486,7 @@ const TENANT_TABLES: [&str; 8] = [
     "oauth_codes",
     "oauth_tokens",
     "tenancy_events",
+    "tenancy_access",
 ];
 
 #[tokio::test]

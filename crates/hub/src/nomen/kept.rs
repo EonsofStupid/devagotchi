@@ -81,6 +81,7 @@ impl SignIns {
                         agent: None,
                         claim_code: None,
                         provisional_warning: false,
+                        access: None,
                     },
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,

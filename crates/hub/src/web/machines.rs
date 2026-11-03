@@ -60,6 +60,7 @@ pub async fn add(
         Err(page) => return *page,
     };
     let name = form.name.trim().to_ascii_lowercase();
+    let site = pages::site();
     match state.hub.add_own_machine(&owner, &name) {
         Ok((stored, code)) => code_page(
             &state.hub.config.public_url,
@@ -71,9 +72,14 @@ pub async fn add(
         Err(error) => pages::message(
             match error.code.as_str() {
                 "device_store" => StatusCode::SERVICE_UNAVAILABLE,
+                "early_access" | "plan_limit" => StatusCode::FORBIDDEN,
                 _ => StatusCode::CONFLICT,
             },
-            "No code issued",
+            match error.code.as_str() {
+                "early_access" => &site.messages.access.waiting_title,
+                "plan_limit" => &site.messages.access.limit_title,
+                _ => "No code issued",
+            },
             &error.message,
             Some(("/account", "Back to your machines")),
         ),
@@ -193,6 +199,7 @@ pub async fn add_json(
         Err(error) => {
             let status = match error.code.as_str() {
                 "device_store" => StatusCode::SERVICE_UNAVAILABLE,
+                "early_access" | "plan_limit" => StatusCode::FORBIDDEN,
                 _ => StatusCode::CONFLICT,
             };
             return json_reply(

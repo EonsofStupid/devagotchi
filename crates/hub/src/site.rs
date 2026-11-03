@@ -9,7 +9,8 @@
 //!                          plans, services, early access, which assets are used
 //!   tokens.json            colours, type, radii and sizes the stylesheet reads, and fonts
 //!   content/landing.json   every landing section's copy
-//!   content/messages.json  the sign-in email, the board's getting-started ticket
+//!   content/messages.json  the sign-in email, the board's getting-started ticket, what
+//!                          early access and plans say (waiting, a limit, "you're in")
 //!   content/docs.md, privacy.md, terms.md, support.md   the public pages
 //!   assets/                logo, icon, diagram, video, poster, fonts (served from 'self')
 //! ```
@@ -26,6 +27,7 @@ mod assets;
 mod brand_tests;
 mod markdown;
 pub(crate) mod model;
+mod plans;
 mod style;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -41,9 +43,10 @@ use std::{
 pub use assets::Asset;
 pub use markdown::Page;
 pub use model::{
-    Action, Band, Front, Item, Landing, Limit, Messages, SignUp, SiteFile, Step, Variants,
+    Action, Band, Front, Item, Landing, Limit, Messages, Plan, SignUp, SiteFile, Step, Variants,
     safe_href,
 };
+pub use plans::Cap;
 pub use text::Ctx;
 pub use watch::{EVERY as WATCH_EVERY, SiteCell, watch};
 
@@ -352,6 +355,22 @@ impl Site {
             ),
         ] {
             let ctx = Ctx::checking(self).with(var, value);
+            if inline {
+                ctx.inline(template);
+            } else {
+                ctx.plain(template);
+            }
+            errors.extend(
+                ctx.errors()
+                    .into_iter()
+                    .map(|e| format!("content/messages.json {what}: {e}")),
+            );
+        }
+        for (what, template, vars, inline) in self.access_checks() {
+            let mut ctx = Ctx::checking(self);
+            for (var, value) in vars {
+                ctx.set(var, value);
+            }
             if inline {
                 ctx.inline(template);
             } else {

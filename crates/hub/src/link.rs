@@ -86,7 +86,14 @@ pub struct Links {
     next: AtomicU64,
     /// Tells an account's phones when a machine it added joins (increment 29a).
     push: Option<Arc<crate::push::Push>>,
+    /// Whether the account that issued a code may enroll a machine with it now.
+    gate: Option<EnrollGate>,
 }
+
+/// Whether an account may enroll a machine now: false while its tenant waits to be let in
+/// (`tenant_access.rs`), or when that cannot be told.
+pub type EnrollGate =
+    Arc<dyn Fn(String) -> futures_util::future::BoxFuture<'static, bool> + Send + Sync>;
 
 /// A device the hello proved, and the account it just joined for, if it enrolled now
 /// with an account's code.
@@ -142,6 +149,32 @@ impl Links {
             refusals: Mutex::new(RefusalLog::default()),
             next: AtomicU64::new(1),
             push: None,
+            gate: None,
+        }
+    }
+
+    /// Ask `gate` before a machine enrolls with an account's code.
+    pub fn gated(mut self, gate: EnrollGate) -> Self {
+        self.gate = Some(gate);
+        self
+    }
+
+    /// Whether `code` may enroll a machine now: refused while the account that issued it
+    /// waits to be let in. Looking does not spend the code.
+    pub async fn may_enroll(&self, code: &str) -> BridgeResult<()> {
+        let Some(gate) = &self.gate else {
+            return Ok(());
+        };
+        let Some(owner) = self.devices.code_owner(code)? else {
+            return Ok(());
+        };
+        if gate(owner).await {
+            Ok(())
+        } else {
+            Err(BridgeError::new(
+                "early_access",
+                "the account that issued this code is not let in yet; nothing joins for it until it is",
+            ))
         }
     }
 
@@ -160,6 +193,12 @@ impl Links {
     /// The machines `owner` added, revoked ones included.
     pub fn owned_by(&self, owner: &str) -> BridgeResult<Vec<crate::devices::Device>> {
         self.devices.owned_by(owner)
+    }
+
+    /// How many machines `owner` holds against its quota: enrolled and not revoked, or
+    /// with a live code.
+    pub fn held(&self, owner: &str) -> BridgeResult<usize> {
+        self.devices.held(owner)
     }
 
     /// Move machines, codes, and push subscriptions from one account id to another
@@ -411,6 +450,17 @@ impl Links {
             Some(LinkFrame::Hello { device, .. }) => Some(device.clone()),
             _ => None,
         };
+        if let Some(LinkFrame::Hello {
+            enroll_code: Some(code),
+            ..
+        }) = &hello
+            && let Err(error) = self.may_enroll(code).await
+        {
+            self.refused(claimed.as_deref(), peer, &error);
+            let _ = send(&mut sink, &wire_refusal(&error)).await;
+            let _ = tokio::time::timeout(SEND_TIMEOUT, sink.close()).await;
+            return;
+        }
         let Admitted {
             device,
             key,

@@ -59,7 +59,7 @@ impl Accounts {
             return Ok(None);
         }
         let key = hash(token);
-        transaction!(&self.store, |connection| {
+        let found = transaction!(&self.store, |connection| {
             if self
                 .enter(connection, crate::store::Lookup::Session(&key))
                 .await?
@@ -114,8 +114,14 @@ impl Accounts {
                 session.last_seen = now;
                 tenants::touch(connection, &mut session.account, now).await?;
             }
-            Ok(Some(session))
-        })
+            // Its tenant's access, settled now: let in, if sign-up opened while it waited.
+            let admitted = self.settle_in(connection, &mut session.account, now).await?;
+            Ok(Some((session, admitted)))
+        })?;
+        Ok(found.map(|(session, admitted)| {
+            self.announce(admitted);
+            session
+        }))
     }
 
     /// Add a passkey on a link's authority and open the session it signs in to, in one

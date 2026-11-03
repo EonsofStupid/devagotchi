@@ -19,8 +19,10 @@
 //! tenant ([`Store::scope`]). The hub's queries run as the role `devagotchi_hub` (no
 //! superuser, no BYPASSRLS), switched to on every connection when the login role may; a
 //! key that must lead to its tenant first (a session's hash, a token's) goes through
-//! [`Store::tenant_of`], which answers the tenant and nothing else. SQLite runs the same
-//! code: there each call is a plain query, the file being one hub's alone.
+//! [`Store::tenant_of`], which answers the tenant and nothing else; the operator's lists of
+//! tenants by access (migration 0008) go through [`Store::tenants_in`], which answers their
+//! ids and nothing else. SQLite runs the same code: there each call is a plain query, the
+//! file being one hub's alone.
 
 use std::{
     path::{Path, PathBuf},
@@ -513,6 +515,32 @@ impl Store {
             }
         };
         sqlx::query_scalar(sql).bind(since).fetch_one(&mut *connection).await
+    }
+
+    /// The tenants whose access is `state` (`admitted` or `waiting`), at most `most`: the
+    /// longest waiting first, the latest let in first. Ids only: on Postgres through
+    /// `devagotchi.tenants_in` (migration 0008), so the operator's lists name tenants and
+    /// each one's details are read in a transaction scoped to it.
+    pub async fn tenants_in(
+        &self,
+        connection: &mut AnyConnection,
+        state: &str,
+        most: i64,
+    ) -> Result<Vec<String>, sqlx::Error> {
+        let sql = match self.backend {
+            Backend::Postgres => "SELECT devagotchi.tenants_in($1, $2)",
+            Backend::Sqlite => {
+                "SELECT tenant_id FROM tenancy_access WHERE state = $1
+                 ORDER BY CASE WHEN state = 'waiting' THEN coalesce(waiting_since, 0)
+                               ELSE -coalesce(admitted_at, 0) END, tenant_id
+                 LIMIT $2"
+            }
+        };
+        sqlx::query_scalar(sql)
+            .bind(state)
+            .bind(most)
+            .fetch_all(&mut *connection)
+            .await
     }
 
     /// A connection for reads outside a transaction.

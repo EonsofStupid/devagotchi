@@ -16,6 +16,7 @@ pub(crate) struct Hosted {
     pub(crate) http: reqwest::Client,
     pub(crate) accounts: Arc<accounts::Accounts>,
     pub(crate) devices: Arc<devices::Devices>,
+    pub(crate) config: Arc<HubConfig>,
     pub(crate) dir: tempfile::TempDir,
 }
 
@@ -73,11 +74,14 @@ pub(crate) async fn hosted_with(
             .await
             .unwrap()
             .with_tokens(config.token_config())
-            .with_tenancy(config.tenancy.clone(), config.operators.clone()),
+            .with_tenancy(config.tenancy.clone(), config.operators.clone())
+            .with_site(config.site_cell(), &url),
     );
     let devices = Arc::new(devices_at(dir.path()).unwrap());
     let audit = Arc::new(Audit::open(&dir.path().join("audit.sqlite3")).unwrap());
-    let links = Arc::new(Links::new(config.clone(), devices.clone(), audit.clone()));
+    let links = Arc::new(
+        Links::new(config.clone(), devices.clone(), audit.clone()).gated(accounts.enroll_gate()),
+    );
     let state = AppState {
         verifier: Arc::new(
             Verifier::from_hub_config(&config, dir.path(), Some(accounts.clone()))
@@ -114,6 +118,7 @@ pub(crate) async fn hosted_with(
             .unwrap(),
         accounts,
         devices,
+        config,
         dir,
     }
 }
@@ -247,7 +252,7 @@ impl Hosted {
     }
 
     /// An MCP request as `person`'s AI client; the answer's `result` (or the JSON-RPC error).
-    async fn mcp(&self, person: &mut Person, method: &str, params: Value) -> Value {
+    pub(crate) async fn mcp(&self, person: &mut Person, method: &str, params: Value) -> Value {
         if person.session.is_none() && method != "initialize" {
             let init = self
                 .http
@@ -311,19 +316,19 @@ impl Hosted {
     }
 }
 
-fn web_encode(value: &str) -> String {
+pub(crate) fn web_encode(value: &str) -> String {
     percent_encoding::utf8_percent_encode(value, percent_encoding::NON_ALPHANUMERIC).to_string()
 }
 
 /// Whether a tool call came back refused (an error result, or a JSON-RPC error).
-fn refused(answer: &Value) -> bool {
+pub(crate) fn refused(answer: &Value) -> bool {
     answer["isError"] == true || answer.get("error").is_some() || answer.get("code").is_some()
 }
 
 /// Arguments for `schema`, filled from `ids` by property name and with harmless values
 /// elsewhere: enough for the call to reach the tool, with the other tenant's ids where a
 /// tool takes one.
-fn fill(schema: &Value, root: &Value, ids: &Value) -> Value {
+pub(crate) fn fill(schema: &Value, root: &Value, ids: &Value) -> Value {
     if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
         let name = reference.rsplit('/').next().unwrap();
         let defs = root

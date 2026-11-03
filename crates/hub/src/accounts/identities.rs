@@ -285,6 +285,7 @@ impl Accounts {
                 now,
             )
             .await?;
+            super::access::begin_in(connection, &fresh_tenant, &self.site(), now).await?;
             create_in(
                 &self.store,
                 connection,

@@ -31,6 +31,7 @@ use crate::{
 };
 
 /// The mail server and sender the email link goes out through.
+#[derive(Clone)]
 pub struct Mailer {
     server: mail::Server,
     password: Option<String>,
@@ -80,18 +81,52 @@ impl Mailer {
     /// The site's sign-in email (`content/messages.json` `email`), with `link` in it.
     async fn send(&self, site: &crate::site::Site, to: &str, link: &str) -> Result<(), String> {
         let (subject, body) = site.sign_in_email(link);
+        self.send_text(to, &subject, &body).await
+    }
+
+    async fn send_text(&self, to: &str, subject: &str, body: &str) -> Result<(), String> {
         mail::send(
             &self.server,
             self.password.as_deref(),
             &mail::Message {
                 from: &self.from,
                 to,
-                subject: &subject,
-                body: &body,
+                subject,
+                body,
             },
         )
         .await
     }
+}
+
+/// What tells a tenant it was let in (early access, `accounts/access.rs`): the site's email
+/// (`content/messages.json` `access.admitted_email`) to the first verified address among its
+/// sign-ins, sent in the background. A tenant with none hears nothing by mail; its account
+/// page says it is in.
+pub(crate) fn announce_admissions(
+    mailer: Mailer,
+    config: Arc<crate::config::HubConfig>,
+) -> crate::accounts::access::Announce {
+    let mailer = Arc::new(mailer);
+    Arc::new(move |admitted: crate::accounts::access::Admitted| {
+        let Some(to) = admitted.email else {
+            return;
+        };
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let (mailer, config) = (mailer.clone(), config.clone());
+        runtime.spawn(async move {
+            let account = format!("{}/account", config.public_url.trim_end_matches('/'));
+            let (subject, body) = config.site().admitted_email(&account);
+            if let Err(why) = mailer.send_text(&to, &subject, &body).await {
+                eprintln!(
+                    "devagotchi-hub: the email that tenant {} is in was not sent: {why}",
+                    admitted.tenant
+                );
+            }
+        });
+    })
 }
 
 /// The form a sign-in page offers when the hub can mail links.

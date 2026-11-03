@@ -531,6 +531,14 @@ pub async fn decide(
                     Some(("/account#secure", "Secure my account")),
                 );
             }
+            Err(error) if error.code == "plan_limit" => {
+                return pages::message(
+                    StatusCode::FORBIDDEN,
+                    &pages::site().messages.access.limit_title,
+                    &error.message,
+                    Some(("/account", "Your account")),
+                );
+            }
             Err(error) => {
                 eprintln!("devagotchi-hub: account store: {}", error.message);
                 return super::routes::unavailable();

@@ -149,6 +149,21 @@ pub struct WhoAmI {
     /// The tenant this account belongs to on a hub with its own accounts (`t-<uuid>`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tenant: Option<String>,
+    /// On a hub with its own accounts: `admitted`, or `waiting` while the tenant is on the
+    /// early-access list. While it waits, every other tool answers with `access_note`
+    /// instead of acting: tell the person, once.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access: Option<String>,
+    /// When the tenant joined the early-access list, in Unix seconds, while it waits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waiting_since: Option<u64>,
+    /// What the hub says to a waiting tenant: when it joined, that an email comes when it
+    /// is in, and its account page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_note: Option<String>,
+    /// The plan the tenant is on (a plan id from the site), on a hosted hub.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
     /// Where its person secures this account, while nobody has: until then it is bound to
     /// the browser that made it and the AI apps it approved, nothing can recover it, and it
     /// ends at `provisional_until` if unused. Tell the person, and give them this link.
@@ -380,7 +395,24 @@ impl Hub {
         context: RequestContext<RoleServer>,
     ) -> Result<Json<WhoAmI>, Json<BridgeError>> {
         let subject = self.subject(&context)?;
+        let access_note = subject.waiting().then(|| self.waiting_text(&subject));
+        let plan = self.held_plan(&subject).map(|plan| plan.id);
         Ok(Json(WhoAmI {
+            access: subject.access.as_ref().map(|access| {
+                if access.waiting {
+                    crate::accounts::access::WAITING
+                } else {
+                    crate::accounts::access::ADMITTED
+                }
+                .to_string()
+            }),
+            waiting_since: subject
+                .access
+                .as_ref()
+                .filter(|access| access.waiting)
+                .and_then(|access| access.waiting_since),
+            access_note,
+            plan,
             brokers: {
                 let mut brokers: Vec<String> = self
                     .config
@@ -651,6 +683,28 @@ pub(crate) fn unexpected_response(expected: &str, actual: &ResponseBody) -> Json
     router = (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router())
 )]
 impl ServerHandler for Hub {
+    /// Every tool call, unless the caller's tenant waits to be let in (early access): then
+    /// every tool but `whoami` answers with the site's message instead of acting
+    /// (`tenant_access.rs`), and the call is audited as `early_access`.
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        if request.name != "whoami"
+            && let Ok(subject) = self.subject(&context)
+            && let Some(answer) = self.waiting_result(&subject)
+        {
+            self.record(&subject, &request.name, "", "", "early_access")
+                .map_err(|Json(error)| rmcp::ErrorData::internal_error(error.message, None))?;
+            return Ok(answer.into());
+        }
+        let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router())
+            .call(call)
+            .await
+    }
+
     /// The MCP server's name and instructions are the site's (`site.json` `mcp`), so every
     /// AI client meets the hub under the name the site gives it.
     fn get_info(&self) -> rmcp::model::ServerConfig {
@@ -702,6 +756,10 @@ mod schema_tests {
             provisional_warning: false,
             claim_url: None,
             tenant: None,
+            access: None,
+            waiting_since: None,
+            access_note: None,
+            plan: None,
             secure_url: None,
             owner: false,
             human: false,
