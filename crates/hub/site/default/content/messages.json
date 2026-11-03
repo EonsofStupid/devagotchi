@@ -19,5 +19,42 @@
       "subject": "You're in: {product}",
       "body": "You're in. Your {product} account is ready, and your AI can use it now.\n\nYour account: {account}\n\nIf you did not ask to join, ignore this email."
     }
+  },
+  "operator": {
+    "title": "Operator",
+    "account_link": "You run this hub: let people in and set their plans on the [operator page](/operator).",
+    "status_open": "Sign-up is **open**: everyone who connects is let in at once.",
+    "status_early_access": "Sign-up is **early access**: everyone who connects waits here until you let them in.",
+    "how_to_change": "To change it, set `early_access.mode` in the site's `site.json` to `open` or `early_access`, then run `hub-up.sh --site DIR --site-only`. Once it is open, people waiting are let in on their next request; nobody already in is ever put back.",
+    "done_admitted": "Let in: {n}. Their next call works.",
+    "done_plan": "Plan changed.",
+    "none_picked": "Nobody was checked: check the people to let in, then press the button.",
+    "not_from_here": "That came from another site, so nothing was changed. Use the operator page itself.",
+    "waiting_title": "Waiting to be let in",
+    "waiting_empty": "Nobody is waiting.",
+    "admitted_title": "Let in",
+    "admitted_empty": "Nobody has been let in yet.",
+    "columns": {
+      "tenant": "Tenant",
+      "joined": "Joined",
+      "sign_ins": "Sign-ins",
+      "secured": "Secured",
+      "made_by": "Made by",
+      "active": "Last active",
+      "plan": "Plan",
+      "admitted": "Let in",
+      "usage": "Usage"
+    },
+    "secured": "Secured",
+    "not_secured": "Not secured",
+    "no_sign_ins": "None yet",
+    "never": "—",
+    "pick": "Let in {tenant}",
+    "plan_for": "Plan for {tenant}",
+    "admit": "Let in the people checked",
+    "change_plan": "Change plan",
+    "admitted_line": "{when}, by {by}",
+    "usage_of": "{count} of {limit}",
+    "usage_unlimited": "{count}, no limit"
   }
 }

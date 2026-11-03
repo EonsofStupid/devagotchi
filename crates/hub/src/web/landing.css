@@ -314,7 +314,7 @@ html:has(.modal:popover-open) { overflow: hidden; }
    in. Offsets, not transforms, so a page never becomes the box a tooltip is placed in. All
    of it is skipped for anyone who asks for less motion. */
 @media (prefers-reduced-motion: no-preference) {
-  html { scroll-behavior: smooth; }
+  html:has(> body.landing) { scroll-behavior: smooth; }
   .hero-text > *, .diagram { position: relative; animation: arrive .7s cubic-bezier(.2, .7, .2, 1) both; }
   .hero-text > :nth-child(2) { animation-delay: 60ms; }
   .hero-text > :nth-child(3) { animation-delay: 140ms; }

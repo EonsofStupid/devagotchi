@@ -7,6 +7,35 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### The operator page: letting people in (increment 64)
+- `/operator` on a hosted hub, for its operator (the hub's owner, signed in) only; anyone
+  else, signed in or not, gets the same 404 an unknown path gets.
+- A status line: what `site.json` `early_access.mode` is now, and how to change it (edit
+  `site.json`, then `hub-up.sh --site DIR --site-only`). The mode stays config.
+- Waiting: each tenant's joining date, its sign-ins (provider and verified email), whether
+  it is secured, the AI app that made it and its last activity. Check one or many, pick each
+  one's plan on its row (the site's plans, the default selected), and one button lets them
+  in; their next MCP call works.
+- Let in: each tenant's plan with a change-plan control on its row, its use against the
+  plan's limits (machines, projects, AI apps), and when and by whom it was let in.
+- Server-rendered forms that work without JavaScript, labelled for screen readers, taken only
+  from the hub's own page like the other forms; every word from `content/messages.json`
+  `operator`. The owner's account page links to it.
+- The operator's reads go through `devagotchi.tenants_in` (ids in one state) and then one
+  transaction scoped to each tenant (`accounts/operator.rs`); admissions and plan changes go
+  through `admit` and `set_plan` (increment 63), on both tenants' chains.
+- The hub's pages without JavaScript, in Chrome: page transitions (`@view-transition`) are
+  declared only with scripting on, since a page reached by one with JavaScript off kept the
+  transition's layer over it and every click landed on that layer; smooth scrolling, meant
+  for the landing page, no longer animates every page's scrolling (it made controls in a
+  scrolled table move under the pointer). The operator page's tables wrap long ids instead of
+  scrolling sideways on a desktop screen.
+- Tests: `web/operator_tests.rs` (404 for everyone else, the lists, letting in on a plan,
+  the next MCP call working, plan changes, foreign posts refused, SQLite and Postgres; a
+  neutral site's operator page names no brand) and `tests/operator_browser.py` (Chrome,
+  JavaScript off and a phone's width for the operator page: an operator lets a waiting
+  person in, and the person's next MCP call works).
+
 ### Early access and plans, enforced by the hub (increment 63)
 - `site.json` `early_access.mode` now decides who gets in on a hosted hub
   (`tenancy.mode multi`). `open`: a new tenant is let in when it is made. `early_access`: a

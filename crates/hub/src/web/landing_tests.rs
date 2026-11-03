@@ -400,7 +400,24 @@ fn the_shell_stays_and_motion_is_optional_in_the_stylesheet() {
         .split("@media (prefers-reduced-motion: no-preference) {")
         .skip(1);
     let gated: String = motion.collect();
-    assert!(gated.contains("@view-transition") && gated.contains("animation-timeline: --page;"));
+    assert!(gated.contains("animation-timeline: --page;"));
+    // Page transitions also only with scripting on: in Chrome a page reached by a
+    // cross-document view transition with JavaScript off never finishes it, and its layer
+    // takes every click.
+    let transitions = CSS
+        .split("@media (prefers-reduced-motion: no-preference) and (scripting: enabled) {")
+        .nth(1)
+        .expect("page transitions gated on motion and scripting");
+    // (Line ends are the checkout's: CRLF on Windows.)
+    assert!(
+        transitions
+            .trim_start()
+            .starts_with("@view-transition { navigation: auto; }")
+    );
+    assert_eq!(CSS.matches("@view-transition").count(), 1);
+    // Smooth scrolling is the landing page's, never an app page's.
+    assert!(CSS.contains("html:has(> body.landing) { scroll-behavior: smooth; }"));
+    assert!(!CSS.contains("html { scroll-behavior"));
     assert!(CSS.contains("@supports (animation-timeline: view())"));
     // Nothing in it reaches another origin.
     assert!(CSS.split("url(").skip(1).all(|rest| rest.starts_with('#')));

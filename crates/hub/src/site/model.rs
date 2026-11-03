@@ -818,6 +818,66 @@ pub struct Messages {
     pub page_footer: String,
     /// Early access and plans on a hosted hub (`accounts/access.rs`).
     pub access: AccessCopy,
+    /// The operator page (`web/operator.rs`).
+    pub operator: OperatorCopy,
+}
+
+/// The operator page's words. Inline markup where it says so; `{tenant}` is a tenant's id.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatorCopy {
+    /// The page's title and heading.
+    pub title: String,
+    /// On the operator's account page, the way to it (inline markup).
+    pub account_link: String,
+    /// What sign-up is now, by `early_access.mode` (inline markup).
+    pub status_open: String,
+    pub status_early_access: String,
+    /// How to change it: `site.json`, then the site push (inline markup).
+    pub how_to_change: String,
+    /// What a done step says (inline markup): `{n}`, how many were let in.
+    pub done_admitted: String,
+    pub done_plan: String,
+    /// Let in pressed with nobody checked.
+    pub none_picked: String,
+    /// A post from another site, refused.
+    pub not_from_here: String,
+    pub waiting_title: String,
+    pub waiting_empty: String,
+    pub admitted_title: String,
+    pub admitted_empty: String,
+    pub columns: OperatorColumns,
+    pub secured: String,
+    pub not_secured: String,
+    pub no_sign_ins: String,
+    /// Where there is nothing to show (no activity, no AI app).
+    pub never: String,
+    /// The accessible names of a row's checkbox and plan picker: `{tenant}`.
+    pub pick: String,
+    pub plan_for: String,
+    /// The buttons.
+    pub admit: String,
+    pub change_plan: String,
+    /// When and by whom a tenant was let in: `{when}`, `{by}`.
+    pub admitted_line: String,
+    /// A limit's use: `{count}` and `{limit}` (the plan's, worded), or with no limit.
+    pub usage_of: String,
+    pub usage_unlimited: String,
+}
+
+/// The operator page's column headings.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OperatorColumns {
+    pub tenant: String,
+    pub joined: String,
+    pub sign_ins: String,
+    pub secured: String,
+    pub made_by: String,
+    pub active: String,
+    pub plan: String,
+    pub admitted: String,
+    pub usage: String,
 }
 
 /// What a hosted hub says about early access and plans. `{since}` is a date, `{account}`

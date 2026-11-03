@@ -90,6 +90,8 @@ pub struct Viewer<'a> {
     pub access: Option<&'a crate::accounts::access::Access>,
     /// The name of the plan its tenant is on, when a plan holds it.
     pub plan: Option<&'a str>,
+    /// The hosted hub's operator: the account page leads to the operator page.
+    pub operator: bool,
 }
 
 /// Where the account stands on a hosted hub: on the early-access list since when, or in
@@ -259,6 +261,15 @@ pub fn account(viewer: &Viewer<'_>, machines: &[Machine]) -> Response {
     } else {
         ""
     };
+    let operator = if viewer.operator {
+        let site = site();
+        format!(
+            "<p class=\"note\" id=\"operator\">{}</p>",
+            crate::site::Ctx::new(&site).inline(&site.messages.operator.account_link)
+        )
+    } else {
+        String::new()
+    };
     let rows: String = machines
         .iter()
         .map(|m| {
@@ -347,7 +358,7 @@ autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"
     };
     let body = format!(
         "<h1>Signed in as {}</h1>\
-<p class=\"meta\">{kind} ID <code>{}</code></p>{owner}{access}{secure}\
+<p class=\"meta\">{kind} ID <code>{}</code></p>{owner}{operator}{access}{secure}\
 <h2>Your machines</h2>{machines}{add}{sign_ins}{history}\
 <form method=\"post\" action=\"/auth/logout\"><button type=\"submit\">Sign out</button></form>",
         escape(shown),
