@@ -408,7 +408,12 @@ fn the_shell_stays_and_motion_is_optional_in_the_stylesheet() {
         .split("@media (prefers-reduced-motion: no-preference) and (scripting: enabled) {")
         .nth(1)
         .expect("page transitions gated on motion and scripting");
-    assert!(transitions.starts_with("\n  @view-transition { navigation: auto; }"));
+    // (Line ends are the checkout's: CRLF on Windows.)
+    assert!(
+        transitions
+            .trim_start()
+            .starts_with("@view-transition { navigation: auto; }")
+    );
     assert_eq!(CSS.matches("@view-transition").count(), 1);
     // Smooth scrolling is the landing page's, never an app page's.
     assert!(CSS.contains("html:has(> body.landing) { scroll-behavior: smooth; }"));
