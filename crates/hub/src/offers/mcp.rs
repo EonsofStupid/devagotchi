@@ -27,12 +27,15 @@ pub struct OffersView {
     pub state: String,
 }
 
+/// One offering that is offered. Every field is always written, empty or not: the output
+/// schema requires them, and a client that checks (Claude's does) refuses the whole result
+/// over one missing field.
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct OfferingView {
     pub name: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    /// One line: what it is. May be empty.
     pub description: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
+    /// Where to learn more.
     pub url: String,
 }
 
@@ -96,8 +99,7 @@ impl Hub {
             network: ctx.plain(&offers.brand),
             question: ctx.plain(&offers.question),
             offerings: offers
-                .items
-                .iter()
+                .offered()
                 .map(|item| OfferingView {
                     name: ctx.plain(&item.name),
                     description: ctx.plain(&item.text),
@@ -129,7 +131,7 @@ impl Hub {
         {
             return Ok(linked(format!("The account is already linked to the {network}.")));
         }
-        let names: Vec<String> = offers.items.iter().map(|item| item.name.clone()).collect();
+        let names: Vec<String> = offers.offered().map(|item| item.name.clone()).collect();
         // Their words first, kept whatever happens next.
         accounts
             .accept_offers(tenant, &subject.id, consent, &names, now)

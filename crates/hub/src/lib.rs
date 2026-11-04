@@ -41,6 +41,8 @@ mod provider_tests;
 #[cfg(test)]
 mod offers_tests;
 #[cfg(test)]
+mod output_schema;
+#[cfg(test)]
 mod tenant_tests;
 #[cfg(test)]
 mod test_keys;
