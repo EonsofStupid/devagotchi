@@ -131,6 +131,19 @@ pub fn app(status: StatusCode, title: &str, body: &str) -> Response {
     render(status, title, body, Kind::App)
 }
 
+/// A workflow's page (`workflow.rs`): its own script, which follows the steps, and the
+/// passkey script while the account can be secured there, and the phone's (with the app's
+/// manifest) while a phone can be turned on there. All from this origin.
+pub fn workflow(status: StatusCode, title: &str, body: &str, passkey: bool, push: bool) -> Response {
+    let mut response = render(status, title, body, Kind::Workflow { passkey, push });
+    // Its forms post here: the browser sends a POST's true Origin only under `same-origin`.
+    response.headers_mut().insert(
+        header::REFERRER_POLICY,
+        HeaderValue::from_static("same-origin"),
+    );
+    response
+}
+
 /// A page that runs one of the hub's own scripts (`/assets/passkey.js`), loaded from this
 /// origin and talking only to it.
 pub fn scripted(status: StatusCode, title: &str, body: &str, script: &'static str) -> Response {
@@ -145,6 +158,7 @@ enum Kind {
     Landing,
     App,
     Script(&'static str),
+    Workflow { passkey: bool, push: bool },
 }
 
 fn render(status: StatusCode, title: &str, body: &str, kind: Kind) -> Response {
@@ -163,6 +177,20 @@ fn render(status: StatusCode, title: &str, body: &str, kind: Kind) -> Response {
             )
         }
         Kind::Script(script) => format!("<script src=\"{script}\" defer></script>"),
+        Kind::Workflow { passkey, push } => {
+            let mut head = String::from("<script src=\"/assets/workflow.js\" defer></script>");
+            if passkey {
+                head.push_str("<script src=\"/assets/passkey.js\" defer></script>");
+            }
+            if push {
+                head.push_str(&format!(
+                    "<link rel=\"manifest\" href=\"/manifest.webmanifest\">\
+<meta name=\"theme-color\" content=\"{}\"><script src=\"/assets/push.js\" defer></script>",
+                    escape(site.theme_color())
+                ));
+            }
+            head
+        }
     };
     let page = format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
@@ -187,7 +215,7 @@ fn render(status: StatusCode, title: &str, body: &str, kind: Kind) -> Response {
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     let policy = match kind {
-        Kind::App => {
+        Kind::App | Kind::Workflow { .. } => {
             "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; worker-src 'self'; \
 manifest-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
         }

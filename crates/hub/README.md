@@ -73,7 +73,8 @@ The directory holds:
 | `site.json` | **Required.** `product` (name, short name, tagline, description, marketing domain), `operator` (the legal name the privacy policy and terms use, contact, support email), `links` (public links by name; `hosted_hub` is the hub `devagotchi login` signs in at by default), `sign_in` (`order`: the order of the sign-in buttons by provider name; `labels`: what each provider is called, `nomen` for Nomen sign-in), `landing.sections` (the landing page's sections in order, each `"on": true` or `false`), `mcp` (`name`, optional `title`, `instructions`), `plans`, `services`, `early_access`, and `assets` (which files are the logo, icon, mascot, diagram, video and poster) |
 | `tokens.json` | The design tokens the stylesheet reads as custom properties: `colors` and `dark` (`--bg`, `--accent`, …), `fonts` (`--font-ui`, `--font-display`, `--font-mono`), `radii` (`--radius-s` … `--radius-pill`), `layout` (`--bar-h`, `--gutter`, `--wide`, `--narrow`), `theme_color` and `background_color` for the installed app, and `font_files` to serve fonts from the hub itself |
 | `content/landing.json` | Every landing section's copy: the hero, how claiming works, How it works, the comparison and its evidence, features, plans and services, connecting an AI, self-hosting, what is coming, the questions, the closing, the footer, the popups, the glossary, and `custom` sections of your own |
-| `content/messages.json` | The sign-in email (`email.subject`, `email.body`, `{link}` is the one-time link), the getting-started ticket (`welcome.title`, `welcome.body`, `{hub}` is the hub's address), and the line under every public page |
+| `content/messages.json` | The sign-in email (`email.subject`, `email.body`, `{link}` is the one-time link), the getting-started ticket (`welcome.title`, `welcome.body`, `{hub}` is the hub's address), the line under every public page, and the words of a workflow's page (`workflow`) |
+| `content/workflows.json` | The setups an AI hands its person as one link (`workflow_start`): each an `id`, a `title`, an `intro` and its ordered `steps`, each a `kind` the hub runs (`machine` with an optional `os`: `linux`, `windows`, `docker` or `host`; `phone`; `secure_account`; `done`) with its own `title` and `text`; or, for one that cannot be done yet, `unavailable` and no steps. `check-site` refuses a kind or an OS the hub does not run |
 | `content/docs.md`, `privacy.md`, `terms.md`, `support.md` | The public pages, in Markdown |
 | `assets/` | The logo, icon, mascot, diagram, video, poster and fonts: SVG, PNG, JPEG, WebP, GIF, ICO, MP4, WebM, WOFF2, WOFF |
 
@@ -173,6 +174,43 @@ starts the broker and the link at boot. Fetching the script does not spend the c
 does. A spent, expired or unknown code gets a script that only says so. The hub hashes every
 listed file at start and leaves `/join` off (reported in `/healthz` `downloads`) when one does
 not match. Operator codes from `devagotchi hub enroll` work with `/join` too.
+
+### Setup links the AI hands over (workflows)
+
+An AI asked to "connect my server" calls `workflow_list`, then `workflow_start` with the
+workflow and gets one link, `<hub>/go/<token>`, to give its person. Nobody signs in to use it:
+the link is the credential, as the line `machine_add` hands an AI already is. It is 256 random
+bits kept only as their SHA-256, bound to one tenant and one workflow, and works for
+`workflows.link_ttl_secs` (30 minutes by default; 300 to 86400); once the workflow is done or
+cancelled it grants nothing more, and starting the same workflow again replaces it.
+
+```json
+"workflows": { "link_ttl_secs": 1800 }
+```
+
+- **Opening it spends nothing.** A GET (a chat app's preview, a mail scanner, the person)
+  shows the workflow and its steps and never a code.
+- **Get my command** is a POST from that page: it issues the step's single-use join code with
+  the checks Add a machine has (early access, the plan's machine limit, said plainly) and
+  shows the one line for the OS picked, with a Copy button. The code comes back only in that
+  browser's own HttpOnly cookie. A hub with no build for an OS offers no line for it; a Mac
+  has none yet, and the page and `workflow_list` say so.
+- **A phone turns on from the same link**, opened on the phone (`/go/<token>/phone`).
+- **Keeping the account is offered after the first success, and optional**: to a browser that
+  did a step through the link, once a step is done, while nobody has secured the account.
+  Google or GitHub when the hub has them, a passkey otherwise.
+- **The page advances on its own.** Its script asks `/go/<token>/status` every few seconds and
+  moves each step's state in place, never reloading; without JavaScript, Check again does
+  it. It works at phone width.
+
+Steps are seen, not claimed: `machine` is done when a machine enrolled through it is online,
+`phone` when the account has a push subscription, `secure_account` when the account is
+secured (it never holds a workflow up), `done` when the rest are. `workflow_status` reports
+each step `done`, `current`, `pending` or `unavailable` (with `why`), and `workflow_wait`
+(up to 60 seconds) returns the moment one moves; `workflow_cancel` ends the link. A workflow
+started, each line handed out, each step done, completion and cancelling go on the tenant's
+chain. The workflows and their words are the site's (`content/workflows.json`,
+`content/messages.json` `workflow`).
 
 A linked broker that is not connected answers `broker_offline`; one that never enrolled,
 `not_enrolled`; a revoked one, `device_revoked`; one with 64 calls already waiting,

@@ -14,9 +14,11 @@ use serde::Deserialize;
 pub(crate) mod analytics;
 pub(crate) mod providers;
 pub(crate) mod tenancy;
+pub(crate) mod workflows;
 pub use analytics::AnalyticsConfig;
 pub use providers::{EmailConfig, ProviderConfig, ProviderKind};
 pub use tenancy::{OPERATORS_ENV, TENANCY_ENV, TenancyConfig, TenancyMode, is_operator};
+pub use workflows::WorkflowsConfig;
 use tenancy::check_operator;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -95,6 +97,9 @@ pub struct HubConfig {
     /// `DEVAGOTCHI_HUB_ANALYTICS` and `DEVAGOTCHI_HUB_ANALYTICS_RETENTION_DAYS` override it.
     #[serde(default)]
     pub analytics: AnalyticsConfig,
+    /// How long a workflow's link works (`config/workflows.rs`).
+    #[serde(default)]
+    pub workflows: WorkflowsConfig,
     /// The owner every holder of this config sees: `owner` above, or in hub mode the
     /// one the accounts store names, learned once at start or when it is made.
     #[serde(skip)]
@@ -620,6 +625,7 @@ impl HubConfig {
         }
         self.tenancy.check().map_err(invalid)?;
         self.analytics.check().map_err(invalid)?;
+        self.workflows.check().map_err(invalid)?;
         for operator in &self.operators {
             check_operator(operator).map_err(invalid)?;
         }

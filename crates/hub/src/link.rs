@@ -90,6 +90,8 @@ pub struct Links {
     gate: Option<EnrollGate>,
     /// Where an account's first machine is counted (`analytics::funnel`), on a hub that counts.
     analytics: Option<Arc<crate::analytics::Analytics>>,
+    /// Woken when a machine connects or drops: what a workflow waits on (`workflows.rs`).
+    changes: Option<Arc<tokio::sync::Notify>>,
 }
 
 /// Whether an account may enroll a machine now: false while its tenant waits to be let in
@@ -153,7 +155,26 @@ impl Links {
             push: None,
             gate: None,
             analytics: None,
+            changes: None,
         }
+    }
+
+    /// Wake `changes`' waiters whenever a machine connects or drops.
+    pub fn signalling(mut self, changes: Arc<tokio::sync::Notify>) -> Self {
+        self.changes = Some(changes);
+        self
+    }
+
+    fn changed(&self) {
+        if let Some(changes) = &self.changes {
+            changes.notify_waiters();
+        }
+    }
+
+    /// The machine a live code (unused, unexpired) is for, if any, without spending it or
+    /// auditing: a workflow's page shows its person their own line again while it works.
+    pub fn live_code(&self, code: &str) -> BridgeResult<Option<String>> {
+        self.devices.live_code(code)
     }
 
     /// Count each account's first machine in `analytics`.
@@ -320,6 +341,24 @@ impl Links {
         };
         self.event(owner, "web", "link.revoke", device, "", &outcome);
         result
+    }
+
+    /// `device` as if its link had just connected, for tests elsewhere in the hub: it shows
+    /// online, and a workflow waiting on it wakes. The receiver gets the calls routed to it.
+    #[cfg(test)]
+    pub(crate) fn connect_for_test(&self, device: &str) -> mpsc::Receiver<(u64, WireRequest)> {
+        let (calls, received) = mpsc::channel(CALL_QUEUE);
+        let id = self.next.fetch_add(1, Ordering::Relaxed);
+        self.sessions.lock().expect("links").insert(
+            device.to_string(),
+            Session {
+                id,
+                calls,
+                pending: Arc::default(),
+            },
+        );
+        self.changed();
+        received
     }
 
     pub fn connected(&self, device: &str) -> bool {
@@ -505,6 +544,7 @@ impl Links {
             },
         );
         drop(previous); // A reconnect replaces the old session; its sender drops and it ends.
+        self.changed();
         let subject = format!("device:{device}");
         let via = format!("link {peer}");
         self.event(
@@ -619,6 +659,7 @@ impl Links {
             sessions.remove(device);
         }
         drop(sessions);
+        self.changed();
         // Dropping the waiters answers every in-flight call with broker_offline.
         pending.lock().expect("pending").clear();
     }

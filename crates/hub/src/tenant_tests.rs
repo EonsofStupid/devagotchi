@@ -86,11 +86,21 @@ pub(crate) async fn hosted_with(
     });
     let devices = Arc::new(devices_at(dir.path()).unwrap());
     let audit = Arc::new(Audit::open(&dir.path().join("audit.sqlite3")).unwrap());
+    let changes = Arc::new(tokio::sync::Notify::new());
     let links = Arc::new(
         Links::new(config.clone(), devices.clone(), audit.clone())
             .gated(accounts.enroll_gate())
-            .counting(analytics.clone()),
+            .counting(analytics.clone())
+            .signalling(changes.clone()),
     );
+    // As `run` wires them: phones on a hub with its own accounts, and the build it hands out
+    // when the config names one (`workflow_tests.rs` does).
+    let push = Some(Arc::new(
+        crate::push::Push::open(dir.path(), &url, devices.clone()).unwrap(),
+    ));
+    let downloads = config.downloads.as_ref().map(|dir| {
+        Arc::new(crate::downloads::Downloads::open(std::path::Path::new(dir)).unwrap())
+    });
     let state = AppState {
         verifier: Arc::new(
             Verifier::from_hub_config(&config, dir.path(), Some(accounts.clone()))
@@ -102,9 +112,14 @@ pub(crate) async fn hosted_with(
             config: config.clone(),
             audit,
             links,
-            push: None,
-            downloads: None,
+            push,
+            downloads,
             analytics,
+            workflows: Some(Arc::new(crate::workflows::Workflows::new(
+                accounts.clone(),
+                changes,
+                config.workflows.link_ttl_secs,
+            ))),
         },
         web: None,
         passkeys: web::HubSignIn::new(config.clone(), accounts.clone())
@@ -214,7 +229,10 @@ impl Hosted {
             Self::text(self.get(&format!("/oauth/authorize?{query}"), None).await).await;
         assert_eq!(status, 200, "{page}");
         assert!(page.contains(&format!("<h1>Connect {app}?</h1>")), "{page}");
-        assert!(page.contains("your new Devagotchi account"), "{page}");
+        assert!(
+            page.contains(&format!("your new {} account", self.config.site().name())),
+            "{page}"
+        );
         assert!(page.contains("nothing can recover it"), "{page}");
         let answer = self
             .form(
@@ -537,9 +555,10 @@ async fn isolation(hub: Hosted) {
             let arguments = fill(&tool["inputSchema"], &tool["inputSchema"], &ids(broker));
             let answer = hub.call(&mut alice, name, arguments.clone()).await;
             leaks_beyond(name, &answer.to_string(), &arguments.to_string());
-            if !matches!(name, "whoami" | "machines") {
-                // Every other tool names a machine or a board of B's here: refused by the tool
-                // itself, never for want of arguments it could read.
+            // `workflow_list` takes nothing: it lists the site's workflows, never anyone's.
+            if !matches!(name, "whoami" | "machines" | "workflow_list") {
+                // Every other tool names a machine, a board or a workflow of B's here:
+                // refused by the tool itself, never for want of arguments it could read.
                 assert!(
                     refused(&answer),
                     "{name}({arguments}) was not refused: {answer}"

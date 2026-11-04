@@ -7,6 +7,41 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Setup links the AI hands over, with no sign-in (increment 68)
+- MCP tools `workflow_list`, `workflow_start {workflow, machine_name?}` → `{id, link,
+  expires_at, steps}`, `workflow_status {id}`, `workflow_wait {id, timeout_secs ≤ 60}`
+  (returns the moment a step moves) and `workflow_cancel {id}`. A waiting tenant gets the
+  early-access message; a tenant at its plan's machine limit is told so plainly.
+- Workflows are content, steps are code: `content/workflows.json` (defaults in
+  `site/default/`) lists each workflow's ordered steps by kind, `machine` (`os`: `linux`,
+  `windows`, `docker` or `host`), `phone`, `secure_account` (optional, never blocks) and
+  `done`; `check-site` refuses unknown kinds. The defaults: "Get started" (a machine with the
+  OS picked on the page, the phone, then keeping the account), "Connect a Linux server",
+  "Connect a Windows PC or laptop", "Turn on approvals on your phone", and "Connect a Mac",
+  which says plainly that a Mac build is not available yet. A hub with no build for an OS
+  offers no line for it.
+- `<hub>/go/<token>` is the credential, as `machine_add`'s line is: random, stored only as a
+  hash, bound to its tenant and workflow, expiring (`workflows.link_ttl_secs`, 30 minutes)
+  and granting nothing once done or cancelled. A GET shows the steps and no code; "Get my
+  command" is a POST that issues the single-use join code and shows the one-liner with a
+  Copy button; the phone turns on from the same link. No sign-in anywhere: the WIP's device
+  pairing and its sign-in requirement are gone. Keeping the account is offered after the
+  first success, optional, to the browser that did it: Google or GitHub when configured,
+  otherwise a passkey.
+- The page follows the hub with a same-origin script (`/assets/workflow.js`), ticking steps in
+  place and never reloading; without JavaScript, Check again; never `<meta refresh>`; phone
+  width. Its top bar has no Sign in.
+- Storage: migration 0010 (`tenancy_workflows`, add-only, SQLite and Postgres, row-level
+  security). Workflow started, each line handed out, step done, completed and cancelled go
+  on the tenant's audit chain; a tenant's first workflow started and first completed are
+  analytics milestones beside the others.
+- Tests: every kind, expiry, cancelling and replacing, a GET that spends nothing, no sign-in,
+  keeping the account, early access, a plan's limit, a wait that returns early, a neutral
+  site that shows no brand (SQLite and Postgres); `tests/workflow_browser.py` in Chrome (CI
+  `e2e`): an AI starts a workflow, the link opens with no sign-in at phone width, Get my
+  command, the runner joins with the page's line as is, the page ticks the step without
+  reloading, a passkey keeps the account, and `workflow_status` reports it done.
+
 ### Every hub from the image hands out builds (increment 71)
 - The hub image carries the Linux and Windows builds of its own commit (x86_64 and ARM64),
   both installers, `SHA256SUMS` and `VERSION` in `/usr/share/devagotchi/downloads`. A hub

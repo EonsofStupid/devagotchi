@@ -36,6 +36,9 @@ pub struct Hub {
     pub downloads: Option<Arc<crate::downloads::Downloads>>,
     /// What a hosted hub counts for its operator (`crate::analytics`), when it counts.
     pub analytics: Option<Arc<crate::analytics::Analytics>>,
+    /// The workflows an AI starts for its person (`crate::workflows`), on a hub with its own
+    /// accounts.
+    pub workflows: Option<Arc<crate::workflows::Workflows>>,
 }
 
 /// One machine as a person sees it on their page and in `/api/v1/me`, and as an AI sees it
@@ -505,12 +508,10 @@ impl Hub {
             name,
             code: code.clone(),
             expires_at: crate::devices::now_secs() + crate::devices::CODE_TTL_SECS,
-            linux: format!("curl -fsSL {hub}/join/{code} | sudo sh"),
-            windows: format!("irm {hub}/join/{code}.ps1 | iex"),
-            docker: format!(
-                "curl -fsSL {hub}/join/{code}.compose.yml -o compose.yml && docker compose -f compose.yml up -d"
-            ),
-            host: format!("curl -fsSL {hub}/join/{code}.host.sh | sudo sh"),
+            linux: join_line(hub, "linux", &code),
+            windows: join_line(hub, "windows", &code),
+            docker: join_line(hub, "docker", &code),
+            host: join_line(hub, "host", &code),
             manual: format!(
                 "Download the archive and SHA256SUMS from {hub}/dist/ for this machine, check the sum, unpack, then: printf '%s\\n' '{code}' | devagotchi link enroll --state-dir ~/.local/state/devagotchi-link --hub {hub} --device {device} --broker <broker-endpoint>"
             ),
@@ -687,12 +688,26 @@ impl Hub {
     }
 }
 
+/// The one line that joins a machine with `code`, for `os` (`linux`, `windows`, `docker`
+/// or `host`): what `machine_add` hands an AI and a workflow's page hands its person.
+pub(crate) fn join_line(hub: &str, os: &str, code: &str) -> String {
+    let hub = hub.trim_end_matches('/');
+    match os {
+        "windows" => format!("irm {hub}/join/{code}.ps1 | iex"),
+        "docker" => format!(
+            "curl -fsSL {hub}/join/{code}.compose.yml -o compose.yml && docker compose -f compose.yml up -d"
+        ),
+        "host" => format!("curl -fsSL {hub}/join/{code}.host.sh | sudo sh"),
+        _ => format!("curl -fsSL {hub}/join/{code} | sudo sh"),
+    }
+}
+
 pub(crate) fn unexpected_response(expected: &str, actual: &ResponseBody) -> Json<BridgeError> {
     Json(devagotchi_mcp::unexpected(expected, actual))
 }
 
 #[tool_handler(
-    router = (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router())
+    router = (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router())
 )]
 impl ServerHandler for Hub {
     /// Every tool call, unless the caller's tenant waits to be let in (early access): then
@@ -712,7 +727,7 @@ impl ServerHandler for Hub {
             return Ok(answer.into());
         }
         let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router())
+        (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router())
             .call(call)
             .await
     }
@@ -734,7 +749,7 @@ impl ServerHandler for Hub {
 /// The names of every tool the hub serves, for tests that hold a page's list to them.
 #[cfg(test)]
 pub(crate) fn tool_names() -> Vec<String> {
-    (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router())
+    (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router() + Hub::workflow_router())
         .list_all()
         .into_iter()
         .map(|tool| tool.name.to_string())
@@ -751,7 +766,7 @@ mod schema_tests {
     #[test]
     fn whoami_output_has_every_required_property() {
         let tool =
-            (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router())
+            (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router() + Hub::workflow_router())
                 .list_all()
                 .into_iter()
                 .find(|tool| tool.name == "whoami")

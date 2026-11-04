@@ -32,6 +32,9 @@ mod access_tests;
 mod analytics_tests;
 mod tenant_access;
 mod tenant_machines;
+mod workflows;
+#[cfg(test)]
+mod workflow_tests;
 #[cfg(test)]
 mod provider_tests;
 #[cfg(test)]
@@ -662,9 +665,12 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         )),
         _ => None,
     };
+    // What a workflow's wait wakes on: a machine connecting or dropping, a phone turned on.
+    let changes = Arc::new(tokio::sync::Notify::new());
     let links = Links::new(config.clone(), devices.clone(), audit.clone())
         .notifying(push.clone())
-        .counting(analytics.clone());
+        .counting(analytics.clone())
+        .signalling(changes.clone());
     // A machine joins for an account only once its tenant is let in (early access).
     let links = Arc::new(match &accounts {
         Some(accounts) => links.gated(accounts.enroll_gate()),
@@ -689,6 +695,13 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         },
         None => None,
     };
+    let workflows = accounts.clone().map(|accounts| {
+        Arc::new(workflows::Workflows::new(
+            accounts,
+            changes,
+            config.workflows.link_ttl_secs,
+        ))
+    });
     let verifier = Arc::new(Verifier::from_hub_config(&config, &state_dir, accounts).await?);
     let web = match (&config.web, &config.auth) {
         (
@@ -725,6 +738,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             links,
             boards,
             analytics,
+            workflows,
         },
         web,
         passkeys,
@@ -1669,6 +1683,7 @@ mod tests {
                 push: None,
                 downloads: None,
                 analytics: None,
+                workflows: None,
             },
             web: None,
             passkeys: None,
@@ -1892,6 +1907,7 @@ mod tests {
                 push: None,
                 downloads: None,
                 analytics: None,
+                workflows: None,
             },
             web: None,
             passkeys,

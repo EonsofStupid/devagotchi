@@ -107,6 +107,25 @@ impl HubSignIn {
         ways
     }
 
+    /// The sign-in providers this hub offers, in the site's order: each one's name (as
+    /// `/auth/provider/<name>` takes it) and its button's words. What a workflow's page
+    /// offers to keep an account with (`workflow.rs`).
+    pub(super) fn provider_names(&self) -> Vec<(String, String)> {
+        let site = self.site();
+        let mut ordered: Vec<&super::providers::Provider> = self.providers.list.iter().collect();
+        ordered.sort_by_key(|provider| site.sign_in_rank(provider.config.name()));
+        ordered
+            .into_iter()
+            .map(|provider| {
+                let name = provider.config.name();
+                (
+                    name.to_string(),
+                    format!("Continue with {}", site.label(name, &provider.config.label())),
+                )
+            })
+            .collect()
+    }
+
     /// The site this hub's pages and messages read.
     pub(super) fn site(&self) -> Arc<crate::site::Site> {
         self.config.site()
@@ -605,6 +624,10 @@ pub struct RegisterIn {
     authenticator_data: String,
     public_key: String,
     public_key_algorithm: i64,
+    /// Where the page goes once the passkey secures the signed-in account: a path on this hub
+    /// (a workflow's page), `/account` otherwise.
+    #[serde(default)]
+    return_to: Option<String>,
 }
 
 pub async fn register(
@@ -772,7 +795,10 @@ async fn secure_with(
     })
     .await;
     match done {
-        Ok(Ok(())) => hub.signed_in_to(&session, "/account"),
+        Ok(Ok(())) => hub.signed_in_to(
+            &session,
+            safe_return_to(input.return_to.as_deref().unwrap_or("/account")),
+        ),
         Ok(Err(error)) => match error.code.as_str() {
             "invalid_link" | "invalid_ceremony" => expired(),
             "passkey_exists" => refuse(

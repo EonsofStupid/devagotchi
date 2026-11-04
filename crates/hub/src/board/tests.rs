@@ -1276,6 +1276,7 @@ mod bound {
             hub: Hub {
                 downloads: None,
                 analytics: None,
+                workflows: None,
                 push: None,
                 boards: Arc::new(crate::board::mcp::Boards::from_config(&config, dir)),
                 config,

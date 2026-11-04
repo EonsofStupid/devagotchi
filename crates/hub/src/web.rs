@@ -59,6 +59,7 @@ mod passkey_tests;
 mod site_tests;
 #[cfg(test)]
 mod tests;
+mod workflow;
 
 use std::{
     collections::HashMap,
@@ -115,7 +116,9 @@ pub async fn bar(
         _ if routes::signed_in(&state, request.headers()).await => Some(false),
         _ => None,
     };
-    let bar = if (state.web.is_none() && state.passkeys.is_none()) || unclaimed {
+    // A workflow's page (`/go/<token>`) is the link alone: no Sign in, no nudge to.
+    let workflow = request.uri().path().starts_with("/go/");
+    let bar = if (state.web.is_none() && state.passkeys.is_none()) || unclaimed || workflow {
         pages::Bar::Plain
     } else if let Some(unsecured) = signed_in {
         pages::Bar::SignedIn { unsecured }

@@ -123,6 +123,7 @@ check("every tool has a title and annotations", not unannotated, ", ".join(unann
 broker_tools = ["approval_request", "approval_wait", "create_directory", "edit_file", "get_file_info",
                 "list_directory", "machine_add", "machines", "move_file", "operation_cancel", "operation_get", "operation_read",
                 "operation_start", "operation_wait", "read_file", "read_image", "read_multiple_files", "run", "whoami",
+                "workflow_cancel", "workflow_list", "workflow_start", "workflow_status", "workflow_wait",
                 "write_file"]
 board_tools = [t for t in tools if t.startswith("board_")]
 check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 18,

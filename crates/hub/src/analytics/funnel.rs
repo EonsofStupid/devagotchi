@@ -1,6 +1,7 @@
 //! A tenant's milestones: each recorded once, with the tenant's id, where it happens. The
 //! operator's funnel is visitors, then accounts made, secured, admitted, with a first
-//! machine, with a first operation (`web/operator` reads them).
+//! machine, with a first operation (`web/operator` reads them). Its first workflow started
+//! and first completed (`workflows.rs`) are kept beside them.
 //!
 //! Never for the home tenant (the operator's own), and only on a hub that counts
 //! (`HubConfig::counts_visits`): the account store writes its own in the transaction that
@@ -24,10 +25,16 @@ pub const MACHINE: &str = "machine";
 pub const OPERATION: &str = "operation";
 /// Its first board was made.
 pub const BOARD: &str = "board";
+/// Its AI started its first workflow (`workflow_start`).
+pub const WORKFLOW: &str = "workflow";
+/// Its first workflow was completed.
+pub const WORKFLOW_DONE: &str = "workflow_done";
 
 /// Every milestone, in the funnel's order where it has one.
 #[cfg_attr(not(test), allow(dead_code))]
-pub const KINDS: [&str; 7] = [MADE, SECURED, WAITING, ADMITTED, MACHINE, OPERATION, BOARD];
+pub const KINDS: [&str; 9] = [
+    MADE, SECURED, WAITING, ADMITTED, MACHINE, OPERATION, BOARD, WORKFLOW, WORKFLOW_DONE,
+];
 
 /// The AI client families an account is made by.
 #[cfg_attr(not(test), allow(dead_code))]

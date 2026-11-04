@@ -67,7 +67,7 @@ pub struct Subscription {
     keys: Keys,
 }
 
-fn plain(status: StatusCode, code: &str) -> Response {
+pub(super) fn plain(status: StatusCode, code: &str) -> Response {
     (status, Json(serde_json::json!({ "error": code }))).into_response()
 }
 
@@ -76,9 +76,9 @@ pub async fn subscribe(
     headers: HeaderMap,
     Json(sub): Json<Subscription>,
 ) -> Response {
-    let Some(push) = state.hub.push.clone() else {
+    if state.hub.push.is_none() {
         return plain(StatusCode::NOT_FOUND, "push_not_set_up");
-    };
+    }
     if !same_origin(&headers, &state.hub.config.public_url) {
         return plain(StatusCode::FORBIDDEN, "not_same_origin");
     }
@@ -91,6 +91,19 @@ pub async fn subscribe(
     if !state.hub.config.is_human(&subject.id) {
         return plain(StatusCode::FORBIDDEN, "not_a_person");
     }
+    match save(&state, &subject.id, &sub) {
+        Ok(()) => (StatusCode::NO_CONTENT, ()).into_response(),
+        Err(response) => response,
+    }
+}
+
+/// Check a phone's subscription and keep it for `account`: what `/push/subscribe` does for a
+/// signed-in person, and a workflow's link (`workflow.rs`) for the account its AI started it
+/// for. A workflow's phone step waiting on it wakes.
+pub(super) fn save(state: &AppState, account: &str, sub: &Subscription) -> Result<(), Response> {
+    let Some(push) = state.hub.push.clone() else {
+        return Err(plain(StatusCode::NOT_FOUND, "push_not_set_up"));
+    };
     let key_ok = URL_SAFE_NO_PAD
         .decode(sub.keys.p256dh.trim_end_matches('='))
         .is_ok_and(|k| k.len() == 65);
@@ -100,16 +113,20 @@ pub async fn subscribe(
     let endpoint_ok = sub.endpoint.len() <= 2048
         && reqwest::Url::parse(&sub.endpoint).is_ok_and(|u| u.scheme() == "https" || cfg!(test));
     if !key_ok || !auth_ok || !endpoint_ok {
-        return plain(StatusCode::BAD_REQUEST, "bad_subscription");
+        return Err(plain(StatusCode::BAD_REQUEST, "bad_subscription"));
     }
-    let devices = push.devices();
-    match devices.add_push(
-        &subject.id,
+    match push.devices().add_push(
+        account,
         &sub.endpoint,
         sub.keys.p256dh.trim_end_matches('='),
         sub.keys.auth.trim_end_matches('='),
     ) {
-        Ok(()) => (StatusCode::NO_CONTENT, ()).into_response(),
-        Err(_) => plain(StatusCode::INTERNAL_SERVER_ERROR, "store"),
+        Ok(()) => {
+            if let Some(workflows) = &state.hub.workflows {
+                workflows.changed();
+            }
+            Ok(())
+        }
+        Err(_) => Err(plain(StatusCode::INTERNAL_SERVER_ERROR, "store")),
     }
 }

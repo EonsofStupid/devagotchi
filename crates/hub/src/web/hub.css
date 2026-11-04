@@ -120,7 +120,54 @@ details table { margin-top: 8px; }
 .meter { display: block; width: 100%; height: 10px; }
 .meter .track { fill: var(--sunk); }
 .meter .fill { fill: var(--accent); }
+/* A workflow's page (`workflow.rs`): its steps in order, the current one open, each done one
+   ticked. The page's script moves `data-state` as the hub sees each step done. */
+main [hidden] { display: none !important; }
+.steps { list-style: none; margin: 16px 0 0; padding: 0; counter-reset: step; }
+.step { counter-increment: step; margin: 12px 0; padding: 14px 16px; background: var(--surface);
+  border: 1px solid var(--line); border-radius: var(--radius-m); }
+.step h2 { display: flex; align-items: baseline; gap: 10px; margin: 0; font-size: 1.05rem; }
+.step-mark { flex: none; display: inline-grid; place-items: center; width: 1.6em; height: 1.6em;
+  border-radius: 50%; border: 2px solid var(--line); color: var(--muted); font-size: .85rem; }
+.step-mark::before { content: counter(step); }
+.step-state { order: 3; margin-left: auto; color: var(--muted); font-size: .8rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .04em; }
+.step .fact { margin: 6px 0 0; color: var(--muted); font-size: .92rem; }
+.step .fact:empty { display: none; }
+.step .why { margin: 6px 0 0; color: var(--wait); }
+.step-body { margin-top: 8px; }
+.step[data-state="current"] { border-color: var(--accent); }
+.step[data-state="current"] .step-mark { border-color: var(--accent); color: var(--accent); }
+.step[data-state="done"] .step-mark { background: var(--online); border-color: var(--online); color: #fff; }
+.step[data-state="done"] .step-mark::before { content: "✓"; }
+.step[data-state="done"] .step-state { color: var(--online); }
+.step[data-state="unavailable"] { border-color: var(--wait); }
+.step:not([data-state="current"]) .step-body { display: none; }
+/* An optional step (keeping the account) shows what it offers until it is done. */
+.step[data-optional]:not([data-state="done"]) .step-body { display: block; }
+.step[data-state="pending"] h2 { color: var(--muted); }
+.command { display: flex; gap: 8px; align-items: flex-start; margin: 8px 0; }
+.command pre { flex: 1; margin: 0; padding: 12px; overflow-x: auto; background: var(--bg);
+  border: 1px solid var(--line); border-radius: var(--radius-s); }
+.command code { white-space: pre-wrap; overflow-wrap: anywhere; user-select: all; }
+.command .copy { flex: none; }
+fieldset.os { border: 0; margin: 12px 0 0; padding: 0; }
+fieldset.os legend { color: var(--muted); font-size: .9rem; padding: 0; }
+.choice { display: inline-flex; align-items: center; gap: 6px; margin: 8px 16px 0 0; color: var(--text); }
+.mac { margin-top: 8px; }
+.get-command { margin-top: 12px; }
+.check { margin-top: 16px; }
+form.inline { margin-top: 8px; }
+.keep { margin: 16px 0 0; padding: 14px 16px; background: var(--surface); border: 1px solid var(--accent);
+  border-radius: var(--radius-m); }
+.step .keep { margin: 8px 0 0; padding: 0; border: 0; background: none; }
+.keep h2 { margin: 0 0 6px; font-size: 1.05rem; }
+.keep-with { display: inline-block; margin: 8px 8px 0 0; }
+.step-title { min-width: 0; overflow-wrap: anywhere; }
+.name input { display: block; width: 100%; max-width: 24rem; margin-top: 4px; }
+.finished { color: var(--online); font-weight: 600; }
 @media (forced-colors: active) {
+  .step[data-state="done"] .step-mark { border-color: CanvasText; }
   .chart .views, .chart .visitors, .swatch rect, .meter .fill { fill: CanvasText; }
   .chart .views, .swatch .views { fill-opacity: .4; }
 }

@@ -197,7 +197,7 @@ fn the_ai_client_family_comes_from_its_oauth_client_name() {
         assert_eq!(funnel::client_family(name), family, "{name}");
         assert!(FAMILIES.contains(&family));
     }
-    assert_eq!(KINDS.len(), 7);
+    assert_eq!(KINDS.len(), 9);
 }
 
 #[tokio::test]

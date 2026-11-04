@@ -91,10 +91,26 @@
     window.addEventListener("hashchange", takeCode);
   }
 
-  // The account page of an account nobody secured yet: its first passkey, on the
-  // authority of this browser's session (no link).
-  async function add() {
+  // The account page of an account nobody secured yet (or a workflow's page): its first
+  // passkey, on the authority of this browser's session (no link), then back to the page
+  // the button names. A workflow's page first asks its own `data-prepare` address for that
+  // session: the browser that did a step there keeps the account (web/workflow.rs).
+  let returnTo = null;
+  async function add(button) {
     link = "";
+    returnTo = button.dataset.returnTo || null;
+    if (button.dataset.prepare) {
+      const kept = await fetch(button.dataset.prepare, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "how=passkey",
+        redirect: "manual",
+      });
+      if (kept.status !== 204) {
+        throw new Error("This page can no longer keep the account. Ask your AI for a new link.");
+      }
+    }
     await makePasskey(await post("/passkey/register/options", {}));
   }
 
@@ -132,6 +148,7 @@
       authenticatorData: b64.encode(response.getAuthenticatorData()),
       publicKey: b64.encode(key),
       publicKeyAlgorithm: response.getPublicKeyAlgorithm(),
+      returnTo: returnTo,
     });
     location.assign(done.next);
   }
