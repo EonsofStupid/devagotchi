@@ -129,7 +129,12 @@ $ErrorActionPreference = 'Stop'
 if (-not $code.StartsWith('dvg-')) { throw "no enrollment code: $code" }
 $joinedRoot = Join-Path $env:LOCALAPPDATA 'Devagotchi'
 try {
-    Invoke-RestMethod -UseBasicParsing "$joinUrl/join/$code.ps1" | Invoke-Expression
+    $said = Invoke-RestMethod -UseBasicParsing "$joinUrl/join/$code.ps1" | Invoke-Expression *>&1 | Out-String
+    Write-Host $said
+    # Only the person's words: the name to tell the AI and the log, no developer lines.
+    if ($said -match 'adapter_probe|MCP command|Claude Code:') { throw 'the join printed developer lines' }
+    if ($said -notmatch 'done: ci-joined is connected to') { throw 'the join did not say the name to use' }
+    if ($said -notmatch 'Log: ') { throw 'the join did not say where the log is' }
     $broker = Get-Content -Raw (Join-Path $joinedRoot 'config\broker.json')
     if ($broker -notmatch '"exec_policy":\s*"account"') { throw 'the joined broker does not run commands as its account' }
     $linkRun = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Devagotchi Link' -ErrorAction SilentlyContinue
