@@ -1,6 +1,6 @@
 # Spec: first connect (sign-in → this computer → machine online)
 
-Status: DRAFT for Jesse's approval. No agent starts until he approves this file.
+Status: APPROVED by Jesse 2026-11-04. One agent executes it in order.
 Target flow: `docs/desktop-commander-teardown.md` §8. Rule: effortless first; nothing visible
 is added for security. Anything not written here is out of scope. Paths are relative to
 `crates/hub/` unless they start with `crates/`, `deploy/` or `tests/`. Line numbers are from
@@ -96,6 +96,14 @@ in `crates/hub/Cargo.toml`; `cargo deny --all-features check` must pass.
      sign-ins list).
    - Google callback must also set the fresh cookie: `providers::callback` passes it into
      `finish` → `open_and_return`.
+   - Same email, Google later (Jesse, 2026-11-04: "UI popup requests that you link the
+     account"): in `providers::finish`, when the Google identity is unknown, its
+     `verified_email` matches a `passwords.email`, and nobody is signed in, do not create an
+     account. Show one page: "`<email>` already has an account. Link Google to it?" with
+     **Link** (POST -> `link_identity(account, proven)` then `open_and_return`) and **Keep
+     separate** (creates the new account as today). The proven identity rides in a signed,
+     HttpOnly, 5-minute cookie between the two requests. Copy keys `sign_in.link_title`,
+     `sign_in.link`, `sign_in.keep_separate`. Test: both buttons.
    - `routes()` merged where `email::routes` / provider routes are merged in `src/lib.rs`.
 4. `src/web/routes.rs` `login()` (~272): when `config.multi_tenant()`, return
    `sign_in::page(...)`. Single-tenant (owner's own hub) keeps `passkeys::login`.
@@ -195,4 +203,4 @@ merged only on full green before the next starts. Push every 15 minutes.
 
 ## Not in this spec
 Phone push, Shippin linking, Mac build, directory listing, email verification, passkeys,
-merging a Google account and a password account that share an email (separate accounts for now).
+merging accounts other than the link page in A2.
