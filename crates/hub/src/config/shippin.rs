@@ -131,9 +131,11 @@ mod tests {
         ] {
             assert!(parse(refused).is_err(), "{refused}");
         }
-        assert!(
-            parse(r#"{"provisioning": {"api": "http://127.0.0.1:9", "organization_id": "1", "token_file": "/run/t"}}"#)
-                .is_ok()
-        );
+        // A token file at an absolute path on this OS (a drive letter on Windows).
+        let file = std::env::temp_dir().join("shippin-token");
+        let loopback = serde_json::json!({ "provisioning": {
+            "api": "http://127.0.0.1:9", "organization_id": "1",
+            "token_file": file.to_string_lossy() } });
+        assert!(parse(&loopback.to_string()).is_ok());
     }
 }
