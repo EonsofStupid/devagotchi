@@ -100,19 +100,33 @@ class Person:
             "code_challenge": challenge, "code_challenge_method": "S256", "state": "s1",
             "resource": resource,
         })
-        status, _, page = call(f"{hub}/oauth/authorize?{query}")
-        assert status == 200 and "Connect Claude?" in page, page
-        status, headers, _ = call(
-            f"{hub}/oauth/authorize",
-            urllib.parse.urlencode({
-                "client_id": client, "redirect_uri": REDIRECT, "code_challenge": challenge,
-                "resource": resource, "scope": "mcp offline_access", "state": "s1",
-                "decision": "approve",
-            }).encode(),
-            {"Origin": hub, "Content-Type": "application/x-www-form-urlencoded"},
-        )
-        assert status == 303, status
+        status, headers, page = call(f"{hub}/oauth/authorize?{query}")
         jar = http.cookies.SimpleCookie()
+        if status == 303 and headers["Location"].startswith("/auth/login?"):
+            # A hosted hub without `anonymous_connect`: sign up with an email and a password,
+            # then the same request goes straight back with the code (spec first-connect).
+            back = urllib.parse.parse_qs(urllib.parse.urlsplit(headers["Location"]).query)["return_to"][0]
+            status, headers, _ = call(f"{hub}/auth/password/new", urllib.parse.urlencode({
+                "email": f"{secrets.token_hex(6)}@example.com", "password": secrets.token_urlsafe(12),
+                "return_to": back,
+            }).encode(), {"Origin": hub, "Content-Type": "application/x-www-form-urlencoded"})
+            assert status == 303, status
+            for value in headers.get_all("Set-Cookie") or []:
+                jar.load(value)
+            cookies = "; ".join(f"{name}={jar[name].value}" for name in ("dg_session", "dvg_fresh"))
+            status, headers, _ = call(hub + back, headers={"Cookie": cookies})
+        else:
+            assert status == 200 and "Connect Claude?" in page, page
+            status, headers, _ = call(
+                f"{hub}/oauth/authorize",
+                urllib.parse.urlencode({
+                    "client_id": client, "redirect_uri": REDIRECT, "code_challenge": challenge,
+                    "resource": resource, "scope": "mcp offline_access", "state": "s1",
+                    "decision": "approve",
+                }).encode(),
+                {"Origin": hub, "Content-Type": "application/x-www-form-urlencoded"},
+            )
+        assert status == 303, status
         for value in headers.get_all("Set-Cookie") or []:
             jar.load(value)
         self.cookie = f"dg_session={jar['dg_session'].value}"
