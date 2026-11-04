@@ -512,3 +512,31 @@ Increments, one PR each:
 | 6 | Orgs on hub accounts (B13): each account its own org at first; who adds members; whether a Nomen-linked account takes Nomen's org | **Ruled 2026-10-27 (Jesse): the hub's org; its owner invites.** Each account starts as its own org; the org's owner invites members on the hub; linking Nomen does not change an account's org |
 | 7 | All passkeys and codes lost | **Ruled 2026-10-27 (Jesse): recovery codes, the owner's reset, another passkey, a PIN, and email once the identity is established.** Ways back in: a recovery code; the hub owner's one-time reset link (for the owner, the link from the hub's host); any other passkey on the account; a PIN the person set; and, once the account's email is verified, a reset link by email. Proposed around it: a PIN is at least 6 digits, locks after 5 wrong tries and tells the account; email and PIN together recover, neither alone; every recovery ends all other sessions and connections and is shown on the account page |
 | 8 | Email | **Ruled 2026-10-27 (Jesse): optional.** Asked at sign-up, not required; needed for email approvals and notices (10c) and for email recovery (decision 7), and verified before either uses it |
+
+## 15. Gap map: the target architecture against main (2026-11-04)
+
+The seven-part target (device agent, tool layer, security boundary, durable task engine,
+multi-agent coordination, provider adapters, control plane) and its five-step build order,
+measured against `main` at 2026-11-04. **Built** = in the code with tests; **partial** = some
+of it; **missing** = not in the code. ⚠ RE-CHECK marks what was found by search, not read.
+No new decisions here; each missing row becomes a register row before any work.
+
+| Part | Built | Partial | Missing |
+|---|---|---|---|
+| Device agent | One per-user broker (`crates/broker`, `devagotchi start`), outbound-only link to the hub (`crates/link`), Linux and Windows platforms (`crates/core/src/execution/platform/{linux,windows}.rs`), starts at boot via the installers | Capability reporting: `machines` shows online/offline and OS, not a capability list ⚠ RE-CHECK | macOS platform file and build (pending since §13) |
+| Tool layer | One typed contract (`crates/contracts`), the same tools over the hub's MCP and the stdio adapter (`crates/mcp`): `run`, `operation_*`, file read/write/edit/list/move, `read_image` | Terminal: one-shot `run` and long `operation_*`; an interactive PTY is unmerged (`wip/pty-unix`) | Structured Git, service and workspace tools (today they go through `run`) |
+| Security boundary | Exec policy per machine (account / granted programs, `--exec-policy`), approvals (`approval_request`/`approval_wait`, push to phone), OAuth 2.1 with PKCE and per-client tokens, audit chain (`hub/src/audit.rs`), tenant row-level security (§14a row 60) | Credentials: sessions and AI connections expire by account setting (decision 4); machine enrollment codes are one-time | OS isolation: Linux runs have no namespaces/landlock; Windows runs are in a Job Object and "not sandboxed" (`windows.rs` `RUNNING_DETAIL`); no network restriction; no read-only vs project vs admin tiers |
+| Durable task engine | Journal with idempotency keys, retired keys refused, never replayed (`core/src/journal.rs`); jobs outlive the chat; after a broker restart an unsettled job is reported as unknown and never retried, no PID recovered (`core/src/broker.rs` ~216); workflows persisted (`hub/src/workflows.rs`) | Artifacts: output is kept per operation; no named artifacts per step | Step checkpoints and parking/resume of an agent; reconcile-before-retry is manual (nothing retries) |
+| Multi-agent coordination | Agent board (`hub/src/board/`): claim with lease and heartbeat (`lease.rs`), dependencies (`board_dep`), handoff, notes, verify, events (decisions B01–B09) | Review gates: `board_verify` exists; protected-action approval is separate from the board ⚠ RE-CHECK | Isolated workspace per agent (git worktree), budgets |
+| Provider adapters | Task ownership is the broker's, never the AI's; the connector works from Claude, ChatGPT, Grok, Cursor and Claude Code (workflows `connect-*`) | — | Subscription-aware sign-in, local-model adapters (the reasoning path is rrflow's per the homebase rulings: park, not here) |
+| Control plane | Hub web: account, machines, approvals, workflows, operator page, analytics; Tauri inspector (`apps/desktop`) | Logs and health per device in one view ⚠ RE-CHECK | Credentials UI (secrets stay in Vaultix; the hub shows none) |
+
+### The build order, where each step stands
+
+| Step | State |
+|---|---|
+| 1. Pair a server, verify identity, inspect health, run one real command through the same contract | Done on a Windows PC (`dabo`, 2026-11-04) through app.devagotchi.com. Platinum not paired: it is the Texas server and needs Jesse's approval |
+| 2. Reliability: close the chat and see the result; network loss, restart, expired credentials, cancellation, duplicates | Partial: journal idempotency, honest restart and `operation_cancel` are tested in `core`; no end-to-end test that closes the AI connection and reads the result from a new one ⚠ RE-CHECK |
+| 3. Safe work: project-scoped sandbox, tests, reviewable diff, cannot reach outside scope | Missing: needs the OS isolation row above |
+| 4. Coordination: two agents in separate worktrees, evidence handoff, approval before a protected action | Partial: board handoff and approvals exist; worktrees do not |
+| 5. Providers and polish: subscription sign-in, local adapters, guided setup, signed updates, recovery, accessible UI | Partial: guided setup (workflows, first connect), recovery (decision 7); signed updates missing (downloads carry sha256 only) |
