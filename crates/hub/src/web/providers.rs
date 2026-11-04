@@ -725,6 +725,7 @@ fn link_page(hub: &Arc<HubSignIn>, proven: &Proven, return_to: &str) -> Response
         pages::escape(&words.keep_separate)
     );
     let mut response = pages::html(StatusCode::OK, &title, &body);
+    super::session::form_may_return(&mut response, return_to);
     let headers = response.headers_mut();
     headers.insert(axum::http::header::REFERRER_POLICY, axum::http::HeaderValue::from_static("same-origin"));
     if let Ok(value) = axum::http::HeaderValue::from_str(&hub.cookie(link_cookie(hub), &sealed, LINK_SECS)) {

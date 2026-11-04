@@ -39,3 +39,25 @@ pub(super) async fn open_and_return(
         }
     }
 }
+
+/// A page whose form signs in and returns to `return_to`: when that is an AI app's authorize
+/// request, the browser follows the answer on to the app's redirect address, which the
+/// page's `form-action` must name too (a browser holds a form's redirects to it).
+pub(super) fn form_may_return(response: &mut Response, return_to: &str) {
+    let Some(query) = return_to.strip_prefix("/oauth/authorize?") else {
+        return;
+    };
+    let redirect = query.split('&').find_map(|pair| pair.strip_prefix("redirect_uri="));
+    let decoded = redirect.and_then(|value| percent_encoding::percent_decode_str(value).decode_utf8().ok());
+    let Some(origin) = decoded.and_then(|uri| super::passkeys::origin_of(&uri)) else {
+        return;
+    };
+    let headers = response.headers_mut();
+    let policy = headers.get(axum::http::header::CONTENT_SECURITY_POLICY).and_then(|v| v.to_str().ok());
+    let Some(policy) = policy.map(|p| p.replace("form-action 'self'", &format!("form-action 'self' {origin}"))) else {
+        return;
+    };
+    if let Ok(value) = axum::http::HeaderValue::from_str(&policy) {
+        headers.insert(axum::http::header::CONTENT_SECURITY_POLICY, value);
+    }
+}

@@ -18,7 +18,6 @@ use super::{HubSignIn, encode, pages, safe_return_to};
 use crate::AppState;
 
 const FRESH: &str = "dvg_fresh";
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Tab { In, Up }
 
@@ -67,7 +66,8 @@ pub fn page(hub: &HubSignIn, return_to: &str, tab: Tab, notice: Option<&str>) ->
         notice = notice.unwrap_or_default(), to = e(return_to), email = e(&words.email),
         password = e(&words.password), submit = e(submit), forgot = e(&words.forgot),
     );
-    own_page(&words.title, &body)
+    let mut response = own_page(&words.title, &body);
+    (super::session::form_may_return(&mut response, return_to), response).1
 }
 
 pub fn routes() -> Router<AppState> {
