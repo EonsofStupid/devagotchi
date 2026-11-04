@@ -659,25 +659,5 @@ pub(super) async fn finish(
             return failed(status, title, text);
         }
     };
-    if account.owner {
-        hub.learn_owner_of(&account.id);
-    }
-    // Still the same account: the session goes on.
-    if current.as_ref().is_some_and(|c| c.id == account.id) {
-        return see_other(return_to, &[]);
-    }
-    match accounts.open_session(&account.id, None).await {
-        Ok(token) => see_other(
-            return_to,
-            &[hub.cookie(
-                hub.session_cookie(),
-                &token,
-                crate::accounts::sessions::SESSION_MAX_SECS,
-            )],
-        ),
-        Err(error) => {
-            eprintln!("devagotchi-hub: account store: {}", error.message);
-            super::routes::unavailable()
-        }
-    }
+    super::session::open_and_return(hub, current.as_ref(), &account, return_to, extra_cookies).await
 }

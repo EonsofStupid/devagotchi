@@ -147,11 +147,11 @@ placeholder=\"you@example.com\"></label><input type=\"hidden\" name=\"return_to\
 
 #[derive(Deserialize)]
 pub struct Ask {
-    email: String,
+    pub(super) email: String,
     #[serde(default)]
-    return_to: Option<String>,
+    pub(super) return_to: Option<String>,
     #[serde(default)]
-    link: Option<String>,
+    pub(super) link: Option<String>,
 }
 
 fn sent() -> Response {

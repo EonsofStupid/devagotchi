@@ -238,5 +238,26 @@
       "client_done": "{client} is connected.",
       "done": "All done."
     }
+  },
+  "sign_in": {
+    "title": "Sign in",
+    "or": "or",
+    "tab_in": "Sign in",
+    "tab_up": "Sign up",
+    "email": "Email",
+    "password": "Password",
+    "submit_in": "Sign in",
+    "submit_up": "Create account",
+    "forgot": "Forgot password?",
+    "wrong": "Email or password is wrong.",
+    "taken": "That email already has an account. Sign in instead.",
+    "short": "Use at least 8 characters.",
+    "slow_down": "Too many tries. Wait a few minutes.",
+    "reset_sent": "Check your email for a sign-in link.",
+    "reset_unavailable": "Password reset isn't available yet — sign in with Google.",
+    "set_password": "Set a password",
+    "link_title": "{email} already has an account. Link Google to it?",
+    "link": "Link",
+    "keep_separate": "Keep separate"
   }
 }
