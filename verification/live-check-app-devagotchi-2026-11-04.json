@@ -1,0 +1,88 @@
+{
+  "hub": "https://app.devagotchi.com",
+  "site": "https://devagotchi.com",
+  "client": "dgc_cdb1q5XTtAUCj2Te9eIgAA",
+  "at": 1793762603,
+  "results": [
+    {
+      "check": "health answers ok",
+      "ok": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "check": "the hub hands out builds",
+      "ok": true,
+      "detail": "{\"files\": 6, \"version\": \"main-7d22ded\"}"
+    },
+    {
+      "check": "/mcp asks an app to sign in (401 naming its metadata)",
+      "ok": true,
+      "detail": "HTTP 401 Bearer resource_metadata=\"https://app.devagotchi.com/.well-known/oauth-protected-resource\", scope=\"mcp offline_access\""
+    },
+    {
+      "check": "protected-resource metadata names this hub",
+      "ok": true,
+      "detail": "https://app.devagotchi.com"
+    },
+    {
+      "check": "OAuth metadata has every endpoint an app needs",
+      "ok": true,
+      "detail": "all present"
+    },
+    {
+      "check": "an app can register itself",
+      "ok": true,
+      "detail": "HTTP 201; reuse --client dgc_cdb1q5XTtAUCj2Te9eIgAA"
+    },
+    {
+      "check": "Connect opens a page with one Connect button",
+      "ok": true,
+      "detail": "hosted: a new person's account is made on Connect, no sign-up"
+    },
+    {
+      "check": "the join line answers with a script",
+      "ok": true,
+      "detail": "echo 'devagotchi join: this join code was already used, has expired or is unknown. Get a new one under Add a machine at "
+    },
+    {
+      "check": "the builds are listed with their sums",
+      "ok": true,
+      "detail": "devagotchi-aarch64-pc-windows-msvc.zip, devagotchi-aarch64-unknown-linux-gnu.tar.xz, devagotchi-x86_64-pc-windows-msvc.zip, devagotchi-x86_64-unknown-linux-gnu.tar.xz, install-devagotchi.ps1, install-devagotchi.sh"
+    },
+    {
+      "check": "the landing page loads",
+      "ok": true,
+      "detail": "HTTP 200"
+    },
+    {
+      "check": "no other product is named",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "check": "the landing page names its canonical address",
+      "ok": true,
+      "detail": "https://app.devagotchi.com/"
+    },
+    {
+      "check": "/llms.txt is served at https://devagotchi.com",
+      "ok": false,
+      "detail": "HTTP 302"
+    },
+    {
+      "check": "/robots.txt is served at https://devagotchi.com",
+      "ok": false,
+      "detail": "HTTP 302"
+    },
+    {
+      "check": "/sitemap.xml is served at https://devagotchi.com",
+      "ok": false,
+      "detail": "HTTP 302"
+    },
+    {
+      "check": "AI crawlers may read the public pages",
+      "ok": false,
+      "detail": "blocked: ClaudeBot, GPTBot, Google-Extended"
+    }
+  ]
+}

@@ -1,0 +1,63 @@
+# Is the live hub working? Every hour, and on demand, tests/live_check.py checks the deployed
+# hub from the outside the way an AI app and a person reach it: health and builds, the MCP front
+# door and its OAuth metadata, the Connect page, the join line, and the public pages with their
+# files for AI agents and crawlers. It only reads; it never presses Connect or makes an account.
+# The hub and site come from repository variables (DEVAGOTCHI_LIVE_HUB, DEVAGOTCHI_LIVE_SITE,
+# DEVAGOTCHI_LIVE_CLIENT); with no hub set, the job is skipped. Nothing here names a host.
+name: live
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      hub:
+        description: "Hub URL (defaults to the DEVAGOTCHI_LIVE_HUB variable)"
+        required: false
+      site:
+        description: "Marketing site URL (defaults to DEVAGOTCHI_LIVE_SITE, else the hub)"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  live:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      HUB: ${{ inputs.hub || vars.DEVAGOTCHI_LIVE_HUB }}
+      SITE: ${{ inputs.site || vars.DEVAGOTCHI_LIVE_SITE }}
+      CLIENT: ${{ vars.DEVAGOTCHI_LIVE_CLIENT }}
+    steps:
+      - name: A hub to check
+        id: hub
+        run: |
+          if [ -z "$HUB" ]; then
+            echo "No DEVAGOTCHI_LIVE_HUB variable and no hub input: nothing to check." >> "$GITHUB_STEP_SUMMARY"
+            echo "set=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "set=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.hub.outputs.set == 'true'
+        with:
+          persist-credentials: false
+      - name: Check the live hub
+        if: steps.hub.outputs.set == 'true'
+        run: |
+          set -o pipefail
+          args=(--hub "$HUB" --json live-check.json)
+          [ -n "$SITE" ] && args+=(--site "$SITE")
+          [ -n "$CLIENT" ] && args+=(--client "$CLIENT")
+          python3 tests/live_check.py "${args[@]}" | tee live-check.txt
+      - name: Summary
+        if: always() && steps.hub.outputs.set == 'true'
+        run: |
+          { echo '### Live hub check'; echo; echo '```'; cat live-check.txt 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always() && steps.hub.outputs.set == 'true'
+        with:
+          name: live-check
+          path: live-check.json
+          if-no-files-found: ignore
