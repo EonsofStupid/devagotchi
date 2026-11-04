@@ -155,7 +155,7 @@ def main() -> int:
         workflow = started["structuredContent"]
         link, wid = workflow["link"], workflow["id"]
         assert link.startswith(f"{url}/go/dgw_"), link
-        assert [s["kind"] for s in workflow["steps"]] == ["machine", "phone", "secure_account", "done"]
+        assert [s["kind"] for s in workflow["steps"]] == ["machine", "done"]
         for _ in range(2):
             status, _, preview = call(link)
             assert status == 200 and "<h1>Get started</h1>" in preview, preview
@@ -166,6 +166,20 @@ def main() -> int:
 
         with sync_playwright() as p:
             browser = p.chromium.launch(channel=args.channel)
+            # On a phone the link says first to open it on the computer, with the link to
+            # copy and its QR code; nothing about keeping an account.
+            phone = browser.new_context(viewport={"width": 390, "height": 844}, user_agent=(
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 "
+                "(KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1"))
+            on_phone = phone.new_page()
+            on_phone.goto(link)
+            text = on_phone.inner_text("main")
+            assert text.strip().startswith("Open this on your computer"), text[:300]
+            assert on_phone.locator("#open-on-computer #page-link").inner_text() == link
+            assert on_phone.locator("#open-on-computer #qr svg").count() == 1
+            assert "Keep your account" not in text, text
+            phone.close()
+            print("PASS on a phone the link says first to open it on the computer, and nothing about keeping an account")
             # 2. A browser that never signed in, at phone width.
             person = browser.new_context(viewport={"width": 390, "height": 844})
             page = person.new_page()
@@ -244,7 +258,7 @@ def main() -> int:
             assert page.evaluate("window.__stayed") == "here", "the page reloaded"
             assert len(loads) == settled, loads
             assert page.locator("#step-1 .fact").inner_text() == "desk is online."
-            assert page.locator("#step-2").get_attribute("data-state") == "current"
+            assert page.locator("#step-2").get_attribute("data-state") == "done"
             assert page.locator("#step-1 .step-state").text_content() == "Done"
             page.wait_for_selector("#keep:not([hidden])", timeout=15_000)
             print("PASS the page ticked the machine step without reloading and offers to keep the account")
@@ -281,16 +295,15 @@ def main() -> int:
 
             page.locator("#passkey-add").click()
             page.wait_for_url(re.compile(r".*/go/dgw_[^#]*$"), timeout=15_000)
-            page.wait_for_selector("#step-3[data-state=done]", timeout=15_000)
-            assert page.locator("#keep").count() == 0
+            page.wait_for_function("!document.getElementById('keep')", timeout=15_000)
             print("PASS a passkey kept the account, from the workflow's page")
 
             # 6. The AI sees it.
             status = ai.tool("workflow_status", {"id": wid})["structuredContent"]
             states = [s["state"] for s in status["steps"]]
-            assert states[0] == "done" and states[2] == "done", status
+            assert states == ["done", "done"], status
             assert status["steps"][0]["fact"] == "desk is online.", status
-            assert status["state"] == "open" and states[1] == "current", status
+            assert status["state"] == "completed", status
             ran = None
             for _ in range(30):
                 ran = ai.tool("run", {"machine": "desk", "command": "echo from-the-link"})
@@ -300,15 +313,19 @@ def main() -> int:
             assert not ran.get("isError") and "from-the-link" in ran["structuredContent"]["output"], ran
             print("PASS workflow_status reports the machine done and the account kept; the AI ran on it")
 
-            # Without JavaScript: Check again shows where it stands; no code but this browser's.
+            # Without JavaScript: the finished link shows it is done, with no code; an open
+            # one's Check again shows where it stands.
             plain = browser.new_context(java_script_enabled=False, viewport={"width": 390, "height": 844})
             other = plain.new_page()
             other.goto(link)
-            assert other.locator("#check button").is_visible()
             assert other.locator("#step-1").get_attribute("data-state") == "done"
+            assert other.locator("#step-2").get_attribute("data-state") == "done"
             assert code not in other.content()
+            linux = ai.tool("workflow_start", {"workflow": "connect-linux"})["structuredContent"]["link"]
+            other.goto(linux)
+            assert other.locator("#check button").is_visible()
             other.locator("#check button").click()
-            assert other.locator("#step-2").get_attribute("data-state") == "current"
+            assert other.locator("#step-1").get_attribute("data-state") == "current"
             print("PASS without JavaScript, Check again shows where it stands")
             browser.close()
     finally:

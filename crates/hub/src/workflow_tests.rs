@@ -68,6 +68,24 @@ async fn stores() -> Vec<Option<String>> {
     out
 }
 
+/// The built-in site with a "Get started" of every step kind: machine, phone, keeping the
+/// account, done.
+fn every_kind_site(dir: &Path) -> PathBuf {
+    let site = crate::offers_tests::builtin_with(dir, |_| {});
+    let file = site.join("content/workflows.json");
+    let mut value: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    let step = |kind: &str, title: &str, text: &str| json!({ "kind": kind, "title": title, "text": text });
+    value["workflows"][0]["steps"] = json!([
+        step("machine", "Connect a computer", "Pick what it runs and press the button."),
+        step("phone", "Turn on approvals on your phone", "Open this same link on your phone."),
+        step("secure_account", "Keep your account", "Optional: add a sign-in."),
+        step("done", "All set", "Go back to your AI."),
+    ]);
+    assert_eq!(value["workflows"][0]["id"], "get-started");
+    std::fs::write(&file, value.to_string()).unwrap();
+    site
+}
+
 /// A site directory in `dir`: the built-in site.json with `edit` applied.
 fn site_dir(dir: &Path, edit: impl FnOnce(&mut Value)) -> PathBuf {
     let mut value: Value =
@@ -223,7 +241,7 @@ async fn the_list_offers_each_workflow_and_says_plainly_what_cannot_be_done_here
             .iter()
             .map(|s| s["kind"].as_str().unwrap().to_string())
             .collect();
-        assert_eq!(kinds, ["machine", "phone", "secure_account", "done"]);
+        assert_eq!(kinds, ["machine", "done"]);
         let mac = offer("connect-mac");
         assert_eq!(mac["available"], false);
         assert!(
@@ -645,8 +663,18 @@ async fn keeping_the_account_is_offered_after_the_first_success_to_the_browser_t
 
 #[tokio::test]
 async fn each_step_kind_is_done_when_the_hub_sees_it_and_a_wait_returns_the_moment_it_is() {
+    // The built-in "Get started" is this computer and done (spec first-connect, B).
+    let builtin = hub_on(None, json!({})).await;
+    let mut someone = builtin.first_connect("Claude").await;
+    let started = structured(&builtin, &mut someone, "workflow_start", json!({ "workflow": "get-started" })).await;
+    let kinds: Vec<&str> = started["steps"].as_array().unwrap().iter().map(|s| s["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, ["machine", "done"]);
     for store in stores().await {
-        let hub = hub_on(store.as_deref(), json!({})).await;
+        // Every step kind, in a site whose "Get started" still has each one.
+        let hub = hosted_with(store.as_deref(), |dir, _| {
+            json!({ "downloads": dist(dir).to_string_lossy(), "site": { "dir": every_kind_site(dir).to_string_lossy() } })
+        })
+        .await;
         let mut person = hub.first_connect("Claude").await;
         let (subject, tenant) = who(&hub, &mut person).await;
         let started = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "get-started" })).await;
