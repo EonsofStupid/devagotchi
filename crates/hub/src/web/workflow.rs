@@ -224,6 +224,14 @@ pub async fn page(State(state): State<AppState>, headers: HeaderMap, Path(token)
         },
     };
     let (body, passkey, push) = view.body(shown.as_deref());
+    // A machine's workflow opened on a phone: the link is for a computer, so that comes
+    // first, to copy or scan.
+    let machine = row.definition.steps.iter().any(|step| step.kind == MACHINE);
+    let phone = machine && headers
+        .get(header::USER_AGENT)
+        .and_then(|agent| agent.to_str().ok())
+        .is_some_and(|agent| ["Mobi", "Android", "iPhone"].iter().any(|word| agent.contains(word)));
+    let body = if phone { format!("{}{body}", view.on_a_phone()) } else { body };
     pages::workflow(StatusCode::OK, &title, &body, passkey, push)
 }
 
@@ -423,6 +431,23 @@ data-return-to=\"{}\" disabled>{}</button></p><p class=\"meta\" id=\"passkey-sta
     /// under (`{server}`).
     fn words(&self) -> Ctx<'_> {
         Ctx::new(self.site).with("mcp", mcp_url(self.state)).with("server", server_name(self.site))
+    }
+
+    /// First on the page on a phone: open it on the computer, with the link to copy and its
+    /// QR code to scan.
+    fn on_a_phone(&self) -> String {
+        let copy = &self.site.messages.workflow;
+        let ctx = Ctx::new(self.site);
+        let link = format!("{}{}", self.state.hub.config.public_url.trim_end_matches('/'), self.path);
+        format!(
+            "<section class=\"note\" id=\"open-on-computer\"><p><strong>{}</strong></p>\
+<div class=\"command\"><pre><code id=\"page-link\">{}</code></pre>\
+<button type=\"button\" class=\"copy\" data-copy=\"page-link\" hidden>{}</button></div>{}</section>",
+            escape(&ctx.plain(&copy.open_on_computer)),
+            escape(&link),
+            escape(&ctx.plain(&copy.copy)),
+            self.qr(),
+        )
     }
 
     /// The link as a QR code, for a phone's camera: drawn here as inline SVG, nothing fetched.

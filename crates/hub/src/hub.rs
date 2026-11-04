@@ -489,7 +489,7 @@ impl Hub {
 
     #[tool(
         name = "machine_add",
-        description = "Add one of the user's own machines to this account. Returns a one-time code and every install command: Linux (systemd), Windows (no administrator), Docker Compose, a Proxmox or Incus host, and a manual tarball. The code works once. The machine that enrolls belongs to this account. Do not use a name the hub operator already configured.",
+        description = "Add one of the user's own machines to this account. Returns a one-time code and every install command: Linux (systemd), Windows (no administrator), Docker Compose, a Proxmox or Incus host, and a manual tarball. The code works once. The machine that enrolls belongs to this account. Do not use a name the hub operator already configured. If you can run commands on this computer, run the command for its OS yourself; give the user a command only for another machine.",
         title = "Add a machine",
         annotations(
             title = "Add a machine",

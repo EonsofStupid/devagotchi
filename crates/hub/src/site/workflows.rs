@@ -261,6 +261,9 @@ pub struct WorkflowCopy {
     pub client_secured: String,
     /// Plain: what the QR code of the link says it is, for a screen reader.
     pub qr: String,
+    /// Plain: first on the page when a phone opens it (the link is for a computer).
+    #[serde(default = "open_on_computer")]
+    pub open_on_computer: String,
     pub facts: FactsCopy,
 }
 
@@ -438,4 +441,8 @@ impl Site {
     pub fn inline_text(&self, text: &str) -> String {
         Ctx::new(self).inline(text)
     }
+}
+
+fn open_on_computer() -> String {
+    "Open this on your computer".into()
 }
