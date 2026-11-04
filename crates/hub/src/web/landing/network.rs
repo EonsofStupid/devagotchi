@@ -3,10 +3,12 @@
 //! offers show; every word is theirs.
 
 use super::{Ctx, intro};
-use crate::site::text::attr;
+use crate::site::{Front, text::attr};
 
-pub fn section(ctx: &Ctx) -> String {
-    let Some(offers) = ctx.site.info.offers() else {
+/// The section, on a hub with its own accounts (a hub that signs in through Nomen has no
+/// offers' tools, so nothing to say yes to).
+pub fn section(ctx: &Ctx, front: Front) -> String {
+    let Some(offers) = ctx.site.info.offers().filter(|_| front != Front::Nomen) else {
         return String::new();
     };
     let items: String = offers

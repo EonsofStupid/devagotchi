@@ -39,6 +39,8 @@ mod workflow_tests;
 #[cfg(test)]
 mod provider_tests;
 #[cfg(test)]
+mod offers_tests;
+#[cfg(test)]
 mod tenant_tests;
 #[cfg(test)]
 mod test_keys;
