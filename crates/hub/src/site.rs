@@ -431,6 +431,21 @@ impl Site {
                     .map(|e| format!("content/messages.json {what}: {e}")),
             );
         }
+        if let Some(offers) = self.info.offers() {
+            let ctx = Ctx::checking(self);
+            for text in [&offers.brand, &offers.question, &offers.instructions] {
+                ctx.plain(text);
+            }
+            let link = &offers.link;
+            for text in [&link.title, &link.text, &link.button, &link.done, &link.gone] {
+                ctx.inline(text);
+            }
+            errors.extend(
+                ctx.errors()
+                    .into_iter()
+                    .map(|e| format!("site.json offers: {e}")),
+            );
+        }
         let ctx = discovery::instructions_ctx(Ctx::checking(self), "https://hub.example.org");
         ctx.plain(&self.info.mcp.instructions);
         errors.extend(
@@ -599,6 +614,13 @@ impl Site {
     /// `{hub}`, `{docs}` and `{llms}` are its address, its docs and its `/llms.txt`.
     pub fn mcp_instructions(&self, public_url: &str) -> String {
         discovery::instructions_ctx(Ctx::new(self), public_url).plain(&self.info.mcp.instructions)
+    }
+
+    /// What the MCP instructions add while the site's offers show (`site/offers.rs`).
+    pub fn offers_instructions(&self) -> Option<String> {
+        self.info
+            .offers()
+            .map(|offers| Ctx::new(self).plain(&offers.instructions))
     }
 
     /// The sign-in email: subject and body, with the link in it.

@@ -120,6 +120,9 @@ pub(crate) async fn hosted_with(
                 changes,
                 config.workflows.link_ttl_secs,
             ))),
+            offers: Some(Arc::new(
+                crate::offers::Offers::from_config(&config, accounts.clone()).unwrap(),
+            )),
         },
         web: None,
         passkeys: web::HubSignIn::new(config.clone(), accounts.clone())

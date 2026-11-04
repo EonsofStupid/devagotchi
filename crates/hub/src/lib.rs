@@ -24,6 +24,7 @@ mod nomen;
 mod oauth;
 mod push;
 mod run;
+mod offers;
 mod site;
 mod store;
 #[cfg(test)]
@@ -702,6 +703,15 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             config.workflows.link_ttl_secs,
         ))
     });
+    // The site's offers on a hub with its own accounts: a provisioning token that is
+    // missing stops the start (`config/shippin.rs`).
+    let offers = match &accounts {
+        Some(accounts) => Some(Arc::new(
+            offers::Offers::from_config(&config, accounts.clone())
+                .map_err(|why| BridgeError::new("invalid_config", why))?,
+        )),
+        None => None,
+    };
     let verifier = Arc::new(Verifier::from_hub_config(&config, &state_dir, accounts).await?);
     let web = match (&config.web, &config.auth) {
         (
@@ -739,6 +749,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             boards,
             analytics,
             workflows,
+            offers,
         },
         web,
         passkeys,
@@ -1694,6 +1705,7 @@ mod tests {
                 downloads: None,
                 analytics: None,
                 workflows: None,
+                offers: None,
             },
             web: None,
             passkeys: None,
@@ -1918,6 +1930,7 @@ mod tests {
                 downloads: None,
                 analytics: None,
                 workflows: None,
+                offers: None,
             },
             web: None,
             passkeys,

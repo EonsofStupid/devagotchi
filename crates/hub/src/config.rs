@@ -13,10 +13,12 @@ use serde::Deserialize;
 
 pub(crate) mod analytics;
 pub(crate) mod providers;
+pub(crate) mod shippin;
 pub(crate) mod tenancy;
 pub(crate) mod workflows;
 pub use analytics::AnalyticsConfig;
 pub use providers::{EmailConfig, ProviderConfig, ProviderKind};
+pub use shippin::ShippinConfig;
 pub use tenancy::{OPERATORS_ENV, TENANCY_ENV, TenancyConfig, TenancyMode, is_operator};
 pub use workflows::WorkflowsConfig;
 use tenancy::check_operator;
@@ -100,6 +102,10 @@ pub struct HubConfig {
     /// How long a workflow's link works (`config/workflows.rs`).
     #[serde(default)]
     pub workflows: WorkflowsConfig,
+    /// How an account whose person says yes to the site's offers is linked to its account
+    /// on the network (`config/shippin.rs`, `src/offers.rs`).
+    #[serde(default)]
+    pub shippin: ShippinConfig,
     /// The owner every holder of this config sees: `owner` above, or in hub mode the
     /// one the accounts store names, learned once at start or when it is made.
     #[serde(skip)]
@@ -626,6 +632,7 @@ impl HubConfig {
         self.tenancy.check().map_err(invalid)?;
         self.analytics.check().map_err(invalid)?;
         self.workflows.check().map_err(invalid)?;
+        self.shippin.check().map_err(invalid)?;
         for operator in &self.operators {
             check_operator(operator).map_err(invalid)?;
         }

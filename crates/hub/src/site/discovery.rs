@@ -13,12 +13,13 @@ use super::{Front, Site, text::Ctx, text::attr};
 /// The public pages besides `/`, in the order `/llms-full.txt` inlines them.
 pub const PAGES: [&str; 4] = ["docs", "support", "privacy", "terms"];
 
-/// What no crawler reads: accounts, the operator, setup links, sign-in and OAuth, the API,
-/// joining and downloads, and the MCP and link endpoints.
-pub const PRIVATE: [&str; 19] = [
+/// What no crawler reads: accounts, the operator, setup and offers links, sign-in and
+/// OAuth, the API, joining and downloads, and the MCP and link endpoints.
+pub const PRIVATE: [&str; 20] = [
     "/account",
     "/operator",
     "/go/",
+    "/offers/",
     "/oauth",
     "/api",
     "/join",

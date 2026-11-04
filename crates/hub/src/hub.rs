@@ -39,6 +39,9 @@ pub struct Hub {
     /// The workflows an AI starts for its person (`crate::workflows`), on a hub with its own
     /// accounts.
     pub workflows: Option<Arc<crate::workflows::Workflows>>,
+    /// The site's offers and how an account is linked (`crate::offers`), on a hub with its
+    /// own accounts.
+    pub offers: Option<Arc<crate::offers::Offers>>,
 }
 
 /// One machine as a person sees it on their page and in `/api/v1/me`, and as an AI sees it
@@ -707,7 +710,7 @@ pub(crate) fn unexpected_response(expected: &str, actual: &ResponseBody) -> Json
 }
 
 #[tool_handler(
-    router = (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router())
+    router = (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router() + Self::offers_router())
 )]
 impl ServerHandler for Hub {
     /// Every tool call, unless the caller's tenant waits to be let in (early access): then
@@ -718,6 +721,10 @@ impl ServerHandler for Hub {
         request: rmcp::model::CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        // The offers' tools exist only while the site's offers show (`crate::offers`).
+        if !self.offered() && crate::offers::TOOLS.contains(&request.name.as_ref()) {
+            return Err(rmcp::ErrorData::invalid_params("tool not found", None));
+        }
         let subject = self.subject(&context).ok();
         if request.name != "whoami"
             && let Some(subject) = &subject
@@ -728,7 +735,7 @@ impl ServerHandler for Hub {
             return Ok(answer.into());
         }
         let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        let answer = (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router())
+        let answer = (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router() + Self::offers_router())
             .call(call)
             .await;
         // A successful call from an AI client of a known family: what a workflow's
@@ -744,6 +751,37 @@ impl ServerHandler for Hub {
         answer
     }
 
+    /// Every tool, but the offers' while the site's offers do not show.
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, rmcp::ErrorData> {
+        let supports_cache_hints = context
+            .protocol_version()
+            .is_some_and(|version| version >= rmcp::model::ProtocolVersion::V_2026_07_28);
+        let offered = self.offered();
+        let mut listed = rmcp::model::ListToolsResult::with_all_items(
+            (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router() + Self::offers_router())
+                .list_all()
+                .into_iter()
+                .filter(|tool| offered || !crate::offers::TOOLS.contains(&tool.name.as_ref()))
+                .collect(),
+        );
+        listed.ttl_ms = supports_cache_hints.then_some(0);
+        listed.cache_scope = supports_cache_hints.then_some(rmcp::model::CacheScope::Public);
+        Ok(listed)
+    }
+
+    fn get_tool(&self, name: &str) -> Option<rmcp::model::Tool> {
+        if !self.offered() && crate::offers::TOOLS.contains(&name) {
+            return None;
+        }
+        (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router() + Self::offers_router())
+            .get(name)
+            .cloned()
+    }
+
     /// The MCP server's name and instructions are the site's (`site.json` `mcp`), so every
     /// AI client meets the hub under the name the site gives it.
     fn get_info(&self) -> rmcp::model::ServerConfig {
@@ -754,14 +792,17 @@ impl ServerHandler for Hub {
                 .build(),
         )
         .with_server_info(site.mcp_info())
-        .with_instructions(site.mcp_instructions(&self.config.public_url))
+        .with_instructions(match site.offers_instructions().filter(|_| self.offered()) {
+            Some(offers) => format!("{} {offers}", site.mcp_instructions(&self.config.public_url)),
+            None => site.mcp_instructions(&self.config.public_url),
+        })
     }
 }
 
 /// Every tool the hub serves, as `tools/list` describes it.
 #[cfg(test)]
 pub(crate) fn tools() -> Vec<rmcp::model::Tool> {
-    (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router() + Hub::workflow_router())
+    (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router() + Hub::workflow_router() + Hub::offers_router())
         .list_all()
 }
 
@@ -784,7 +825,7 @@ mod schema_tests {
     #[test]
     fn whoami_output_has_every_required_property() {
         let tool =
-            (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router() + Hub::workflow_router())
+            (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router() + Hub::workflow_router() + Hub::offers_router())
                 .list_all()
                 .into_iter()
                 .find(|tool| tool.name == "whoami")

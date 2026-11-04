@@ -44,6 +44,7 @@ mod media;
 #[cfg(test)]
 mod media_tests;
 mod notify;
+mod offers;
 pub mod oauth;
 mod operator;
 #[cfg(test)]

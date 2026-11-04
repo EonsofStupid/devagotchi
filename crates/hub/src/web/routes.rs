@@ -16,7 +16,7 @@ use serde::Deserialize;
 
 use super::{
     Exchange, SessionToken, WebLogin, analytics, approvals, claim, device, discovery, email, machines,
-    notify, oauth, operator,
+    notify, oauth, offers, operator,
     pages::{self, Viewer},
     passkeys, providers, public, workflow,
 };
@@ -84,6 +84,8 @@ pub fn router(hub_authorization: bool) -> Router<AppState> {
         .route("/go/{token}/keep", post(workflow::keep))
         .route("/go/{token}/client", post(workflow::client))
         .route("/assets/workflow.js", get(workflow::script))
+        // The one-tap link that links an account to the site's network (`offers.rs`).
+        .route("/offers/{token}", get(offers::show).post(offers::go))
         .route("/assets/hub.css", get(css))
         // The site's own files: its logo, icon, pictures, video and fonts.
         .route("/assets/{file}", get(super::media::asset));
