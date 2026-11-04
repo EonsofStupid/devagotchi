@@ -14,6 +14,7 @@
 //!                          the workflow page's words
 //!   content/workflows.json the step-by-step setups an AI hands its person as one link
 //!   content/docs.md, privacy.md, terms.md, support.md   the public pages
+//!   content/llms.md        what an AI reads at /llms.txt (`discovery.rs`)
 //!   assets/                logo, icon, diagram, video, poster, fonts (served from 'self')
 //! ```
 //!
@@ -28,6 +29,7 @@ mod analytics_copy;
 mod assets;
 #[cfg(test)]
 mod brand_tests;
+pub mod discovery;
 mod markdown;
 pub(crate) mod model;
 mod plans;
@@ -62,7 +64,7 @@ pub const SITE_ENV: &str = "DEVAGOTCHI_SITE_DIR";
 pub const PAGES: [&str; 4] = ["docs", "privacy", "terms", "support"];
 
 /// The text files a site directory may hold, besides `assets/`.
-const TEXT_FILES: [&str; 9] = [
+const TEXT_FILES: [&str; 10] = [
     "site.json",
     "tokens.json",
     "content/landing.json",
@@ -72,6 +74,7 @@ const TEXT_FILES: [&str; 9] = [
     "content/privacy.md",
     "content/terms.md",
     "content/support.md",
+    "content/llms.md",
 ];
 const MAX_TEXT_BYTES: u64 = 1024 * 1024;
 
@@ -85,6 +88,8 @@ pub struct Site {
     /// The workflows an AI can start for its person (`content/workflows.json`).
     pub workflows: WorkflowsFile,
     pub pages: BTreeMap<String, Page>,
+    /// What an AI reads at `/llms.txt` (`content/llms.md`, `discovery.rs`).
+    pub llms: Page,
     pub assets: BTreeMap<String, Asset>,
     style: style::Style,
 }
@@ -127,6 +132,7 @@ fn builtin_files() -> Files {
         "content/privacy.md",
         "content/terms.md",
         "content/support.md",
+        "content/llms.md",
     );
     let assets = builtin_assets!(
         "logo.svg",
@@ -198,7 +204,7 @@ impl Site {
                     && !TEXT_FILES.contains(&format!("content/{name}").as_str())
                 {
                     return Err(format!(
-                        "content/{name} is not a file a site reads (landing.json, messages.json, workflows.json, docs.md, privacy.md, terms.md, support.md)"
+                        "content/{name} is not a file a site reads (landing.json, messages.json, workflows.json, docs.md, privacy.md, terms.md, support.md, llms.md)"
                     ));
                 }
             }
@@ -257,6 +263,8 @@ impl Site {
             let page = Page::parse(text(&path)).map_err(|why| format!("{path}: {why}"))?;
             pages.insert(name.to_string(), page);
         }
+        let llms = Page::parse(text("content/llms.md"))
+            .map_err(|why| format!("content/llms.md: {why}"))?;
         let mut loaded = BTreeMap::new();
         for (name, bytes) in files.assets {
             let asset = Asset::new(&name, bytes).map_err(|why| format!("assets/{name}: {why}"))?;
@@ -286,6 +294,7 @@ impl Site {
             messages,
             workflows,
             pages,
+            llms,
             assets: loaded,
             style,
         };
@@ -330,6 +339,15 @@ impl Site {
                     );
                 }
             }
+        }
+        for front in markdown::DOC_FRONTS {
+            let ctx = discovery::llms_ctx(Ctx::checking(self), "https://hub.example.org");
+            self.llms.markdown(&ctx, &[front]);
+            errors.extend(
+                ctx.errors()
+                    .into_iter()
+                    .map(|e| format!("content/llms.md: {e}")),
+            );
         }
         // Each message with what fills it where it is sent.
         for (what, template, var, value, inline) in [
@@ -410,7 +428,7 @@ impl Site {
                     .map(|e| format!("content/messages.json {what}: {e}")),
             );
         }
-        let ctx = Ctx::checking(self);
+        let ctx = discovery::instructions_ctx(Ctx::checking(self), "https://hub.example.org");
         ctx.plain(&self.info.mcp.instructions);
         errors.extend(
             ctx.errors()
@@ -574,8 +592,10 @@ impl Site {
         info
     }
 
-    pub fn mcp_instructions(&self) -> String {
-        Ctx::new(self).plain(&self.info.mcp.instructions)
+    /// What every AI client is told when it connects to the hub at `public_url`:
+    /// `{hub}`, `{docs}` and `{llms}` are its address, its docs and its `/llms.txt`.
+    pub fn mcp_instructions(&self, public_url: &str) -> String {
+        discovery::instructions_ctx(Ctx::new(self), public_url).plain(&self.info.mcp.instructions)
     }
 
     /// The sign-in email: subject and body, with the link in it.

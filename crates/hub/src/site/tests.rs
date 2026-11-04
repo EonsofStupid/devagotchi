@@ -95,7 +95,7 @@ fn everything(site: &Site) -> Vec<(String, String)> {
             "{} {:?}\n{}",
             info.name,
             info.title,
-            site.mcp_instructions()
+            site.mcp_instructions("https://hub.example.org")
         ),
     ));
     out.push(("manifest".into(), site.manifest()));
@@ -116,8 +116,8 @@ fn the_built_in_site_checks_out_and_says_what_the_hub_always_said() {
     assert_eq!(site.mcp_info().name, "devagotchi-hub");
     assert!(site.mcp_info().title.is_none());
     assert!(
-        site.mcp_instructions()
-            .starts_with("Devagotchi is how you work")
+        site.mcp_instructions("https://hub.example.org")
+            .starts_with("Devagotchi gives you the user's own machines (servers, PCs and devspaces) through this hub at https://hub.example.org. Docs: https://hub.example.org/docs; for AI agents: https://hub.example.org/llms.txt.")
     );
     assert_eq!(site.hosted_hub(), Some("https://app.devagotchi.com"));
     let (subject, body) = site.sign_in_email("https://hub.example.org/auth/email#t");

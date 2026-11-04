@@ -754,7 +754,7 @@ impl ServerHandler for Hub {
                 .build(),
         )
         .with_server_info(site.mcp_info())
-        .with_instructions(site.mcp_instructions())
+        .with_instructions(site.mcp_instructions(&self.config.public_url))
     }
 }
 

@@ -9,7 +9,10 @@
 use axum::{extract::State, http::StatusCode, response::Response};
 
 use super::pages;
-use crate::{AppState, site::Ctx};
+use crate::{
+    AppState,
+    site::{Ctx, discovery},
+};
 
 /// The page `name` of the site, drawn for this hub: its own MCP address, and the copy for
 /// the way it signs people in.
@@ -34,18 +37,31 @@ fn page(state: &AppState, name: &str) -> Response {
             state.hub.config.analytics.retention_days.to_string(),
         );
     let body = page.render(&ctx, &[kind(state), switch(state)]);
-    pages::html(
+    let title = ctx.plain(&page.title);
+    let head = discovery::head(
+        &site,
+        &state.hub.config.public_url,
+        &discovery::Meta {
+            path: &format!("/{name}"),
+            title: &title,
+            description: &ctx.plain(&page.description),
+            noindex: false,
+            json_ld: Vec::new(),
+        },
+    );
+    pages::public(
         StatusCode::OK,
-        &ctx.plain(&page.title),
+        &title,
         &format!(
             "{body}<p class=\"meta\">{}</p>",
             ctx.inline(&site.messages.page_footer)
         ),
+        &head,
     )
 }
 
 /// Which of a page's `::: …` blocks this hub shows.
-fn kind(state: &AppState) -> &'static str {
+pub(super) fn kind(state: &AppState) -> &'static str {
     if state.passkeys.is_some() {
         if state.hub.config.multi_tenant() {
             "hosted"
@@ -64,7 +80,7 @@ fn kind(state: &AppState) -> &'static str {
 
 /// Whether this hub counts visits: which of a page's `::: analytics` and
 /// `::: no-analytics` blocks it shows.
-fn switch(state: &AppState) -> &'static str {
+pub(super) fn switch(state: &AppState) -> &'static str {
     if state.hub.analytics.is_some() {
         "analytics"
     } else {

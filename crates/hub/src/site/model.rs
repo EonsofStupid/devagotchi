@@ -104,6 +104,34 @@ pub struct SiteFile {
     pub early_access: EarlyAccess,
     #[serde(default)]
     pub assets: AssetNames,
+    /// What the landing page's `SoftwareApplication` JSON-LD says beyond the product's name
+    /// and description (`discovery.rs`). Left out, it says only those.
+    #[serde(default)]
+    pub software: Software,
+}
+
+/// The facts a search engine reads about the software, as schema.org words them.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Software {
+    /// schema.org `applicationCategory`: `DeveloperApplication`, `BusinessApplication`…
+    #[serde(default)]
+    pub category: Option<String>,
+    /// schema.org `operatingSystem`: the systems it runs on, as a list.
+    #[serde(default)]
+    pub operating_systems: Vec<String>,
+    /// What it costs: a schema.org `Offer`, only when the price is one number.
+    #[serde(default)]
+    pub offer: Option<Offer>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Offer {
+    /// A number as text: `0` for free.
+    pub price: String,
+    /// ISO 4217: `USD`.
+    pub currency: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -395,6 +423,14 @@ impl SiteFile {
         }
         if let Some(cta) = &self.early_access.cta {
             cta.check("site.json early_access.cta")?;
+        }
+        if let Some(offer) = &self.software.offer {
+            if offer.price.parse::<f64>().map_or(true, |p| !p.is_finite() || p < 0.0) {
+                return bad("software.offer.price", "a number as text, \"0\" for free");
+            }
+            if offer.currency.len() != 3 || !offer.currency.bytes().all(|b| b.is_ascii_uppercase()) {
+                return bad("software.offer.currency", "an ISO 4217 code such as USD");
+            }
         }
         Ok(())
     }

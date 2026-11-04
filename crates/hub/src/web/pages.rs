@@ -122,20 +122,26 @@ fn access_note(viewer: &Viewer<'_>) -> String {
 }
 
 pub fn html(status: StatusCode, title: &str, body: &str) -> Response {
-    render(status, title, body, Kind::Plain)
+    render(status, title, body, Kind::Plain, "")
+}
+
+/// A public page (`/docs`, `/privacy`, …): a plain page with what search engines and link
+/// previews read in its head (`site/discovery.rs`).
+pub fn public(status: StatusCode, title: &str, body: &str, head: &str) -> Response {
+    render(status, title, body, Kind::Plain, head)
 }
 
 /// A page that is also the installable app: the manifest, the icon and the hub's one
 /// script (`/assets/push.js`) may load, from this origin only.
 pub fn app(status: StatusCode, title: &str, body: &str) -> Response {
-    render(status, title, body, Kind::App)
+    render(status, title, body, Kind::App, "")
 }
 
 /// A workflow's page (`workflow.rs`): its own script, which follows the steps, and the
 /// passkey script while the account can be secured there, and the phone's (with the app's
 /// manifest) while a phone can be turned on there. All from this origin.
 pub fn workflow(status: StatusCode, title: &str, body: &str, passkey: bool, push: bool) -> Response {
-    let mut response = render(status, title, body, Kind::Workflow { passkey, push });
+    let mut response = render(status, title, body, Kind::Workflow { passkey, push }, "");
     // Its forms post here: the browser sends a POST's true Origin only under `same-origin`.
     response.headers_mut().insert(
         header::REFERRER_POLICY,
@@ -147,7 +153,7 @@ pub fn workflow(status: StatusCode, title: &str, body: &str, passkey: bool, push
 /// A page that runs one of the hub's own scripts (`/assets/passkey.js`), loaded from this
 /// origin and talking only to it.
 pub fn scripted(status: StatusCode, title: &str, body: &str, script: &'static str) -> Response {
-    render(status, title, body, Kind::Script(script))
+    render(status, title, body, Kind::Script(script), "")
 }
 
 #[derive(Clone, Copy)]
@@ -161,7 +167,9 @@ enum Kind {
     Workflow { passkey: bool, push: bool },
 }
 
-fn render(status: StatusCode, title: &str, body: &str, kind: Kind) -> Response {
+/// A page: `meta` is what search engines and link previews read in its head, on the
+/// public pages only.
+fn render(status: StatusCode, title: &str, body: &str, kind: Kind, meta: &str) -> Response {
     let site = site();
     let head = match kind {
         Kind::Plain | Kind::Landing => String::new(),
@@ -195,7 +203,7 @@ fn render(status: StatusCode, title: &str, body: &str, kind: Kind) -> Response {
     let page = format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-<title>{} · {}</title><link rel=\"stylesheet\" href=\"/assets/hub.css\">{head}</head>\
+<title>{} · {}</title>{meta}<link rel=\"stylesheet\" href=\"/assets/hub.css\">{head}</head>\
 <body{class}>{bar}<main>{body}</main></body></html>\n",
         escape(title),
         escape(site.name()),
@@ -279,7 +287,20 @@ pub fn message(
 /// only the claim. The MCP address is this hub's own `public_url`, never a hosted one.
 pub fn home(front: Front, public_url: &str) -> Response {
     let (title, body) = super::landing::page(&front, public_url);
-    render(StatusCode::OK, &title, &body, Kind::Landing)
+    let site = site();
+    let meta = crate::site::discovery::head(
+        &site,
+        public_url,
+        &crate::site::discovery::Meta {
+            path: "/",
+            title: &title,
+            description: "",
+            // A hub nobody owns yet is not one to find.
+            noindex: front == Front::Unclaimed,
+            json_ld: crate::site::discovery::landing_json_ld(&site, front, public_url),
+        },
+    );
+    render(StatusCode::OK, &title, &body, Kind::Landing, &meta)
 }
 
 pub fn account(viewer: &Viewer<'_>, machines: &[Machine]) -> Response {

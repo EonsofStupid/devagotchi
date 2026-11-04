@@ -4,13 +4,14 @@
 //!   character as it is. Everything else is text: `<`, `>` and a bare `&` are escaped, and
 //!   an entity (`&quot;`, `&#39;`) stays as written. No HTML passes through, so copy can
 //!   never add a script, a style or another origin to a page.
-//! - `{product}`, `{tagline}`, `{domain}`, `{operator}`, `{operator_contact}`,
-//!   `{support_email}`: from `site.json`. `{link:<name>}`: a public link.
+//! - `{product}`, `{tagline}`, `{description}`, `{domain}`, `{operator}`,
+//!   `{operator_contact}`, `{support_email}`: from `site.json`. `{link:<name>}`: a public link.
 //!   `{label:<provider>}`: what a sign-in provider is called.
 //! - `{term:<key>}` or `{term:<key>|shown}`: a glossary word with its tooltip.
 //!   `{pop:<claim|tools|watch>|label}`: a button that opens that popup.
 //! - Whatever the page adds where it draws the copy: `{mcp}` (this hub's MCP address),
-//!   `{sign_in}`, `{sign_in_url}`, `{updated}`, `{retention_days}`, `{link}`, `{hub}`, `{n}`.
+//!   `{sign_in}`, `{sign_in_url}`, `{updated}`, `{retention_days}`, `{link}`, `{hub}`, `{n}`,
+//!   and in `content/llms.md` the join lines `{join_linux}`, `{join_windows}`, `{join_docker}`.
 //!
 //! A placeholder the copy names but nothing fills is an error when the site is checked at
 //! start (`Ctx::checking`); drawing a page never fails.
@@ -288,6 +289,7 @@ impl<'a> Ctx<'a> {
             None => match spec {
                 "product" => text(&info.product.name),
                 "tagline" => text(&info.product.tagline),
+                "description" => text(&info.product.description),
                 "domain" => text(&info.product.domain),
                 "operator" => text(&info.operator.name),
                 "operator_contact" => text(&info.operator.contact),
