@@ -98,6 +98,43 @@ fn everything(site: &Site) -> Vec<(String, String)> {
             site.mcp_instructions("https://hub.example.org")
         ),
     ));
+    // What search engines and AI agents read (`discovery.rs`).
+    let url = "https://hub.example.org";
+    for kind in DOC_FRONTS {
+        out.push((
+            format!("llms.txt ({kind})"),
+            super::discovery::llms_txt(site, url, kind),
+        ));
+        for switch in SWITCHES {
+            out.push((
+                format!("llms-full.txt ({kind}, {switch})"),
+                super::discovery::llms_full_txt(site, url, kind, switch, 90),
+            ));
+        }
+    }
+    out.push(("robots.txt".into(), super::discovery::robots_txt(site, url)));
+    out.push((
+        "sitemap.xml".into(),
+        super::discovery::sitemap_xml(site, url, true),
+    ));
+    for front in [
+        Front::Unclaimed,
+        Front::Passkeys,
+        Front::Nomen,
+        Front::Hosted,
+    ] {
+        let meta = super::discovery::Meta {
+            path: "/",
+            title: &site.info.product.tagline,
+            description: "",
+            noindex: false,
+            json_ld: super::discovery::landing_json_ld(site, front, url),
+        };
+        out.push((
+            format!("landing head ({})", front.key()),
+            super::discovery::head(site, url, &meta),
+        ));
+    }
     out.push(("manifest".into(), site.manifest()));
     out.push(("service worker".into(), site.service_worker()));
     out.push(("stylesheet".into(), site.stylesheet().to_string()));

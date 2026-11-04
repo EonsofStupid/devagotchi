@@ -7,6 +7,36 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### The landing page, readable by AI agents and search engines (increment 72)
+- The built-in landing page tells one story in plain words: your AI (Claude, ChatGPT, Codex,
+  Cursor, Grok) gets your server through one HTTPS address, with an account made the moment it
+  connects on a hosted hub and one line or one setup link per machine; then the extended
+  services (approvals on your phone, setup links, the agents' board) and the security built
+  in. No other product is named anywhere a person or an AI reads: the comparison section is
+  gone from the built-in site (`compare` is optional in `content/landing.json`), and the
+  README, `llms.txt`, the Windows installer's help and `apps/website` (its `/research` page and
+  evidence ledger removed) no longer name one.
+- New routes on every hub, made from its site and its `public_url`: `/llms.txt` (llmstxt.org
+  format, from the new `content/llms.md`: the steps an AI follows to give its user a server),
+  `/llms-full.txt` (that, with every public page inlined as Markdown), `/robots.txt` (every
+  crawler may read the public pages; `/account`, `/operator`, `/go/`, `/oauth`, `/api`,
+  `/join`, `/dist` and the other private paths are disallowed; names the sitemap) and
+  `/sitemap.xml`.
+- Every public page has a meta description (a page's own `description:` front matter, else
+  the product's), a canonical link, and Open Graph and Twitter cards with the site's poster.
+  The landing page carries JSON-LD: `SoftwareApplication` (from `site.json`'s new optional
+  `software` block), `HowTo` for its steps and `FAQPage` for its questions, each only where
+  the page shows them; a hub nobody owns yet asks not to be indexed. JSON-LD is data, so the
+  CSP still has no `script-src`.
+- The MCP instructions take `{hub}`, `{docs}` and `{llms}`, and name the product, its docs and
+  its `/llms.txt`; the protected-resource metadata gives `resource_name`,
+  `resource_documentation`, `resource_policy_uri` and `resource_tos_uri` (RFC 9728).
+- Tests: each route and its content type, robots against the private paths, the sitemap,
+  the llms.txt shape and its steps at the hub's own address (naming only tools the hub
+  serves), the JSON-LD parsing and matching the page, every public page's head, the
+  metadata and instructions, the neutral site showing none of the built-in one, and no other
+  product named in the site, any served page, the hub's tools or the stdio adapter's.
+
 ### Connecting an AI app from a workflow (increment 69)
 - Step kind `ai_client {client}` for Claude (claude.ai and the desktop app's custom connector,
   and Claude Code), ChatGPT and Codex, Grok and Cursor; default workflows "Connect Claude",
