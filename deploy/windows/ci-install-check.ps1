@@ -129,8 +129,16 @@ $ErrorActionPreference = 'Stop'
 if (-not $code.StartsWith('dvg-')) { throw "no enrollment code: $code" }
 $joinedRoot = Join-Path $env:LOCALAPPDATA 'Devagotchi'
 try {
-    $said = Invoke-RestMethod -UseBasicParsing "$joinUrl/join/$code.ps1" | Invoke-Expression *>&1 | Out-String
-    Write-Host $said
+    # What the person sees, kept by a transcript: piping it would hand the broker and the
+    # link the pipe as their stdout, and the join would never finish.
+    $transcript = Join-Path $env:RUNNER_TEMP 'join-output.txt'
+    Start-Transcript -Path $transcript -Force | Out-Null
+    try {
+        Invoke-RestMethod -UseBasicParsing "$joinUrl/join/$code.ps1" | Invoke-Expression
+    } finally {
+        Stop-Transcript | Out-Null
+    }
+    $said = Get-Content -Raw $transcript
     # Only the person's words: the name to tell the AI and the log, no developer lines.
     if ($said -match 'adapter_probe|MCP command|Claude Code:') { throw 'the join printed developer lines' }
     if ($said -notmatch 'done: ci-joined is connected to') { throw 'the join did not say the name to use' }
