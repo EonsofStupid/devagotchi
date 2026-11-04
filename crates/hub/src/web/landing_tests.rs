@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use axum::{body::to_bytes, http::header, response::Response};
 
 use super::{
-    landing::{TOOLS, page},
+    landing::{OFFER_TOOLS, TOOLS, page},
     pages::{CSS, Front, home},
 };
 
@@ -61,6 +61,7 @@ fn a_claimed_hub_shows_the_whole_product_page() {
         "<h1>",
         "id=\"how\"",
         "id=\"features\"",
+        "id=\"network\"",
         "id=\"connect\"",
         "id=\"self-host\"",
         "id=\"faq\"",
@@ -70,8 +71,10 @@ fn a_claimed_hub_shows_the_whole_product_page() {
     .map(|needle| html.find(needle).unwrap())
     .collect();
     assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
-    // A hub with its own accounts never names another sign-in, and offers no claim.
-    assert!(!html.contains("Shippin") && !html.contains("/claim"));
+    // A hub with its own accounts never names another sign-in (the network its site's
+    // offers link to is not one), and offers no claim.
+    assert!(!html.contains("with Shippin") && !html.contains("/claim"));
+    assert!(html.contains("id=\"network\"") && html.contains("Shippin Network"));
 }
 
 #[test]
@@ -191,14 +194,23 @@ async fn the_page_needs_nothing_the_plain_csp_refuses() {
         );
         // The diagram's arrowheads are markers in the same SVG, never a fetch.
         assert!(html.split("url(").skip(1).all(|rest| rest.starts_with('#')));
-        // Links leave only for the source on GitHub; the canonical link is this hub's own.
+        // Links leave only for the source on GitHub and the site's offerings (and the
+        // network's own address in their intro); the canonical link is this hub's own.
+        let site = crate::site::builtin();
+        let offerings: Vec<&str> = site
+            .info
+            .offers()
+            .map(|offers| offers.items.iter().map(|item| item.href.as_str()).collect())
+            .unwrap_or_default();
         for href in html.split("href=\"").skip(1) {
             let href = href.split('"').next().unwrap();
             assert!(
                 href.starts_with('/')
                     || href.starts_with('#')
                     || href == format!("{URL}/")
-                    || href.starts_with("https://github.com/EonsofStupid/devagotchi"),
+                    || href.starts_with("https://github.com/EonsofStupid/devagotchi")
+                    || offerings.contains(&href)
+                    || href == "https://shippin.cloud",
                 "{href}"
             );
         }
@@ -287,9 +299,12 @@ fn every_popup_opens_from_a_button_names_itself_and_closes() {
 
 #[test]
 fn the_tool_list_is_the_tools_the_hub_serves() {
+    // The offers' tools are listed under the site's network, while its offers show.
     let listed: Vec<&str> = TOOLS
         .iter()
-        .flat_map(|(_, tools)| tools.iter().flat_map(|(names, _)| names.iter().copied()))
+        .flat_map(|(_, tools)| tools.iter())
+        .chain(OFFER_TOOLS)
+        .flat_map(|(names, _)| names.iter().copied())
         .collect();
     let unique: BTreeSet<&str> = listed.iter().copied().collect();
     assert_eq!(unique.len(), listed.len(), "a tool is listed twice");
@@ -315,7 +330,7 @@ fn the_rail_names_every_page_in_the_order_they_read() {
         .skip(1)
         .map(|rest| rest.split('"').next().unwrap())
         .collect();
-    assert_eq!(targets.len(), 8, "{targets:?}");
+    assert_eq!(targets.len(), 9, "{targets:?}");
     let at: Vec<usize> = targets
         .iter()
         .map(|id| {

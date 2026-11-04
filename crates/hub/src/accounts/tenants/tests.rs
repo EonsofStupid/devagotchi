@@ -477,7 +477,7 @@ async fn a_one_owner_hub_makes_no_account_for_a_strangers_sign_in() {
 }
 
 /// The tables row-level security holds to one tenant (migration 0007).
-const TENANT_TABLES: [&str; 11] = [
+const TENANT_TABLES: [&str; 12] = [
     "auth_accounts",
     "auth_passkeys",
     "auth_sessions",
@@ -489,6 +489,7 @@ const TENANT_TABLES: [&str; 11] = [
     "tenancy_access",
     "tenancy_workflows",
     "tenancy_clients",
+    "tenancy_offers",
 ];
 
 #[tokio::test]
@@ -585,6 +586,15 @@ async fn on_postgres_the_hubs_role_reads_and_writes_one_tenants_rows_only() {
             .unwrap();
         // An AI client of its that made a call, and a workflow its AI started.
         accounts.note_client_call(&account.tenant, "claude", now_secs()).await.unwrap();
+        // Its yes to the site's offers, and their one-tap link.
+        accounts
+            .accept_offers(&account.tenant, &account.id, "yes", &["An offering".to_string()], now_secs())
+            .await
+            .unwrap();
+        accounts
+            .offer_link(&account.tenant, [n; 32], 600, now_secs())
+            .await
+            .unwrap();
         let site = crate::site::builtin();
         let (_workflow, _link, _) = accounts
             .start_workflow(

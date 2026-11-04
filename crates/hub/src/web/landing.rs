@@ -18,7 +18,7 @@ mod network;
 mod popups;
 
 #[cfg(test)]
-pub(super) use popups::TOOLS;
+pub(super) use popups::{OFFER_TOOLS, TOOLS};
 
 use super::pages::escape;
 use crate::site::{self, Action, Ctx, Front, Item, Limit, SignUp, Site, Step, Variants};
@@ -49,7 +49,7 @@ pub(crate) fn render(site: &Site, ctx: &Ctx, front: Front, public_url: &str) -> 
         ]
         .concat()
     } else {
-        let mut parts = vec![rail(&ctx), hero(&ctx, front)];
+        let mut parts = vec![rail(&ctx, front), hero(&ctx, front)];
         for id in site.info.sections() {
             parts.push(section(&ctx, front, id));
         }
@@ -242,10 +242,11 @@ fn hero(ctx: &Ctx, front: Front) -> String {
 
 /// Where you are on the page: one dot per section, the current one lit (the stylesheet
 /// has a view timeline per section this site shows).
-fn rail(ctx: &Ctx) -> String {
+fn rail(ctx: &Ctx, front: Front) -> String {
     let site = ctx.site;
     let links: String = std::iter::once("top")
         .chain(site.info.sections())
+        .filter(|id| *id != "network" || front != Front::Nomen)
         .map(|id| {
             format!(
                 "<a href=\"#{id}\"><span>{}</span></a>",
@@ -291,7 +292,7 @@ fn section(ctx: &Ctx, front: Front, id: &str) -> String {
         "how" => how(ctx, front),
         "compare" => compare::section(ctx),
         "features" => features(ctx, front),
-        "network" => network::section(ctx),
+        "network" => network::section(ctx, front),
         "plans" => plans(ctx),
         "services" => services(ctx),
         "connect" => connect(ctx, front),
