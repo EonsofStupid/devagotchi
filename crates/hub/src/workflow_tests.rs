@@ -1077,6 +1077,29 @@ async fn the_sites_workflows_name_only_clients_and_kinds_the_hub_runs() {
 }
 
 #[tokio::test]
+async fn a_client_the_site_marks_unavailable_is_offered_as_unavailable_with_its_words() {
+    let why = "Grok is not offered on this hub yet.";
+    let hub = hosted_with(None, move |dir, _| {
+        let site = site_dir(dir, |_| {});
+        std::fs::create_dir_all(site.join("content")).unwrap();
+        let words = json!({ "workflow": { "clients": { "grok": { "unavailable": why } } } });
+        std::fs::write(site.join("content/messages.json"), words.to_string()).unwrap();
+        json!({ "downloads": dist(dir).to_string_lossy(), "site": { "dir": site.to_string_lossy() } })
+    })
+    .await;
+    let mut person = hub.first_connect("Claude").await;
+    let listed = structured(&hub, &mut person, "workflow_list", json!({})).await;
+    let offer = |id: &str| listed["workflows"].as_array().unwrap().iter().find(|w| w["id"] == id).unwrap().clone();
+    let grok = offer("connect-grok");
+    assert_eq!(grok["available"], false, "{grok}");
+    assert_eq!(grok["why"], why, "{grok}");
+    assert_eq!(offer("connect-cursor")["available"], true);
+    let answer = hub.call(&mut person, "workflow_start", json!({ "workflow": "connect-grok" })).await;
+    assert_eq!(answer["isError"], true, "{answer}");
+    assert!(answer.to_string().contains(why), "{answer}");
+}
+
+#[tokio::test]
 async fn the_phone_step_shows_its_link_as_a_qr_code() {
     let hub = hub_on(None, json!({})).await;
     let mut person = hub.first_connect("Claude").await;

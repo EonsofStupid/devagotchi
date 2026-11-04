@@ -28,7 +28,8 @@ heading. Agents draft the fragments below; they never tag.
   no dependencies of its own, passes `cargo deny`).
 - Tests: the family of each client's registered name, the content checks, a step done only
   by a client of its family on this tenant (a wait returns the moment it is), the browser
-  button and a secured account, the QR code; `tests/workflow_browser.py` adds a second AI
+  button and a secured account, a client the site marks unavailable, the QR code;
+  `tests/workflow_browser.py` adds a second AI
   client (ChatGPT) whose sign-in in the person's browser lands on the same account and ticks
   the step in place.
 
