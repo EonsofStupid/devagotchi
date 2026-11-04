@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tarfile
 import time
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -57,6 +58,23 @@ def get(url: str) -> bytes:
         return answer.read()
 
 
+def reachable(hub: str, seconds: int = 60) -> bytes:
+    """`/healthz` from this host once the published port answers. `docker compose up --wait`
+    returns when the container's own health check passes, which is inside the container; the
+    host's forwarded port can still reset a connection for a moment after that (seen on the
+    ARM runner: ConnectionResetError on the first request). Only connection-level errors are
+    retried, each one printed, for at most `seconds`; any HTTP answer is final."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            return get(f"{hub}/healthz")
+        except (ConnectionError, urllib.error.URLError) as why:
+            if isinstance(why, urllib.error.HTTPError) or time.monotonic() > deadline:
+                raise
+            print(f"waiting for {hub}/healthz from this host: {why}", flush=True)
+            time.sleep(1)
+
+
 def names_in(name: str, data: bytes) -> set:
     """The base names of the files in one archive."""
     if name.endswith(".zip"):
@@ -74,7 +92,7 @@ def main() -> int:
     hub = args.hub.rstrip("/")
 
     # 1. The builds the image carries, with nothing configured.
-    health = json.loads(get(f"{hub}/healthz"))
+    health = json.loads(reachable(hub))
     assert health["downloads"] == {"version": args.version, "files": 6}, health["downloads"]
     sums = {}
     for line in get(f"{hub}/dist/SHA256SUMS").decode().splitlines():

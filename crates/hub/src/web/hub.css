@@ -163,6 +163,10 @@ form.inline { margin-top: 8px; }
 .step .keep { margin: 8px 0 0; padding: 0; border: 0; background: none; }
 .keep h2 { margin: 0 0 6px; font-size: 1.05rem; }
 .keep-with { display: inline-block; margin: 8px 8px 0 0; }
+/* The link as a QR code for a phone's camera: dark on light in every theme, as scanners need. */
+.qr { margin: 12px 0 0; }
+.qr svg { display: block; width: 176px; max-width: 60vw; height: auto; border-radius: var(--radius-s);
+  border: 1px solid var(--line); }
 .step-title { min-width: 0; overflow-wrap: anywhere; }
 .name input { display: block; width: 100%; max-width: 24rem; margin-top: 4px; }
 .finished { color: var(--online); font-weight: 600; }

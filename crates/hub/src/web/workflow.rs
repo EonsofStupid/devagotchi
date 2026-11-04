@@ -13,7 +13,12 @@
 //!   shows that line with a copy button, for the OS picked. The code comes back in this
 //!   browser's own cookie (HttpOnly, for its 15 minutes), so the page shows the line again on
 //!   a reload; it is never in a URL.
-//! - **A phone turns on from the same link** (`POST /go/<token>/phone`), opened on the phone.
+//! - **A phone turns on from the same link** (`POST /go/<token>/phone`), opened on the phone;
+//!   the page draws the link as a QR code for its camera (inline SVG, `qrcode`).
+//! - **An AI client connects with its own steps** (`ai_client`): the hub's MCP address or the
+//!   command to paste, with Copy buttons. For an account nobody secured, one press joins the
+//!   client's sign-in page in this browser to the account (`POST /go/<token>/client`), so its
+//!   Connect lands there and not on a new account.
 //! - **Keeping the account is offered after the first success, and optional.** Only to a
 //!   browser that did a step here (its own random cookie, remembered by its SHA-256), once a
 //!   step was seen done, while nobody has secured the account: Google or GitHub when the hub
@@ -49,7 +54,7 @@ use crate::{
     devices::{CODE_TTL_SECS, now_secs},
     site::{
         Ctx, Site,
-        workflows::{MACHINE, PHONE, SECURE_ACCOUNT},
+        workflows::{AI_CLIENT, MACHINE, PHONE, SECURE_ACCOUNT},
     },
     workflows::WorkflowStatus,
 };
@@ -76,6 +81,23 @@ fn cookie(state: &AppState, name: &str, value: &str, max_age: u64) -> String {
 
 fn link_path(token: &str) -> String {
     format!("/go/{token}")
+}
+
+/// This hub's MCP address, what an AI client is given.
+fn mcp_url(state: &AppState) -> String {
+    format!("{}/mcp", state.hub.config.public_url.trim_end_matches('/'))
+}
+
+/// The name an AI client adds this hub under: the product's, as a name a command line takes.
+fn server_name(site: &Site) -> String {
+    let name: String = site
+        .name()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    let name = name.trim_matches('-').to_string();
+    if name.is_empty() { "hub".into() } else { name }
 }
 
 fn ttl(state: &AppState) -> u64 {
@@ -196,6 +218,10 @@ pub async fn page(State(state): State<AppState>, headers: HeaderMap, Path(token)
         // Seeing it done just now completes it: it then only shows that it is.
         live: standing == Standing::Live && status.state == "open",
         now,
+        session_account: match state.passkeys.as_ref() {
+            Some(hub) => hub.who(&headers).await.ok().flatten().map(|subject| subject.id),
+            None => None,
+        },
     };
     let (body, passkey, push) = view.body(shown.as_deref());
     pages::workflow(StatusCode::OK, &title, &body, passkey, push)
@@ -239,6 +265,8 @@ struct View<'a> {
     /// The link still does things (open, not expired); else it only shows it is done.
     live: bool,
     now: u64,
+    /// The account this browser's session is of, if it has one.
+    session_account: Option<String>,
 }
 
 impl View<'_> {
@@ -252,7 +280,7 @@ impl View<'_> {
         let has_keep_step = self.row.definition.steps.iter().any(|step| step.kind == SECURE_ACCOUNT);
         let mut items = String::new();
         for (index, (step, seen)) in self.row.definition.steps.iter().zip(&self.status.steps).enumerate() {
-            let mut body = format!("<p>{}</p>", ctx.inline(&step.text));
+            let mut body = format!("<p>{}</p>", self.words().inline(&step.text));
             if seen.state != "done" && seen.why.is_none() {
                 match step.kind.as_str() {
                     MACHINE if self.live => body.push_str(&self.machine_step(index, seen, shown)),
@@ -262,14 +290,16 @@ impl View<'_> {
                             body.push_str(&format!(
                                 "<p><button class=\"button primary\" id=\"notify\" type=\"button\" data-key=\"{}\" \
 data-subscribe=\"{}/phone\" data-auto=\"off\">{}</button></p>\
-<p class=\"meta\" id=\"notify-status\" role=\"status\"></p><p class=\"meta\">{}</p>",
+<p class=\"meta\" id=\"notify-status\" role=\"status\"></p><p class=\"meta\">{}</p>{}",
                                 escape(&key),
                                 escape(&self.path),
                                 escape(&ctx.plain(&copy.notify)),
-                                ctx.inline(&copy.phone_hint)
+                                ctx.inline(&copy.phone_hint),
+                                self.qr(),
                             ));
                         }
                     }
+                    AI_CLIENT if self.live => body.push_str(&self.client_step(index, step.client.as_deref())),
                     SECURE_ACCOUNT => body.push_str(&keep),
                     _ => {}
                 }
@@ -387,6 +417,73 @@ data-return-to=\"{}\" disabled>{}</button></p><p class=\"meta\" id=\"passkey-sta
             escape(&ctx.plain(&copy.keep_title)),
             ctx.inline(&copy.keep_text),
         )
+    }
+
+    /// Copy that may name this hub's MCP address (`{mcp}`) and the name an AI client adds it
+    /// under (`{server}`).
+    fn words(&self) -> Ctx<'_> {
+        Ctx::new(self.site).with("mcp", mcp_url(self.state)).with("server", server_name(self.site))
+    }
+
+    /// The link as a QR code, for a phone's camera: drawn here as inline SVG, nothing fetched.
+    fn qr(&self) -> String {
+        let link = format!("{}{}", self.state.hub.config.public_url.trim_end_matches('/'), self.path);
+        let Ok(code) = qrcode::QrCode::new(link.as_bytes()) else {
+            return String::new();
+        };
+        let svg = code
+            .render::<qrcode::render::svg::Color>()
+            .min_dimensions(176, 176)
+            .dark_color(qrcode::render::svg::Color("#000000"))
+            .light_color(qrcode::render::svg::Color("#ffffff"))
+            .quiet_zone(true)
+            .build();
+        // The SVG alone, without its XML declaration, labelled for a screen reader.
+        let svg = svg.split_once("<svg").map(|(_, rest)| rest).unwrap_or_default();
+        let label = escape(&Ctx::new(self.site).plain(&self.site.messages.workflow.qr));
+        format!("<figure class=\"qr\" id=\"qr\"><svg role=\"img\" aria-label=\"{label}\"{svg}</figure>")
+    }
+
+    /// An `ai_client` step that is not done: the client's own steps, the address or command to
+    /// paste with Copy buttons, and, for an account nobody secured, the button that joins
+    /// the client's sign-in page in this browser to this account.
+    fn client_step(&self, index: usize, client: Option<&str>) -> String {
+        let (copy, ctx) = (&self.site.messages.workflow, self.words());
+        let Some(words) = client.and_then(|client| copy.clients.get(client)) else {
+            return String::new();
+        };
+        let name = ctx.plain(&words.name);
+        let named = || self.words().with("client", name.clone());
+        let mut out = format!("<p>{}</p>", ctx.inline(&words.how));
+        for (at, line) in words.boxes.iter().enumerate() {
+            out.push_str(&format!(
+                "<p class=\"meta\">{}</p><div class=\"command\"><pre><code id=\"client-{n}-{at}\">{}</code></pre>\
+<button type=\"button\" class=\"copy\" data-copy=\"client-{n}-{at}\" hidden>{}</button></div>",
+                escape(&ctx.plain(&line.label)),
+                escape(&ctx.plain(&line.text)),
+                escape(&ctx.plain(&copy.copy)),
+                n = index + 1,
+            ));
+        }
+        if self.subject.provisional_until.is_none() {
+            out.push_str(&format!("<p class=\"meta\">{}</p>", named().inline(&copy.client_secured)));
+        } else if self.session_account.as_deref() == Some(self.subject.id.as_str()) {
+            out.push_str(&format!(
+                "<p class=\"note\" id=\"client-ready-{}\">{}</p>",
+                index + 1,
+                named().inline(&copy.client_ready)
+            ));
+        } else {
+            out.push_str(&format!(
+                "<p class=\"meta\">{}</p><form method=\"post\" action=\"{}/client\" class=\"inline\">\
+<input type=\"hidden\" name=\"step\" value=\"{index}\"><button class=\"button primary\" type=\"submit\" id=\"client-here-{}\">{}</button></form>",
+                named().inline(&copy.client_browser),
+                escape(&self.path),
+                index + 1,
+                escape(&named().plain(&copy.client_here)),
+            ));
+        }
+        out
     }
 
     /// A machine step that is not done: the line, while this browser holds a live code for
@@ -654,6 +751,62 @@ pub async fn phone(
         response.headers_mut().append(header::SET_COOKIE, value);
     }
     response
+}
+
+#[derive(Deserialize)]
+pub struct ClientForm {
+    step: usize,
+}
+
+/// `POST /go/<token>/client`: before an AI client opens its sign-in page in this browser,
+/// for an account nobody secured, this browser joins the account (a session of it), so the
+/// client's Connect lands on this account and not a new one. The link is all it takes,
+/// while it is live; a secured account signs in on the client's page instead.
+pub async fn client(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+    Form(form): Form<ClientForm>,
+) -> Response {
+    let now = now_secs();
+    if !same_origin(&headers, &state.hub.config.public_url) {
+        return cross_site(&token);
+    }
+    let (row, subject) = match found(&state, &token, now).await {
+        Ok((row, subject, Standing::Live)) => (row, subject),
+        Ok(_) => return dead(),
+        Err(page) => return page,
+    };
+    let path = link_path(&token);
+    let Some(step) = row.definition.steps.get(form.step).filter(|step| step.kind == AI_CLIENT) else {
+        return see_other(&path, &[]);
+    };
+    let (Some(workflows), Some(hub)) = (&state.hub.workflows, &state.passkeys) else {
+        return dead();
+    };
+    if subject.provisional_until.is_none() {
+        return see_other(&format!("{path}#step-{}", form.step + 1), &[]);
+    }
+    let (secret, keep_browser) = browser_secret(&state, &headers);
+    let browser = browser_hash(&secret).unwrap_or_default();
+    let client = step.client.clone().unwrap_or_default();
+    match workflows
+        .accounts()
+        .client_session(&row.tenant, &row.id, &browser, &client, crate::link::random::<32>(), now)
+        .await
+    {
+        Ok(session) => see_other(
+            &format!("{path}#step-{}", form.step + 1),
+            &[hub.cookie(hub.session_cookie(), &session, SESSION_MAX_SECS), keep_browser],
+        ),
+        Err(error) => match error.code.as_str() {
+            "secured" | "expired" | "unknown_workflow" | "account_disabled" => see_other(&path, &[]),
+            _ => {
+                eprintln!("devagotchi-hub: account store: {}", error.message);
+                unavailable()
+            }
+        },
+    }
 }
 
 #[derive(Deserialize)]

@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use super::{Ctx, Site};
 
 /// The step kinds this hub implements.
-pub const KINDS: [&str; 4] = [SECURE_ACCOUNT, MACHINE, PHONE, DONE];
+pub const KINDS: [&str; 5] = [SECURE_ACCOUNT, MACHINE, PHONE, AI_CLIENT, DONE];
 /// Done when the account is secured (a passkey or a linked sign-in). Optional: offered once
 /// a step worked, it never holds a workflow up.
 pub const SECURE_ACCOUNT: &str = "secure_account";
@@ -26,6 +26,12 @@ pub const SECURE_ACCOUNT: &str = "secure_account";
 pub const MACHINE: &str = "machine";
 /// Done when the account has a phone (a push subscription).
 pub const PHONE: &str = "phone";
+/// Done when an AI client of `client`'s family (one of [`AI_CLIENTS`]) made a successful MCP
+/// call for the tenant (`accounts/clients.rs`). The page shows that client's own steps.
+pub const AI_CLIENT: &str = "ai_client";
+/// The AI clients an `ai_client` step connects, by family (`analytics::funnel::FAMILIES`):
+/// Claude (claude.ai, the desktop app, Claude Code), ChatGPT and Codex, Grok, Cursor.
+pub const AI_CLIENTS: [&str; 4] = ["claude", "chatgpt", "grok", "cursor"];
 /// The closing step: done when every step before it is.
 pub const DONE: &str = "done";
 /// What a machine step installs on: the hub's one-line joins.
@@ -74,6 +80,9 @@ pub struct StepDef {
     /// A machine step's OS ([`MACHINE_OS`]); absent, the person picks on the page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub os: Option<String>,
+    /// An `ai_client` step's client ([`AI_CLIENTS`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
 }
 
 impl WorkflowsFile {
@@ -156,6 +165,20 @@ impl Workflow {
                 (MACHINE, _) | (_, None) => {}
                 (kind, Some(_)) => return Err(format!("{at}: a {kind} step takes no os")),
             }
+            match (step.kind.as_str(), step.client.as_deref()) {
+                (AI_CLIENT, Some(client)) if AI_CLIENTS.contains(&client) => {}
+                (AI_CLIENT, Some(client)) => {
+                    return Err(format!(
+                        "{at}: client {client:?} is not one the hub connects ({})",
+                        AI_CLIENTS.join(", ")
+                    ));
+                }
+                (AI_CLIENT, None) => {
+                    return Err(format!("{at}: an ai_client step names its client ({})", AI_CLIENTS.join(", ")));
+                }
+                (_, None) => {}
+                (kind, Some(_)) => return Err(format!("{at}: a {kind} step takes no client")),
+            }
             *counts.entry(step.kind.as_str()).or_default() += 1;
         }
         for kind in [SECURE_ACCOUNT, PHONE, DONE] {
@@ -225,7 +248,46 @@ pub struct WorkflowCopy {
     pub phone_hint: String,
     /// Inline markup: a post from another site, refused.
     pub refused: String,
+    /// Each AI client's own steps (keys: [`AI_CLIENTS`]).
+    pub clients: BTreeMap<String, ClientCopy>,
+    /// Inline markup; `{client}`: an account nobody secured connects a new AI client in the
+    /// browser that will open its sign-in page, so this one joins it to the account.
+    pub client_browser: String,
+    /// The button that does it.
+    pub client_here: String,
+    /// Inline markup; `{client}`: this browser will join the client to the account.
+    pub client_ready: String,
+    /// Inline markup; `{client}`: a secured account signs in on the client's page.
+    pub client_secured: String,
+    /// Plain: what the QR code of the link says it is, for a screen reader.
+    pub qr: String,
     pub facts: FactsCopy,
+}
+
+/// One AI client's own steps on a workflow's page.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientCopy {
+    /// Plain: what it is called.
+    pub name: String,
+    /// Inline markup; `{mcp}` (the hub's MCP address), `{server}` (the name it is added
+    /// under): the steps, as the client's own documentation gives them.
+    pub how: String,
+    /// What to paste or run, each with a Copy button (plain; `{mcp}`, `{server}`).
+    #[serde(default)]
+    pub boxes: Vec<ClientBox>,
+    /// Inline markup: why it cannot connect to a remote MCP server today. Such a step is
+    /// unavailable, with this as its reason.
+    #[serde(default)]
+    pub unavailable: Option<String>,
+}
+
+/// A line to paste or run, and what it is for.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClientBox {
+    pub label: String,
+    pub text: String,
 }
 
 /// What a step stands at, in words (plain; `{machine}`, `{n}`).
@@ -240,6 +302,10 @@ pub struct FactsCopy {
     pub machine_online: String,
     pub phone_on: String,
     pub phone_off: String,
+    /// `{client}`.
+    pub client_waiting: String,
+    /// `{client}`.
+    pub client_done: String,
     pub done: String,
 }
 
@@ -265,6 +331,16 @@ impl Site {
                     MACHINE_OS.join(", ")
                 ));
             }
+        }
+        let mut clients: Vec<&str> = copy.clients.keys().map(String::as_str).collect();
+        let mut wanted = AI_CLIENTS.to_vec();
+        wanted.sort_unstable();
+        clients.sort_unstable();
+        if clients != wanted {
+            return Err(format!(
+                "content/messages.json workflow.clients: one entry for each of {}",
+                AI_CLIENTS.join(", ")
+            ));
         }
         for (os, name) in &copy.default_names {
             if !crate::config::valid_name(name) || name.len() > crate::tenant_machines::HOSTED_NAME_MAX {
@@ -311,6 +387,13 @@ impl Site {
             ("facts.machine_online".into(), &copy.facts.machine_online, vec![machine], false),
             ("facts.phone_on".into(), &copy.facts.phone_on, vec![("n", "1")], false),
             ("facts.phone_off".into(), &copy.facts.phone_off, vec![], false),
+            ("facts.client_waiting".into(), &copy.facts.client_waiting, vec![("client", "Claude")], false),
+            ("facts.client_done".into(), &copy.facts.client_done, vec![("client", "Claude")], false),
+            ("client_browser".into(), &copy.client_browser, vec![("client", "Claude")], true),
+            ("client_here".into(), &copy.client_here, vec![("client", "Claude")], false),
+            ("client_ready".into(), &copy.client_ready, vec![("client", "Claude")], true),
+            ("client_secured".into(), &copy.client_secured, vec![("client", "Claude")], true),
+            ("qr".into(), &copy.qr, vec![], false),
             ("facts.done".into(), &copy.facts.done, vec![], false),
         ];
         for (os, text) in &copy.os {
@@ -318,6 +401,19 @@ impl Site {
         }
         for (os, text) in &copy.os_hint {
             checks.push((format!("os_hint.{os}"), text, vec![], true));
+        }
+        let mcp = ("mcp", "https://hub.example/mcp");
+        let server = ("server", "hub");
+        for (client, words) in &copy.clients {
+            checks.push((format!("clients.{client}.name"), &words.name, vec![], false));
+            checks.push((format!("clients.{client}.how"), &words.how, vec![mcp, server], true));
+            for (index, line) in words.boxes.iter().enumerate() {
+                checks.push((format!("clients.{client}.boxes[{index}].label"), &line.label, vec![], false));
+                checks.push((format!("clients.{client}.boxes[{index}].text"), &line.text, vec![mcp, server], false));
+            }
+            if let Some(why) = &words.unavailable {
+                checks.push((format!("clients.{client}.unavailable"), why, vec![], true));
+            }
         }
         let mut out: Vec<Check<'_>> = checks
             .into_iter()
@@ -332,7 +428,7 @@ impl Site {
             }
             for (index, step) in workflow.steps.iter().enumerate() {
                 out.push((at(&format!("steps[{index}].title")), &step.title, vec![], false));
-                out.push((at(&format!("steps[{index}].text")), &step.text, vec![], true));
+                out.push((at(&format!("steps[{index}].text")), &step.text, vec![("mcp", "https://hub.example/mcp"), ("server", "hub")], true));
             }
         }
         Ok(out)

@@ -80,6 +80,7 @@ impl SignIns {
                         provisional_until: None,
                         agent: None,
                         claim_code: None,
+                        client: None,
                         provisional_warning: false,
                         access: None,
                     },

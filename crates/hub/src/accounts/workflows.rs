@@ -490,6 +490,56 @@ impl Accounts {
         })
     }
 
+    /// The browser whose cookie hashes to `browser` gets a session of workflow `id`'s account
+    /// for its `ai_client` step, so the client's sign-in page there lands on this account:
+    /// while the link is live, and only for an account nobody has secured yet (a secured
+    /// one signs in on the client's page). The browser is remembered as one that did a step.
+    /// Returns the session's token.
+    pub async fn client_session(
+        &self,
+        tenant: &str,
+        id: &str,
+        browser: &str,
+        client: &str,
+        session_random: [u8; 32],
+        now: u64,
+    ) -> BridgeResult<String> {
+        let refused = |code: &str, message: &str| Failed::Refused(BridgeError::new(code, message));
+        transaction!(&self.store, |connection| {
+            self.store.scope(connection, tenant).await?;
+            let Some(row) = workflow_in(connection, tenant, id).await? else {
+                return Err(unknown_workflow().into());
+            };
+            if row.state != "open" || now >= row.expires_at {
+                return Err(refused("expired", "the workflow's link no longer works"));
+            }
+            let holder = account_in(connection, &row.account)
+                .await?
+                .ok_or_else(|| BridgeError::new("no_account", "the workflow's account is gone"))?;
+            if holder.disabled_at.is_some() {
+                return Err(account_disabled(&holder.id).into());
+            }
+            if !holder.provisional {
+                return Err(refused("secured", "this account is secured: sign in to it"));
+            }
+            let mut progress = row.progress.clone();
+            progress.mark_browser(browser, now);
+            save_progress(connection, &row, &progress).await?;
+            let session =
+                sessions::insert_session(connection, tenant, &holder.id, None, session_random, now).await?;
+            tenants::record_in(
+                connection,
+                tenant,
+                &holder.id,
+                "session.opened",
+                &format!("a browser to connect {client} through workflow {id}"),
+                now,
+            )
+            .await?;
+            Ok(session)
+        })
+    }
+
     /// The browser whose cookie hashes to `browser` keeps the account of workflow `id`: a
     /// session of that account, opened in the same transaction that checks it may. Only a
     /// browser that did a step through the link within `window` seconds, only once a step

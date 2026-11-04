@@ -7,6 +7,32 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Connecting an AI app from a workflow (increment 69)
+- Step kind `ai_client {client}` for Claude (claude.ai and the desktop app's custom connector,
+  and Claude Code), ChatGPT and Codex, Grok and Cursor; default workflows "Connect Claude",
+  "Connect ChatGPT", "Connect Grok" and "Connect Cursor". It is done when an AI client of that
+  family (`analytics::funnel::client_family` of the name it registered with) has made a
+  successful MCP call with one of the tenant's tokens: kept per tenant and family (migration
+  0011, `tenancy_clients`, add-only, both engines, row-level security), written on the first
+  call and at most hourly after, waking a `workflow_wait` the first time.
+- The page shows that client's exact steps, from `content/messages.json` `workflow.clients`
+  (checked by `check-site`): the hub's `/mcp` address to paste, `claude mcp add --scope user
+  --transport http <name> <hub>/mcp` then `/mcp` → Authenticate, `codex mcp add <name> --url
+  <hub>/mcp`, Cursor's `mcp.json` entry, each with a Copy button. A client marked
+  `unavailable` there is offered as unavailable, with that text.
+- An account nobody secured connects the new client in the browser that will open its
+  sign-in page: "Use this browser for <client>" opens a session of the account there (the link
+  is the credential, while it is live; audited), so the client's Connect lands on the same
+  account. A secured account signs in on the client's page as usual.
+- The phone step shows the link as a QR code (inline SVG from the `qrcode` crate: pure Rust,
+  no dependencies of its own, passes `cargo deny`).
+- Tests: the family of each client's registered name, the content checks, a step done only
+  by a client of its family on this tenant (a wait returns the moment it is), the browser
+  button and a secured account, a client the site marks unavailable, the QR code;
+  `tests/workflow_browser.py` adds a second AI
+  client (ChatGPT) whose sign-in in the person's browser lands on the same account and ticks
+  the step in place.
+
 ### Setup links the AI hands over, with no sign-in (increment 68)
 - MCP tools `workflow_list`, `workflow_start {workflow, machine_name?}` → `{id, link,
   expires_at, steps}`, `workflow_status {id}`, `workflow_wait {id, timeout_secs ≤ 60}`

@@ -1269,6 +1269,7 @@ impl Authority {
             provisional_until,
             agent: claims.agent,
             claim_code,
+            client: None,
             provisional_warning: provisional_until.is_some_and(|until| {
                 let left = until.saturating_sub(now());
                 let ttl = self.limit_snapshot().0;

@@ -49,6 +49,10 @@ pub struct Subject {
     /// Its tenant's place on a hub with its own accounts (`accounts/access.rs`): let in or
     /// waiting, and its plan. `None` where the hub keeps no tenants for it.
     pub access: Option<crate::accounts::access::Access>,
+    /// The name the AI client gave itself when it registered with this hub (`Connect Claude?`),
+    /// for a call made with one of the hub's own tokens: what says which family of AI client
+    /// (Claude, ChatGPT or Codex, Grok, Cursor) is connected (`analytics::funnel::client_family`).
+    pub client: Option<String>,
 }
 
 impl Subject {
@@ -220,6 +224,7 @@ impl Verifier {
                         provisional_until: None,
                         agent: None,
                         claim_code: None,
+                        client: None,
                         provisional_warning: false,
                         access: None,
                     }
@@ -246,7 +251,10 @@ impl Verifier {
             } => {
                 if bearer.starts_with("dgh_") {
                     return match accounts.verify_access(bearer).await {
-                        Ok(Some(grant)) => Ok(accounts.subject(&grant.account, "hub")),
+                        Ok(Some(grant)) => Ok(crate::auth::Subject {
+                            client: grant.client_name,
+                            ..accounts.subject(&grant.account, "hub")
+                        }),
                         Ok(None) => Err(AuthError::Invalid(
                             "unknown, expired or revoked hub token",
                         )),
@@ -470,6 +478,7 @@ impl OidcVerifier {
             provisional_until: None,
             agent: None,
             claim_code: None,
+            client: None,
             provisional_warning: false,
             access: None,
         })
@@ -539,6 +548,7 @@ mod tests {
                 provisional_until: None,
                 agent: None,
                 claim_code: None,
+                client: None,
                 provisional_warning: false,
                 access: None,
             }
