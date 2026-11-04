@@ -47,6 +47,10 @@ runners; a release publishes only when it passes). A PR merges only when all of 
 ## Rules
 
 - One concern per PR, branch `increment-N/<topic>`, PR body states what was verified and where.
+- Push early and often: commit and push your branch to origin at least every 15 minutes of
+  work. A WIP commit that does not build yet is fine; squash before the PR if you like. The
+  agent workspace can restart at any time and wipes everything not on GitHub (RAM worktrees
+  in /dev/shm first). Never hold more than 15 minutes of unpushed work.
 - Extend an existing owner before adding a crate, process or service; the plan's boundary test
   applies. Never a second job system, a broker per workspace, or recovery by remembered PID.
 - Native code lives only in `crates/core/src/execution/platform/*` and `crates/ipc/src/{unix,windows}*`;
