@@ -623,7 +623,7 @@ pub(super) async fn finish(
     // signed in: ask whether to link it there (spec first-connect, A2).
     if !link && current.is_none() && proven.provider == "google" {
         match accounts.password_account_for(proven).await {
-            Ok(Some(_)) => return link_page(hub, proven, return_to),
+            Ok(Some(_)) => return link_page(hub, proven, return_to, None),
             Ok(None) => {}
             Err(error) => {
                 eprintln!("devagotchi-hub: account store: {}", error.message);
@@ -700,8 +700,9 @@ fn link_cookie(hub: &HubSignIn) -> &'static str {
     if hub.secure() { "__Host-dg_link" } else { "dg_link" }
 }
 
-/// "<email> already has an account. Link Google to it?": Link, or Keep separate.
-fn link_page(hub: &Arc<HubSignIn>, proven: &Proven, return_to: &str) -> Response {
+/// "<email> already has an account. Link Google to it?": Link (with that account's
+/// password), or Keep separate. `notice` is why it is shown again (a wrong password).
+fn link_page(hub: &Arc<HubSignIn>, proven: &Proven, return_to: &str, notice: Option<&str>) -> Response {
     let waiting = Waiting {
         p: proven.provider.clone(),
         s: proven.subject.clone(),
@@ -716,13 +717,24 @@ fn link_page(hub: &Arc<HubSignIn>, proven: &Proven, return_to: &str) -> Response
     let words = &hub.site().messages.sign_in;
     let email = proven.verified_email.as_deref().unwrap_or_default();
     let title = words.link_title.replace("{email}", email);
+    let e = pages::escape;
+    let notice = notice.map(|text| format!("<p class=\"notice\" role=\"alert\">{}</p>", e(text)));
     let body = format!(
-        "<h1>{}</h1><form method=\"post\" action=\"/auth/provider/link\">\
-<p class=\"actions\"><button class=\"button primary\" name=\"decision\" value=\"link\">{}</button> \
-<button class=\"button\" name=\"decision\" value=\"separate\">{}</button></p></form>",
-        pages::escape(&title),
-        pages::escape(&words.link),
-        pages::escape(&words.keep_separate)
+        "<h1>{title}</h1>{notice}<p>{explain}</p><form method=\"post\" action=\"/auth/provider/link\">\
+<input type=\"hidden\" name=\"decision\" value=\"link\">\
+<label>{password} for {email} <input type=\"password\" name=\"password\" required autocomplete=\"current-password\"></label>\
+<p class=\"actions\"><button class=\"button primary\" type=\"submit\">{link}</button></p></form>\
+<form method=\"post\" action=\"/auth/provider/link\"><input type=\"hidden\" name=\"decision\" value=\"separate\">\
+<p class=\"actions\"><button class=\"button\" type=\"submit\">{separate}</button></p></form>\
+<p><a href=\"/auth/password/forgot\">{forgot}</a></p>",
+        title = e(&title),
+        notice = notice.unwrap_or_default(),
+        explain = e(&words.link_password),
+        password = e(&words.password),
+        email = e(email),
+        link = e(&words.link),
+        separate = e(&words.keep_separate),
+        forgot = e(&words.forgot),
     );
     let mut response = pages::html(StatusCode::OK, &title, &body);
     super::session::form_may_return(&mut response, return_to);
@@ -737,6 +749,9 @@ fn link_page(hub: &Arc<HubSignIn>, proven: &Proven, return_to: &str) -> Response
 #[derive(Deserialize)]
 pub struct LinkDecision {
     decision: String,
+    /// The password account's password: Link only.
+    #[serde(default)]
+    password: String,
 }
 
 /// `POST /auth/provider/link`: the link page's answer. Link adds the sign-in to the password
@@ -766,14 +781,31 @@ pub async fn link(
     let accounts = hub.accounts().clone();
     let done = match form.decision.as_str() {
         "link" => match accounts.password_account_for(&proven).await {
-            Ok(Some(account)) => accounts.link_identity(&account, &proven).await,
+            // Linking takes the password: whoever signed up with this address first may not
+            // be the person Google just proved it for.
+            Ok(Some(account)) => {
+                let email = proven.verified_email.as_deref().unwrap_or_default();
+                match accounts.sign_in_password(email, &form.password).await {
+                    Ok(holder) if holder.id == account => accounts.link_identity(&account, &proven).await,
+                    Ok(_) => Err(devagotchi_contracts::BridgeError::new("password_wrong", "wrong")),
+                    Err(error) => Err(error),
+                }
+            }
             Ok(None) => accounts.sign_in_identity_from(&proven, None).await,
             Err(error) => Err(error),
         },
         _ => accounts.sign_in_identity_from(&proven, None).await,
     };
+    let words = hub.site().messages.sign_in.clone();
+    let again = |status: StatusCode, notice: &str| {
+        let mut page = link_page(&hub, &proven, &waiting.r, Some(notice));
+        *page.status_mut() = status;
+        page
+    };
     let account = match done {
         Ok(account) => account,
+        Err(error) if error.code == "password_wrong" => return again(StatusCode::BAD_REQUEST, &words.wrong),
+        Err(error) if error.code == "slow_down" => return again(StatusCode::TOO_MANY_REQUESTS, &words.slow_down),
         Err(error) if error.code == "account_disabled" => {
             return failed(StatusCode::FORBIDDEN, "This account is disabled", "Ask the hub's owner.");
         }

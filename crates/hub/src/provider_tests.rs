@@ -618,8 +618,13 @@ async fn google_for_an_address_with_a_password_account_asks_to_link_it() {
     assert_eq!(status, 200);
     assert!(page.contains("pat@example.com already has an account. Link Google to it?"), "{page}");
     assert!(page.contains(">Link<") && page.contains(">Keep separate<"), "{page}");
-    // Link: Google now signs in to the password account.
-    let linked = world.hub.form("/auth/provider/link", Some(&waiting), &[("decision", "link")]).await;
+    assert!(page.contains("Enter this account&#39;s password to link Google to it.") && page.contains("name=\"password\""), "{page}");
+    assert!(page.contains("Password for pat@example.com") && page.contains("Forgot password?"), "{page}");
+    // Link with the account's password: Google now signs in to the password account.
+    let linked = world
+        .hub
+        .form("/auth/provider/link", Some(&waiting), &[("decision", "link"), ("password", "pats password")])
+        .await;
     assert_eq!(linked.status(), 303);
     assert_eq!(linked.headers()[header::LOCATION], "/account");
     let session = set_cookie(&linked, "dg_session").expect("signed in");
@@ -629,8 +634,43 @@ async fn google_for_an_address_with_a_password_account_asks_to_link_it() {
     let back = set_cookie(&again, "dg_session").unwrap();
     assert!(world.account_page(&back).await.contains(&password.id));
     // A forged or missing waiting cookie links nothing.
-    let none = world.hub.form("/auth/provider/link", None, &[("decision", "link")]).await;
+    let none = world.hub.form("/auth/provider/link", None, &[("decision", "link"), ("password", "pats password")]).await;
     assert_eq!(none.status(), 400);
+}
+
+#[tokio::test]
+async fn link_with_a_wrong_password_links_nothing_and_signs_nobody_in() {
+    // Someone signed up first with this address and their own password: the person Google
+    // proved the address for cannot be joined to that account without its password.
+    let world = world(google("g-302", Some("ash@example.com"))).await;
+    let squatter = world
+        .hub
+        .accounts
+        .sign_up_password("ash@example.com", "not ash's password")
+        .await
+        .unwrap();
+    let asked = world.sign_in("google", None, false).await;
+    let waiting = set_cookie(&asked, "dg_link").expect("asked");
+    for wrong in ["", "a guess at it"] {
+        let refused = world
+            .hub
+            .form("/auth/provider/link", Some(&waiting), &[("decision", "link"), ("password", wrong)])
+            .await;
+        assert!(set_cookie(&refused, "dg_session").is_none(), "no session");
+        let (status, page) = Hosted::text(refused).await;
+        assert_eq!(status, 400, "{page}");
+        assert!(page.contains("Email or password is wrong."), "{page}");
+        assert!(page.contains(">Keep separate<") && page.contains("Forgot password?"), "{page}");
+    }
+    // Nothing was linked: Google still reaches no account and asks again.
+    let again = world.sign_in("google", None, false).await;
+    assert!(set_cookie(&again, "dg_link").is_some(), "still not linked");
+    assert!(set_cookie(&again, "dg_session").is_none());
+    // Keep separate still works, as its own account.
+    let kept = world.hub.form("/auth/provider/link", Some(&waiting), &[("decision", "separate")]).await;
+    assert_eq!(kept.status(), 303);
+    let session = set_cookie(&kept, "dg_session").expect("signed in");
+    assert!(!world.account_page(&session).await.contains(&squatter.id));
 }
 
 #[tokio::test]

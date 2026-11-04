@@ -930,6 +930,8 @@ pub struct SignInMessages {
     pub link_title: String,
     pub link: String,
     pub keep_separate: String,
+    /// Above the Link form's password field: linking takes the account's password.
+    pub link_password: String,
 }
 
 impl Default for SignInMessages {
@@ -955,6 +957,7 @@ impl Default for SignInMessages {
             link_title: s("{email} already has an account. Link Google to it?"),
             link: s("Link"),
             keep_separate: s("Keep separate"),
+            link_password: s("Enter this account's password to link Google to it."),
         }
     }
 }
