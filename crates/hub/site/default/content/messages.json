@@ -259,6 +259,7 @@
     "set_password": "Set a password",
     "link_title": "{email} already has an account. Link Google to it?",
     "link": "Link",
-    "keep_separate": "Keep separate"
+    "keep_separate": "Keep separate",
+    "link_password": "Enter this account's password to link Google to it."
   }
 }
