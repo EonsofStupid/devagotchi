@@ -13,8 +13,8 @@ Connect your assistant to `{mcp}`, then ask it to add a computer.
 
 ## Pages
 
-- [Help]({hub}/docs): how {product} works
-- [Everything]({hub}/llms-full.txt): every page in one file
+- [Help]({site}/docs): how {product} works
+- [Everything]({site}/llms-full.txt): every page in one file
 
 ## Optional
 
