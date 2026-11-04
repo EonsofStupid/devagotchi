@@ -10,7 +10,7 @@ export function Arrow({ diagonal = false }: { diagonal?: boolean }) {
 }
 
 export function BridgeHeader({ active = "" }: { active?: string }) {
-  return <header className="bridge-header"><div className="bridge-container bridge-nav"><Link className="bridge-brand" href="/" aria-label="Devagotchi home"><BridgeMark/><span>devagotchi</span></Link><nav aria-label="Primary"><Link href="/#workspace" aria-current={active === "product" ? "page" : undefined}>Product</Link><Link href="/connect" aria-current={active === "connect" ? "page" : undefined}>Connect</Link><Link href="/architecture" aria-current={active === "architecture" ? "page" : undefined}>Architecture</Link><Link href="/research" aria-current={active === "research" ? "page" : undefined}>Research</Link></nav><Link className="bridge-button bridge-button-small" href="/connect#local">Get the preview <Arrow/></Link></div></header>;
+  return <header className="bridge-header"><div className="bridge-container bridge-nav"><Link className="bridge-brand" href="/" aria-label="Devagotchi home"><BridgeMark/><span>devagotchi</span></Link><nav aria-label="Primary"><Link href="/#workspace" aria-current={active === "product" ? "page" : undefined}>Product</Link><Link href="/connect" aria-current={active === "connect" ? "page" : undefined}>Connect</Link><Link href="/architecture" aria-current={active === "architecture" ? "page" : undefined}>Architecture</Link></nav><Link className="bridge-button bridge-button-small" href="/connect#local">Get the preview <Arrow/></Link></div></header>;
 }
 
 export function BridgeFooter() {

@@ -443,6 +443,9 @@ pub struct Landing {
     /// What a new hub shows under the hero: how to claim it.
     pub claim: StepsBand,
     pub how: StepsBand,
+    /// Another product beside this one, row by row: a site may add one; the built-in
+    /// site has none.
+    #[serde(default)]
     pub compare: Compare,
     pub features: Features,
     pub plans: PlansCopy,
@@ -528,7 +531,7 @@ pub struct Step {
     pub terminal: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Compare {
     pub rail: String,

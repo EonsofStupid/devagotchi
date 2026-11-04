@@ -2,8 +2,8 @@
   "product": {
     "name": "Devagotchi",
     "short_name": "Devagotchi",
-    "tagline": "One hub for your AI and every machine",
-    "description": "Approve what your AI wants to do on your machines.",
+    "tagline": "Your AI gets your server",
+    "description": "Give Claude, ChatGPT, Codex, Cursor and Grok your own servers and PCs through one HTTPS address, with no sign-up and one line per machine.",
     "domain": "devagotchi.com"
   },
   "operator": {
@@ -26,9 +26,6 @@
     "sections": [
       {
         "id": "how"
-      },
-      {
-        "id": "compare"
       },
       {
         "id": "features"
