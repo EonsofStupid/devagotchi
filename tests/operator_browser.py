@@ -198,7 +198,7 @@ def main() -> int:
         "listen": f"127.0.0.1:{port}",
         "public_url": url,
         "auth": {"mode": "hub"},
-        "tenancy": {"mode": "multi", "starts_per_hour": 100},
+        "tenancy": {"mode": "multi", "starts_per_hour": 100, "anonymous_connect": True},
         "site": {"dir": str(site(work))},
         "brokers": [],
         "grants": [],

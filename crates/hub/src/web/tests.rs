@@ -1701,7 +1701,7 @@ mod first_connect {
         let login = location(&first);
         assert!(login.starts_with("/auth/login?return_to="), "{login}");
         let return_to = query_param(&login, "return_to").unwrap();
-        assert_eq!(return_to, authorize);
+        assert!(return_to.starts_with("/oauth/authorize?") && return_to.contains("state=s1"), "{return_to}");
         // The page: Google, "or", email and password, sign in / sign up, forgot. Nothing else.
         let (status, page) = Hosted::text(hub.get(&login, None).await).await;
         assert_eq!(status, 200, "{page}");
@@ -1732,11 +1732,11 @@ mod first_connect {
             )
             .await;
         assert_eq!(made.status(), 303);
-        assert_eq!(location(&made), authorize);
+        assert_eq!(location(&made), return_to);
         let session = set_cookie(&made, "dg_session").expect("signed in");
         let fresh = set_cookie(&made, "dvg_fresh").expect("a fresh sign-in");
         // That request now goes straight to the app with its code: no Connect page.
-        let back = hub.get(&authorize, Some(&format!("{session}; {fresh}"))).await;
+        let back = hub.get(&return_to, Some(&format!("{session}; {fresh}"))).await;
         assert_eq!(back.status(), 303);
         let to_app = location(&back);
         assert!(to_app.starts_with(REDIRECT), "{to_app}");
