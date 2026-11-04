@@ -85,6 +85,78 @@
           "text": "Go back to your AI."
         }
       ]
+    },
+    {
+      "id": "connect-claude",
+      "title": "Connect Claude",
+      "intro": "Add {product} to Claude (claude.ai, the desktop app or Claude Code) so it can work on your machines.",
+      "steps": [
+        {
+          "kind": "ai_client",
+          "client": "claude",
+          "title": "Connect Claude to your account",
+          "text": "Follow the steps for Claude below: you paste one address (or run one command) and press Connect."
+        },
+        {
+          "kind": "done",
+          "title": "Connected",
+          "text": "Claude can work on your machines now. Ask it to."
+        }
+      ]
+    },
+    {
+      "id": "connect-chatgpt",
+      "title": "Connect ChatGPT",
+      "intro": "Add {product} to ChatGPT or Codex so it can work on your machines.",
+      "steps": [
+        {
+          "kind": "ai_client",
+          "client": "chatgpt",
+          "title": "Connect ChatGPT to your account",
+          "text": "Follow the steps for ChatGPT below: you paste one address (or run one command) and press Connect."
+        },
+        {
+          "kind": "done",
+          "title": "Connected",
+          "text": "ChatGPT can work on your machines now. Ask it to."
+        }
+      ]
+    },
+    {
+      "id": "connect-grok",
+      "title": "Connect Grok",
+      "intro": "Add {product} to Grok so it can work on your machines.",
+      "steps": [
+        {
+          "kind": "ai_client",
+          "client": "grok",
+          "title": "Connect Grok to your account",
+          "text": "Follow the steps for Grok below: you paste one address (or run one command) and press Connect."
+        },
+        {
+          "kind": "done",
+          "title": "Connected",
+          "text": "Grok can work on your machines now. Ask it to."
+        }
+      ]
+    },
+    {
+      "id": "connect-cursor",
+      "title": "Connect Cursor",
+      "intro": "Add {product} to Cursor so it can work on your machines.",
+      "steps": [
+        {
+          "kind": "ai_client",
+          "client": "cursor",
+          "title": "Connect Cursor to your account",
+          "text": "Follow the steps for Cursor below: you paste one address (or run one command) and press Connect."
+        },
+        {
+          "kind": "done",
+          "title": "Connected",
+          "text": "Cursor can work on your machines now. Ask it to."
+        }
+      ]
     }
   ]
 }

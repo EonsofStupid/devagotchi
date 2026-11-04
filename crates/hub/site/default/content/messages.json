@@ -170,6 +170,61 @@
     "notify": "Turn on notifications on this phone",
     "phone_hint": "On a computer now? Open this same link on your phone and press the button there.",
     "refused": "That came from another site, so nothing was changed. Use the button on this page.",
+    "clients": {
+      "claude": {
+        "name": "Claude",
+        "how": "**On claude.ai or in the Claude desktop app:** open **Customize**, then **Connectors**, press **Add custom connector**, paste the address below, press **Add**, then **Connect** on it. **In Claude Code:** run the command below in a terminal, start `claude`, type `/mcp`, choose it and press **Authenticate**. The Free plan holds one custom connector.",
+        "boxes": [
+          {
+            "label": "Address to paste",
+            "text": "{mcp}"
+          },
+          {
+            "label": "Claude Code",
+            "text": "claude mcp add --scope user --transport http {server} {mcp}"
+          }
+        ]
+      },
+      "chatgpt": {
+        "name": "ChatGPT",
+        "how": "**In ChatGPT on the web** (Plus, Pro, Business, Enterprise or Education): open **Settings**, then **Apps**, turn on **Developer mode** under **Advanced settings**, press **Create app**, paste the address below as its MCP server, choose **OAuth**, and connect. **In Codex:** run the command below; it opens the sign-in itself.",
+        "boxes": [
+          {
+            "label": "Address to paste",
+            "text": "{mcp}"
+          },
+          {
+            "label": "Codex",
+            "text": "codex mcp add {server} --url {mcp}"
+          }
+        ]
+      },
+      "grok": {
+        "name": "Grok",
+        "how": "**On grok.com:** open [grok.com/connectors](https://grok.com/connectors), press **New Connector**, choose **Custom**, paste the address below and finish its sign-in. On a Business or Enterprise team, an admin adds the connector first.",
+        "boxes": [
+          {
+            "label": "Address to paste",
+            "text": "{mcp}"
+          }
+        ]
+      },
+      "cursor": {
+        "name": "Cursor",
+        "how": "**In Cursor:** add the entry below to `~/.cursor/mcp.json` (every project) or `.cursor/mcp.json` (this project), save, and press **Connect** next to it under **MCP** when Cursor asks you to sign in.",
+        "boxes": [
+          {
+            "label": "mcp.json",
+            "text": "\\{ \"mcpServers\": \\{ \"{server}\": \\{ \"url\": \"{mcp}\" \\} \\} \\}"
+          }
+        ]
+      }
+    },
+    "client_browser": "{client} opens a page to connect in your browser. Press the button below in the browser it will open (on a computer, your usual one), so it joins this account instead of making a new one.",
+    "client_here": "Use this browser for {client}",
+    "client_ready": "This browser will join {client} to your account: when its page asks, press **Connect**.",
+    "client_secured": "{client} opens a page to connect: sign in there as you usually do, then press **Connect**.",
+    "qr": "This page's link as a QR code: scan it with your phone's camera",
     "facts": {
       "secured": "Your account is secured.",
       "not_secured": "Your account is not secured yet.",
@@ -179,6 +234,8 @@
       "machine_online": "{machine} is online.",
       "phone_on": "Notifications are on for {n} phone or browser.",
       "phone_off": "No phone has notifications on yet.",
+      "client_waiting": "Waiting for {client} to connect.",
+      "client_done": "{client} is connected.",
       "done": "All done."
     }
   }

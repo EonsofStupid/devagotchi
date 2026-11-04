@@ -48,6 +48,9 @@ pub struct StepOffer {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub os: Option<String>,
+    /// An `ai_client` step's client: `claude`, `chatgpt`, `grok` or `cursor`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -151,7 +154,7 @@ impl Hub {
 impl Hub {
     #[tool(
         name = "workflow_list",
-        description = "The setups this hub can walk the user through with one link they open and click through, no sign-in: connecting a Linux server, a Windows PC or laptop, their phone for approvals, or everything to get started. Use it when the user asks to connect, add or set up a machine, server, computer, laptop or phone, before workflow_start; prefer it to machine_add unless the user wants the raw command. A workflow with available false cannot be done here: tell the user its `why`, plainly, and offer no workaround (a Mac, for one, has no build yet).",
+        description = "The setups this hub can walk the user through with one link they open and click through, no sign-in: connecting a Linux server, a Windows PC or laptop, their phone for approvals, another AI app (Claude, ChatGPT or Codex, Grok, Cursor), or everything to get started. Use it when the user asks to connect, add or set up a machine, server, computer, laptop, phone or AI app, before workflow_start; prefer it to machine_add unless the user wants the raw command. A workflow with available false cannot be done here: tell the user its `why`, plainly, and offer no workaround (a Mac, for one, has no build yet).",
         title = "What I can set up for you",
         annotations(title = "What I can set up for you", read_only_hint = true, open_world_hint = false)
     )]
@@ -183,6 +186,7 @@ impl Hub {
                                     kind: step.kind.clone(),
                                     title: ctx.plain(&step.title),
                                     os: step.os.clone(),
+                                    client: step.client.clone(),
                                 })
                                 .collect(),
                         }

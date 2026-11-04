@@ -75,6 +75,7 @@ pub fn router(hub_authorization: bool) -> Router<AppState> {
         .route("/go/{token}/command", post(workflow::command))
         .route("/go/{token}/phone", post(workflow::phone))
         .route("/go/{token}/keep", post(workflow::keep))
+        .route("/go/{token}/client", post(workflow::client))
         .route("/assets/workflow.js", get(workflow::script))
         .route("/assets/hub.css", get(css))
         // The site's own files: its logo, icon, pictures, video and fonts.

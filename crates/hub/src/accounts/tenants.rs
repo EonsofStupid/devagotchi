@@ -285,6 +285,7 @@ impl Accounts {
             provisional_until: lapses,
             agent: None,
             claim_code: None,
+            client: None,
             provisional_warning: lapses
                 .is_some_and(|until| until.saturating_sub(now_secs()) < (idle / 7).max(3600)),
             access: account.access.clone(),

@@ -683,6 +683,7 @@ fn assess(answer: &Introspection, accepts: &Accepts, now: u64) -> Result<Subject
         provisional_until: None,
         agent: None,
         claim_code: None,
+        client: None,
         provisional_warning: false,
         access: None,
     })

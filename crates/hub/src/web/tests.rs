@@ -1372,6 +1372,7 @@ async fn a_person_adds_a_machine_of_their_own_and_revokes_it() {
         provisional_until: None,
         agent: None,
         claim_code: None,
+        client: None,
         provisional_warning: false,
         access: None,
     };
