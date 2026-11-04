@@ -225,6 +225,7 @@
     "client_ready": "This browser will join {client} to your account: when its page asks, press **Connect**.",
     "client_secured": "{client} opens a page to connect: sign in there as you usually do, then press **Connect**.",
     "qr": "This page's link as a QR code: scan it with your phone's camera",
+    "open_on_computer": "Open this on your computer",
     "facts": {
       "secured": "Your account is secured.",
       "not_secured": "Your account is not secured yet.",

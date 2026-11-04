@@ -3,22 +3,12 @@
     {
       "id": "get-started",
       "title": "Get started",
-      "intro": "Connect a computer, then turn on approvals on your phone. A click and one pasted line each, no sign-in: your AI watches this page and carries on as each step is done.",
+      "intro": "Connect this computer. One click and one pasted line; your AI watches and carries on when it's done.",
       "steps": [
         {
           "kind": "machine",
           "title": "Connect a computer",
-          "text": "Pick what it runs and press the button. You get one line to paste on that computer: it installs {product}, joins it to your account and starts it at boot."
-        },
-        {
-          "kind": "phone",
-          "title": "Turn on approvals on your phone",
-          "text": "Open this same link on your phone and turn notifications on there, so {product} can reach you when something needs you."
-        },
-        {
-          "kind": "secure_account",
-          "title": "Keep your account",
-          "text": "Optional: add a sign-in so you can come back to your account and its machines from anywhere."
+          "text": "Pick what this computer runs and press the button. You get one line to paste here: it installs {product}, joins your account and starts with the computer."
         },
         {
           "kind": "done",
