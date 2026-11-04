@@ -61,8 +61,11 @@ pub(crate) const PIPE_TIMEOUT_DETAIL: &str = " Output pipes did not close within
 pub(crate) const RUNNING_DETAIL_ACCOUNT: &str = "Root created suspended as the broker's account with its environment, null stdin, and no console window, then assigned to a broker-owned Job Object before it ran. Executable behavior is not sandboxed.";
 
 /// The shell a `command` line runs in: Windows PowerShell from System32, given the line
-/// as `-EncodedCommand` (UTF-16LE, base64) so no quoting layer can change it.
+/// as `-EncodedCommand` (UTF-16LE, base64) so no quoting layer can change it. Progress
+/// records are silenced first: with its output redirected, PowerShell otherwise writes them
+/// to stderr as `#< CLIXML` serialization around the command's real output.
 pub(crate) fn shell_command(command: &str) -> (std::path::PathBuf, Vec<String>) {
+    let command = format!("$ProgressPreference='SilentlyContinue';{command}");
     use base64::Engine as _;
     let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
     let shell = std::path::Path::new(&root)
@@ -447,6 +450,20 @@ mod tests {
 
     fn ping(seconds: u32) -> String {
         format!("{} -n {} 127.0.0.1 >nul", system32("PING.EXE"), seconds + 1)
+    }
+
+    #[test]
+    fn a_command_line_prints_its_output_and_no_progress_records() {
+        let (shell, args) = shell_command("Write-Progress -Activity x -Status y; 'ok'");
+        let out = std::process::Command::new(shell)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "{stdout}\n{stderr}");
+        assert_eq!(stdout.trim(), "ok", "{stderr}");
+        assert!(!stderr.contains("#< CLIXML"), "{stderr}");
     }
 
     #[tokio::test]
