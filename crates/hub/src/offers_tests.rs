@@ -500,7 +500,7 @@ fn assert_nothing_of_the_offers(what: &str, (names, said, pages): &(Vec<String>,
 }
 
 /// A copy of the built-in site changed by `edit`.
-fn builtin_with(dir: &std::path::Path, edit: impl FnOnce(&mut Value)) -> std::path::PathBuf {
+pub(crate) fn builtin_with(dir: &std::path::Path, edit: impl FnOnce(&mut Value)) -> std::path::PathBuf {
     let site = dir.join("site");
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("site/default");
     for sub in ["", "content", "assets"] {

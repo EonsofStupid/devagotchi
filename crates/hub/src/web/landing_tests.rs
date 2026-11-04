@@ -195,7 +195,7 @@ async fn the_page_needs_nothing_the_plain_csp_refuses() {
         // The diagram's arrowheads are markers in the same SVG, never a fetch.
         assert!(html.split("url(").skip(1).all(|rest| rest.starts_with('#')));
         // Links leave only for the source on GitHub and the site's offerings (and the
-        // network's own address in their intro); the canonical link is this hub's own.
+        // network's own address in their intro); the canonical link is the site's own address.
         let site = crate::site::builtin();
         let offerings: Vec<&str> = site
             .info
@@ -207,7 +207,7 @@ async fn the_page_needs_nothing_the_plain_csp_refuses() {
             assert!(
                 href.starts_with('/')
                     || href.starts_with('#')
-                    || href == format!("{URL}/")
+                    || href == "https://devagotchi.com/"
                     || href.starts_with("https://github.com/EonsofStupid/devagotchi")
                     || offerings.contains(&href)
                     || href == "https://shippin.cloud",
