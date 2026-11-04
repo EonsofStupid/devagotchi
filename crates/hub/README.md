@@ -74,7 +74,7 @@ The directory holds:
 | `tokens.json` | The design tokens the stylesheet reads as custom properties: `colors` and `dark` (`--bg`, `--accent`, …), `fonts` (`--font-ui`, `--font-display`, `--font-mono`), `radii` (`--radius-s` … `--radius-pill`), `layout` (`--bar-h`, `--gutter`, `--wide`, `--narrow`), `theme_color` and `background_color` for the installed app, and `font_files` to serve fonts from the hub itself |
 | `content/landing.json` | Every landing section's copy: the hero, how claiming works, How it works, the comparison and its evidence, features, plans and services, connecting an AI, self-hosting, what is coming, the questions, the closing, the footer, the popups, the glossary, and `custom` sections of your own |
 | `content/messages.json` | The sign-in email (`email.subject`, `email.body`, `{link}` is the one-time link), the getting-started ticket (`welcome.title`, `welcome.body`, `{hub}` is the hub's address), the line under every public page, and the words of a workflow's page (`workflow`) |
-| `content/workflows.json` | The setups an AI hands its person as one link (`workflow_start`): each an `id`, a `title`, an `intro` and its ordered `steps`, each a `kind` the hub runs (`machine` with an optional `os`: `linux`, `windows`, `docker` or `host`; `phone`; `secure_account`; `done`) with its own `title` and `text`; or, for one that cannot be done yet, `unavailable` and no steps. `check-site` refuses a kind or an OS the hub does not run |
+| `content/workflows.json` | The setups an AI hands its person as one link (`workflow_start`): each an `id`, a `title`, an `intro` and its ordered `steps`, each a `kind` the hub runs (`machine` with an optional `os`: `linux`, `windows`, `docker` or `host`; `phone`; `ai_client` with its `client`: `claude`, `chatgpt`, `grok` or `cursor`; `secure_account`; `done`) with its own `title` and `text`; or, for one that cannot be done yet, `unavailable` and no steps. `check-site` refuses a kind or an OS the hub does not run |
 | `content/docs.md`, `privacy.md`, `terms.md`, `support.md` | The public pages, in Markdown |
 | `assets/` | The logo, icon, mascot, diagram, video, poster and fonts: SVG, PNG, JPEG, WebP, GIF, ICO, MP4, WebM, WOFF2, WOFF |
 
@@ -195,7 +195,15 @@ cancelled it grants nothing more, and starting the same workflow again replaces 
   shows the one line for the OS picked, with a Copy button. The code comes back only in that
   browser's own HttpOnly cookie. A hub with no build for an OS offers no line for it; a Mac
   has none yet, and the page and `workflow_list` say so.
-- **A phone turns on from the same link**, opened on the phone (`/go/<token>/phone`).
+- **A phone turns on from the same link**, opened on the phone (`/go/<token>/phone`); the
+  page shows the link as a QR code for the phone's camera (inline SVG, drawn by the hub).
+- **Another AI app connects with its own steps** (`ai_client`): the page shows that client's
+  steps from `content/messages.json` `workflow.clients` (the hub's `/mcp` address to paste, or
+  the command: `claude mcp add --scope user --transport http …`, `codex mcp add … --url …`,
+  Cursor's `mcp.json` entry), each with a Copy button. For an account nobody has secured, one
+  press joins the client's sign-in page in that browser to the account (a session of it,
+  `/go/<token>/client`), so the client's Connect lands there and not on a new account; a
+  secured account signs in on the client's page as usual.
 - **Keeping the account is offered after the first success, and optional**: to a browser that
   did a step through the link, once a step is done, while nobody has secured the account.
   Google or GitHub when the hub has them, a passkey otherwise.
@@ -204,7 +212,9 @@ cancelled it grants nothing more, and starting the same workflow again replaces 
   it. It works at phone width.
 
 Steps are seen, not claimed: `machine` is done when a machine enrolled through it is online,
-`phone` when the account has a push subscription, `secure_account` when the account is
+`phone` when the account has a push subscription, `ai_client` when an AI client of that
+family (the name it registered with: `analytics::funnel::client_family`) has made a successful
+MCP call with one of the tenant's tokens (kept per tenant and family, migration 0011), `secure_account` when the account is
 secured (it never holds a workflow up), `done` when the rest are. `workflow_status` reports
 each step `done`, `current`, `pending` or `unavailable` (with `why`), and `workflow_wait`
 (up to 60 seconds) returns the moment one moves; `workflow_cancel` ends the link. A workflow

@@ -14,8 +14,11 @@ from this binary (`downloads`). Then, as a person and their AI would:
 4. A real machine enrolls through that line: with `--machine join` the line runs exactly as
    shown (`curl … | sudo sh`, CI); with `--machine link` (the default, for a machine without
    root and systemd) a broker and `devagotchi link enroll` take the code from that line.
-5. The page ticks the step in place, without reloading, and offers to keep the account; a
-   passkey keeps it (the Chrome DevTools virtual authenticator).
+5. The page ticks the step in place, without reloading, and offers to keep the account.
+   A second AI client joins: the AI starts "Connect ChatGPT", the person presses the page's
+   button in this browser, ChatGPT's sign-in page here lands on the same account, and its
+   first call ticks that step in place. Then a passkey keeps the account (the Chrome
+   DevTools virtual authenticator).
 6. `workflow_status` reports the machine step done and the account kept, and the AI runs a
    command on the machine.
 
@@ -28,21 +31,63 @@ ubuntu-24.04 (`e2e`); locally:
 """
 
 import argparse
+import base64
 import hashlib
 import io
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import tarfile
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
 from analytics_browser import start
+from clients_oauth import Callback
 from operator_browser import ROOT, Person, call, free_port, wait_ready
+
+
+class Connector:
+    """Another AI client connecting the way it does: register, a sign-in page in the person's
+    browser (the test drives it), the code back at its loopback redirect, its tokens, calls."""
+
+    def __init__(self, hub: str, name: str):
+        self.hub = hub
+        self.callback = Callback()
+        self.redirect = self.callback.uri
+        status, _, body = call(f"{hub}/oauth/register",
+                               json.dumps({"client_name": name, "redirect_uris": [self.redirect]}).encode(),
+                               {"Content-Type": "application/json"})
+        assert status in (200, 201), body
+        self.client = json.loads(body)["client_id"]
+        self.verifier = secrets.token_urlsafe(48)
+        challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(self.verifier.encode()).digest()).rstrip(b"=").decode()
+        self.authorize_url = f"{hub}/oauth/authorize?" + urllib.parse.urlencode({
+            "response_type": "code", "client_id": self.client, "redirect_uri": self.redirect,
+            "code_challenge": challenge, "code_challenge_method": "S256", "state": "s9",
+            "resource": f"{hub}/mcp",
+        })
+        self.token = None
+        self.session = None
+
+    def finish(self):
+        """The code the sign-in page sent back to the client's redirect, for its tokens."""
+        code = self.callback.wait()["code"]
+        status, _, body = call(f"{self.hub}/oauth/token", urllib.parse.urlencode({
+            "grant_type": "authorization_code", "code": code, "redirect_uri": self.redirect,
+            "client_id": self.client, "code_verifier": self.verifier,
+        }).encode(), {"Content-Type": "application/x-www-form-urlencoded"})
+        assert status == 200, body
+        self.token = json.loads(body)["access_token"]
+
+    def tool(self, name: str, arguments: dict = None) -> dict:
+        return Person.mcp(self, "tools/call", {"name": name, "arguments": arguments or {}})
 
 
 def downloads(work: Path, binary: str) -> Path:
@@ -203,6 +248,37 @@ def main() -> int:
             assert page.locator("#step-1 .step-state").text_content() == "Done"
             page.wait_for_selector("#keep:not([hidden])", timeout=15_000)
             print("PASS the page ticked the machine step without reloading and offers to keep the account")
+
+            # A second AI client: the AI starts "Connect ChatGPT"; the person, in the browser
+            # ChatGPT will open, presses the page's button, and ChatGPT's own sign-in there
+            # lands on this account. Its first call ticks the step on the open page.
+            second = ai.tool("workflow_start", {"workflow": "connect-chatgpt"})["structuredContent"]
+            other = person.new_page()
+            other.goto(second["link"])
+            assert other.locator("#step-1").get_attribute("data-state") == "current"
+            assert other.locator("#client-1-0").inner_text() == f"{url}/mcp"
+            assert other.locator("#client-1-1").inner_text() == f"codex mcp add devagotchi --url {url}/mcp"
+            assert other.locator("button.copy[data-copy=client-1-0]").is_visible()
+            other.locator("#client-here-1").click()
+            other.wait_for_selector("#client-ready-1")
+            other.evaluate("window.__stayed = 'here'")
+            chatgpt = Connector(url, "ChatGPT")
+            consent = person.new_page()
+            consent.goto(chatgpt.authorize_url)
+            assert consent.locator("h1").inner_text() == "Connect ChatGPT?"
+            assert "your new" not in consent.inner_text("main"), consent.inner_text("main")
+            consent.click("button[value=approve]")
+            chatgpt.finish()
+            me = chatgpt.tool("whoami")
+            assert not me.get("isError"), me
+            other.wait_for_selector("#step-1[data-state=done]", timeout=30_000)
+            assert other.evaluate("window.__stayed") == "here", "the page reloaded"
+            assert other.locator("#step-1 .fact").inner_text() == "ChatGPT is connected."
+            assert ai.tool("workflow_status", {"id": second["id"]})["structuredContent"]["state"] == "completed"
+            consent.close()
+            other.close()
+            print("PASS a second AI client (ChatGPT) joined the same account from the page's steps; the step ticked in place")
+
             page.locator("#passkey-add").click()
             page.wait_for_url(re.compile(r".*/go/dgw_[^#]*$"), timeout=15_000)
             page.wait_for_selector("#step-3[data-state=done]", timeout=15_000)
