@@ -14,6 +14,7 @@
 //! inline style, nothing from another origin.
 
 mod compare;
+mod network;
 mod popups;
 
 #[cfg(test)]
@@ -49,7 +50,7 @@ pub(crate) fn render(site: &Site, ctx: &Ctx, front: Front, public_url: &str) -> 
         .concat()
     } else {
         let mut parts = vec![rail(&ctx), hero(&ctx, front)];
-        for id in site.info.landing.on() {
+        for id in site.info.sections() {
             parts.push(section(&ctx, front, id));
         }
         parts.push(footer(&ctx));
@@ -244,7 +245,7 @@ fn hero(ctx: &Ctx, front: Front) -> String {
 fn rail(ctx: &Ctx) -> String {
     let site = ctx.site;
     let links: String = std::iter::once("top")
-        .chain(site.info.landing.on())
+        .chain(site.info.sections())
         .map(|id| {
             format!(
                 "<a href=\"#{id}\"><span>{}</span></a>",
@@ -265,6 +266,11 @@ fn rail_name<'a>(site: &'a Site, id: &'a str) -> &'a str {
         "how" => &landing.how.rail,
         "compare" => &landing.compare.rail,
         "features" => &landing.features.rail,
+        "network" => site
+            .info
+            .offers()
+            .map(|offers| offers.rail.as_str())
+            .unwrap_or(id),
         "plans" => &landing.plans.rail,
         "services" => &landing.services.rail,
         "connect" => &landing.connect.rail,
@@ -285,6 +291,7 @@ fn section(ctx: &Ctx, front: Front, id: &str) -> String {
         "how" => how(ctx, front),
         "compare" => compare::section(ctx),
         "features" => features(ctx, front),
+        "network" => network::section(ctx),
         "plans" => plans(ctx),
         "services" => services(ctx),
         "connect" => connect(ctx, front),

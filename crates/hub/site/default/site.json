@@ -31,6 +31,9 @@
         "id": "features"
       },
       {
+        "id": "network"
+      },
+      {
         "id": "plans",
         "on": false
       },
@@ -84,13 +87,58 @@
   "early_access": {
     "mode": "open"
   },
-  "assets": {
-    "logo": "logo.svg",
-    "icon": "icon.svg",
-    "mascot": "pet.svg",
-    "diagram": "diagram.svg",
-    "video": "turnkey.mp4",
-    "poster": "turnkey-poster.png"
+  "offers": {
+    "enabled": true,
+    "brand": "Shippin Network",
+    "rail": "Shippin Network",
+    "title": "Join the {brand} with one word",
+    "intro": "Say “Yes” when your AI asks, and your account links to [shippin.cloud](https://shippin.cloud) with its free offerings. No form: your AI asks once, after your first machine works.",
+    "question": "Want me to link your account to the Shippin Network on shippin.cloud and turn on its free offerings? Just say yes.",
+    "instructions": "The {brand}: after the user's first machine works (machines shows it online), offer it once. Call offers and ask its question as it is. Only if the user says yes, call offers_accept with their own words. Never ask twice and never push; if they say no or nothing, carry on.",
+    "link": {
+      "title": "Link your account to the {brand}",
+      "text": "One tap: sign in with Shippin, and your account here links to your account on shippin.cloud, with its free offerings.",
+      "button": "Sign in with Shippin",
+      "done": "Your account is linked to the {brand}. You can go back to your AI.",
+      "gone": "This link has expired or was replaced. Ask your AI for a new one."
+    },
+    "items": [
+      {
+        "name": "RROFLOW",
+        "text": "AI monitoring, with the evidence: it captures coding-agent activity and turns it into behaviour signals for review.",
+        "href": "https://github.com/rrflow/rroflow-development"
+      },
+      {
+        "name": "wardenmesh",
+        "text": "",
+        "href": ""
+      },
+      {
+        "name": "Vaultix",
+        "text": "Shippin secrets you own.",
+        "href": "https://vaultix.cloud"
+      },
+      {
+        "name": "devscif",
+        "text": "",
+        "href": ""
+      },
+      {
+        "name": "shippin.cloud free tier",
+        "text": "Coder-style dev workspaces.",
+        "href": "https://shippin.cloud"
+      },
+      {
+        "name": "shippin.bot",
+        "text": "",
+        "href": ""
+      },
+      {
+        "name": "shippin.app",
+        "text": "",
+        "href": ""
+      }
+    ]
   },
   "software": {
     "category": "DeveloperApplication",
@@ -102,5 +150,13 @@
       "price": "0",
       "currency": "USD"
     }
+  },
+  "assets": {
+    "logo": "logo.svg",
+    "icon": "icon.svg",
+    "mascot": "pet.svg",
+    "diagram": "diagram.svg",
+    "video": "turnkey.mp4",
+    "poster": "turnkey-poster.png"
   }
 }

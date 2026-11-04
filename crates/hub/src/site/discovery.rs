@@ -298,7 +298,7 @@ pub fn landing_json_ld(site: &Site, front: Front, public_url: &str) -> Vec<Value
     if front == Front::Unclaimed {
         return out;
     }
-    let shown: Vec<&str> = info.landing.on().collect();
+    let shown: Vec<&str> = info.sections().collect();
     let landing = &site.landing;
     if shown.contains(&"how") && !landing.how.steps.is_empty() {
         let steps: Vec<Value> = landing

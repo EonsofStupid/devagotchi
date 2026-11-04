@@ -32,6 +32,7 @@ mod brand_tests;
 pub mod discovery;
 mod markdown;
 pub(crate) mod model;
+pub mod offers;
 mod plans;
 mod style;
 #[cfg(test)]
