@@ -29,6 +29,164 @@ pub struct StartInput {
     pub cwd: Option<String>,
     /// Execution deadline, not a client wait timeout. 1..=300000 milliseconds.
     pub deadline_ms: u64,
+    /// Keep the program's input open for `operation_input`: on a pseudo-terminal (`terminal`,
+    /// the default: prompts, REPLs, sign-ins, Ctrl-C) or on a plain pipe (`pipe`). Absent:
+    /// the program reads nothing (its stdin is the null device), as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interactive: Option<InteractiveInput>,
+    /// Who is starting it, set by the transport that carried the request (this machine's
+    /// adapter, a hub), never by an AI: whatever arrives here from a tool call is replaced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub caller: Option<Caller>,
+}
+
+/// The account of a caller on this machine itself (its adapter over local IPC): the machine's
+/// own user, who owns everything its broker runs.
+pub const LOCAL_ACCOUNT: &str = "local";
+
+/// Who sent a request, as the transport that carried it knows it. A transport fills it in
+/// from what it authenticated and replaces anything an AI put there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Caller {
+    /// The account: `local` for this machine's own user over local IPC, `hub:<subject>`
+    /// for an account a hub signed in.
+    pub account: String,
+    /// One AI conversation or client within that account: an adapter process, a hub MCP
+    /// session. Opaque; compared, never shown.
+    pub client: String,
+}
+
+/// How an interactive operation takes input.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputMode {
+    /// A pseudo-terminal: the program sees a terminal of `cols` by `rows`, echoes what is
+    /// typed, and Ctrl-C interrupts it. Output is one stream, `terminal`.
+    #[default]
+    Terminal,
+    /// A plain pipe on stdin; stdout and stderr stay separate. Ctrl-C signals the program.
+    Pipe,
+}
+
+fn default_cols() -> u16 { 80 }
+fn default_rows() -> u16 { 24 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InteractiveInput {
+    #[serde(default)]
+    pub mode: InputMode,
+    /// Terminal width, 2..=500 columns (default 80).
+    #[serde(default = "default_cols")]
+    pub cols: u16,
+    /// Terminal height, 1..=200 rows (default 24).
+    #[serde(default = "default_rows")]
+    pub rows: u16,
+}
+
+impl Default for InteractiveInput {
+    fn default() -> Self {
+        Self { mode: InputMode::Terminal, cols: default_cols(), rows: default_rows() }
+    }
+}
+
+/// An interactive operation's input, as it stands.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InteractiveView {
+    pub mode: InputMode,
+    /// The terminal's current size (terminal mode).
+    pub cols: u16,
+    pub rows: u16,
+    /// Whether `operation_input` can still reach the program.
+    pub input_open: bool,
+    /// Until when (milliseconds since the Unix epoch) one client holds the keyboard; others
+    /// wait or take it over. Absent when nobody holds it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writer_until_ms: Option<u64>,
+}
+
+/// A named key for `operation_input`. On a terminal each is the bytes a terminal sends;
+/// on a pipe `enter` is a newline, `ctrl_c` and `ctrl_backslash` signal the program, and
+/// `ctrl_d` closes its input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum Key {
+    Enter,
+    Tab,
+    Backspace,
+    Escape,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Delete,
+    Space,
+    CtrlC,
+    CtrlD,
+    CtrlZ,
+    CtrlL,
+    CtrlU,
+    CtrlBackslash,
+}
+
+/// Most text one `operation_input` carries.
+pub const MAX_INPUT_TEXT_BYTES: usize = 16 * 1024;
+/// Most keys one `operation_input` carries.
+pub const MAX_INPUT_KEYS: usize = 64;
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SendInput {
+    pub operation_id: String,
+    /// Text to type, exactly as given (UTF-8, at most 16 KiB). Nothing is added: end a line
+    /// with the `enter` key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Keys pressed after the text, in order (at most 64).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<Key>,
+    /// Drive an operation another conversation or client of the same account started, or
+    /// take the keyboard from the one holding it. Never reaches another account's.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub take_over: bool,
+    /// Set by the transport, never by an AI (see `StartInput::caller`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub caller: Option<Caller>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ResizeInput {
+    pub operation_id: String,
+    /// New width, 2..=500 columns.
+    pub cols: u16,
+    /// New height, 1..=200 rows.
+    pub rows: u16,
+    /// As for `operation_input`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub take_over: bool,
+    /// Set by the transport, never by an AI (see `StartInput::caller`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub caller: Option<Caller>,
+}
+
+/// Input delivered to the program.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct InputSent {
+    pub operation: OperationView,
+    /// The output sequence just before this input: what it caused is after it, so read or
+    /// wait from here (`operation_read` cursor, `operation_wait` output_after).
+    pub cursor: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -82,6 +240,23 @@ pub struct ListInput {
     pub offset: u64,
     #[serde(default = "default_list_limit")]
     pub limit: u32,
+    /// With a caller: `mine` (the default) lists what this conversation or client started;
+    /// `account` lists what any of its account's conversations started (and, for this
+    /// machine's own account, everything here). Without a caller (the inspector): everything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<ListScope>,
+    /// Set by the transport, never by an AI (see `StartInput::caller`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub caller: Option<Caller>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ListScope {
+    #[default]
+    Mine,
+    Account,
 }
 fn default_list_limit() -> u32 { 32 }
 
@@ -94,6 +269,9 @@ pub struct OperationSummary {
     pub updated_at_ms: u64,
     /// Bounded display preview only. Execute only the exact argv from the canonical request.
     pub display_command: String,
+    /// How an interactive operation takes input; absent for one that takes none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interactive: Option<InputMode>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -153,6 +331,9 @@ pub struct OperationView {
     pub ownership_scope: String,
     pub cancellation_requested: bool,
     pub output_complete: bool,
+    /// Present for an interactive operation: how it takes input and whether it still can.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interactive: Option<InteractiveView>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -465,6 +646,8 @@ pub enum RequestBody {
     FileInfo(FileInfoInput),
     FileMkdir(DirectoryInput),
     FileMove(FileMoveInput),
+    OperationInput(SendInput),
+    OperationResize(ResizeInput),
 }
 
 impl RequestBody {
@@ -500,6 +683,7 @@ pub enum ResponseBody {
     Written(FileWritten),
     Revision(Revision),
     Info(FileInfo),
+    InputSent(InputSent),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -14,7 +14,14 @@ use devagotchi_contracts::{BridgeError, BridgeResult, OperationState};
 use crate::execution::GROUP_SETTLE;
 use std::fs::Metadata;
 use std::io;
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::io::{Read as _, Write as _};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::ffi::OsStrExt;
+use std::pin::Pin;
+use std::process::Stdio;
+use std::sync::Arc;
+use std::task::{Context, Poll, ready};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -33,6 +40,9 @@ const MAX_WATCHED: usize = 64;
 const NO_PIDFD_INTERVAL: Duration = Duration::from_millis(20);
 
 pub(crate) const SCOPE: &str = "Linux root process and inherited process group; excludes processes that leave the group. This is not OS containment.";
+/// An operation on a pseudo-terminal: its root leads a new session, and job control may put
+/// its children in process groups of their own, so the session is what is owned.
+pub(crate) const SCOPE_TERMINAL: &str = "Linux root process and the session it leads on a broker-owned pseudo-terminal, every process group in it included; excludes processes that start a session of their own. This is not OS containment.";
 pub(crate) const RUNNING_DETAIL: &str = "Root spawned with exact argv, cleared environment, null stdin, and a new Linux process group. Executable behavior is not sandboxed.";
 pub(crate) const TERMINATION_VERIFIED_DETAIL: &str = " SIGTERM then SIGKILL were issued while the root PID was still owned; no executing members remained in its inherited process group.";
 pub(crate) const OBSERVATION_FAILED_DETAIL: &str =
@@ -40,6 +50,27 @@ pub(crate) const OBSERVATION_FAILED_DETAIL: &str =
 pub(crate) const TERMINATION_UNVERIFIED_DETAIL: &str = " Group termination was not verified";
 pub(crate) const PIPE_TIMEOUT_DETAIL: &str = " Output pipes did not close within one second of root settlement; a descendant may still hold them open. Reading was stopped, output is incomplete, and processes outside the owned group are not tracked or terminated.";
 pub(crate) const RUNNING_DETAIL_ACCOUNT: &str = "Root spawned as the broker's account with its environment, null stdin, and a new Linux process group. Executable behavior is not sandboxed.";
+
+/// Both input modes are available on Linux.
+pub(crate) fn supports_interactive(_mode: devagotchi_contracts::InputMode) -> bool {
+    true
+}
+
+/// What a running operation's detail says: who it runs as, and where its input comes from.
+pub(crate) fn running_detail(account: bool, mode: Option<devagotchi_contracts::InputMode>) -> String {
+    use devagotchi_contracts::InputMode;
+    let who = if account {
+        "as the broker's account with its environment"
+    } else {
+        "with exact argv and a cleared environment"
+    };
+    match mode {
+        None if account => RUNNING_DETAIL_ACCOUNT.into(),
+        None => RUNNING_DETAIL.into(),
+        Some(InputMode::Pipe) => format!("Root spawned {who}, stdin a broker-held pipe for operation_input, and a new Linux process group. Executable behavior is not sandboxed."),
+        Some(InputMode::Terminal) => format!("Root spawned {who} plus TERM=xterm-256color, leading a new session whose controlling terminal is a broker-owned pseudo-terminal (stdin, stdout and stderr). Executable behavior is not sandboxed."),
+    }
+}
 pub(crate) const EXECUTABLE_RULE: &str = "";
 
 /// The shell a `command` line runs in: the account's `$SHELL` when it is one of the
@@ -71,6 +102,14 @@ pub(crate) fn configure(command: &mut Command) {
     command.as_std_mut().process_group(0);
 }
 
+/// What an owned tree is: the root's process group, or (on a pseudo-terminal) the session
+/// it leads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scope {
+    Group,
+    Session,
+}
+
 /// Why a spawned root could not be taken into ownership.
 pub(crate) struct AdoptFailure {
     pub(crate) state: OperationState,
@@ -83,10 +122,11 @@ pub(crate) struct AdoptFailure {
 pub(crate) struct OwnedTree {
     pid: u32,
     root: Option<AsyncFd<OwnedFd>>,
+    scope: Scope,
 }
 
 impl OwnedTree {
-    pub(crate) async fn adopt(child: &mut Child) -> Result<Self, AdoptFailure> {
+    pub(crate) async fn adopt(child: &mut Child, scope: Scope) -> Result<Self, AdoptFailure> {
         let Some(pid) = child.id() else {
             return Err(AdoptFailure {
                 state: OperationState::Unknown,
@@ -107,7 +147,13 @@ impl OwnedTree {
                 });
             }
         };
-        Ok(Self { pid, root })
+        Ok(Self { pid, root, scope })
+    }
+
+    /// Signals the root's process group on the operation's behalf (Ctrl-C on a pipe). Only
+    /// while the root is unreaped, which the job guarantees by stopping input first.
+    pub(crate) fn signaller(&self) -> Signaller {
+        Signaller(self.pid)
     }
 
     /// Returns when the root has exited, without reaping it.
@@ -132,7 +178,7 @@ impl OwnedTree {
     /// another before it ended.
     pub(crate) async fn members_settled(&self) -> BridgeResult<()> {
         loop {
-            let members = group_members(self.pid)?;
+            let members = members(self.pid, self.scope)?;
             if members.is_empty() {
                 return Ok(());
             }
@@ -146,7 +192,7 @@ impl OwnedTree {
                     continue;
                 };
                 // Opened by number: keep it only if that number still names a member.
-                if member_state(member, self.pid)? {
+                if member_state(member, self.pid, self.scope)? {
                     watched.push(fd);
                 }
             }
@@ -159,9 +205,9 @@ impl OwnedTree {
     /// SIGTERM, up to a short grace for the group to leave, SIGKILL, then verified
     /// settlement of the group.
     pub(crate) async fn terminate(&self) -> BridgeResult<()> {
-        let term_error = signal_group(self.pid, libc::SIGTERM).err();
+        let term_error = self.signal_all(libc::SIGTERM).err();
         let _ = timeout(TERM_GRACE, self.members_settled()).await;
-        let kill_error = signal_group(self.pid, libc::SIGKILL).err();
+        let kill_error = self.signal_all(libc::SIGKILL).err();
         if let Some(error) = term_error.or(kill_error) {
             return Err(error);
         }
@@ -172,6 +218,67 @@ impl OwnedTree {
                 "Executing members remained in the owned process group after SIGKILL",
             )),
         }
+    }
+
+    /// Every owned member: the group with one call, a session member by member (job control
+    /// gives a terminal's pipelines groups of their own). A member is signalled through a
+    /// pidfd opened and then checked to be a member, so a number reused in between is never
+    /// signalled; without pidfds, by number right after the check.
+    fn signal_all(&self, signal: i32) -> BridgeResult<()> {
+        if self.scope == Scope::Group {
+            return signal_group(self.pid, signal);
+        }
+        for member in members(self.pid, self.scope)? {
+            match pidfd(member) {
+                Ok(Some(fd)) => {
+                    if !member_state(member, self.pid, self.scope)? {
+                        continue;
+                    }
+                    // SAFETY: the pidfd is open and names exactly that process.
+                    let sent = unsafe {
+                        libc::syscall(
+                            libc::SYS_pidfd_send_signal,
+                            fd.get_ref().as_raw_fd(),
+                            signal,
+                            std::ptr::null::<libc::siginfo_t>(),
+                            0u32,
+                        )
+                    };
+                    if sent == -1 {
+                        let error = io::Error::last_os_error();
+                        if error.raw_os_error() != Some(libc::ESRCH) {
+                            return Err(BridgeError::new(
+                                "process_signal_error",
+                                format!("Cannot signal an owned session member: {error}"),
+                            ));
+                        }
+                    }
+                }
+                Ok(None) => {}
+                Err(error) if pidfd_unsupported(&error) => {
+                    if member_state(member, self.pid, self.scope)? {
+                        // SAFETY: plain kill(2) of a member just checked to be one.
+                        unsafe { libc::kill(member as libc::pid_t, signal) };
+                    }
+                }
+                Err(error) => return Err(observation(error)),
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Signals an operation's root group for its input (Ctrl-C and Ctrl-\\ on a pipe).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Signaller(u32);
+
+impl Signaller {
+    pub(crate) fn interrupt(&self) -> BridgeResult<()> {
+        signal_group(self.0, libc::SIGINT)
+    }
+
+    pub(crate) fn quit(&self) -> BridgeResult<()> {
+        signal_group(self.0, libc::SIGQUIT)
     }
 }
 
@@ -251,7 +358,14 @@ fn signal_group(pid: u32, signal: i32) -> BridgeResult<()> {
 
 /// The executing members of the owned group, read from /proc while the root remains
 /// unreaped. Zombies have ended execution and cannot run or create more processes.
+#[cfg(test)]
 fn group_members(group: u32) -> BridgeResult<Vec<u32>> {
+    members(group, Scope::Group)
+}
+
+/// The executing members of the root's group or session, read from /proc while the root
+/// remains unreaped.
+fn members(root: u32, scope: Scope) -> BridgeResult<Vec<u32>> {
     let entries = std::fs::read_dir("/proc")
         .map_err(|error| BridgeError::new("process_observation_error", error.to_string()))?;
     let mut members = Vec::new();
@@ -265,15 +379,16 @@ fn group_members(group: u32) -> BridgeResult<Vec<u32>> {
         else {
             continue;
         };
-        if member_state(pid, group)? {
+        if member_state(pid, root, scope)? {
             members.push(pid);
         }
     }
     Ok(members)
 }
 
-/// Whether `pid` is an executing member of `group` now; a process that is gone is not.
-fn member_state(pid: u32, group: u32) -> BridgeResult<bool> {
+/// Whether `pid` is an executing member of the root's group (or session) now; a process
+/// that is gone is not.
+fn member_state(pid: u32, root: u32, scope: Scope) -> BridgeResult<bool> {
     let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(stat) => stat,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
@@ -292,14 +407,175 @@ fn member_state(pid: u32, group: u32) -> BridgeResult<bool> {
             "Malformed /proc process stat",
         ));
     };
-    let fields: Vec<_> = stat[end + 1..].split_whitespace().take(3).collect();
-    if fields.len() != 3 {
+    // state, ppid, pgrp, session
+    let fields: Vec<_> = stat[end + 1..].split_whitespace().take(4).collect();
+    if fields.len() != 4 {
         return Err(BridgeError::new(
             "process_observation_error",
             "Incomplete /proc process stat",
         ));
     }
-    Ok(fields[2].parse::<u32>().ok() == Some(group) && fields[0] != "Z" && fields[0] != "X")
+    let owner = match scope {
+        Scope::Group => fields[2],
+        Scope::Session => fields[3],
+    };
+    Ok(owner.parse::<u32>().ok() == Some(root) && fields[0] != "Z" && fields[0] != "X")
+}
+
+/// The broker's side (the master) of a pseudo-terminal an operation runs on.
+pub(crate) struct Terminal {
+    master: Arc<AsyncFd<std::fs::File>>,
+}
+
+impl Terminal {
+    /// A new pseudo-terminal of `cols` by `rows`, and its program side for the root.
+    pub(crate) fn open(cols: u16, rows: u16) -> io::Result<(Self, OwnedFd)> {
+        use std::os::unix::fs::OpenOptionsExt;
+        // std opens with O_CLOEXEC: no program inherits the master.
+        let master = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOCTTY)
+            .open("/dev/ptmx")?;
+        let fd = master.as_raw_fd();
+        // SAFETY: `fd` is the open ptmx descriptor `master` owns.
+        if unsafe { libc::grantpt(fd) } != 0 || unsafe { libc::unlockpt(fd) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut name = [0 as libc::c_char; 128];
+        // SAFETY: the buffer and its length are this array's.
+        let failed = unsafe { libc::ptsname_r(fd, name.as_mut_ptr(), name.len()) };
+        if failed != 0 {
+            return Err(io::Error::from_raw_os_error(failed));
+        }
+        // SAFETY: ptsname_r succeeded, so it wrote a NUL-terminated name into the buffer.
+        let path = unsafe { std::ffi::CStr::from_ptr(name.as_ptr()) };
+        let program_side = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NOCTTY)
+            .open(std::ffi::OsStr::from_bytes(path.to_bytes()))?;
+        set_size(fd, cols, rows)?;
+        // SAFETY: F_GETFL and F_SETFL on a descriptor `master` owns.
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+        if flags == -1 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: `master` is an open File the AsyncFd owns from here on; its descriptor stays
+        // open and unchanged until the AsyncFd drops it.
+        let master = unsafe { AsyncFd::register(master) }.map_err(io::Error::from)?;
+        Ok((
+            Self {
+                master: Arc::new(master),
+            },
+            program_side.into(),
+        ))
+    }
+
+    /// Reads what the program writes; writes what is typed to it.
+    pub(crate) fn io(&self) -> TerminalIo {
+        TerminalIo(self.master.clone())
+    }
+
+    /// The program's foreground process group gets SIGWINCH from the kernel.
+    pub(crate) fn resize(&self, cols: u16, rows: u16) -> io::Result<()> {
+        set_size(self.master.get_ref().as_raw_fd(), cols, rows)
+    }
+}
+
+fn set_size(fd: i32, cols: u16, rows: u16) -> io::Result<()> {
+    let size = libc::winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: TIOCSWINSZ reads one winsize through the pointer, which outlives the call.
+    if unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &raw const size) } == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// The master side, as a stream. Once every program side has closed, a read fails with
+/// EIO on Linux: that is the end of the program's output, read here as end of file.
+pub(crate) struct TerminalIo(Arc<AsyncFd<std::fs::File>>);
+
+impl AsyncRead for TerminalIo {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        loop {
+            let mut guard = ready!(self.0.poll_read_ready(context))?;
+            let unfilled = buffer.initialize_unfilled();
+            match guard.try_io(|master| {
+                let mut file: &std::fs::File = master.get_ref();
+                file.read(unfilled)
+            }) {
+                Ok(Ok(length)) => {
+                    buffer.advance(length);
+                    return Poll::Ready(Ok(()));
+                }
+                Ok(Err(error)) if error.raw_os_error() == Some(libc::EIO) => {
+                    return Poll::Ready(Ok(()));
+                }
+                Ok(Err(error)) => return Poll::Ready(Err(error)),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+}
+
+impl AsyncWrite for TerminalIo {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        bytes: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        loop {
+            let mut guard = ready!(self.0.poll_write_ready(context))?;
+            match guard.try_io(|master| {
+                let mut file: &std::fs::File = master.get_ref();
+                file.write(bytes)
+            }) {
+                Ok(result) => return Poll::Ready(result),
+                Err(_would_block) => continue,
+            }
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _context: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+/// Puts the root on the terminal: its stdin, stdout and stderr are the program side, and
+/// it leads a new session whose controlling terminal that is.
+pub(crate) fn configure_terminal(command: &mut Command, program_side: &OwnedFd) -> io::Result<()> {
+    command
+        .stdin(Stdio::from(program_side.try_clone()?))
+        .stdout(Stdio::from(program_side.try_clone()?))
+        .stderr(Stdio::from(program_side.try_clone()?));
+    // SAFETY: between fork and exec this calls only async-signal-safe setsid and ioctl, and
+    // allocates nothing.
+    unsafe {
+        command.as_std_mut().pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            if libc::ioctl(0, libc::TIOCSCTTY, 0 as libc::c_int) == -1 {
+                return Err(io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -320,7 +596,7 @@ mod tests {
     }
 
     async fn owned(child: &mut Child) -> OwnedTree {
-        let tree = OwnedTree::adopt(child).await.ok().unwrap();
+        let tree = OwnedTree::adopt(child, Scope::Group).await.ok().unwrap();
         assert!(tree.root.is_some(), "this kernel should offer pidfd_open (Linux 5.3+)");
         tree
     }

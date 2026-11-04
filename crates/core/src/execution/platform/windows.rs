@@ -60,6 +60,105 @@ pub(crate) const TERMINATION_UNVERIFIED_DETAIL: &str = " Job Object termination 
 pub(crate) const PIPE_TIMEOUT_DETAIL: &str = " Output pipes did not close within one second of root settlement; a process holding them may have received them outside the job. Reading was stopped, output is incomplete, and processes outside the owned Job Object are not tracked or terminated.";
 pub(crate) const RUNNING_DETAIL_ACCOUNT: &str = "Root created suspended as the broker's account with its environment, null stdin, and no console window, then assigned to a broker-owned Job Object before it ran. Executable behavior is not sandboxed.";
 
+/// The Job Object owns every member however it groups itself; there is one scope.
+pub(crate) const SCOPE_TERMINAL: &str = SCOPE;
+
+/// What a running operation's detail says.
+pub(crate) fn running_detail(account: bool, _mode: Option<devagotchi_contracts::InputMode>) -> String {
+    if account { RUNNING_DETAIL_ACCOUNT } else { RUNNING_DETAIL }.into()
+}
+
+/// Interactive operations reach Windows with ConPTY (increment 55); until then the broker
+/// refuses them before admission, so nothing below is reached.
+pub(crate) fn supports_interactive(_mode: devagotchi_contracts::InputMode) -> bool {
+    false
+}
+
+fn not_yet() -> io::Error {
+    io::Error::new(io::ErrorKind::Unsupported, "interactive operations are not available on Windows yet")
+}
+
+/// How an owned tree is scoped; on Windows the Job Object is the one scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scope {
+    Group,
+    Session,
+}
+
+/// Not available on Windows yet (see `supports_interactive`).
+pub(crate) struct Terminal;
+
+impl Terminal {
+    pub(crate) fn open(_cols: u16, _rows: u16) -> io::Result<(Self, std::os::windows::io::OwnedHandle)> {
+        Err(not_yet())
+    }
+
+    pub(crate) fn io(&self) -> TerminalIo {
+        TerminalIo
+    }
+
+    pub(crate) fn resize(&self, _cols: u16, _rows: u16) -> io::Result<()> {
+        Err(not_yet())
+    }
+}
+
+pub(crate) struct TerminalIo;
+
+impl tokio::io::AsyncRead for TerminalIo {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        _context: &mut std::task::Context<'_>,
+        _buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::task::Poll::Ready(Err(not_yet()))
+    }
+}
+
+impl tokio::io::AsyncWrite for TerminalIo {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        _context: &mut std::task::Context<'_>,
+        _bytes: &[u8],
+    ) -> std::task::Poll<io::Result<usize>> {
+        std::task::Poll::Ready(Err(not_yet()))
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _context: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+pub(crate) fn configure_terminal(
+    _command: &mut Command,
+    _program_side: &std::os::windows::io::OwnedHandle,
+) -> io::Result<()> {
+    Err(not_yet())
+}
+
+/// Not available on Windows yet (see `supports_interactive`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Signaller;
+
+impl Signaller {
+    pub(crate) fn interrupt(&self) -> BridgeResult<()> {
+        Err(BridgeError::new("unsupported_platform", not_yet().to_string()))
+    }
+
+    pub(crate) fn quit(&self) -> BridgeResult<()> {
+        self.interrupt()
+    }
+}
+
 /// The shell a `command` line runs in: Windows PowerShell from System32, given the line
 /// as `-EncodedCommand` (UTF-16LE, base64) so no quoting layer can change it.
 pub(crate) fn shell_command(command: &str) -> (std::path::PathBuf, Vec<String>) {
@@ -139,7 +238,7 @@ pub(crate) struct OwnedTree {
 }
 
 impl OwnedTree {
-    pub(crate) async fn adopt(child: &mut Child) -> Result<Self, AdoptFailure> {
+    pub(crate) async fn adopt(child: &mut Child, _scope: Scope) -> Result<Self, AdoptFailure> {
         let (Some(process), Some(pid)) = (child.raw_handle(), child.id()) else {
             return Err(AdoptFailure {
                 state: OperationState::Unknown,
@@ -204,6 +303,10 @@ impl OwnedTree {
     /// Returns when the root has exited: the wait on its process handle, which the
     /// runtime registers with the system thread pool. The job, not this handle, owns the
     /// tree, so nothing after this needs the root's handle.
+    pub(crate) fn signaller(&self) -> Signaller {
+        Signaller
+    }
+
     pub(crate) async fn root_exit(&self, child: &mut Child) -> BridgeResult<()> {
         child
             .wait()

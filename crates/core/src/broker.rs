@@ -4,8 +4,8 @@
 //! is run by `crate::execution`. Executable grants are not a sandbox.
 
 use devagotchi_contracts::*;
-use crate::execution::platform::{self, SCOPE};
-use crate::execution::{ExecutionSpec, StopReason, run_job};
+use crate::execution::platform::{self, SCOPE, SCOPE_TERMINAL};
+use crate::execution::{ExecutionSpec, InputRequest, InputStep, StopReason, run_job};
 use crate::journal::{Journal, JournalFrame, JournalOperation};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde::{Deserialize, Serialize};
@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::{Notify, Semaphore, watch};
+use tokio::sync::{Notify, Semaphore, mpsc, oneshot, watch};
 use tokio::time::{Instant, timeout};
 
 const MAX_FRAMES: usize = 1024;
@@ -22,6 +22,14 @@ const MAX_FRAMES: usize = 1024;
 /// are capped well under the broker's 32 connections; ordinary requests always get through.
 const MAX_WAITERS: usize = 16;
 const MAX_PAGE_FRAMES: usize = 64;
+/// How long one client holds the keyboard of an interactive operation after its last input;
+/// another client of the account waits it out or takes over.
+const WRITER_LEASE_MS: u64 = 60_000;
+/// Longest the broker waits for the program to take one input before answering
+/// `input_blocked` (the program is not reading; the input stays queued).
+const INPUT_WAIT: Duration = Duration::from_secs(5);
+/// Input requests queued for one operation at once.
+const INPUT_QUEUE: usize = 8;
 
 fn default_output_limit() -> usize {
     262_144
@@ -67,6 +75,10 @@ struct Operation {
     active: bool,
     control: Option<watch::Sender<Option<StopReason>>>,
     persistence_fault: Option<String>,
+    /// The running job's input, while an interactive operation can still take it.
+    input: Option<mpsc::Sender<InputRequest>>,
+    /// The client holding the keyboard, and until when (ms since the epoch).
+    writer: Option<(String, u64)>,
 }
 
 struct State {
@@ -209,6 +221,10 @@ impl Broker {
         let mut operations = HashMap::new();
         let mut keys = HashMap::new();
         for mut record in recovered {
+            if let Some(interactive) = &mut record.view.interactive {
+                interactive.input_open = false;
+                interactive.writer_until_ms = None;
+            }
             if !record.view.state.terminal() {
                 record.view.state = OperationState::Unknown;
                 record.view.updated_at_ms = now_ms();
@@ -237,6 +253,8 @@ impl Broker {
                     active: false,
                     control: None,
                     persistence_fault: None,
+                    input: None,
+                    writer: None,
                 },
             );
         }
@@ -276,6 +294,10 @@ impl Broker {
             RequestBody::OperationWait(input) => self.wait(input).await.map(ResponseBody::Operation),
             RequestBody::OperationsChanged(input) => {
                 self.operations_changed(input).await.map(ResponseBody::Revision)
+            }
+            RequestBody::OperationInput(input) => self.input(input).await.map(ResponseBody::InputSent),
+            RequestBody::OperationResize(input) => {
+                self.resize(input).await.map(ResponseBody::Operation)
             }
             RequestBody::FileRead(input) => {
                 self.on_files(move |files| files.read(input).map(ResponseBody::File)).await
@@ -390,13 +412,33 @@ impl Broker {
                 "The canonical cwd is outside the configured workspace",
             ));
         }
-        let bytes = serde_json::to_vec(&(
+        if let Some(interactive) = &input.interactive {
+            check_size(interactive.cols, interactive.rows)?;
+            if !platform::supports_interactive(interactive.mode) {
+                return Err(BridgeError::new(
+                    "unsupported_platform",
+                    "Interactive operations are not available on this machine's platform yet",
+                ));
+            }
+            if input.caller.is_none() {
+                return Err(invalid(
+                    "An interactive operation needs a caller to own it: start it through devagotchi mcp or a hub",
+                ));
+            }
+        }
+        let canonical = (
             &self.shared.config_identity,
             path_string(&executable)?,
             &args,
             path_string(&cwd)?,
             input.deadline_ms,
-        ))
+        );
+        // An interactive start is another request than the same command without input; a
+        // plain one keeps the digest it always had.
+        let bytes = match &input.interactive {
+            None => serde_json::to_vec(&canonical),
+            Some(interactive) => serde_json::to_vec(&(canonical, interactive)),
+        }
         .map_err(|error| invalid(error.to_string()))?;
         Ok((
             ExecutionSpec {
@@ -405,6 +447,7 @@ impl Broker {
                 cwd,
                 deadline_ms: input.deadline_ms,
                 account_environment: account,
+                interactive: input.interactive.clone(),
             },
             hex::encode(Sha256::digest(bytes)),
         ))
@@ -466,12 +509,25 @@ impl Broker {
             } else {
                 "Admission committed; the independent broker job owns execution. Executable grants and cwd checks do not sandbox the executable.".into()
             }),
-            ownership_scope: SCOPE.into(), cancellation_requested: false, output_complete: false,
+            ownership_scope: match &spec.interactive {
+                Some(InteractiveInput { mode: InputMode::Terminal, .. }) => SCOPE_TERMINAL,
+                _ => SCOPE,
+            }
+            .into(),
+            cancellation_requested: false, output_complete: false,
+            interactive: spec.interactive.as_ref().map(|interactive| InteractiveView {
+                mode: interactive.mode,
+                cols: interactive.cols,
+                rows: interactive.rows,
+                input_open: true,
+                writer_until_ms: None,
+            }),
         };
         let record = JournalOperation {
             key: input.idempotency_key.clone(),
             request_digest,
             config_identity: self.shared.config_identity.clone(),
+            owner: input.caller.clone(),
             view: view.clone(),
             latest_sequence: 0,
             frames: VecDeque::new(),
@@ -481,6 +537,13 @@ impl Broker {
             return Err(error);
         }
         let (control, receiver) = watch::channel(None);
+        let (input_sender, input_receiver) = match spec.interactive {
+            Some(_) => {
+                let (sender, receiver) = mpsc::channel(INPUT_QUEUE);
+                (Some(sender), Some(receiver))
+            }
+            None => (None, None),
+        };
         state.keys.insert(input.idempotency_key, id.clone());
         state.operations.insert(
             id.clone(),
@@ -490,6 +553,8 @@ impl Broker {
                 active: true,
                 control: Some(control),
                 persistence_fault: None,
+                input: input_sender,
+                writer: None,
             },
         );
         state.active_count += 1;
@@ -501,7 +566,7 @@ impl Broker {
         let job_id = id.clone();
         let job_shared = shared.clone();
         let job = tokio::spawn(async move {
-            run_job(job_shared, job_id, spec, receiver, deadline).await;
+            run_job(job_shared, job_id, spec, receiver, deadline, input_receiver).await;
         });
         // A panic in a job cannot silently strand an active registry entry.
         tokio::spawn(async move {
@@ -591,10 +656,12 @@ impl Broker {
         if !(1..=64).contains(&input.limit) {
             return Err(invalid("limit must be 1..=64"));
         }
+        let scope = input.scope.unwrap_or_default();
         let state = self.shared.lock();
         let mut operations: Vec<_> = state
             .operations
             .values()
+            .filter(|operation| visible(operation.record.owner.as_ref(), input.caller.as_ref(), scope))
             .map(|operation| &operation.record.view)
             .collect();
         operations.sort_by(|left, right| {
@@ -633,6 +700,7 @@ impl Broker {
                     created_at_ms: operation.created_at_ms,
                     updated_at_ms: operation.updated_at_ms,
                     display_command: display,
+                    interactive: operation.interactive.as_ref().map(|interactive| interactive.mode),
                 }
             })
             .collect();
@@ -640,6 +708,81 @@ impl Broker {
             operations: summaries,
             next_offset: (end < operations.len()).then_some(end as u64),
         })
+    }
+
+    /// Type into an interactive operation: text, then named keys, delivered in order once
+    /// the caller holds the keyboard (see `claim_writer`).
+    async fn input(&self, input: SendInput) -> BridgeResult<InputSent> {
+        let id = validate_id(&input.operation_id)?;
+        let text = input.text.unwrap_or_default();
+        if text.len() > MAX_INPUT_TEXT_BYTES || input.keys.len() > MAX_INPUT_KEYS {
+            return Err(invalid(format!(
+                "text is at most {MAX_INPUT_TEXT_BYTES} bytes and keys at most {MAX_INPUT_KEYS}"
+            )));
+        }
+        if text.is_empty() && input.keys.is_empty() {
+            return Err(invalid("Give text, keys, or both"));
+        }
+        let caller = input.caller.ok_or_else(no_caller)?;
+        let (sender, steps, cursor) = {
+            let mut state = self.shared.lock();
+            let operation = state.operations.get_mut(&id).ok_or_else(not_found)?;
+            let mode = claim_writer(operation, &caller, input.take_over)?;
+            let steps = input_steps(mode, &text, &input.keys)?;
+            let sender = operation.input.clone().ok_or_else(input_closed)?;
+            (sender, steps, operation.record.latest_sequence)
+        };
+        self.shared.output_changed();
+        let closes = steps.contains(&InputStep::Close);
+        deliver(&sender, steps).await?;
+        if closes {
+            self.shared.input_closed(&id);
+        }
+        Ok(InputSent {
+            operation: self.get(&id)?,
+            cursor,
+        })
+    }
+
+    /// Resize an interactive operation's terminal; its program gets SIGWINCH.
+    async fn resize(&self, input: ResizeInput) -> BridgeResult<OperationView> {
+        let id = validate_id(&input.operation_id)?;
+        check_size(input.cols, input.rows)?;
+        let caller = input.caller.ok_or_else(no_caller)?;
+        let sender = {
+            let mut state = self.shared.lock();
+            let operation = state.operations.get_mut(&id).ok_or_else(not_found)?;
+            if claim_writer(operation, &caller, input.take_over)? != InputMode::Terminal {
+                return Err(BridgeError::new(
+                    "no_terminal",
+                    "This operation reads a pipe, not a terminal; there is nothing to resize",
+                ));
+            }
+            operation.input.clone().ok_or_else(input_closed)?
+        };
+        deliver(
+            &sender,
+            vec![InputStep::Resize {
+                cols: input.cols,
+                rows: input.rows,
+            }],
+        )
+        .await?;
+        let mut state = self.shared.lock();
+        let operation = state.operations.get_mut(&id).ok_or_else(not_found)?;
+        if let Some(interactive) = &mut operation.record.view.interactive {
+            interactive.cols = input.cols;
+            interactive.rows = input.rows;
+        }
+        operation.record.view.updated_at_ms = now_ms();
+        let view = operation.record.view.clone();
+        if let Err(error) = state.journal.update(&view) {
+            state.fault(error.clone());
+            return Err(error);
+        }
+        drop(state);
+        self.shared.output_changed();
+        Ok(view)
     }
 
     fn cancel(&self, id: &str) -> BridgeResult<OperationView> {
@@ -789,6 +932,186 @@ fn validate_id(id: &str) -> BridgeResult<String> {
         .map_err(|_| invalid("operation_id must be a valid UUID"))
 }
 
+fn check_size(cols: u16, rows: u16) -> BridgeResult<()> {
+    if !(2..=500).contains(&cols) || !(1..=200).contains(&rows) {
+        return Err(invalid("cols must be 2..=500 and rows 1..=200"));
+    }
+    Ok(())
+}
+
+fn no_caller() -> BridgeError {
+    invalid("Input needs a caller: send it through devagotchi mcp or a hub")
+}
+
+fn input_closed() -> BridgeError {
+    BridgeError::new(
+        "input_closed",
+        "This operation no longer takes input: it ended, or its input was closed",
+    )
+}
+
+/// Whether a list for `caller` in `scope` shows an operation `owner` started. Without a
+/// caller (the inspector, an older client) everything shows. An operation started without
+/// an owner belongs to this machine's own account.
+fn visible(owner: Option<&Caller>, caller: Option<&Caller>, scope: ListScope) -> bool {
+    let Some(caller) = caller else {
+        return true;
+    };
+    match (owner, scope) {
+        (Some(owner), ListScope::Mine) => owner == caller,
+        (Some(owner), ListScope::Account) => owner.account == caller.account,
+        (None, ListScope::Mine) => false,
+        (None, ListScope::Account) => caller.account == LOCAL_ACCOUNT,
+    }
+}
+
+/// Give `caller` the keyboard of an interactive operation, or say why not. Only its own
+/// account ever drives it; another conversation or client of that account asks explicitly
+/// (`take_over`); and while one client holds the keyboard (its last input within the lease)
+/// no other types into it unless it takes over, so keystrokes never interleave.
+fn claim_writer(operation: &mut Operation, caller: &Caller, take_over: bool) -> BridgeResult<InputMode> {
+    let Some(interactive) = &operation.record.view.interactive else {
+        return Err(BridgeError::new(
+            "not_interactive",
+            "This operation takes no input; start it with interactive to type into it",
+        ));
+    };
+    let Some(owner) = &operation.record.owner else {
+        return Err(input_closed());
+    };
+    if owner.account != caller.account {
+        return Err(BridgeError::new(
+            "not_your_operation",
+            "This operation belongs to another account; only that account can drive it",
+        ));
+    }
+    if !interactive.input_open || operation.input.is_none() {
+        return Err(input_closed());
+    }
+    if owner.client != caller.client && !take_over {
+        return Err(BridgeError::new(
+            "not_your_session",
+            "Another conversation or client of your account started this operation. To drive it anyway, call again with take_over: true",
+        ));
+    }
+    let now = now_ms();
+    if let Some((holder, until)) = &operation.writer
+        && holder != &caller.client
+        && *until > now
+        && !take_over
+    {
+        return Err(BridgeError::new(
+            "writer_busy",
+            format!(
+                "Another client of your account is typing into this operation; its hold ends in {} s. Wait, or call again with take_over: true",
+                (until - now).div_ceil(1000)
+            ),
+        ));
+    }
+    let mode = interactive.mode;
+    operation.writer = Some((caller.client.clone(), now + WRITER_LEASE_MS));
+    if let Some(interactive) = &mut operation.record.view.interactive {
+        interactive.writer_until_ms = Some(now + WRITER_LEASE_MS);
+    }
+    Ok(mode)
+}
+
+/// What a key sends on a terminal (an xterm in its normal cursor mode).
+fn key_bytes(key: Key) -> &'static [u8] {
+    match key {
+        Key::Enter => b"\r",
+        Key::Tab => b"\t",
+        Key::Backspace => b"\x7f",
+        Key::Escape => b"\x1b",
+        Key::Up => b"\x1b[A",
+        Key::Down => b"\x1b[B",
+        Key::Right => b"\x1b[C",
+        Key::Left => b"\x1b[D",
+        Key::Home => b"\x1b[H",
+        Key::End => b"\x1b[F",
+        Key::PageUp => b"\x1b[5~",
+        Key::PageDown => b"\x1b[6~",
+        Key::Delete => b"\x1b[3~",
+        Key::Space => b" ",
+        Key::CtrlC => b"\x03",
+        Key::CtrlD => b"\x04",
+        Key::CtrlZ => b"\x1a",
+        Key::CtrlL => b"\x0c",
+        Key::CtrlU => b"\x15",
+        Key::CtrlBackslash => b"\x1c",
+    }
+}
+
+/// The steps one input takes. On a terminal everything is bytes and the terminal does the
+/// rest (Ctrl-C becomes SIGINT for the foreground job). On a pipe there is no terminal:
+/// Enter is a newline, Ctrl-C and Ctrl-\\ are signals, Ctrl-D closes the input, and
+/// Ctrl-Z, which would stop a program nothing can continue, is refused.
+fn input_steps(mode: InputMode, text: &str, keys: &[Key]) -> BridgeResult<Vec<InputStep>> {
+    let mut steps = Vec::new();
+    let mut bytes = text.as_bytes().to_vec();
+    for &key in keys {
+        let step = match (mode, key) {
+            (InputMode::Terminal, key) => {
+                bytes.extend_from_slice(key_bytes(key));
+                continue;
+            }
+            (InputMode::Pipe, Key::Enter) => {
+                bytes.push(b'\n');
+                continue;
+            }
+            (InputMode::Pipe, Key::CtrlC) => InputStep::Interrupt,
+            (InputMode::Pipe, Key::CtrlBackslash) => InputStep::Quit,
+            (InputMode::Pipe, Key::CtrlD) => InputStep::Close,
+            (InputMode::Pipe, Key::CtrlZ) => {
+                return Err(BridgeError::new(
+                    "no_terminal",
+                    "ctrl_z needs a terminal: on a pipe it would stop the program with nothing to continue it",
+                ));
+            }
+            (InputMode::Pipe, key) => {
+                bytes.extend_from_slice(key_bytes(key));
+                continue;
+            }
+        };
+        if !bytes.is_empty() {
+            steps.push(InputStep::Bytes(std::mem::take(&mut bytes)));
+        }
+        steps.push(step);
+    }
+    if !bytes.is_empty() {
+        steps.push(InputStep::Bytes(bytes));
+    }
+    if let Some(position) = steps.iter().position(|step| *step == InputStep::Close)
+        && position + 1 != steps.len()
+    {
+        return Err(invalid("Nothing can follow ctrl_d on a pipe: it closes the input"));
+    }
+    Ok(steps)
+}
+
+/// Hand steps to the running job and wait (bounded) until the program has them.
+async fn deliver(sender: &mpsc::Sender<InputRequest>, steps: Vec<InputStep>) -> BridgeResult<()> {
+    let (reply, answer) = oneshot::channel();
+    match sender.try_send(InputRequest { steps, reply }) {
+        Ok(()) => {}
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            return Err(BridgeError::new(
+                "input_busy",
+                "Earlier input to this operation is still waiting for the program to read it",
+            ));
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => return Err(input_closed()),
+    }
+    match timeout(INPUT_WAIT, answer).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err(input_closed()),
+        Err(_) => Err(BridgeError::new(
+            "input_blocked",
+            "The program has not read its input for five seconds; it stays queued and is delivered when it reads",
+        )),
+    }
+}
+
 impl State {
     /// Make room for one admission by retiring the operation that finished longest ago.
     /// A retired operation's ID is no longer found and its key is never run again.
@@ -863,6 +1186,31 @@ impl Shared {
         self.roster.send_modify(|revision| *revision = revision.wrapping_add(1));
     }
 
+    /// An interactive operation takes no more input: it is ending, or its pipe was closed.
+    pub(crate) fn input_closed(&self, id: &str) {
+        let mut state = self.lock();
+        let Some(operation) = state.operations.get_mut(id) else {
+            return;
+        };
+        operation.input = None;
+        operation.writer = None;
+        let Some(interactive) = &mut operation.record.view.interactive else {
+            return;
+        };
+        if !interactive.input_open {
+            return;
+        }
+        interactive.input_open = false;
+        interactive.writer_until_ms = None;
+        operation.record.view.updated_at_ms = now_ms();
+        let view = operation.record.view.clone();
+        if let Err(error) = state.journal.update(&view) {
+            state.fault(error);
+        }
+        drop(state);
+        self.output_changed();
+    }
+
     /// An operation has new output.
     fn output_changed(&self) {
         self.changes.send_modify(|revision| *revision = revision.wrapping_add(1));
@@ -878,14 +1226,15 @@ impl Shared {
         }
         operation.record.view.state = OperationState::Running;
         operation.record.view.updated_at_ms = now_ms();
-        operation.record.view.detail = Some(
-            if self.config.exec_policy == ExecPolicy::Account {
-                platform::RUNNING_DETAIL_ACCOUNT
-            } else {
-                platform::RUNNING_DETAIL
-            }
-            .into(),
-        );
+        operation.record.view.detail = Some(platform::running_detail(
+            self.config.exec_policy == ExecPolicy::Account,
+            operation
+                .record
+                .view
+                .interactive
+                .as_ref()
+                .map(|interactive| interactive.mode),
+        ));
         let view = operation.record.view.clone();
         if let Err(error) = state.journal.update(&view) {
             state.fault(error);
@@ -975,6 +1324,10 @@ impl Shared {
         operation.record.view.exit_code = exit_code;
         operation.record.view.output_complete =
             output_complete && operation.persistence_fault.is_none();
+        if let Some(interactive) = &mut operation.record.view.interactive {
+            interactive.input_open = false;
+            interactive.writer_until_ms = None;
+        }
         operation.record.view.detail = Some(match &operation.persistence_fault {
             Some(error) => format!(
                 "{detail} Critical persistence failure remains visible: {error}; durable completion cannot be certified."
@@ -991,6 +1344,8 @@ impl Shared {
             .expect("Operation remains in this locked registry");
         operation.active = false;
         operation.control = None;
+        operation.input = None;
+        operation.writer = None;
         state.active_count = state.active_count.saturating_sub(1);
         drop(state);
         self.settlement.notify_waiters();
@@ -1064,6 +1419,8 @@ mod tests {
                 command: None,
                 cwd: None,
                 deadline_ms,
+                interactive: None,
+                caller: None,
             })
             .unwrap()
             .operation
@@ -1286,6 +1643,8 @@ mod tests {
             command: Some(line.into()),
             cwd,
             deadline_ms: 120_000,
+            interactive: None,
+            caller: None,
         }
     }
 
@@ -1308,6 +1667,8 @@ mod tests {
             command: None,
             cwd: None,
             deadline_ms: 5_000,
+            interactive: None,
+            caller: None,
         }
     }
 
@@ -1550,6 +1911,8 @@ mod tests {
             command: None,
             cwd: None,
             deadline_ms: 3000,
+            interactive: None,
+            caller: None,
         };
         let start = broker.start(input.clone()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -1593,6 +1956,8 @@ mod tests {
             command: None,
             cwd: None,
             deadline_ms: 1000,
+            interactive: None,
+            caller: None,
         };
         let id = uuid::Uuid::new_v4().to_string();
         let state = devagotchi_ipc::private_test_state(directory.path());
@@ -1603,6 +1968,7 @@ mod tests {
                 key: input.idempotency_key.clone(),
                 request_digest: digest,
                 config_identity: broker.shared.config_identity.clone(),
+                owner: None,
                 view: OperationView {
                     operation_id: id.clone(),
                     executable: path_string(&spec.executable).unwrap(),
@@ -1617,6 +1983,7 @@ mod tests {
                     ownership_scope: SCOPE.into(),
                     cancellation_requested: false,
                     output_complete: false,
+                    interactive: None,
                 },
                 latest_sequence: 0,
                 frames: VecDeque::new(),
