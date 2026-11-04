@@ -59,8 +59,9 @@ pub struct Machine {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub enrolled_at: Option<u64>,
     /// The account added this machine itself ("Add a machine"); only it reaches the
-    /// machine, and it can revoke it.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    /// machine, and it can revoke it. Left out when false, so `default` keeps it out of the
+    /// output schema's `required` (a client that checks refuses `machines` otherwise).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub owned: bool,
 }
 
