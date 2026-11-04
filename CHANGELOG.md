@@ -7,6 +7,20 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Is the live hub working? (increment 77)
+- `tests/live_check.py --hub URL [--site URL]` checks a deployed hub from the outside, as an
+  AI app and a person reach it: health and builds, `/mcp` answering 401 with its metadata,
+  the OAuth metadata, the Connect page (hosted or owner-only), the join line and the build
+  sums, and the public pages with `/llms.txt`, `/robots.txt` and `/sitemap.xml` (including
+  whether AI crawlers are blocked). It only reads; it never presses Connect. With `--token`
+  it also opens an MCP session and calls whoami, machines and workflow_list.
+- `.github/workflows/live.yml` runs it every hour and on demand against the repository
+  variables `DEVAGOTCHI_LIVE_HUB` / `DEVAGOTCHI_LIVE_SITE` / `DEVAGOTCHI_LIVE_CLIENT` (skipped
+  when unset) and writes the result to the run summary.
+- First receipt: `verification/live-check-app-devagotchi-2026-11-04.json`, 12 of 16 passing.
+  The four failures are the marketing host redirecting its llms, robots and sitemap files to
+  the app host (increment 76 fixes it) and the zone's edge blocking AI crawlers in robots.txt.
+
 ### The Shippin Network: "Yes" in the chat links the account (increment 73)
 - `site.json` `offers`: the network a site belongs to and its free offerings, each a name, a
   one-line description and a learn-more URL (either may be empty). The built-in site belongs
