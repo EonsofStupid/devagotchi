@@ -234,7 +234,7 @@ impl Style {
 /// The landing page's rail lights the page in view: one view timeline per section this
 /// site shows, named after its id.
 fn rail(site: &SiteFile) -> String {
-    let ids: Vec<&str> = std::iter::once("top").chain(site.landing.on()).collect();
+    let ids: Vec<&str> = std::iter::once("top").chain(site.sections()).collect();
     let scope: Vec<String> = ids.iter().map(|id| format!("--p-{id}")).collect();
     let mut css = format!(
         "@supports (timeline-scope: --a) and (animation-timeline: view()) {{\n  .landing main {{ timeline-scope: {}; }}\n",

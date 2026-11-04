@@ -7,6 +7,34 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### The Shippin Network: "Yes" in the chat links the account (increment 73)
+- `site.json` `offers`: the network a site belongs to and its free offerings, each a name, a
+  one-line description and a learn-more URL (either may be empty). The built-in site belongs
+  to the Shippin Network and has it on: RROFLOW, wardenmesh, Vaultix, devscif, the
+  shippin.cloud free tier, shippin.bot and shippin.app. `"enabled": false`, an empty list or
+  no block removes all of it: the landing section (`network`, after the extended services,
+  not on a hub that signs in through Nomen), its rail entry and timeline, the tools, the
+  instructions' sentence and the `/offers/` page. The neutral site has none.
+- MCP tools `offers` (the offerings, the one question to ask, and `not_asked`, `pending` or
+  `linked`) and `offers_accept {consent}`. Their descriptions and the instructions say: offer
+  once, after the first machine works, never push. The consent is kept verbatim with the time
+  on the tenant's chain (`offers.accepted`) and in `tenancy_offers` (migration 0012, add-only,
+  both engines, row-level security, `devagotchi.offer_tenant` for the link). Listed and
+  served only while the site's offers show, on a hub with its own accounts.
+- Linking: with `shippin.provisioning` (a Nomen API origin, an organization, and a service
+  user's token from the environment or a 0600 file, never the config) and an email the hub
+  verified, the hub finds the Nomen user with it (`POST /v2/users`) or makes one
+  (`POST /v2/users/new`, email verified) and links it as the account's Shippin sign-in with
+  no click. Otherwise one link, `/offers/<token>`: one tap joins the browser to an unsecured
+  account (a secured one signs in first) and goes on to Sign in with Shippin, which links it;
+  `offers` then says linked (`offers.linked`). Robots keep out of `/offers/`.
+- Tests: consent kept verbatim (and refused when empty, too long or with control
+  characters), provisioning against a fake Nomen user API (made, found, found unverified,
+  Nomen down, no verified email), the one-tap link (preview, cross-site post, unsecured and
+  secured accounts, linked, replaced, expired), on by default, gone completely when off or
+  empty, the neutral site, and the offers table under row-level security, on SQLite and
+  Postgres.
+
 ### The landing page, readable by AI agents and search engines (increment 72)
 - The built-in landing page tells one story in plain words: your AI (Claude, ChatGPT, Codex,
   Cursor, Grok) gets your server through one HTTPS address, with an account made the moment it

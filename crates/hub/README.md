@@ -70,12 +70,13 @@ The directory holds:
 
 | File | What it holds |
 |---|---|
-| `site.json` | **Required.** `product` (name, short name, tagline, description, marketing domain), `operator` (the legal name the privacy policy and terms use, contact, support email), `links` (public links by name; `hosted_hub` is the hub `devagotchi login` signs in at by default), `sign_in` (`order`: the order of the sign-in buttons by provider name; `labels`: what each provider is called, `nomen` for Nomen sign-in), `landing.sections` (the landing page's sections in order, each `"on": true` or `false`), `mcp` (`name`, optional `title`, `instructions`), `plans`, `services`, `early_access`, and `assets` (which files are the logo, icon, mascot, diagram, video and poster) |
+| `site.json` | **Required.** `product` (name, short name, tagline, description, marketing domain), `operator` (the legal name the privacy policy and terms use, contact, support email), `links` (public links by name; `hosted_hub` is the hub `devagotchi login` signs in at by default), `sign_in` (`order`: the order of the sign-in buttons by provider name; `labels`: what each provider is called, `nomen` for Nomen sign-in), `landing.sections` (the landing page's sections in order, each `"on": true` or `false`), `mcp` (`name`, optional `title`, `instructions`), `plans`, `services`, `early_access`, `offers` (the network the site belongs to and its free offerings: below), `software` (what the landing page's `SoftwareApplication` JSON-LD says: `category`, `operating_systems`, `offer`), and `assets` (which files are the logo, icon, mascot, diagram, video and poster) |
 | `tokens.json` | The design tokens the stylesheet reads as custom properties: `colors` and `dark` (`--bg`, `--accent`, …), `fonts` (`--font-ui`, `--font-display`, `--font-mono`), `radii` (`--radius-s` … `--radius-pill`), `layout` (`--bar-h`, `--gutter`, `--wide`, `--narrow`), `theme_color` and `background_color` for the installed app, and `font_files` to serve fonts from the hub itself |
 | `content/landing.json` | Every landing section's copy: the hero, how claiming works, How it works, the comparison and its evidence, features, plans and services, connecting an AI, self-hosting, what is coming, the questions, the closing, the footer, the popups, the glossary, and `custom` sections of your own |
 | `content/messages.json` | The sign-in email (`email.subject`, `email.body`, `{link}` is the one-time link), the getting-started ticket (`welcome.title`, `welcome.body`, `{hub}` is the hub's address), the line under every public page, and the words of a workflow's page (`workflow`) |
 | `content/workflows.json` | The setups an AI hands its person as one link (`workflow_start`): each an `id`, a `title`, an `intro` and its ordered `steps`, each a `kind` the hub runs (`machine` with an optional `os`: `linux`, `windows`, `docker` or `host`; `phone`; `ai_client` with its `client`: `claude`, `chatgpt`, `grok` or `cursor`; `secure_account`; `done`) with its own `title` and `text`; or, for one that cannot be done yet, `unavailable` and no steps. `check-site` refuses a kind or an OS the hub does not run |
 | `content/docs.md`, `privacy.md`, `terms.md`, `support.md` | The public pages, in Markdown |
+| `content/llms.md` | What an AI reads at `/llms.txt` |
 | `assets/` | The logo, icon, mascot, diagram, video, poster and fonts: SVG, PNG, JPEG, WebP, GIF, ICO, MP4, WebM, WOFF2, WOFF |
 
 Only `site.json` is required: any other file left out is the built-in one's, and
@@ -221,6 +222,47 @@ each step `done`, `current`, `pending` or `unavailable` (with `why`), and `workf
 started, each line handed out, each step done, completion and cancelling go on the tenant's
 chain. The workflows and their words are the site's (`content/workflows.json`,
 `content/messages.json` `workflow`).
+
+### The site's offers: one word links the account (`offers`, `shippin`)
+
+A site may belong to a network and offer its free offerings (`site.json` `offers`: `brand`,
+the landing section's `rail`, `title` and `intro`, the one `question` the AI asks, the
+`instructions` added to the MCP instructions, the one-tap page's words under `link`, and the
+`items`, each a `name`, a one-line `text` and an `href`, either of which may be empty). The
+built-in site belongs to the Shippin Network and has it on. `"enabled": false`, an empty
+`items`, or no `offers` block takes it off completely: no landing section, no `offers` or
+`offers_accept` tool listed or served, nothing added to the instructions, no `/offers/` page.
+
+- `offers` gives the AI the offerings, the question to ask as it is, and where the tenant
+  stands (`not_asked`, `pending`, `linked`). Its description and the instructions say to offer
+  once, after the person's first machine works, and never to push.
+- `offers_accept {consent}` takes the person's own words, exactly: kept with the time in
+  `tenancy_offers` (migration 0012, row-level security) and on the tenant's chain
+  (`offers.accepted`). Then it links the account:
+  - with `shippin.provisioning` and an email the hub verified for the account (a sign-in that
+    proved it), it finds the Nomen user with that email in the organization (`POST
+    /v2/users`, an email query), or makes one (`POST /v2/users/new`, the email marked
+    verified), and links it as the account's `shippin.provider` sign-in at once. A user found
+    whose email Nomen never verified is not linked that way.
+  - otherwise it returns one link, `<hub>/offers/<token>` (256 random bits kept as their
+    SHA-256, working for `workflows.link_ttl_secs`, replaced by a later yes). One tap there
+    joins that browser to an account nobody secured yet (a secured one signs in first) and
+    goes on to Sign in with Shippin (`/auth/provider/<provider>?link=1`), which links it;
+    the page and `offers` then say linked (`offers.linked` on the chain).
+  - a hub with neither the provisioning nor that sign-in keeps the yes and says so plainly.
+
+```json
+"shippin": {
+  "provider": "nomen",
+  "provisioning": { "api": "https://id.shippin.cloud", "organization_id": "<org id>",
+                    "token_env": "DEVAGOTCHI_SHIPPIN_TOKEN" }
+}
+```
+
+The token is a Nomen service user's personal access token that may manage users in that
+organization; it comes only from the environment (set from Vaultix) or a 0600 `token_file`
+the Vaultix agent writes, is read at start (missing, the hub does not start), and is never
+logged.
 
 A linked broker that is not connected answers `broker_offline`; one that never enrolled,
 `not_enrolled`; a revoked one, `device_revoked`; one with 64 calls already waiting,

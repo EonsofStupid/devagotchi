@@ -14,10 +14,11 @@
 //! inline style, nothing from another origin.
 
 mod compare;
+mod network;
 mod popups;
 
 #[cfg(test)]
-pub(super) use popups::TOOLS;
+pub(super) use popups::{OFFER_TOOLS, TOOLS};
 
 use super::pages::escape;
 use crate::site::{self, Action, Ctx, Front, Item, Limit, SignUp, Site, Step, Variants};
@@ -48,8 +49,8 @@ pub(crate) fn render(site: &Site, ctx: &Ctx, front: Front, public_url: &str) -> 
         ]
         .concat()
     } else {
-        let mut parts = vec![rail(&ctx), hero(&ctx, front)];
-        for id in site.info.landing.on() {
+        let mut parts = vec![rail(&ctx, front), hero(&ctx, front)];
+        for id in site.info.sections() {
             parts.push(section(&ctx, front, id));
         }
         parts.push(footer(&ctx));
@@ -241,10 +242,11 @@ fn hero(ctx: &Ctx, front: Front) -> String {
 
 /// Where you are on the page: one dot per section, the current one lit (the stylesheet
 /// has a view timeline per section this site shows).
-fn rail(ctx: &Ctx) -> String {
+fn rail(ctx: &Ctx, front: Front) -> String {
     let site = ctx.site;
     let links: String = std::iter::once("top")
-        .chain(site.info.landing.on())
+        .chain(site.info.sections())
+        .filter(|id| *id != "network" || front != Front::Nomen)
         .map(|id| {
             format!(
                 "<a href=\"#{id}\"><span>{}</span></a>",
@@ -265,6 +267,11 @@ fn rail_name<'a>(site: &'a Site, id: &'a str) -> &'a str {
         "how" => &landing.how.rail,
         "compare" => &landing.compare.rail,
         "features" => &landing.features.rail,
+        "network" => site
+            .info
+            .offers()
+            .map(|offers| offers.rail.as_str())
+            .unwrap_or(id),
         "plans" => &landing.plans.rail,
         "services" => &landing.services.rail,
         "connect" => &landing.connect.rail,
@@ -285,6 +292,7 @@ fn section(ctx: &Ctx, front: Front, id: &str) -> String {
         "how" => how(ctx, front),
         "compare" => compare::section(ctx),
         "features" => features(ctx, front),
+        "network" => network::section(ctx, front),
         "plans" => plans(ctx),
         "services" => services(ctx),
         "connect" => connect(ctx, front),

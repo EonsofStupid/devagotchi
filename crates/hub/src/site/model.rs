@@ -108,6 +108,10 @@ pub struct SiteFile {
     /// and description (`discovery.rs`). Left out, it says only those.
     #[serde(default)]
     pub software: Software,
+    /// The network this site belongs to and the free offerings an account links to when its
+    /// person says yes in the chat (`offers.rs`, `src/offers.rs`). Left out: none.
+    #[serde(default)]
+    pub offers: Option<super::offers::Offers>,
 }
 
 /// The facts a search engine reads about the software, as schema.org words them.
@@ -187,9 +191,10 @@ pub struct Layout {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SectionEntry {
-    /// A built-in section (`how`, `compare`, `features`, `plans`, `services`, `connect`,
-    /// `self-host`, `next`, `faq`, `get-started`) or one of `content/landing.json`'s
-    /// `custom` sections. Also its anchor on the page.
+    /// A built-in section (`how`, `compare`, `features`, `network`, `plans`, `services`,
+    /// `connect`, `self-host`, `next`, `faq`, `get-started`) or one of
+    /// `content/landing.json`'s `custom` sections. Also its anchor on the page. `network`
+    /// shows only while `offers` does.
     pub id: String,
     #[serde(default = "yes")]
     pub on: bool,
@@ -200,10 +205,11 @@ fn yes() -> bool {
 }
 
 /// The built-in sections, by id.
-pub const SECTIONS: [&str; 10] = [
+pub const SECTIONS: [&str; 11] = [
     "how",
     "compare",
     "features",
+    "network",
     "plans",
     "services",
     "connect",
@@ -424,6 +430,9 @@ impl SiteFile {
         if let Some(cta) = &self.early_access.cta {
             cta.check("site.json early_access.cta")?;
         }
+        if let Some(offers) = &self.offers {
+            offers.check()?;
+        }
         if let Some(offer) = &self.software.offer {
             if offer.price.parse::<f64>().map_or(true, |p| !p.is_finite() || p < 0.0) {
                 return bad("software.offer.price", "a number as text, \"0\" for free");
@@ -433,6 +442,22 @@ impl SiteFile {
             }
         }
         Ok(())
+    }
+}
+
+impl SiteFile {
+    /// The site's offers, while they show (`offers.rs`): on, with an offering.
+    pub fn offers(&self) -> Option<&super::offers::Offers> {
+        self.offers.as_ref().filter(|offers| offers.shown())
+    }
+
+    /// The landing page's sections that show, in order: those that are on, and `network`
+    /// only while the offers show.
+    pub fn sections(&self) -> impl Iterator<Item = &str> {
+        let offers = self.offers().is_some();
+        self.landing
+            .on()
+            .filter(move |id| *id != "network" || offers)
     }
 }
 

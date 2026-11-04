@@ -175,10 +175,24 @@ pub const TOOLS: [(&str, &[(&[&str], &str)]); 5] = [
     ),
 ];
 
+/// The offers' tools, listed under the site's network while its offers show
+/// (`crate::offers`).
+pub const OFFER_TOOLS: &[(&[&str], &str)] = &[(
+    &["offers", "offers_accept"],
+    "Says what the network offers, asked once after your first machine works, and links your account when you say yes.",
+)];
+
 fn tools(ctx: &Ctx) -> String {
     let copy = &ctx.site.landing.popups.tools;
+    let network = ctx
+        .site
+        .info
+        .offers()
+        .map(|offers| (ctx.plain(&offers.brand), OFFER_TOOLS));
     let groups: String = TOOLS
         .iter()
+        .map(|(group, tools)| (group.to_string(), *tools))
+        .chain(network)
         .map(|(group, tools)| {
             let rows: String = tools
                 .iter()
@@ -191,7 +205,10 @@ fn tools(ctx: &Ctx) -> String {
                     format!("<dt>{names}</dt><dd>{what}</dd>")
                 })
                 .collect();
-            format!("<h3>{group}</h3><dl class=\"tools\">{rows}</dl>")
+            format!(
+                "<h3>{}</h3><dl class=\"tools\">{rows}</dl>",
+                crate::site::text::escape_text(&group)
+            )
         })
         .collect();
     modal(

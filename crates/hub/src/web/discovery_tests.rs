@@ -143,6 +143,7 @@ async fn robots_lets_every_crawler_read_the_public_pages_and_none_the_private_on
         "/approvals",
         "/claim",
         "/mcp",
+        "/offers/dgo_abc",
     ] {
         assert!(disallowed(&robots, path), "{path} is let in:\n{robots}");
     }

@@ -120,6 +120,9 @@ pub(crate) async fn hosted_with(
                 changes,
                 config.workflows.link_ttl_secs,
             ))),
+            offers: Some(Arc::new(
+                crate::offers::Offers::from_config(&config, accounts.clone()).unwrap(),
+            )),
         },
         web: None,
         passkeys: web::HubSignIn::new(config.clone(), accounts.clone())
@@ -556,7 +559,12 @@ async fn isolation(hub: Hosted) {
             let answer = hub.call(&mut alice, name, arguments.clone()).await;
             leaks_beyond(name, &answer.to_string(), &arguments.to_string());
             // `workflow_list` takes nothing: it lists the site's workflows, never anyone's.
-            if !matches!(name, "whoami" | "machines" | "workflow_list") {
+            // `offers` and `offers_accept` name no machine, board or workflow: they read
+            // and keep the caller's own tenant's yes, never another's.
+            if !matches!(
+                name,
+                "whoami" | "machines" | "workflow_list" | "offers" | "offers_accept"
+            ) {
                 // Every other tool names a machine, a board or a workflow of B's here:
                 // refused by the tool itself, never for want of arguments it could read.
                 assert!(
