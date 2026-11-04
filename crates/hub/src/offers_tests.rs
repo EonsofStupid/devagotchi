@@ -569,3 +569,37 @@ async fn off_or_empty_or_on_a_neutral_site_nothing_of_the_offers_shows() {
         assert_eq!(status, 404, "{what}");
     }
 }
+
+#[tokio::test]
+async fn a_blank_offering_is_left_out_and_offers_matches_its_output_schema() {
+    // One offering with an address, one left blank (no text, no address).
+    let hub = hosted_with(None, |dir, _| {
+        let site = builtin_with(dir, |v| {
+            v["offers"]["items"] = json!([
+                { "name": "Vaultix", "text": "Shippin secrets you own.", "href": "https://vaultix.cloud" },
+                { "name": "wardenmesh", "text": "", "href": "" },
+            ])
+        });
+        json!({ "site": { "dir": site.to_string_lossy() } })
+    })
+    .await;
+    let mut person = hub.first_connect("Claude").await;
+    let answer = hub
+        .mcp(&mut person, "tools/call", json!({ "name": "offers", "arguments": {} }))
+        .await;
+    assert_ne!(answer["isError"], true, "{answer}");
+    let structured = &answer["structuredContent"];
+    // The blank one is not sent at all, and the one sent is whole.
+    let offerings = structured["offerings"].as_array().unwrap();
+    assert_eq!(offerings.len(), 1, "{structured}");
+    assert_eq!(offerings[0]["name"], "Vaultix");
+    assert_eq!(offerings[0]["description"], "Shippin secrets you own.");
+    assert_eq!(offerings[0]["url"], "https://vaultix.cloud");
+    // As a client that checks holds it: the result matches the declared output schema.
+    let schema = crate::output_schema::declared("offers").expect("offers declares an output schema");
+    crate::output_schema::assert_matches("offers", &schema, structured);
+    // And the check is real: a half-empty offering, as sent before, is refused.
+    let mut half = structured.clone();
+    half["offerings"][0].as_object_mut().unwrap().remove("url");
+    assert!(!crate::output_schema::errors(&schema, &half).is_empty(), "{half}");
+}
