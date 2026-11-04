@@ -23,10 +23,29 @@ Write-Host "ok   autostart entry: $($run.'Devagotchi Broker')"
 
 # Re-running is an upgrade: the config is kept, the broker restarts, the endpoint is stable.
 $before = Get-Content -Raw (Join-Path $root 'endpoint.txt')
-& "$PSScriptRoot\install-devagotchi.ps1" -BinDir (Resolve-Path 'target\debug').ProviderPath -Root $root -Workspace $ws
+# What it prints, kept by a transcript (the installer runs in this session): the log, and the
+# developer lines (MCP command, Claude Code, adapter_probe) only with -Developer.
+$transcript = Join-Path $env:RUNNER_TEMP 'install-output.txt'
+Start-Transcript -Path $transcript -Force | Out-Null
+try {
+    & "$PSScriptRoot\install-devagotchi.ps1" -BinDir (Resolve-Path 'target\debug').ProviderPath -Root $root -Workspace $ws
+} finally {
+    Stop-Transcript | Out-Null
+}
+$said = Get-Content -Raw $transcript
+if ($said -match 'adapter_probe|MCP command|Claude Code:') { throw 'the installer printed developer lines without -Developer' }
+if ($said -notmatch 'Log: ') { throw 'the installer did not say where the log is' }
 $after = Get-Content -Raw (Join-Path $root 'endpoint.txt')
 if ($before -ne $after) { throw "endpoint changed across reinstall: $before -> $after" }
-Write-Host 'ok   reinstall kept the endpoint'
+Write-Host 'ok   reinstall kept the endpoint; it printed the log and no developer lines'
+Start-Transcript -Path $transcript -Force | Out-Null
+try {
+    & "$PSScriptRoot\install-devagotchi.ps1" -BinDir (Resolve-Path 'target\debug').ProviderPath -Root $root -Workspace $ws -Developer
+} finally {
+    Stop-Transcript | Out-Null
+}
+if ((Get-Content -Raw $transcript) -notmatch 'adapter_probe') { throw '-Developer did not print the adapter check' }
+Write-Host 'ok   -Developer prints the developer lines'
 
 & "$PSScriptRoot\install-devagotchi.ps1" -Root $root -Uninstall
 if (Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Devagotchi Broker' -ErrorAction SilentlyContinue) { throw 'autostart entry survived uninstall' }
@@ -129,12 +148,20 @@ $ErrorActionPreference = 'Stop'
 if (-not $code.StartsWith('dvg-')) { throw "no enrollment code: $code" }
 $joinedRoot = Join-Path $env:LOCALAPPDATA 'Devagotchi'
 try {
-    $said = Invoke-RestMethod -UseBasicParsing "$joinUrl/join/$code.ps1" | Invoke-Expression *>&1 | Out-String
-    Write-Host $said
-    # Only the person's words: the name to tell the AI and the log, no developer lines.
-    if ($said -match 'adapter_probe|MCP command|Claude Code:') { throw 'the join printed developer lines' }
+    # The join never asks the installer for developer lines, and ends with the name to tell
+    # the AI. (Its own lines are kept by a transcript; the installer it starts prints to the
+    # console, checked above. Piping it would hand the broker and the link the pipe.)
+    $joinScript = Invoke-RestMethod -UseBasicParsing "$joinUrl/join/$code.ps1"
+    if ($joinScript -match '-Developer') { throw 'the join script asks for developer lines' }
+    $transcript = Join-Path $env:RUNNER_TEMP 'join-output.txt'
+    Start-Transcript -Path $transcript -Force | Out-Null
+    try {
+        $joinScript | Invoke-Expression
+    } finally {
+        Stop-Transcript | Out-Null
+    }
+    $said = Get-Content -Raw $transcript
     if ($said -notmatch 'done: ci-joined is connected to') { throw 'the join did not say the name to use' }
-    if ($said -notmatch 'Log: ') { throw 'the join did not say where the log is' }
     $broker = Get-Content -Raw (Join-Path $joinedRoot 'config\broker.json')
     if ($broker -notmatch '"exec_policy":\s*"account"') { throw 'the joined broker does not run commands as its account' }
     $linkRun = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'Devagotchi Link' -ErrorAction SilentlyContinue
