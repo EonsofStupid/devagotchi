@@ -40,6 +40,8 @@ pub struct Tokens {
 pub struct Grant {
     pub account: Account,
     pub client: String,
+    /// The name the client registered with, when it is still registered.
+    pub client_name: Option<String>,
 }
 
 fn invalid_grant() -> BridgeError {
@@ -443,8 +445,9 @@ impl Accounts {
             let found = sqlx::query(concat!(
                 "SELECT ",
                 account_columns_a!(),
-                ", t.client FROM oauth_tokens t
+                ", t.client, c.name FROM oauth_tokens t
                  JOIN auth_accounts a ON a.id = t.account
+                 LEFT JOIN oauth_clients c ON c.id = t.client
                  WHERE t.hash = $1 AND t.kind = 'access' AND t.expires_at > $2
                    AND a.disabled_at IS NULL"
             ))
@@ -456,6 +459,7 @@ impl Accounts {
                 Ok(Grant {
                     account: account_row(&row)?,
                     client: row.try_get(7)?,
+                    client_name: row.try_get(8)?,
                 })
             })
             .transpose()?;

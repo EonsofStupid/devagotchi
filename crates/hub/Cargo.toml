@@ -50,6 +50,9 @@ getrandom = "0.4"
 # Browser sign-in: PKCE challenge, state and session ids are base64url.
 base64 = { workspace = true }
 futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
+# A workflow's link as a QR code on its page (`web/workflow.rs`), drawn as inline SVG: pure
+# Rust, no image crates, nothing at runtime but the link it encodes.
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
