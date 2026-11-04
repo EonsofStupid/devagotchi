@@ -1,6 +1,7 @@
 ---
 title: Support
 updated: 1 November 2026
+description: Where to get help with {product}, report a bug or a security problem, and ask for your data.
 ---
 # Support
 

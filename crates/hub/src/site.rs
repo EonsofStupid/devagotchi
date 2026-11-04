@@ -332,6 +332,8 @@ impl Site {
                         .with("updated", page.updated.clone())
                         .with("retention_days", "90");
                     page.render(&ctx, &[front, switch]);
+                    page.markdown(&ctx, &[front, switch]);
+                    ctx.plain(&page.description);
                     errors.extend(
                         ctx.errors()
                             .into_iter()

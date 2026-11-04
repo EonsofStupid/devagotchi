@@ -161,10 +161,20 @@ async fn the_page_needs_nothing_the_plain_csp_refuses() {
         );
         assert!(html.contains("<body class=\"landing\">"));
         assert!(html.contains("<link rel=\"stylesheet\" href=\"/assets/hub.css\">"));
-        // No script, no inline style, nothing loaded from anywhere but this hub: inline
-        // SVG, and the setup video and its poster from /assets/.
-        for refused in ["<script", "<style", " style=", "<img", "<iframe"] {
+        // No script that runs, no inline style, nothing loaded from anywhere but this hub:
+        // inline SVG, and the setup video and its poster from /assets/. The only script
+        // elements are JSON-LD, data no browser runs, so the CSP needs no script-src.
+        for refused in ["<style", " style=", "<img", "<iframe"] {
             assert!(!html.contains(refused), "{refused}");
+        }
+        for script in html.split("<script").skip(1) {
+            assert!(script.starts_with(" type=\"application/ld+json\">"), "{script}");
+            let data = script
+                .split_once('>')
+                .and_then(|(_, rest)| rest.split_once("</script>"))
+                .map(|(data, _)| data)
+                .unwrap();
+            serde_json::from_str::<serde_json::Value>(data).unwrap();
         }
         for src in html.split(" src=\"").skip(1) {
             assert!(src.starts_with("/assets/turnkey.mp4?v="), "{src}");
@@ -181,12 +191,13 @@ async fn the_page_needs_nothing_the_plain_csp_refuses() {
         );
         // The diagram's arrowheads are markers in the same SVG, never a fetch.
         assert!(html.split("url(").skip(1).all(|rest| rest.starts_with('#')));
-        // Links leave only for the source on GitHub.
+        // Links leave only for the source on GitHub; the canonical link is this hub's own.
         for href in html.split("href=\"").skip(1) {
             let href = href.split('"').next().unwrap();
             assert!(
                 href.starts_with('/')
                     || href.starts_with('#')
+                    || href == format!("{URL}/")
                     || href.starts_with("https://github.com/EonsofStupid/devagotchi"),
                 "{href}"
             );

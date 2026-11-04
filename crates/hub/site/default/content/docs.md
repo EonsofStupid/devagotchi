@@ -1,6 +1,7 @@
 ---
 title: Docs
 updated: 1 November 2026
+description: How to connect Claude, ChatGPT, Codex, Cursor or Grok to {product}, add your machines, and every tool your AI gets.
 ---
 # {product}
 

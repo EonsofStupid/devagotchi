@@ -1,6 +1,7 @@
 ---
 title: Privacy policy
 updated: 3 November 2026
+description: What {product} keeps about you, why, and for how long.
 ---
 # Privacy policy
 
