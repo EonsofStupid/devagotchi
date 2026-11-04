@@ -22,6 +22,7 @@ pub mod tenants;
 pub mod workflows;
 pub mod clients;
 pub mod offers;
+mod passwords;
 
 use aws_lc_rs::hmac;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -182,6 +183,9 @@ pub struct Accounts {
     /// own transaction, and refreshes this one. It changes only when a clock is found set
     /// back (`clock_set_back`).
     challenge_key: std::sync::RwLock<hmac::Key>,
+    /// Failed password sign-ins per email, the times of those in the last 15 minutes
+    /// (`passwords.rs`); in memory, like the hosted hub's other limits.
+    password_failures: std::sync::Mutex<std::collections::HashMap<String, Vec<u64>>>,
 }
 
 fn hash(secret: &str) -> String {
@@ -298,6 +302,7 @@ impl Accounts {
             announce: std::sync::OnceLock::new(),
             counting: false,
             challenge_key: std::sync::RwLock::new(key),
+            password_failures: Default::default(),
         })
     }
 
