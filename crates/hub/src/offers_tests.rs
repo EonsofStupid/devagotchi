@@ -121,7 +121,16 @@ async fn on_by_default_offered_once_and_a_yes_is_kept_in_the_users_own_words() {
         let site = crate::site::builtin();
         let offers = site.info.offers().unwrap();
         assert_eq!(offer["question"], offers.question.as_str());
-        assert_eq!(offer["offerings"].as_array().unwrap().len(), offers.items.len());
+        // Only what is offered: an offering the site left blank (no address) is not.
+        let offered: Vec<&str> = offers.offered().map(|item| item.name.as_str()).collect();
+        assert!(offered.len() < offers.items.len(), "the built-in site has blank offerings");
+        let names: Vec<&str> = offer["offerings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|o| o["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(names, offered);
         let vaultix = offer["offerings"]
             .as_array()
             .unwrap()
@@ -140,7 +149,7 @@ async fn on_by_default_offered_once_and_a_yes_is_kept_in_the_users_own_words() {
         assert_eq!(row.consent, words);
         assert_eq!(row.account, subject);
         assert!(row.accepted_at >= before);
-        assert_eq!(row.offerings.len(), offers.items.len());
+        assert_eq!(row.offerings, offered);
         assert_eq!(row.state, "pending");
         let events = hub.accounts.events(&tenant, 50).await.unwrap();
         let yes = events.iter().find(|e| e.event == "offers.accepted").unwrap();
