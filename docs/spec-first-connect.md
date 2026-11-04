@@ -1,74 +1,198 @@
-# Spec: first connect, matched to the market leader step for step
+# Spec: first connect (sign-in → this computer → machine online)
 
 Status: DRAFT for Jesse's approval. No agent starts until he approves this file.
-Source of truth for the target flow: `docs/desktop-commander-teardown.md` §8 (checked live
-2026-11-03). Rule: effortless first; nothing visible is added for security until real usage
-is known. Anything not written here is out of scope.
+Target flow: `docs/desktop-commander-teardown.md` §8. Rule: effortless first; nothing visible
+is added for security. Anything not written here is out of scope. Paths are relative to
+`crates/hub/` unless they start with `crates/`, `deploy/` or `tests/`. Line numbers are from
+`main` at 2026-11-03 and are hints only; the function names are the anchors.
 
-## The flow a person gets (the whole thing)
+## The whole flow a person gets
 
-| # | Desktop Commander (§8) | Devagotchi must do exactly this |
+| # | What the person sees | What makes it happen |
 |---|---|---|
-| 1 | "Add to Claude" from the directory | Person adds the connector `https://app.devagotchi.com/mcp` (directory listing is a later, separate task) |
-| 2 | Sign-in page: "Continue with Google" / "Continue with email" (email + password, Sign In / Sign Up / Forgot password?) | The page the AI app opens shows the same two choices, nothing else on first view |
-| 3 | AI gives one command | AI runs the one command itself if it has a shell on this computer; otherwise shows the one line to paste |
-| 4 | Machine appears in the chat | `machines` shows it online; AI says so and carries on |
+| 1 | Adds connector `https://app.devagotchi.com/mcp` in their AI app | unchanged |
+| 2 | One page: **Continue with Google**, "or", email + password (**Sign in / Sign up**, **Forgot password?**) | PR A2 |
+| 3 | Straight back to the AI app. No Connect screen, no passkey, no "secure your account" | PR A2 |
+| 4 | AI runs the one line itself (it has a shell), or shows one line to paste | PR B |
+| 5 | AI says "`<name>` is online" and carries on | PR B, C2–C4 |
 
-No other screen, prompt, nag or step anywhere in 1–4.
+Fails the spec: any extra screen, prompt or nag in 1–5.
 
-## Work items (each one PR, merged only when every check is green)
+## Modules (each owns one thing; nothing else changes)
 
-### A. Sign-in page (the page `/oauth/authorize` shows to someone with no session, hosted mode)
-- Shows, in this order, only what is configured: **Continue with Google**, then a divider,
-  then **email + password** with tabs **Sign in / Sign up** and a **Forgot password?** link.
-  (GitHub and "Sign in with Shippin" buttons appear below Google only when configured.)
-- Sign up: email + password (min 8 chars, nothing else). Account created with its UUID and
-  tenant at once. Sign in: email + password. Wrong either way: "Email or password is wrong."
-- After either, the browser goes straight back to the app: **no Connect/approve screen** for a
-  person who just signed in from this request. (Already signed in + new app: one Connect
-  screen, as today.)
-- Forgot password: if outgoing email is configured, sends a reset link; if not, says
-  "Password reset isn't available yet — sign in with Google."
-- Passwords: argon2id, rate limit per address. Invisible to the person. No email verification
-  required for anything. No passkey prompt anywhere in this flow.
-- Anonymous "Connect makes an account" is removed from this page (config
-  `tenancy.anonymous_connect`, default false).
-- Existing accounts (the owner's passkey account, the anonymous ones) keep working.
-- Operator: whoever signs in with Google as an email listed in `tenancy.operators`.
-- Words from `content/messages.json`; defaults in `site/default/`.
+| Module | Kind | Owns | Public surface |
+|---|---|---|---|
+| `src/accounts/passwords.rs` | new | password hashes, sign-up, sign-in, set | `Accounts::{sign_up_password, sign_in_password, set_password}` |
+| `migrations/{postgres,sqlite}/0013_passwords.sql` | new | table `passwords` | — |
+| `src/web/sign_in.rs` | new | the sign-in page HTML + its two POSTs | `page()`, `routes()` |
+| `src/web/session.rs` | new (extracted) | open a session + cookie + redirect | `open_and_return()` |
+| `src/web/oauth.rs` | changed | redirect to sign-in; skip Connect after fresh sign-in | `authorize`, `decide`, new `approve` |
+| `src/config/tenancy.rs` | changed | flag `anonymous_connect` | field |
+| `src/site/model.rs` `Messages` | changed | copy struct `sign_in` | field |
+| `site/default/content/messages.json`, `workflows.json`, `site.json` | changed | all words | — |
+| `src/join.rs`, `src/link.rs` `join_script`, `src/join/join.{sh,ps1}`, `deploy/windows/install-devagotchi.ps1` | changed | join output | — |
+| `crates/core/src/execution/platform/windows.rs` `shell_command` | changed | clean PowerShell output | — |
 
-### B. First machine = this computer
-- `get-started` workflow = one step: "Connect this computer" → done. Phone step and "Keep your
-  account" step removed from it.
-- MCP instructions + `machine_add`/`workflow_start` descriptions: "If you can run commands on
-  the user's computer (Claude Code, Codex CLI, a shell tool), run the one line yourself. Give
-  the user a link only for a different machine." Never mention phone or approvals during setup.
-- `/go/<token>` page: no "Keep your account", no secure/passkey/sign-in text. Opened on a
-  phone: leads with "Open this on your computer" + Copy link + QR.
-- Phone approvals: only offered when `approval_request` returns `phones: 0`.
+No new crate, process or service. One new dependency: `argon2` (RustCrypto, MIT/Apache-2.0)
+in `crates/hub/Cargo.toml`; `cargo deny --all-features check` must pass.
 
-### C. The four bugs from the live test (2026-11-04, dabo)
-1. `offers` fails in Claude (output schema vs blank entries). Fix already pushed on branch
-   `increment-78/offers-schema` — finish, test, merge.
-2. Join script prints `tf9930eb1dd70-dabo`; must print the name `machines` shows (`dabo`).
-3. Join script ends with developer text (MCP command, `tests\adapter_probe.py`). Replace with:
-   name, "connected to <hub>", "starts with Windows / at boot", log path.
-4. `run` on Windows returns PowerShell `#< CLIXML` progress junk. Broker starts PowerShell
-   with progress silenced; Windows test asserts clean output.
+## PR C1 — `offers` works in Claude (branch `increment-78/offers-schema`, exists)
+- Already pushed: `src/output_schema.rs`, `src/site/offers.rs`, `src/web/landing/network.rs`,
+  `src/tenant_tests.rs` (b3a5355; autosave 553eafc has the rest — take the autosave).
+- Finish: blank offerings (no description/url) are left out of `offers` output, not sent
+  half-empty. Test in `src/offers_tests.rs`: with one blank offering configured, the
+  `offers` result validates against the tool's `outputSchema` (use the validator in
+  `output_schema.rs`).
+- Done when: the test passes; full CI green.
 
-### D. Owner setup (Jesse, not code)
-- Google OAuth client: Web application, redirect
-  `https://app.devagotchi.com/auth/provider/google/callback`; client id + secret into Vaultix;
-  env names come from PR A's docs.
+## PR A1 — password accounts (library only, no web)
+1. `migrations/postgres/0013_passwords.sql` and `migrations/sqlite/0013_passwords.sql`:
+   `passwords(account_id TEXT PRIMARY KEY REFERENCES accounts, email TEXT UNIQUE NOT NULL,
+   hash TEXT NOT NULL, created_at BIGINT NOT NULL, updated_at BIGINT NOT NULL)`. Email stored
+   trimmed + lowercased. Copy the style of `0012_offers.sql` exactly (both dialects).
+2. `src/accounts/passwords.rs` (≤150 lines), `impl Accounts`:
+   - `sign_up_password(email, password) -> BridgeResult<Account>`: reject `password.len() < 8`
+     (`code = "password_short"`); reject an existing email (`code = "email_taken"`). Else
+     create the account and tenant exactly as an identity sign-in does — call
+     `sign_in_identity(&Proven { provider: "email", subject: email, verified_email: None,
+     name: None })` (identities.rs) — then insert the argon2id hash. One transaction if the
+     store allows; otherwise insert the hash second and delete the account on failure.
+   - `sign_in_password(email, password) -> BridgeResult<Account>`: unknown email or wrong
+     password both return `code = "password_wrong"` (same message, same timing: hash a dummy
+     on unknown email). Disabled account → `account_disabled` (existing code).
+   - `set_password(account, password)`: upsert; used by Forgot password (A2).
+   - Limit: 10 failed sign-ins per email per 15 minutes, in memory (a `Mutex<HashMap>` on
+     `Accounts`, same pattern as `starts_per_hour` in `src/web/hosted.rs`) → `code = "slow_down"`.
+   - argon2 `Argon2::default()` (argon2id, crate defaults). Never log the password or hash.
+3. Wire the module in `src/accounts.rs` (`mod passwords;`). Nothing else.
+4. Tests in `src/accounts/tests.rs`: sign up → sign in works; wrong password and unknown
+   email give the same error; short password refused; duplicate email refused; the account
+   has a `t-<uuid>` tenant and is not provisional (`provisional_until` is `None`, so
+   `whoami.secure_url` is `None`).
+
+## PR A2 — the sign-in page and no Connect screen after it
+1. `src/config/tenancy.rs` `TenancyConfig`: add `pub anonymous_connect: bool`, default
+   `false`, `#[serde(default)]`. Document in the config docs next to `max_unsecured`.
+2. `src/web/session.rs` (new): move the tail of `providers::finish` (from `// Still the same
+   account` to the end) into `pub(super) async fn open_and_return(hub, current, account,
+   return_to, extra_cookies) -> Response`. `providers::finish` calls it. No behaviour change.
+3. `src/web/sign_in.rs` (new, ≤150 lines):
+   - `pub fn page(hub, return_to, tab: Tab, notice: Option<&str>) -> Response`:
+     `hub.providers.buttons(&site, return_to, false)` first (Google, then GitHub/Shippin only
+     if configured), then `messages.sign_in.or`, then one `<form method=post>` with email +
+     password and two tab links (`?tab=in` / `?tab=up`, plain links, no JS needed), submit
+     posting to `/auth/password` or `/auth/password/new`, then the Forgot link
+     `/auth/password/forgot?return_to=…`. Same `REFERRER_POLICY same-origin` as
+     `passkeys::login_page`. No passkey text, no "secure", no anonymous note.
+   - `POST /auth/password` → `sign_in_password`; `POST /auth/password/new` →
+     `sign_up_password`. Success → `session::open_and_return(…, return_to, [fresh cookie])`.
+     Error → `page()` again with the matching `messages.sign_in.*` notice, status 400/429.
+   - Fresh cookie: `dvg_fresh=<sha256(return_to)>`, HttpOnly, SameSite=Lax, Max-Age 300.
+   - `GET/POST /auth/password/forgot`: if `hub.providers.email.is_some()`, send the existing
+     email sign-in link (`email::ask`) with `return_to=/account#password`, and show
+     `messages.sign_in.reset_sent`; else show `messages.sign_in.reset_unavailable`
+     ("Password reset isn't available yet — sign in with Google."). The account page gets a
+     "Set a password" form posting to `set_password` (in `routes.rs` account page, the
+     sign-ins list).
+   - Google callback must also set the fresh cookie: `providers::callback` passes it into
+     `finish` → `open_and_return`.
+   - `routes()` merged where `email::routes` / provider routes are merged in `src/lib.rs`.
+4. `src/web/routes.rs` `login()` (~272): when `config.multi_tenant()`, return
+   `sign_in::page(...)`. Single-tenant (owner's own hub) keeps `passkeys::login`.
+5. `src/web/oauth.rs`:
+   - `authorize()` (~363): the `Ok(None) if multi_tenant()` arm becomes
+     `Ok(None) if multi_tenant() && tenancy.anonymous_connect`; otherwise the existing
+     `see_other(&sign_in)` runs (it already carries `return_to` = this request).
+   - Extract the code-issuing block of `decide()` (the `issue_code` call through the redirect
+     with `code` + `state`) into `async fn approve(state, hub, person, checked) -> Response`.
+   - `authorize()`: when a person is signed in AND the request's `dvg_fresh` cookie equals
+     `sha256(this_request(&query))`, call `approve()` directly and clear the cookie. Else
+     render the Connect page as today (already-signed-in person + new app = one screen, kept).
+   - `decide()`: the `hosted::start` branch runs only when `anonymous_connect` is true.
+6. Copy: `src/site/model.rs` `Messages` gets `pub sign_in: SignInMessages { title, or,
+   tab_in, tab_up, email, password, submit_in, submit_up, forgot, wrong, taken, short,
+   slow_down, reset_sent, reset_unavailable, set_password }`, `#[serde(default)]` with these
+   defaults in `site/default/content/messages.json`:
+   "Sign in", "or", "Sign in", "Sign up", "Email", "Password", "Sign in", "Create account",
+   "Forgot password?", "Email or password is wrong.", "That email already has an account. Sign in instead.",
+   "Use at least 8 characters.", "Too many tries. Wait a few minutes.",
+   "Check your email for a sign-in link.", "Password reset isn't available yet — sign in with Google.",
+   "Set a password".
+7. Existing accounts keep working: anonymous ones (e.g. `dabo`'s) still sign in by their
+   cookie; the owner keeps the passkey page on single-tenant hubs; `email`-link sign-in stays.
+8. Tests (`src/web/tests.rs`): multi-tenant, no session → `/oauth/authorize` 303s to
+   `/auth/login?return_to=…`; that page contains the Google link (with a dummy provider
+   configured), both forms, "Forgot password?", and none of: "passkey", "Secure", "Connect";
+   sign up POST → 303 to the authorize URL with `dvg_fresh` set → that GET 303s straight to
+   `redirect_uri?code=…&state=…`; a second app later shows the Connect page;
+   `anonymous_connect=true` restores today's behaviour (existing hosted tests pass unchanged
+   with the flag set in their fixture).
+
+## PR B — first machine is this computer
+1. `site/default/content/workflows.json` `get-started`: steps = `machine`, `done` only.
+   Intro: "Connect this computer. One click and one pasted line; your AI watches and carries
+   on when it's done." Step text: "Pick what this computer runs and press the button. You get
+   one line to paste here: it installs {product}, joins your account and starts with the
+   computer." Update the asserts in `src/workflow_tests.rs` (~226, ~658) to
+   `["machine", "done"]`. `phone-approvals` workflow stays as its own workflow.
+2. `site/default/site.json` `mcp.instructions`: replace the sentence starting "To connect a new
+   machine" with: "To connect a machine: if you can run commands on the user's computer
+   (Claude Code, Codex, a shell tool), call machine_add and run its line for that OS
+   yourself. Otherwise call workflow_start with get-started and give the user its one link;
+   then workflow_wait. Do not bring up phones or approvals while connecting." Remove the
+   `secure_url` sentence.
+3. `src/hub.rs` `machine_add` description (~492): append "If you can run commands on this
+   computer, run the command for its OS yourself; give the user a command only for another
+   machine." `workflow_start` description: same sentence in reverse ("use this when you
+   cannot run commands on the user's computer").
+4. `src/web/workflow.rs` `/go/<token>` page: when the User-Agent is a phone (`Mobi|Android|
+   iPhone`), put first "Open this on your computer" + a Copy link button + the QR the page
+   already draws for the phone step. Copy key `messages.workflow.open_on_computer`.
+5. Tests: `src/workflow_tests.rs` get-started has 2 steps; `tests/workflow_browser.py` adds a
+   phone-UA page load asserting "Open this on your computer" is first and no "Keep your
+   account" anywhere.
+
+## PR C2+C3 — join prints the right name and only user words
+1. `src/join.rs` replacements: add `("@NAME@", shown)` where `shown` is the name `machines`
+   shows. `src/link.rs` `join_script` takes it from `tenant_machines::shown_name(subject,
+   device)` and passes it in. `unfilled()` in the join tests includes `@NAME@`.
+2. `src/join/join.sh` line ~35 and `src/join/join.ps1` line ~45: print
+   `done: @NAME@ is connected to $hub and starts with the computer. Tell your AI to use "@NAME@".`
+   `--device` keeps the stored name.
+3. `deploy/windows/install-devagotchi.ps1` lines ~374–376 (MCP command, Claude Code line,
+   `adapter_probe.py`): print only when `-Developer` is passed. `join.ps1` never passes it.
+   Same check for `deploy/linux/install-devagotchi.sh` if it prints developer lines.
+   Add the log path line: "Log: <path>".
+4. Tests: join tests assert the rendered script contains `dabo`-style shown name and not the
+   `t…-` tag; `tests/e2e.py` Windows path asserts no "adapter_probe" in installer output.
+
+## PR C4 — clean `run` output on Windows
+1. `crates/core/src/execution/platform/windows.rs` `shell_command`: encode
+   `"$ProgressPreference='SilentlyContinue';" + command` instead of `command`.
+2. Real-OS test in the same file's tests (Windows CI runners): command
+   `Write-Progress -Activity x -Status y; 'ok'` → stdout trimmed == `ok`, stderr does not
+   contain `#< CLIXML`.
+
+## D — owner setup (Jesse, not code)
+Google OAuth client, type Web application, redirect
+`https://app.devagotchi.com/auth/provider/google/callback`; id + secret into Vaultix under the
+env names PR A2's docs give. Until then the page shows email + password only.
 
 ## Acceptance (the only definition of done)
-1. Browser test, CI: AI client connects → sign-in page shows Google + email/password only →
-   sign up with email/password → back in the app with no other screen → `whoami` shows the
-   account → `machine_add` → join script runs → `machines` shows it online → `run` returns
-   clean output. Fails on any extra screen.
-2. Live, by Jesse from Claude: same path on app.devagotchi.com with his own PC; recorded in
-   `verification/`.
-3. `tests/live_check.py` against app.devagotchi.com passes the sign-in-page check.
+1. `tests/first_connect_browser.py` (new, Playwright, same harness as
+   `tests/workflow_browser.py`; added to the CI job that runs it): multi-tenant hub → DCR
+   client → open authorize URL → page has the two choices only → sign up → the very next
+   navigation is the client's `redirect_uri` with a code (count navigations: exactly 2 hub
+   pages) → token → MCP `whoami` (no `secure_url`) → `machine_add` → run the Linux line →
+   `machines` shows it online under its shown name → `run echo ok` returns `ok`.
+2. Live, Jesse from Claude on app.devagotchi.com with his PC; receipt in `verification/`.
+3. `tests/live_check.py` gains a check: `/auth/login` on the live hub contains "Sign up" and
+   no "passkey".
 
-## Order
-C1 → A → B → C2–C4 → D (owner) → live acceptance.
+## Order and size
+C1 → A1 → A2 → B → C2+C3 → C4 → D → live acceptance. Six PRs, one agent, sequential, each
+merged only on full green before the next starts. Push every 15 minutes.
+
+## Not in this spec
+Phone push, Shippin linking, Mac build, directory listing, email verification, passkeys,
+merging a Google account and a password account that share an email (separate accounts for now).
