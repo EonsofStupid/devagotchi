@@ -1,5 +1,6 @@
 //! What search engines and AI agents read, over HTTP on a hosted hub with the whole router
-//! as it serves (`discovery.rs`, `site/discovery.rs`): each route and its content type;
+//! as it serves (`discovery.rs`, `site/discovery.rs`), on the hub's own host and on the
+//! site's marketing domain (the public pages' address): each route and its content type;
 //! robots keeps every crawler out of the private paths and lets it read the public pages;
 //! the sitemap lists those pages at this hub's address; `/llms.txt` carries this hub's own
 //! address and the steps an AI follows, in the llmstxt.org shape, naming only tools the
@@ -29,14 +30,22 @@ async fn neutral() -> Hosted {
     .await
 }
 
+/// The built-in site's marketing domain: where its public pages live.
+const SITE: &str = "https://devagotchi.com";
+
 /// `path`'s status, content type and body.
 async fn get(hub: &Hosted, path: &str) -> (u16, String, String) {
-    let response = hub
-        .http
-        .get(format!("{}{path}", hub.url))
-        .send()
-        .await
-        .unwrap();
+    get_on(hub, None, path).await
+}
+
+/// `path` asked of the hub as `host` (the site's marketing domain reaching it through the
+/// edge), or as its own address.
+async fn get_on(hub: &Hosted, host: Option<&str>, path: &str) -> (u16, String, String) {
+    let mut request = hub.http.get(format!("{}{path}", hub.url));
+    if let Some(host) = host {
+        request = request.header(header::HOST, host);
+    }
+    let response = request.send().await.unwrap();
     let status = response.status().as_u16();
     let kind = response
         .headers()
@@ -155,10 +164,13 @@ async fn robots_lets_every_crawler_read_the_public_pages_and_none_the_private_on
 }
 
 #[tokio::test]
-async fn the_sitemap_lists_the_public_pages_at_this_hubs_address() {
+async fn the_sitemap_lists_the_public_pages_at_the_sites_own_address() {
     let hub = hosted().await;
     let (_, _, robots) = get(&hub, "/robots.txt").await;
     let (_, _, sitemap) = get(&hub, "/sitemap.xml").await;
+    // The same on the marketing host, where each answers too, with no redirect.
+    let (status, kind, there) = get_on(&hub, Some("devagotchi.com"), "/sitemap.xml").await;
+    assert_eq!((status, kind.as_str(), there.as_str()), (200, "application/xml; charset=utf-8", sitemap.as_str()));
     assert!(sitemap.starts_with(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">"
@@ -168,23 +180,21 @@ async fn the_sitemap_lists_the_public_pages_at_this_hubs_address() {
         .skip(1)
         .map(|rest| rest.split("</loc>").next().unwrap())
         .collect();
-    let expected: Vec<String> = PUBLIC
-        .iter()
-        .map(|path| format!("{}{path}", hub.url))
-        .collect();
+    // The site's marketing domain (`site.json` product.domain), never the hub's own.
+    let expected: Vec<String> = PUBLIC.iter().map(|path| format!("{SITE}{path}")).collect();
     assert_eq!(locs, expected);
+    assert!(!sitemap.contains(&hub.url));
     for loc in &locs {
-        let path = loc.strip_prefix(hub.url.as_str()).unwrap();
+        let path = loc.strip_prefix(SITE).unwrap();
         assert!(!disallowed(&robots, path), "{path}");
-        let (status, _, _) = get(&hub, path).await;
+        let (status, _, _) = get_on(&hub, Some("devagotchi.com"), path).await;
         assert_eq!(status, 200, "{path}");
     }
     // The date a page says it changed, as W3C wants it.
     let updated = &site::builtin().pages["docs"].updated;
     let date = discovery::iso_date(updated).expect("docs says when it changed");
     assert!(sitemap.contains(&format!(
-        "<loc>{}/docs</loc><lastmod>{date}</lastmod>",
-        hub.url
+        "<loc>{SITE}/docs</loc><lastmod>{date}</lastmod>"
     )));
     assert_eq!(
         discovery::iso_date("1 November 2026").as_deref(),
@@ -229,8 +239,10 @@ async fn llms_txt_carries_this_hubs_address_and_the_steps_an_ai_follows() {
     // A hosted hub: the account is made on the first connect. Nothing for other hubs.
     assert!(llms.contains("the account is made the moment it connects"));
     assert!(!llms.contains("passkey") && !llms.contains("Shippin"));
-    assert!(llms.contains(&format!("- [Docs]({url}/docs)")));
-    assert!(llms.contains(&format!("({url}/llms-full.txt)")));
+    // Its page links at the site's own address; the MCP and join steps at this hub's.
+    assert!(llms.contains(&format!("- [Docs]({SITE}/docs)")));
+    assert!(llms.contains(&format!("({SITE}/llms-full.txt)")));
+    assert!(!llms.contains(&format!("({url}/")), "{llms}");
     // Every tool it names is one the hub serves; every placeholder is filled.
     let served = crate::hub::tool_names();
     for name in llms.split('`').skip(1).step_by(2) {
@@ -247,7 +259,7 @@ async fn llms_txt_carries_this_hubs_address_and_the_steps_an_ai_follows() {
     let mut last = 0;
     for page in discovery::PAGES {
         let at = full
-            .find(&format!("\n---\n\n<{url}/{page}>\n\n"))
+            .find(&format!("\n---\n\n<{SITE}/{page}>\n\n"))
             .unwrap_or_else(|| panic!("{page}"));
         assert!(at > last, "{page} out of order");
         last = at;
@@ -259,7 +271,7 @@ async fn llms_txt_carries_this_hubs_address_and_the_steps_an_ai_follows() {
     assert!(full.contains("# Privacy policy") && full.contains("# Terms of service"));
     // The docs name only tools the hub serves.
     let docs = full
-        .split(&format!("<{url}/docs>"))
+        .split(&format!("<{SITE}/docs>"))
         .nth(1)
         .and_then(|rest| rest.split("\n---\n").next())
         .unwrap();
@@ -292,14 +304,15 @@ async fn the_landing_pages_json_ld_parses_and_says_only_what_the_page_shows() {
     }
     let app = &data[0];
     assert_eq!(app["name"], "Devagotchi");
-    assert_eq!(app["url"], format!("{url}/"));
+    // Its addresses are the site's; its picture is the hub's own asset.
+    assert_eq!(app["url"], format!("{SITE}/"));
     assert_eq!(app["applicationCategory"], "DeveloperApplication");
     assert_eq!(app["operatingSystem"], "Linux, Windows");
     assert_eq!(
         app["offers"],
         json!({"@type": "Offer", "price": "0", "priceCurrency": "USD"})
     );
-    assert_eq!(app["softwareHelp"]["url"], format!("{url}/docs"));
+    assert_eq!(app["softwareHelp"]["url"], format!("{SITE}/docs"));
     assert!(
         app["image"]
             .as_str()
@@ -311,6 +324,7 @@ async fn the_landing_pages_json_ld_parses_and_says_only_what_the_page_shows() {
     assert_eq!(steps.len(), 3);
     for (i, step) in steps.iter().enumerate() {
         assert_eq!(step["position"], i + 1);
+        assert_eq!(step["url"], format!("{SITE}/#how"));
         let name = step["name"].as_str().unwrap();
         assert!(html.contains(&format!("<h3>{name}</h3>")), "{name}");
         assert!(!step["text"].as_str().unwrap().is_empty());
@@ -352,7 +366,13 @@ async fn every_public_page_says_what_it_is_where_it_lives_and_how_it_previews() 
     for path in PUBLIC {
         let (_, _, html) = get(&hub, path).await;
         let head = html.split("</head>").next().unwrap();
-        let canonical = format!("{url}{path}");
+        // At the site's own address, whichever host served it.
+        let canonical = format!("{SITE}{path}");
+        let (_, _, there) = get_on(&hub, Some("devagotchi.com"), path).await;
+        assert!(
+            there.contains(&format!("<link rel=\"canonical\" href=\"{canonical}\">")),
+            "{path} on the marketing host"
+        );
         assert!(
             head.contains(&format!("<link rel=\"canonical\" href=\"{canonical}\">")),
             "{path}"
@@ -550,4 +570,87 @@ async fn a_neutral_site_shows_none_of_the_built_in_one_to_crawlers_or_agents() {
     let data = json_ld(&landing);
     assert_eq!(data[0]["name"], "Lumen Relay");
     assert!(data[0].get("offers").is_none() && data[0].get("applicationCategory").is_none());
+}
+
+#[tokio::test]
+async fn each_file_answers_on_both_hosts_naming_its_own_and_the_app_steps_stay_on_the_hub() {
+    let hub = hosted().await;
+    let url = &hub.url;
+    for (host, own) in [
+        (None, url.to_string()),
+        (Some("devagotchi.com"), SITE.to_string()),
+        // A host in another case is the same host.
+        (Some("DevAgotchi.COM"), SITE.to_string()),
+        // Any other host is answered as the hub's own; it is never written back.
+        (Some("elsewhere.example"), url.to_string()),
+    ] {
+        for (path, kind) in [
+            ("/llms.txt", "text/plain; charset=utf-8"),
+            ("/llms-full.txt", "text/plain; charset=utf-8"),
+            ("/robots.txt", "text/plain; charset=utf-8"),
+            ("/sitemap.xml", "application/xml; charset=utf-8"),
+        ] {
+            let (status, got, body) = get_on(&hub, host, path).await;
+            assert_eq!((status, got.as_str()), (200, kind), "{path} on {host:?}");
+            assert!(!body.contains("elsewhere.example"), "{path}");
+        }
+        let (_, _, robots) = get_on(&hub, host, "/robots.txt").await;
+        assert!(robots.contains(&format!("\nSitemap: {own}/sitemap.xml\n")), "{host:?}: {robots}");
+        assert!(robots.contains(&format!("# {own}/llms.txt\n")), "{host:?}: {robots}");
+        // llms.txt is the same on either host: the pages at the site's address, and what
+        // only the hub has (its MCP address, the one line per machine) at the hub's.
+        let (_, _, llms) = get_on(&hub, host, "/llms.txt").await;
+        assert!(llms.contains(&format!("MCP server at `{url}/mcp`")), "{llms}");
+        assert!(llms.contains(&format!("`curl -fsSL {url}/join/<code> | sudo sh`")));
+        assert!(llms.contains(&format!("- [Docs]({SITE}/docs)")));
+        assert!(!llms.contains(&format!("{SITE}/mcp")) && !llms.contains(&format!("{SITE}/join")));
+    }
+}
+
+#[tokio::test]
+async fn a_site_with_no_marketing_domain_keeps_everything_at_the_hubs_address() {
+    let hub = hosted_with(None, |dir, _| {
+        let site = crate::offers_tests::builtin_with(dir, |v| v["product"]["domain"] = "".into());
+        json!({ "site": { "dir": site.to_string_lossy() } })
+    })
+    .await;
+    let url = &hub.url;
+    let (_, _, landing) = get(&hub, "/").await;
+    assert!(landing.contains(&format!("<link rel=\"canonical\" href=\"{url}/\">")));
+    assert_eq!(json_ld(&landing)[0]["url"], format!("{url}/"));
+    let (_, _, sitemap) = get(&hub, "/sitemap.xml").await;
+    assert!(sitemap.contains(&format!("<loc>{url}/docs</loc>")), "{sitemap}");
+    let (_, _, llms) = get(&hub, "/llms.txt").await;
+    assert!(llms.contains(&format!("- [Docs]({url}/docs)")), "{llms}");
+    for body in [&landing, &sitemap, &llms] {
+        assert!(!body.contains("devagotchi.com/"), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn a_neutral_site_is_at_its_own_domain_on_both_hosts() {
+    let hub = neutral().await;
+    let url = &hub.url;
+    let site = "https://lumen.example.org";
+    let (_, _, docs) = get_on(&hub, Some("lumen.example.org"), "/docs").await;
+    assert!(docs.contains(&format!("<link rel=\"canonical\" href=\"{site}/docs\">")), "{docs}");
+    assert_eq!(meta(&docs, "property", "og:url"), Some(format!("{site}/docs").as_str()));
+    let (_, _, landing) = get(&hub, "/").await;
+    assert_eq!(json_ld(&landing)[0]["url"], format!("{site}/"));
+    let (_, _, sitemap) = get_on(&hub, Some("lumen.example.org"), "/sitemap.xml").await;
+    assert!(sitemap.contains(&format!("<loc>{site}/privacy</loc>")), "{sitemap}");
+    let (_, _, robots) = get_on(&hub, Some("lumen.example.org"), "/robots.txt").await;
+    assert!(robots.contains(&format!("\nSitemap: {site}/sitemap.xml\n")), "{robots}");
+    let (_, _, robots) = get(&hub, "/robots.txt").await;
+    assert!(robots.contains(&format!("\nSitemap: {url}/sitemap.xml\n")), "{robots}");
+    let (_, _, llms) = get_on(&hub, Some("lumen.example.org"), "/llms.txt").await;
+    assert!(llms.contains(&format!("[Help]({site}/docs)")), "{llms}");
+    assert!(llms.contains(&format!("Connect at `{url}/mcp`")), "{llms}");
+    // Nothing of the built-in site, its domain included, on either host.
+    for host in [None, Some("lumen.example.org"), Some("devagotchi.com")] {
+        for path in ["/", "/docs", "/llms.txt", "/llms-full.txt", "/robots.txt", "/sitemap.xml"] {
+            let (_, _, body) = get_on(&hub, host, path).await;
+            site::tests::assert_no_brand(&format!("{path} on {host:?}"), &body);
+        }
+    }
 }

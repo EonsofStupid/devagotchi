@@ -1,10 +1,13 @@
 //! The routes search engines and AI agents read (`site/discovery.rs` makes their words):
 //! `/llms.txt`, `/llms-full.txt`, `/robots.txt` and `/sitemap.xml`. No sign-in, nothing
-//! counted as a visit, and every address in them is this hub's own `public_url`.
+//! counted as a visit. They answer the same on this hub's own host and on the site's
+//! marketing domain when that reaches the hub: the public pages at the site's addresses, the
+//! MCP address and the join lines at this hub's `public_url`, and robots naming the sitemap
+//! of the host it was asked on.
 
 use axum::{
     extract::State,
-    http::{HeaderValue, header},
+    http::{HeaderMap, HeaderValue, header},
     response::{IntoResponse, Response},
 };
 
@@ -48,12 +51,13 @@ pub async fn llms_full(State(state): State<AppState>) -> Response {
     )
 }
 
-pub async fn robots(State(state): State<AppState>) -> Response {
+/// `/robots.txt`, naming the sitemap of the host it was asked on: the site's marketing
+/// domain or this hub's own address.
+pub async fn robots(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let site = state.hub.config.site();
-    text(
-        discovery::robots_txt(&site, &state.hub.config.public_url),
-        "text/plain; charset=utf-8",
-    )
+    let host = headers.get(header::HOST).and_then(|value| value.to_str().ok());
+    let own = discovery::request_base(&site, &state.hub.config.public_url, host);
+    text(discovery::robots_txt(&site, &own), "text/plain; charset=utf-8")
 }
 
 /// `/sitemap.xml`: the public pages; `/` only where it is a landing page (a hub with no
