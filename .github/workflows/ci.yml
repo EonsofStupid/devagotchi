@@ -157,7 +157,8 @@ jobs:
       # `devagotchi login` approved on the hub's /device page, the operator letting a
       # waiting person in on /operator, the operator's analytics moving as people visit,
       # connect, enroll a machine and run on it, and a workflow's link: no sign-in, Get my
-      # command, this runner joining with the page's line as is, the step ticked in place.
+      # command, this runner joining with the page's line as is, the step ticked in place;
+      # and first connect: sign up on the one page, straight back to the app, a machine online.
       # Playwright is pinned by hash (tests/requirements-browser.txt) and downloads nothing.
       - name: Sign-in pages in Chrome
         if: matrix.os == 'ubuntu-24.04'
@@ -169,6 +170,7 @@ jobs:
           python tests/operator_browser.py --channel chrome --devagotchi "$PWD/target/debug/devagotchi"
           python tests/analytics_browser.py --channel chrome --devagotchi "$PWD/target/debug/devagotchi"
           python tests/workflow_browser.py --channel chrome --machine join --devagotchi "$PWD/target/debug/devagotchi"
+          python tests/first_connect_browser.py --channel chrome --machine join --devagotchi "$PWD/target/debug/devagotchi"
       # Real AI clients connect through the hub's own OAuth server as a person connects them:
       # the official MCP TypeScript SDK and the Codex CLI (locked in tests/clients), each
       # registering, approved on the consent page in Chrome, then listing and calling tools.

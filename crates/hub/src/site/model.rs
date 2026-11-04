@@ -901,6 +901,62 @@ pub struct Messages {
     pub analytics: AnalyticsCopy,
     /// The workflow page (`web/workflow.rs`) and what a workflow's steps stand at.
     pub workflow: super::workflows::WorkflowCopy,
+    /// The sign-in page of a hosted hub (`web/sign_in.rs`). Plain text.
+    #[serde(default)]
+    pub sign_in: SignInMessages,
+}
+
+/// The sign-in page's words (`web/sign_in.rs`): Google, or an email and a password.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct SignInMessages {
+    pub title: String,
+    pub or: String,
+    pub tab_in: String,
+    pub tab_up: String,
+    pub email: String,
+    pub password: String,
+    pub submit_in: String,
+    pub submit_up: String,
+    pub forgot: String,
+    pub wrong: String,
+    pub taken: String,
+    pub short: String,
+    pub slow_down: String,
+    pub reset_sent: String,
+    pub reset_unavailable: String,
+    pub set_password: String,
+    /// The page when a Google sign-in's address already has an account: `{email}`.
+    pub link_title: String,
+    pub link: String,
+    pub keep_separate: String,
+}
+
+impl Default for SignInMessages {
+    fn default() -> Self {
+        let s = |text: &str| text.to_string();
+        Self {
+            title: s("Sign in"),
+            or: s("or"),
+            tab_in: s("Sign in"),
+            tab_up: s("Sign up"),
+            email: s("Email"),
+            password: s("Password"),
+            submit_in: s("Sign in"),
+            submit_up: s("Create account"),
+            forgot: s("Forgot password?"),
+            wrong: s("Email or password is wrong."),
+            taken: s("That email already has an account. Sign in instead."),
+            short: s("Use at least 8 characters."),
+            slow_down: s("Too many tries. Wait a few minutes."),
+            reset_sent: s("Check your email for a sign-in link."),
+            reset_unavailable: s("Password reset isn't available yet \u{2014} sign in with Google."),
+            set_password: s("Set a password"),
+            link_title: s("{email} already has an account. Link Google to it?"),
+            link: s("Link"),
+            keep_separate: s("Keep separate"),
+        }
+    }
 }
 
 /// The operator page's words. Inline markup where it says so; `{tenant}` is a tenant's id.

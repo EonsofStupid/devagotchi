@@ -54,7 +54,9 @@ mod passkeys;
 mod providers;
 mod public;
 mod routes;
+mod session;
 mod sessions;
+mod sign_in;
 #[cfg(test)]
 mod claim_tests;
 #[cfg(test)]

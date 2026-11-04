@@ -604,7 +604,7 @@ def hosted(args, browser, steps: Steps, work: Path, versions: dict) -> list:
     hub_port = free_port()
     rec = Recorder(hub_port)
     url = f"http://localhost:{rec.port}"
-    hub, log = serve(args.devagotchi, work, hub_port, url, {"tenancy": {"mode": "multi"}})
+    hub, log = serve(args.devagotchi, work, hub_port, url, {"tenancy": {"mode": "multi", "anonymous_connect": True}})
     name = "hosted"
     try:
         status, _, body = fetch("GET", url + "/")

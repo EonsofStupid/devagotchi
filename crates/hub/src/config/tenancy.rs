@@ -9,6 +9,7 @@
 //!   "trusted_proxies": ["10.0.0.0/8"],  // whose X-Forwarded-For names the client
 //!   "starts_per_hour": 8,            // new accounts per client address per hour
 //!   "max_unsecured": 10000,          // accounts not yet secured, live at once
+//!   "anonymous_connect": false,      // true: Connect with no sign-in makes an unsecured account
 //!   "unsecured": { "machines": 2, "clients": 3, "idle_days": 14 }
 //! },
 //! "operators": ["email:jesse@example.com", "github:12345"]
@@ -83,6 +84,11 @@ pub struct TenancyConfig {
     pub starts_per_hour: u32,
     /// Accounts not yet secured that may be live at once on the hub.
     pub max_unsecured: u32,
+    /// Whether someone with no session may connect an AI client straight away, the hub
+    /// making an account nobody has secured yet (`web/hosted.rs`). Off: they sign in or sign
+    /// up first (`web/sign_in.rs`).
+    #[serde(default)]
+    pub anonymous_connect: bool,
     pub unsecured: UnsecuredLimits,
 }
 
@@ -94,6 +100,7 @@ impl Default for TenancyConfig {
             trusted_proxies: Vec::new(),
             starts_per_hour: 8,
             max_unsecured: 10_000,
+            anonymous_connect: false,
             unsecured: UnsecuredLimits::default(),
         }
     }

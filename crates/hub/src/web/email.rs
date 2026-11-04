@@ -147,11 +147,11 @@ placeholder=\"you@example.com\"></label><input type=\"hidden\" name=\"return_to\
 
 #[derive(Deserialize)]
 pub struct Ask {
-    email: String,
+    pub(super) email: String,
     #[serde(default)]
-    return_to: Option<String>,
+    pub(super) return_to: Option<String>,
     #[serde(default)]
-    link: Option<String>,
+    pub(super) link: Option<String>,
 }
 
 fn sent() -> Response {
@@ -340,7 +340,7 @@ pub async fn verify(
         // Sent to add the address to an account: only in a browser signed in to it.
         Some(account) => match hub.who(&headers).await {
             Ok(Some(person)) if person.id == account => {
-                super::providers::finish(&hub, &headers, &proven, true, &return_to).await
+                super::providers::finish(&hub, &headers, &proven, true, &return_to, &[]).await
             }
             Ok(_) => pages::message(
                 StatusCode::FORBIDDEN,
@@ -350,6 +350,6 @@ pub async fn verify(
             ),
             Err(()) => super::routes::unavailable(),
         },
-        None => super::providers::finish(&hub, &headers, &proven, false, &return_to).await,
+        None => super::providers::finish(&hub, &headers, &proven, false, &return_to, &[]).await,
     }
 }

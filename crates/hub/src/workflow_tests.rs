@@ -769,7 +769,7 @@ async fn a_plans_machine_limit_is_said_plainly_to_the_ai_and_on_the_page() {
             json!({
                 "downloads": dist(dir).to_string_lossy(),
                 "site": { "dir": site.to_string_lossy() },
-                "tenancy": { "mode": "multi", "starts_per_hour": 100,
+                "tenancy": { "mode": "multi", "starts_per_hour": 100, "anonymous_connect": true,
                              "unsecured": { "machines": 10, "clients": 10, "idle_days": 14 } }
             })
         })

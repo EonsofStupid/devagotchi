@@ -375,17 +375,22 @@ gets an account and a tenant (`t-<uuid>`) of their own, made on the spot:
   "trusted_proxies": ["172.16.0.0/12"], // whose X-Forwarded-For names the client (Caddy, the edge)
   "starts_per_hour": 8,                // new accounts per client address per hour
   "max_unsecured": 10000,              // accounts nobody secured yet, live at once
+  "anonymous_connect": false,          // true: Connect with no sign-in makes an unsecured account
   "unsecured": { "machines": 2, "clients": 3, "idle_days": 14 }
 },
 "operators": ["email:you@example.com"] // or DEVAGOTCHI_HUB_OPERATORS, from the secret store
 ```
 
-- **First connect makes the account.** The first OAuth authorize from an AI client, or the
-  `/device` page of `devagotchi login`, opened with no session shows the same Connect (or
-  Approve) page anyone sees, naming "your new Devagotchi account". Pressing it makes the
-  account and its tenant, signs that browser in, and sends the code to the client: one
-  click, no form, the AI working within seconds. "Sign in" is on the page for anyone who
-  has an account.
+- **First connect signs in or signs up.** The first OAuth authorize from an AI client opened
+  with no session goes to `/auth/login`: Continue with Google (and any other configured
+  provider), or an email and password (Sign in / Sign up, Forgot password?). Signing in or
+  up there goes straight back to the AI app with its code, no Connect page; a later app
+  shows Connect as usual. Google's client id and secret come from
+  `DEVAGOTCHI_GOOGLE_CLIENT_ID` and `DEVAGOTCHI_GOOGLE_CLIENT_SECRET` (below); with none, the
+  page offers email and password only. With `anonymous_connect: true` the hub works as
+  before: the Connect (or Approve) page, naming "your new Devagotchi account", makes an
+  account nobody has secured yet with one click. The `/device` page of `devagotchi login`
+  keeps that one click.
 - **Securing never blocks.** Afterwards the account page offers a passkey and every sign-in
   the hub has (Google, GitHub, an email link, Sign in with Shippin: below), every page
   carries a line saying the account is not secured, `/device`'s answer offers it, and
