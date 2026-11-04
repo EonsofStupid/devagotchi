@@ -18,7 +18,7 @@ use super::{
     Exchange, SessionToken, WebLogin, analytics, approvals, claim, device, discovery, email, machines,
     notify, oauth, offers, operator,
     pages::{self, Viewer},
-    passkeys, providers, public, workflow,
+    passkeys, providers, public, safe_return_to, sign_in, workflow,
 };
 use crate::{
     AppState,
@@ -47,10 +47,13 @@ pub fn router(hub_authorization: bool) -> Router<AppState> {
         .route("/passkey/sign-in/options", post(passkeys::sign_in_options))
         .route("/passkey/sign-in", post(passkeys::sign_in))
         .route("/assets/passkey.js", get(passkeys::script))
+        .route("/auth/provider/link", post(providers::link))
         .route("/auth/provider/{name}", get(providers::start))
         .route("/auth/provider/{name}/callback", get(providers::callback))
         .route("/auth/email", get(email::page).post(email::ask))
         .route("/auth/email/verify", post(email::verify))
+        .merge(sign_in::routes())
+        .route("/auth/password/set", post(set_password))
         .route("/api/v1/me", get(me))
         .route("/api/v1/machines", post(machines::add_json))
         .route("/operator", get(operator::page))
@@ -112,6 +115,9 @@ pub fn router(hub_authorization: bool) -> Router<AppState> {
 #[derive(Deserialize)]
 pub(super) struct LoginQuery {
     pub(super) return_to: Option<String>,
+    /// On a hosted hub's sign-in page: `up` shows Sign up.
+    #[serde(default)]
+    pub(super) tab: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -274,6 +280,16 @@ async fn login(
     headers: HeaderMap,
     Query(query): Query<LoginQuery>,
 ) -> Response {
+    // A hosted hub: Google, or an email and a password (`sign_in.rs`). The owner's own
+    // hub keeps its passkey page.
+    if let Some(hub) = state.passkeys.clone().filter(|_| state.hub.config.multi_tenant()) {
+        let return_to = safe_return_to(query.return_to.as_deref().unwrap_or("/account"));
+        if hub.signed_in(&headers).await {
+            return see_other(return_to, &[]);
+        }
+        let tab = if query.tab.as_deref() == Some("up") { sign_in::Tab::Up } else { sign_in::Tab::In };
+        return sign_in::page(&hub, return_to, tab, None);
+    }
     if state.passkeys.is_some() {
         return passkeys::login(State(state), headers, Query(query)).await;
     }
@@ -386,11 +402,18 @@ async fn account(State(state): State<AppState>, headers: HeaderMap) -> Response 
                 }
                 _ => Vec::new(),
             };
-            let ways = state
+            let mut ways = state
                 .passkeys
                 .as_ref()
                 .map(|hub| hub.linking_ways())
                 .unwrap_or_default();
+            // A hosted hub's secured account: Set a password (`sign_in.rs`).
+            if state.passkeys.is_some()
+                && state.hub.config.multi_tenant()
+                && subject.provisional_until.is_none()
+            {
+                ways.push_str(&set_password_form());
+            }
             let linked = match &state.passkeys {
                 Some(hub) => hub.accounts().identities_of(&subject.id).await.unwrap_or_default(),
                 None => Vec::new(),
@@ -532,4 +555,57 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> Response {
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     response
+}
+
+/// The account page's Set a password form (a hosted hub, `sign_in.rs`).
+fn set_password_form() -> String {
+    let words = &pages::site().messages.sign_in;
+    format!(
+        "<form method=\"post\" action=\"/auth/password/set\" id=\"password\"><label>{} \
+<input type=\"password\" name=\"password\" required autocomplete=\"new-password\"></label>\
+<p class=\"actions\"><button class=\"button\" type=\"submit\">{}</button></p></form>",
+        pages::escape(&words.password),
+        pages::escape(&words.set_password)
+    )
+}
+
+#[derive(Deserialize)]
+struct NewPassword {
+    password: String,
+}
+
+/// `POST /auth/password/set`: the signed-in account's password, set or changed.
+async fn set_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    axum::Form(form): axum::Form<NewPassword>,
+) -> Response {
+    let Some(hub) = state.passkeys.clone() else {
+        return not_set_up();
+    };
+    if !super::approvals::same_origin(&headers, &state.hub.config.public_url) {
+        return pages::message(StatusCode::FORBIDDEN, "Not from this hub", "Set it on this hub's own page.", None);
+    }
+    let person = match hub.who(&headers).await {
+        Ok(Some(person)) => person,
+        Ok(None) => return see_other("/auth/login?return_to=/account", &[]),
+        Err(()) => return unavailable(),
+    };
+    let words = pages::site().messages.sign_in.clone();
+    match hub.accounts().set_password(&person.id, &form.password).await {
+        Ok(()) => pages::message(StatusCode::OK, &words.set_password, "Done.", Some(("/account", "Your account"))),
+        Err(error) if error.code == "password_short" => {
+            pages::message(StatusCode::BAD_REQUEST, &words.set_password, &words.short, Some(("/account", "Back")))
+        }
+        Err(error) if error.code == "email_taken" => {
+            pages::message(StatusCode::CONFLICT, &words.set_password, &words.taken, Some(("/account", "Back")))
+        }
+        Err(error) if error.code == "no_email" => {
+            pages::message(StatusCode::BAD_REQUEST, &words.set_password, &error.message, Some(("/account", "Back")))
+        }
+        Err(error) => {
+            eprintln!("devagotchi-hub: account store: {}", error.message);
+            unavailable()
+        }
+    }
 }

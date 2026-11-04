@@ -1631,3 +1631,173 @@ async fn api_add_machine_is_bearer_only_and_the_code_joins_for_that_account() {
         "another account never sees it: {theirs}"
     );
 }
+
+// ------------------------------------------------ first connect (spec first-connect, A2)
+
+mod first_connect {
+    use reqwest::header;
+    use serde_json::{Value, json};
+
+    use crate::{
+        accounts::oauth::s256,
+        tenant_tests::{Hosted, Person, hosted_with, query_param, set_cookie, web_encode},
+    };
+
+    const REDIRECT: &str = "http://127.0.0.1:9/callback";
+
+    /// A hosted hub as the spec runs it: no `anonymous_connect`, Google configured (never
+    /// reached: only its button is drawn).
+    async fn hub() -> Hosted {
+        hosted_with(None, |dir, _| {
+            let secret = dir.join("google-secret");
+            std::fs::write(&secret, "s3cret\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+            }
+            json!({
+                "tenancy": { "mode": "multi", "starts_per_hour": 100 },
+                "auth": { "providers": [{ "kind": "google", "issuer": "https://accounts.google.test",
+                    "client_id": "client-1", "client_secret_file": secret.to_string_lossy() }] }
+            })
+        })
+        .await
+    }
+
+    /// A newly registered AI app and its authorize request (path and query).
+    async fn app(hub: &Hosted, name: &str) -> (String, String) {
+        let registered: Value = hub
+            .http
+            .post(format!("{}/oauth/register", hub.url))
+            .json(&json!({ "client_name": name, "redirect_uris": [REDIRECT] }))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let client = registered["client_id"].as_str().unwrap().to_string();
+        let query = format!(
+            "/oauth/authorize?response_type=code&client_id={client}&redirect_uri={}&code_challenge={}&code_challenge_method=S256&state=s1&resource={}",
+            web_encode(REDIRECT),
+            s256(&"v".repeat(64)),
+            web_encode(&format!("{}/mcp", hub.url))
+        );
+        (client, query)
+    }
+
+    fn location(response: &reqwest::Response) -> String {
+        response.headers()[header::LOCATION].to_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn sign_up_on_the_one_page_then_straight_back_to_the_app() {
+        let hub = hub().await;
+        let (client, authorize) = app(&hub, "Claude").await;
+        // No session: to the sign-in page, carrying this very request.
+        let first = hub.get(&authorize, None).await;
+        assert_eq!(first.status(), 303);
+        let login = location(&first);
+        assert!(login.starts_with("/auth/login?return_to="), "{login}");
+        let return_to = query_param(&login, "return_to").unwrap();
+        assert_eq!(return_to, authorize);
+        // The page: Google, "or", email and password, sign in / sign up, forgot. Nothing else.
+        let (status, page) = Hosted::text(hub.get(&login, None).await).await;
+        assert_eq!(status, 200, "{page}");
+        for needle in [
+            "/auth/provider/google?return_to=",
+            "Continue with Google",
+            ">or<",
+            "action=\"/auth/password\"",
+            "name=\"email\"",
+            "name=\"password\"",
+            "tab=up",
+            "Forgot password?",
+        ] {
+            assert!(page.contains(needle), "{needle}: {page}");
+        }
+        let lower = page.to_lowercase();
+        for absent in ["passkey", "secure", "connect"] {
+            assert!(!lower.contains(absent), "{absent}: {page}");
+        }
+        let up = Hosted::text(hub.get(&format!("{login}&tab=up"), None).await).await.1;
+        assert!(up.contains("action=\"/auth/password/new\"") && up.contains("Create account"), "{up}");
+        // Sign up: back to the authorize request, signed in and fresh.
+        let made = hub
+            .form(
+                "/auth/password/new",
+                None,
+                &[("email", "new@example.com"), ("password", "a good password"), ("return_to", &return_to)],
+            )
+            .await;
+        assert_eq!(made.status(), 303);
+        assert_eq!(location(&made), authorize);
+        let session = set_cookie(&made, "dg_session").expect("signed in");
+        let fresh = set_cookie(&made, "dvg_fresh").expect("a fresh sign-in");
+        // That request now goes straight to the app with its code: no Connect page.
+        let back = hub.get(&authorize, Some(&format!("{session}; {fresh}"))).await;
+        assert_eq!(back.status(), 303);
+        let to_app = location(&back);
+        assert!(to_app.starts_with(REDIRECT), "{to_app}");
+        assert_eq!(query_param(&to_app, "state").as_deref(), Some("s1"));
+        let code = query_param(&to_app, "code").expect("a code");
+        assert_eq!(set_cookie(&back, "dvg_fresh").as_deref(), Some("dvg_fresh="), "spent");
+        // The app's tokens, and whoami: secured, nothing to secure.
+        let tokens: Value = hub
+            .http
+            .post(format!("{}/oauth/token", hub.url))
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("code", &code),
+                ("redirect_uri", REDIRECT),
+                ("client_id", &client),
+                ("code_verifier", &"v".repeat(64)),
+            ])
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let mut person = Person {
+            cookie: session.clone(),
+            token: tokens["access_token"].as_str().expect("a token").to_string(),
+            session: None,
+        };
+        let who = hub.call(&mut person, "whoami", json!({})).await;
+        assert!(who["structuredContent"].get("secure_url").is_none(), "{who}");
+        // A second app later, same browser, no fresh sign-in: the Connect page, as today.
+        let (_, second) = app(&hub, "Codex").await;
+        let (status, page) = Hosted::text(hub.get(&second, Some(&session)).await).await;
+        assert_eq!(status, 200);
+        assert!(page.contains("<h1>Connect Codex?</h1>"), "{page}");
+        // The fresh cookie of one request does not skip another's Connect page.
+        let (status, page) = Hosted::text(hub.get(&second, Some(&format!("{session}; {fresh}"))).await).await;
+        assert_eq!(status, 200);
+        assert!(page.contains("<h1>Connect Codex?</h1>"), "{page}");
+    }
+
+    #[tokio::test]
+    async fn a_wrong_password_says_so_on_the_same_page() {
+        let hub = hub().await;
+        hub.accounts.sign_up_password("kim@example.com", "kims password").await.unwrap();
+        let (_, authorize) = app(&hub, "Claude").await;
+        let wrong = hub
+            .form("/auth/password", None, &[("email", "kim@example.com"), ("password", "nope nope"), ("return_to", &authorize)])
+            .await;
+        assert!(set_cookie(&wrong, "dg_session").is_none());
+        let (status, page) = Hosted::text(wrong).await;
+        assert_eq!(status, 400);
+        assert!(page.contains("Email or password is wrong.") && page.contains("action=\"/auth/password\""), "{page}");
+        let right = hub
+            .form("/auth/password", None, &[("email", "kim@example.com"), ("password", "kims password"), ("return_to", &authorize)])
+            .await;
+        assert_eq!(right.status(), 303);
+        assert_eq!(location(&right), authorize);
+        // Forgot password on a hub that sends no mail: said plainly.
+        let (status, page) = Hosted::text(hub.get("/auth/password/forgot", None).await).await;
+        assert_eq!(status, 200);
+        assert!(page.contains("Password reset isn"), "{page}");
+    }
+}

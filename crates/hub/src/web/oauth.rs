@@ -371,14 +371,21 @@ pub async fn authorize(
     };
     let hub = state.passkeys.clone().expect("checked");
     let sign_in = format!("/auth/login?return_to={}", encode(&this_request(&query)));
-    // On a hosted hub, someone with no session gets the same page: Connect makes their
-    // account (`hosted.rs`).
+    // On a hosted hub with `anonymous_connect`, someone with no session gets the same page:
+    // Connect makes their account (`hosted.rs`). Otherwise they sign in or up first.
+    let anonymous = state.hub.config.multi_tenant() && state.hub.config.tenancy.anonymous_connect;
     let person = match hub.who(&headers).await {
         Ok(Some(person)) => Some(person),
-        Ok(None) if state.hub.config.multi_tenant() => None,
+        Ok(None) if anonymous => None,
         Ok(None) => return see_other(&sign_in, &[]),
         Err(()) => return super::routes::unavailable(),
     };
+    // Just signed in (or up) for this very request: no Connect page, the code goes back now.
+    if let Some(person) = &person
+        && let Some(spent) = super::sign_in::fresh(&hub, &headers, &this_request(&query))
+    {
+        return approve(&state, &hub, person, &checked, vec![spent]).await;
+    }
     let Some(origin) = super::passkeys::origin_of(&checked.redirect_uri) else {
         return refuse_page("Its redirect address has no origin.");
     };
@@ -486,11 +493,12 @@ pub async fn decide(
     let approve = form.decision == "approve";
     let multi = state.hub.config.multi_tenant();
     let mut cookies = Vec::new();
+    let anonymous = multi && state.hub.config.tenancy.anonymous_connect;
     let person = match hub.who(&headers).await {
         Ok(Some(person)) => Some(person),
         // Cancel needs no account.
-        Ok(None) if multi && !approve => None,
-        Ok(None) if multi => {
+        Ok(None) if anonymous && !approve => None,
+        Ok(None) if anonymous => {
             let address = super::hosted::client_address(&state, &extensions, &headers);
             match super::hosted::start(&hub, address, &checked.client.name).await {
                 Ok((person, cookie)) => {
@@ -506,58 +514,71 @@ pub async fn decide(
         }
         Err(()) => return super::routes::unavailable(),
     };
-    let issuer = public_url(&state);
-    let mut params: Vec<(&str, &str)> = Vec::new();
-    let code;
-    if let (true, Some(person)) = (approve, &person) {
-        code = match hub
-            .accounts()
-            .issue_code(
-                &checked.client.id,
-                &person.id,
-                &checked.redirect_uri,
-                &checked.challenge,
-                &checked.resource,
-                &checked.scope,
-            )
-            .await
-        {
-            Ok(code) => code,
-            Err(error) if error.code == "client_limit" => {
-                return pages::message(
-                    StatusCode::FORBIDDEN,
-                    "Secure your account to connect more apps",
-                    &error.message,
-                    Some(("/account#secure", "Secure my account")),
-                );
+    match (approve, &person) {
+        (true, Some(person)) => self::approve(&state, &hub, person, &checked, cookies).await,
+        _ => {
+            let mut params = vec![("error", "access_denied")];
+            if let Some(sent) = checked.state.as_deref() {
+                params.push(("state", sent));
             }
-            Err(error) if error.code == "plan_limit" => {
-                return pages::message(
-                    StatusCode::FORBIDDEN,
-                    &pages::site().messages.access.limit_title,
-                    &error.message,
-                    Some(("/account", "Your account")),
-                );
-            }
-            Err(error) => {
-                eprintln!("devagotchi-hub: account store: {}", error.message);
-                return super::routes::unavailable();
-            }
-        };
-        if let Some(tenant) = &person.tenant {
-            let _ = hub
-                .accounts()
-                .record(tenant, &person.id, "client.connected", &checked.client.name)
-                .await;
+            see_other(&back_to(&checked.redirect_uri, &params, &public_url(&state)), &cookies)
         }
-        params.push(("code", &code));
-    } else {
-        params.push(("error", "access_denied"));
     }
+}
+
+/// Approved for `person`: the code, back to the app's redirect address with `state`.
+async fn approve(
+    state: &AppState,
+    hub: &super::HubSignIn,
+    person: &crate::auth::Subject,
+    checked: &Checked,
+    cookies: Vec<String>,
+) -> Response {
+    let code = match hub
+        .accounts()
+        .issue_code(
+            &checked.client.id,
+            &person.id,
+            &checked.redirect_uri,
+            &checked.challenge,
+            &checked.resource,
+            &checked.scope,
+        )
+        .await
+    {
+        Ok(code) => code,
+        Err(error) if error.code == "client_limit" => {
+            return pages::message(
+                StatusCode::FORBIDDEN,
+                "Secure your account to connect more apps",
+                &error.message,
+                Some(("/account#secure", "Secure my account")),
+            );
+        }
+        Err(error) if error.code == "plan_limit" => {
+            return pages::message(
+                StatusCode::FORBIDDEN,
+                &pages::site().messages.access.limit_title,
+                &error.message,
+                Some(("/account", "Your account")),
+            );
+        }
+        Err(error) => {
+            eprintln!("devagotchi-hub: account store: {}", error.message);
+            return super::routes::unavailable();
+        }
+    };
+    if let Some(tenant) = &person.tenant {
+        let _ = hub
+            .accounts()
+            .record(tenant, &person.id, "client.connected", &checked.client.name)
+            .await;
+    }
+    let mut params = vec![("code", code.as_str())];
     if let Some(sent) = checked.state.as_deref() {
         params.push(("state", sent));
     }
-    see_other(&back_to(&checked.redirect_uri, &params, &issuer), &cookies)
+    see_other(&back_to(&checked.redirect_uri, &params, &public_url(state)), &cookies)
 }
 
 #[derive(Deserialize)]

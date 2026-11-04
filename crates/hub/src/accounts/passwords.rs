@@ -16,15 +16,12 @@ fn wrong() -> BridgeError { BridgeError::new("password_wrong", "email or passwor
 fn taken() -> BridgeError { BridgeError::new("email_taken", "that email already has an account") }
 
 fn checked(password: &str) -> BridgeResult<()> {
-    if password.len() < MIN_LEN {
-        return Err(BridgeError::new("password_short", "use at least 8 characters"));
-    }
-    Ok(())
+    let short = || BridgeError::new("password_short", "use at least 8 characters");
+    (password.len() >= MIN_LEN).then_some(()).ok_or_else(short)
 }
 
 fn hash_with(password: &[u8], salt: &[u8]) -> Option<String> {
-    let salt = SaltString::encode_b64(salt).ok()?;
-    Argon2::default().hash_password(password, &salt).ok().map(|hash| hash.to_string())
+    Argon2::default().hash_password(password, &SaltString::encode_b64(salt).ok()?).ok().map(|h| h.to_string())
 }
 
 /// The argon2id PHC string of `password`, under a fresh salt, off the async threads.
@@ -52,14 +49,18 @@ async fn matches(hash: Option<String>, password: &str) -> bool {
 }
 
 impl Accounts {
+    fn too_many_failures(&self, email: &str, now: u64) -> bool {
+        let mut failures = self.password_failures.lock().unwrap_or_else(|e| e.into_inner());
+        failures.retain(|_, times| { times.retain(|at| now.saturating_sub(*at) < FAILURES_SECS); !times.is_empty() });
+        failures.get(email).is_some_and(|times| times.len() >= FAILURES_MAX)
+    }
+
     /// A new account and tenant for `email`, signed in by `password` from now on.
     pub async fn sign_up_password(&self, email: &str, password: &str) -> BridgeResult<Account> {
         let email = normalize_email(email).ok_or_else(|| BridgeError::new("invalid_email", "not an email address"))?;
         checked(password)?;
         let proven = Proven { provider: "email".into(), subject: email.clone(), verified_email: None, name: None };
-        if self.is_operator_identity(&proven) {
-            return Err(taken());
-        }
+        self.is_operator_identity(&proven).then(|| Err(taken())).unwrap_or(Ok(()))?;
         let (hash, now) = (hash_of(password).await?, now_secs());
         let (tenant_random, account_random) = (crate::link::random::<16>(), crate::link::random::<16>());
         transaction!(&self.store, |connection| {
@@ -78,25 +79,17 @@ impl Accounts {
         })
     }
 
-    /// The account `email` and `password` reach; `password_wrong` for an unknown address
-    /// or a wrong password alike, `slow_down` after too many failures.
+    /// The account `email` and `password` reach; `password_wrong` for an unknown address or a
+    /// wrong password alike, `slow_down` after too many failures.
     pub async fn sign_in_password(&self, email: &str, password: &str) -> BridgeResult<Account> {
         let email = normalize_email(email).unwrap_or_default();
         let now = now_secs();
-        {
-            let mut failures = self.password_failures.lock().unwrap_or_else(|e| e.into_inner());
-            failures.retain(|_, times| {
-                times.retain(|at| now.saturating_sub(*at) < FAILURES_SECS);
-                !times.is_empty()
-            });
-            if failures.get(&email).is_some_and(|times| times.len() >= FAILURES_MAX) {
-                return Err(BridgeError::new("slow_down", "too many tries; wait a few minutes"));
-            }
+        if self.too_many_failures(&email, now) {
+            return Err(BridgeError::new("slow_down", "too many tries; wait a few minutes"));
         }
         let found: Option<(Account, String)> = transaction!(&self.store, |connection| {
-            if email.is_empty() || self.enter(connection, Lookup::Identity("email", &email)).await?.is_none() {
-                return Ok(None);
-            }
+            let known = !email.is_empty() && self.enter(connection, Lookup::Identity("email", &email)).await?.is_some();
+            if !known { return Ok(None) }
             let row = sqlx::query("SELECT account_id, hash FROM passwords WHERE email = $1").bind(&email);
             let Some(row) = row.fetch_optional(&mut *connection).await? else { return Ok(None) };
             let (id, hash): (String, String) = (row.try_get(0)?, row.try_get(1)?);
@@ -109,19 +102,31 @@ impl Accounts {
             return Err(wrong());
         }
         let account = account.ok_or_else(wrong)?;
-        account.disabled_at.map_or(Ok(()), |_| Err(account_disabled(&account.id)))?;
-        Ok(account)
+        account.disabled_at.map_or(Ok(account.clone()), |_| Err(account_disabled(&account.id)))
     }
 
-    /// Set `account`'s password, or change it (Forgot password, the account page), for the
-    /// address its email sign-in proves, else the first address a provider verified for it.
+    /// The account a password sign-up made for `proven`'s verified address, when `proven`
+    /// itself reaches no account yet: the page that offers to link them (`web/providers.rs`).
+    pub async fn password_account_for(&self, proven: &Proven) -> BridgeResult<Option<String>> {
+        let Some(email) = proven.verified_email.as_deref().and_then(normalize_email) else { return Ok(None) };
+        transaction!(&self.store, |connection| {
+            let known = self.enter(connection, Lookup::Identity(&proven.provider, &proven.subject)).await?;
+            if known.is_some() || self.enter(connection, Lookup::Identity("email", &email)).await?.is_none() {
+                return Ok(None);
+            }
+            let found = sqlx::query_scalar("SELECT account_id FROM passwords WHERE email = $1").bind(&email);
+            Ok(found.fetch_optional(&mut *connection).await?)
+        })
+    }
+
+    /// Set `account`'s password or change it, for the address its email sign-in proves,
+    /// else the first address a provider verified for it.
     pub async fn set_password(&self, account: &str, password: &str) -> BridgeResult<()> {
         checked(password)?;
         let (hash, now) = (hash_of(password).await?, now_secs());
         transaction!(&self.store, |connection| {
             self.enter(connection, Lookup::Account(account)).await?;
-            let holder = account_in(connection, account).await?
-                .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
+            let holder = account_in(connection, account).await?.ok_or_else(|| BridgeError::new("no_account", account))?;
             let first = |sql| sqlx::query_scalar::<_, String>(sql).bind(account);
             let mut email = first("SELECT subject FROM auth_identities WHERE account = $1 AND provider = 'email' ORDER BY created_at LIMIT 1")
                 .fetch_optional(&mut *connection).await?;
@@ -129,19 +134,13 @@ impl Accounts {
                 let verified = first("SELECT email FROM auth_identities WHERE account = $1 AND email IS NOT NULL ORDER BY created_at LIMIT 1")
                     .fetch_optional(&mut *connection).await?
                     .ok_or_else(|| BridgeError::new("no_email", "this account has no email to sign in with"))?;
-                // Its email sign-in, which is how a password sign-in finds the account.
-                if self.store.tenant_of(connection, Lookup::Identity("email", &verified)).await?.is_some() {
-                    return Err(taken().into());
-                }
+                if self.store.tenant_of(connection, Lookup::Identity("email", &verified)).await?.is_some() { return Err(taken().into()) }
                 let proven = Proven { provider: "email".into(), subject: verified.clone(), verified_email: Some(verified.clone()), name: None };
                 super::identities::insert_identity(connection, &holder, &proven, self.counting, now).await?;
                 email = Some(verified);
             }
-            sqlx::query(
-                "INSERT INTO passwords (account_id, tenant_id, email, hash, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $5)
-                 ON CONFLICT (account_id) DO UPDATE SET hash = excluded.hash, updated_at = excluded.updated_at",
-            )
+            sqlx::query("INSERT INTO passwords (account_id, tenant_id, email, hash, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)
+                 ON CONFLICT (account_id) DO UPDATE SET hash = excluded.hash, updated_at = excluded.updated_at")
             .bind(&holder.id).bind(&holder.tenant).bind(&email).bind(&hash).bind(secs(now))
             .execute(&mut *connection).await?;
             Ok(())

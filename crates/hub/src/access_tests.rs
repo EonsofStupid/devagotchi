@@ -43,7 +43,7 @@ async fn hub_with(store: Option<&str>, edit: fn(&mut Value)) -> Hosted {
         let site = site_dir(dir, "site", edit);
         json!({
             "site": { "dir": site.to_string_lossy() },
-            "tenancy": { "mode": "multi", "starts_per_hour": 100,
+            "tenancy": { "mode": "multi", "starts_per_hour": 100, "anonymous_connect": true,
                          "unsecured": { "machines": 10, "clients": 10, "idle_days": 14 } }
         })
     })

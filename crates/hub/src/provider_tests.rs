@@ -600,3 +600,56 @@ async fn email_links_are_rate_limited_per_address() {
     .await;
     assert_eq!(status, 429);
 }
+
+#[tokio::test]
+async fn google_for_an_address_with_a_password_account_asks_to_link_it() {
+    // Spec first-connect, A2: the same address signed up with a password, then Google.
+    let world = world(google("g-300", Some("pat@example.com"))).await;
+    let password = world
+        .hub
+        .accounts
+        .sign_up_password("pat@example.com", "pats password")
+        .await
+        .unwrap();
+    let asked = world.sign_in("google", None, false).await;
+    assert!(set_cookie(&asked, "dg_session").is_none(), "nobody signed in yet");
+    let waiting = set_cookie(&asked, "dg_link").expect("the proven sign-in waits");
+    let (status, page) = Hosted::text(asked).await;
+    assert_eq!(status, 200);
+    assert!(page.contains("pat@example.com already has an account. Link Google to it?"), "{page}");
+    assert!(page.contains(">Link<") && page.contains(">Keep separate<"), "{page}");
+    // Link: Google now signs in to the password account.
+    let linked = world.hub.form("/auth/provider/link", Some(&waiting), &[("decision", "link")]).await;
+    assert_eq!(linked.status(), 303);
+    assert_eq!(linked.headers()[header::LOCATION], "/account");
+    let session = set_cookie(&linked, "dg_session").expect("signed in");
+    assert!(world.account_page(&session).await.contains(&password.id));
+    let again = world.sign_in("google", None, false).await;
+    assert!(set_cookie(&again, "dg_link").is_none(), "linked: no question twice");
+    let back = set_cookie(&again, "dg_session").unwrap();
+    assert!(world.account_page(&back).await.contains(&password.id));
+    // A forged or missing waiting cookie links nothing.
+    let none = world.hub.form("/auth/provider/link", None, &[("decision", "link")]).await;
+    assert_eq!(none.status(), 400);
+}
+
+#[tokio::test]
+async fn keep_separate_makes_a_new_account_for_the_google_sign_in() {
+    let world = world(google("g-301", Some("lee@example.com"))).await;
+    let password = world
+        .hub
+        .accounts
+        .sign_up_password("lee@example.com", "lees password")
+        .await
+        .unwrap();
+    let asked = world.sign_in("google", None, false).await;
+    let waiting = set_cookie(&asked, "dg_link").expect("asked");
+    let kept = world.hub.form("/auth/provider/link", Some(&waiting), &[("decision", "separate")]).await;
+    assert_eq!(kept.status(), 303);
+    let session = set_cookie(&kept, "dg_session").expect("signed in");
+    let page = world.account_page(&session).await;
+    assert!(!page.contains(&password.id), "{page}");
+    // The password still reaches its own account.
+    let same = world.hub.accounts.sign_in_password("lee@example.com", "lees password").await.unwrap();
+    assert_eq!(same.id, password.id);
+}

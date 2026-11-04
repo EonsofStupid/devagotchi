@@ -52,7 +52,7 @@ pub(crate) async fn hosted_with(
         "listen": "127.0.0.1:1",
         "public_url": url,
         "auth": { "mode": "hub" },
-        "tenancy": { "mode": "multi", "starts_per_hour": 100 },
+        "tenancy": { "mode": "multi", "starts_per_hour": 100, "anonymous_connect": true },
         "account_boards": { "dir": boards.to_string_lossy(), "free_limit": 5 },
         "brokers": [{ "name": "wi1", "link": true }],
         "grants": []
