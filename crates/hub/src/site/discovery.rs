@@ -4,7 +4,12 @@
 //! `/sitemap.xml`, and the head of every public page: its description, its canonical link,
 //! its Open Graph and Twitter cards and, on the landing page, its JSON-LD
 //! (`SoftwareApplication`, `FAQPage` for the questions it shows, `HowTo` for its steps).
-//! Every address in them is this hub's own `public_url`.
+//! The public pages' own addresses (canonical links, `og:url`, the JSON-LD's `url`s, the
+//! sitemap, `/llms.txt`'s page links) are the site's: `https://<site.json product.domain>`
+//! when the site names its marketing domain (`site_base`), else this hub's `public_url`. What
+//! only the hub has (its MCP address, the one line that joins a machine, its assets) is
+//! always at `public_url`. The four files answer on either host, each naming its own host's
+//! files (`request_base`).
 
 use serde_json::{Value, json};
 
@@ -42,13 +47,37 @@ fn base(public_url: &str) -> &str {
     public_url.trim_end_matches('/')
 }
 
-/// `ctx` with what `content/llms.md` names: this hub's address, its MCP address, and the
-/// one line that joins a machine on each system (with `<code>` where `machine_add`'s code
-/// goes).
+/// Where the site's public pages live: its marketing domain over https when `site.json`
+/// names one, else this hub's `public_url`.
+pub fn site_base(site: &Site, public_url: &str) -> String {
+    match site.info.product.domain.trim() {
+        "" => base(public_url).to_string(),
+        domain => format!("https://{}", domain.to_ascii_lowercase()),
+    }
+}
+
+/// The base of the host a request named (`Host`): the site's marketing domain when it is
+/// that, else this hub's `public_url`. Only ever one of those two: a request's `Host` picks
+/// between them and is never echoed.
+pub fn request_base(site: &Site, public_url: &str, host: Option<&str>) -> String {
+    let domain = site.info.product.domain.trim();
+    match host {
+        Some(host) if !domain.is_empty() && host.trim().eq_ignore_ascii_case(domain) => {
+            site_base(site, public_url)
+        }
+        _ => base(public_url).to_string(),
+    }
+}
+
+/// `ctx` with what `content/llms.md` names: this hub's address (`{hub}`), where the site's
+/// public pages live (`{site}`), the hub's MCP address, and the one line that joins a
+/// machine on each system (with `<code>` where `machine_add`'s code goes).
 pub fn llms_ctx<'a>(ctx: Ctx<'a>, public_url: &str) -> Ctx<'a> {
     let hub = base(public_url);
     let join = |os: &str| crate::hub::join_line(hub, os, "<code>");
+    let site = site_base(ctx.site, public_url);
     ctx.with("hub", hub)
+        .with("site", site)
         .with("mcp", format!("{hub}/mcp"))
         .with("join_linux", join("linux"))
         .with("join_windows", join("windows"))
@@ -79,6 +108,7 @@ pub fn llms_full_txt(
     retention_days: u32,
 ) -> String {
     let hub = base(public_url);
+    let pages = site_base(site, public_url);
     let mut out = llms_txt(site, public_url, kind);
     for name in PAGES {
         let Some(page) = site.pages.get(name) else {
@@ -88,16 +118,17 @@ pub fn llms_full_txt(
             .with("mcp", format!("{hub}/mcp"))
             .with("updated", page.updated.clone())
             .with("retention_days", retention_days.to_string());
-        out.push_str(&format!("\n---\n\n<{hub}/{name}>\n\n"));
+        out.push_str(&format!("\n---\n\n<{pages}/{name}>\n\n"));
         out.push_str(&page.markdown(&ctx, &[kind, switch]));
     }
     out
 }
 
-/// `/robots.txt`: every crawler, AI crawlers included, may read the public pages; none
-/// reads the private paths. It names the sitemap.
-pub fn robots_txt(site: &Site, public_url: &str) -> String {
-    let hub = base(public_url);
+/// `/robots.txt` as the host at `own` (`request_base`) answers it: every crawler, AI
+/// crawlers included, may read the public pages; none reads the private paths. It names
+/// that host's sitemap and `/llms.txt`.
+pub fn robots_txt(site: &Site, own: &str) -> String {
+    let hub = base(own);
     let mut out = format!("# {}: {hub}\n# {hub}/llms.txt\n\nUser-agent: *\nAllow: /\n", site.name());
     for path in PRIVATE {
         out.push_str(&format!("Disallow: {path}\n"));
@@ -106,11 +137,12 @@ pub fn robots_txt(site: &Site, public_url: &str) -> String {
     out
 }
 
-/// `/sitemap.xml`: the public pages, with the date each was last changed where it says.
-/// `landing`: whether this hub serves a landing page at `/` (one with no web sign-in sends
-/// `/` to its docs).
+/// `/sitemap.xml`: the public pages at the site's own addresses (`site_base`), with the date
+/// each was last changed where it says. `landing`: whether this hub serves a landing page
+/// at `/` (one with no web sign-in sends `/` to its docs).
 pub fn sitemap_xml(site: &Site, public_url: &str, landing: bool) -> String {
-    let hub = base(public_url);
+    let base = site_base(site, public_url);
+    let hub = base.as_str();
     let mut out = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
@@ -181,12 +213,13 @@ pub struct Meta<'a> {
     pub json_ld: Vec<Value>,
 }
 
-/// The head of a public page: its description, canonical link, Open Graph and Twitter
-/// cards (with the site's poster as their picture, when it has one) and its JSON-LD. The
-/// JSON-LD is data, never run: the pages' CSP has no `script-src` and needs none for it.
+/// The head of a public page: its description, its canonical link and `og:url` at the
+/// site's own address (`site_base`), Open Graph and Twitter cards (with the site's poster,
+/// served by this hub, as their picture, when it has one) and its JSON-LD. The JSON-LD is
+/// data, never run: the pages' CSP has no `script-src` and needs none for it.
 pub fn head(site: &Site, public_url: &str, meta: &Meta) -> String {
     let hub = base(public_url);
-    let url = format!("{hub}{}", meta.path);
+    let url = format!("{}{}", site_base(site, public_url), meta.path);
     let title = format!("{} · {}", meta.title, site.name());
     let description = if meta.description.is_empty() {
         site.info.product.description.as_str()
@@ -266,6 +299,7 @@ fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
 /// steps only where the page shows them (a new hub shows only the claim).
 pub fn landing_json_ld(site: &Site, front: Front, public_url: &str) -> Vec<Value> {
     let hub = base(public_url);
+    let pages = site_base(site, public_url);
     let ctx = Ctx::new(site).with("mcp", format!("{hub}/mcp"));
     let info = &site.info;
     let mut software = json!({
@@ -273,7 +307,7 @@ pub fn landing_json_ld(site: &Site, front: Front, public_url: &str) -> Vec<Value
         "@type": "SoftwareApplication",
         "name": info.product.name,
         "description": info.product.description,
-        "url": format!("{hub}/"),
+        "url": format!("{pages}/"),
         "publisher": { "@type": "Organization", "name": info.operator.name },
     });
     if let Some(category) = &info.software.category {
@@ -293,7 +327,7 @@ pub fn landing_json_ld(site: &Site, front: Front, public_url: &str) -> Vec<Value
         software["image"] = format!("{hub}{}", poster.url()).into();
     }
     if site.pages.contains_key("docs") {
-        software["softwareHelp"] = json!({ "@type": "CreativeWork", "url": format!("{hub}/docs") });
+        software["softwareHelp"] = json!({ "@type": "CreativeWork", "url": format!("{pages}/docs") });
     }
     let mut out = vec![software];
     if front == Front::Unclaimed {
@@ -313,7 +347,7 @@ pub fn landing_json_ld(site: &Site, front: Front, public_url: &str) -> Vec<Value
                     "position": i + 1,
                     "name": words(&ctx, &step.title),
                     "text": step.text.pick(front.key()).map(|t| words(&ctx, t)).unwrap_or_default(),
-                    "url": format!("{hub}/#how"),
+                    "url": format!("{pages}/#how"),
                 })
             })
             .collect();

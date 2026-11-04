@@ -391,6 +391,14 @@ fn a_site_that_does_not_check_out_says_what_and_where() {
         (
             Box::new(|d| {
                 edit_json(&d.join("site.json"), |v| {
+                    v["product"]["domain"] = "https://lumen.example.org/".into()
+                })
+            }),
+            &["site.json product.domain", "a host name"],
+        ),
+        (
+            Box::new(|d| {
+                edit_json(&d.join("site.json"), |v| {
                     v["links"]["source"] = "javascript:alert(1)".into()
                 })
             }),

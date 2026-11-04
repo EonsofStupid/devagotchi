@@ -151,7 +151,9 @@ pub struct Product {
     /// One sentence for the installed app's description.
     #[serde(default)]
     pub description: String,
-    /// The marketing domain, as `{domain}` in the copy.
+    /// The marketing domain, as `{domain}` in the copy: a host name. The public pages'
+    /// canonical addresses and the sitemap are `https://<domain>/…` when it is set
+    /// (`discovery::site_base`).
     #[serde(default)]
     pub domain: String,
 }
@@ -347,6 +349,17 @@ impl SiteFile {
         }
         if self.product.tagline.trim().is_empty() {
             return bad("product.tagline", "say what it is in a line");
+        }
+        // Where the public pages live (`discovery::site_base`): a host name, no scheme or path.
+        let domain = self.product.domain.trim();
+        if !domain.is_empty()
+            && (domain.len() > 253
+                || domain.starts_with(['.', '-'])
+                || !domain
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'))
+        {
+            return bad("product.domain", "a host name, like example.org, with no https:// or path");
         }
         if self.operator.name.trim().is_empty() {
             return bad("operator.name", "who runs the service");

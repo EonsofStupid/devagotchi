@@ -12,7 +12,8 @@
 //!   `{pop:<claim|tools|watch>|label}`: a button that opens that popup.
 //! - Whatever the page adds where it draws the copy: `{mcp}` (this hub's MCP address),
 //!   `{sign_in}`, `{sign_in_url}`, `{updated}`, `{retention_days}`, `{link}`, `{hub}`, `{n}`,
-//!   and in `content/llms.md` the join lines `{join_linux}`, `{join_windows}`, `{join_docker}`.
+//!   and in `content/llms.md` where the public pages live `{site}` and the join lines
+//!   `{join_linux}`, `{join_windows}`, `{join_docker}`.
 //!
 //! A placeholder the copy names but nothing fills is an error when the site is checked at
 //! start (`Ctx::checking`); drawing a page never fails.
