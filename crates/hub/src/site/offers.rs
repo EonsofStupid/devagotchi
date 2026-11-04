@@ -16,7 +16,9 @@
 //! }
 //! ```
 //!
-//! An offering's `text` and `href` may be empty: the section shows its name alone.
+//! An offering's `text` may be empty. One with no `href` is not offered at all, anywhere
+//! (`Offers::offered`): not in the `offers` tool, the landing section or the record of a
+//! yes, until the site gives it an address. With none that has one, the offers do not show.
 
 use serde::Deserialize;
 
@@ -68,15 +70,29 @@ pub struct Offering {
     /// One line: what it is. May be empty.
     #[serde(default)]
     pub text: String,
-    /// Where to learn more. May be empty.
+    /// Where to learn more. Empty: not offered yet (`Offers::offered`).
     #[serde(default)]
     pub href: String,
 }
 
+impl Offering {
+    /// Whether it is offered: it has somewhere to go. A blank one waits for the site.
+    pub fn offered(&self) -> bool {
+        !self.href.trim().is_empty()
+    }
+}
+
 impl Offers {
-    /// Whether any of it shows: on, with an offering.
+    /// The offerings that are offered, in the site's order: each with an address. Everything
+    /// that names an offering (the `offers` tool, the landing section, a kept yes) reads
+    /// them from here, never from `items`.
+    pub fn offered(&self) -> impl Iterator<Item = &Offering> {
+        self.items.iter().filter(|item| item.offered())
+    }
+
+    /// Whether any of it shows: on, with an offering that is offered.
     pub fn shown(&self) -> bool {
-        self.enabled && !self.items.is_empty()
+        self.enabled && self.offered().next().is_some()
     }
 
     pub(super) fn check(&self) -> Result<(), String> {
@@ -106,7 +122,7 @@ impl Offers {
             if item.name.trim().is_empty() || item.name.len() > 80 {
                 return bad("items", "each has a name, at most 80 characters");
             }
-            if !item.href.is_empty() && !(item.href.starts_with("https://") && safe_href(&item.href)) {
+            if item.offered() && !(item.href.starts_with("https://") && safe_href(&item.href)) {
                 return bad(
                     &format!("items {}.href", item.name),
                     "an https: URL, or empty",
