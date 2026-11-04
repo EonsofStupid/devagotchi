@@ -39,7 +39,7 @@ use crate::{
     hub::Hub,
     site::{
         Ctx, Site,
-        workflows::{DONE, MACHINE, MACHINE_OS, PHONE, SECURE_ACCOUNT},
+        workflows::{AI_CLIENT, DONE, MACHINE, MACHINE_OS, PHONE, SECURE_ACCOUNT},
     },
 };
 
@@ -49,6 +49,9 @@ pub struct Workflows {
     accounts: Arc<Accounts>,
     changes: Arc<tokio::sync::Notify>,
     link_ttl: u64,
+    /// When this hub last wrote each (tenant, family) of AI client's call, so a busy client
+    /// costs a write an hour at most.
+    noted: std::sync::Mutex<std::collections::HashMap<(String, &'static str), u64>>,
 }
 
 impl Workflows {
@@ -57,6 +60,34 @@ impl Workflows {
             accounts,
             changes,
             link_ttl,
+            noted: Default::default(),
+        }
+    }
+
+    /// An AI client that registered as `client` made a successful MCP call for `tenant`:
+    /// its family (Claude, ChatGPT or Codex, Grok, Cursor) is kept for the tenant, and a
+    /// workflow waiting on it wakes the first time. Another kind of client is not kept.
+    pub async fn client_called(&self, tenant: &str, client: &str) {
+        let family = crate::analytics::funnel::client_family(client);
+        if family == "other" {
+            return;
+        }
+        let now = crate::devices::now_secs();
+        let key = (tenant.to_string(), family);
+        {
+            let noted = self.noted.lock().expect("noted");
+            if noted.get(&key).is_some_and(|at| now < at + crate::accounts::clients::NOTE_EVERY_SECS) {
+                return;
+            }
+        }
+        match self.accounts.note_client_call(tenant, family, now).await {
+            Ok(first) => {
+                self.noted.lock().expect("noted").insert(key, now);
+                if first {
+                    self.changed();
+                }
+            }
+            Err(error) => eprintln!("devagotchi-hub: account store: {}", error.message),
         }
     }
 
@@ -102,6 +133,9 @@ pub struct StepStatus {
     /// The step is offered but never holds the workflow up (keeping the account).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub optional: bool,
+    /// An `ai_client` step: which AI client (`claude`, `chatgpt`, `grok`, `cursor`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub client: Option<String>,
 }
 
 /// Where a workflow stands.
@@ -207,6 +241,12 @@ impl Hub {
         workflow.steps.iter().find_map(|step| match step.kind.as_str() {
             MACHINE => self.machine_unavailable(site, step.os.as_deref()),
             PHONE if self.push.is_none() => Some(Ctx::new(site).plain(&site.messages.workflow.no_push)),
+            AI_CLIENT => step
+                .client
+                .as_ref()
+                .and_then(|client| site.messages.workflow.clients.get(client))
+                .and_then(|words| words.unavailable.as_ref())
+                .map(|why| Ctx::new(site).plain(why)),
             _ => None,
         })
     }
@@ -307,6 +347,12 @@ impl Hub {
             .map(|push| push.devices().push_for(&subject.id).map(|p| p.len()).unwrap_or(0));
         let room = self.machine_room(subject).map(|refused| refused.message);
         let steps = row.definition.steps.clone();
+        // The AI clients the tenant has working, when a step waits on one.
+        let families = if steps.iter().any(|step| step.kind == AI_CLIENT) {
+            workflows.accounts().client_families(&row.tenant).await?
+        } else {
+            Vec::new()
+        };
         let mut seen: Vec<Seen> = Vec::with_capacity(steps.len());
         for (index, step) in steps.iter().enumerate() {
             let progress = row.progress.step(index);
@@ -355,6 +401,20 @@ impl Hub {
                     None if !one.done => one.why = Some(ctx().plain(&copy.no_push)),
                     None => {}
                 },
+                AI_CLIENT => {
+                    let client = step.client.clone().unwrap_or_default();
+                    let words = copy.clients.get(&client);
+                    let name = words.map(|w| ctx().plain(&w.name)).unwrap_or_else(|| client.clone());
+                    one.done |= families.contains(&client);
+                    one.fact = Some(
+                        ctx()
+                            .with("client", name)
+                            .plain(if one.done { &facts.client_done } else { &facts.client_waiting }),
+                    );
+                    if !one.done {
+                        one.why = words.and_then(|w| w.unavailable.as_ref()).map(|why| ctx().plain(why));
+                    }
+                }
                 _ => {}
             }
             seen.push(one);
@@ -432,6 +492,7 @@ impl Hub {
                     os: seen.os,
                     why: seen.why,
                     optional,
+                    client: step.client.clone(),
                 }
             })
             .collect();

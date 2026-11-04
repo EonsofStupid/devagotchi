@@ -718,18 +718,30 @@ impl ServerHandler for Hub {
         request: rmcp::model::CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        let subject = self.subject(&context).ok();
         if request.name != "whoami"
-            && let Ok(subject) = self.subject(&context)
-            && let Some(answer) = self.waiting_result(&subject)
+            && let Some(subject) = &subject
+            && let Some(answer) = self.waiting_result(subject)
         {
-            self.record(&subject, &request.name, "", "", "early_access")
+            self.record(subject, &request.name, "", "", "early_access")
                 .map_err(|Json(error)| rmcp::ErrorData::internal_error(error.message, None))?;
             return Ok(answer.into());
         }
         let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router())
+        let answer = (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router())
             .call(call)
-            .await
+            .await;
+        // A successful call from an AI client of a known family: what a workflow's
+        // `ai_client` step waits on (`workflows.rs`).
+        if let Ok(rmcp::model::CallToolResponse::Complete(result)) = &answer
+            && result.is_error != Some(true)
+            && let Some(subject) = &subject
+            && let (Some(tenant), Some(client)) = (&subject.tenant, &subject.client)
+            && let Some(workflows) = &self.workflows
+        {
+            workflows.client_called(tenant, client).await;
+        }
+        answer
     }
 
     /// The MCP server's name and instructions are the site's (`site.json` `mcp`), so every
