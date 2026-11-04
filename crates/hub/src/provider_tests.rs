@@ -618,7 +618,7 @@ async fn google_for_an_address_with_a_password_account_asks_to_link_it() {
     assert_eq!(status, 200);
     assert!(page.contains("pat@example.com already has an account. Link Google to it?"), "{page}");
     assert!(page.contains(">Link<") && page.contains(">Keep separate<"), "{page}");
-    assert!(page.contains("Enter this account's password to link Google to it.") && page.contains("name=\"password\""), "{page}");
+    assert!(page.contains("Enter this account&#39;s password to link Google to it.") && page.contains("name=\"password\""), "{page}");
     assert!(page.contains("Password for pat@example.com") && page.contains("Forgot password?"), "{page}");
     // Link with the account's password: Google now signs in to the password account.
     let linked = world
