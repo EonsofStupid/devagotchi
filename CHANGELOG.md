@@ -7,6 +7,21 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### The public pages at the site's marketing domain (increment 76)
+- The public pages' canonical links, `og:url`, the landing page's JSON-LD `url`s, the
+  sitemap and `/llms.txt`'s page links are at `https://<site.json product.domain>` when the
+  site names one (`discovery::site_base`), else at the hub's `public_url` as before. For the
+  built-in site that is https://devagotchi.com, so the marketing site is the canonical one
+  and app.devagotchi.com stays the app.
+- `/llms.txt`, `/llms-full.txt`, `/robots.txt` and `/sitemap.xml` answer on the marketing
+  host as on the hub's own, with no redirect, and robots names the sitemap and `/llms.txt`
+  of the host it was asked on (`Host`, which only picks between the two configured
+  addresses). What only the hub has stays at `public_url`: the MCP address, the join lines,
+  the setup links, the poster.
+- `site.json` `product.domain` must be a host name (no scheme or path); `check-site` says so.
+- Tests: both hosts, a host in another case, any other host (never echoed), a site with no
+  domain, and the neutral site at its own domain.
+
 ### The Shippin Network: "Yes" in the chat links the account (increment 73)
 - `site.json` `offers`: the network a site belongs to and its free offerings, each a name, a
   one-line description and a learn-more URL (either may be empty). The built-in site belongs
