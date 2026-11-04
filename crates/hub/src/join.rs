@@ -51,16 +51,19 @@ fn safe_url(url: &str) -> bool {
     })
 }
 
-/// The script for one live code. `None` when a value could not be written safely.
+/// The script for one live code: `device` is the stored name the machine joins as, `shown`
+/// the name `machines` shows its person (`tenant_machines.rs`), the one the script tells
+/// them to use. `None` when a value could not be written safely.
 pub fn script(
     shell: Shell,
     hub: &str,
     device: &str,
+    shown: &str,
     code: &str,
     downloads: &Downloads,
 ) -> Option<String> {
     let hub = hub.trim_end_matches('/');
-    if !safe_url(hub) || !valid_name(device) || !valid_code(code) {
+    if !safe_url(hub) || !valid_name(device) || !valid_name(shown) || !valid_code(code) {
         return None;
     }
     let sum = |name: &str| downloads.sha256(name).unwrap_or("").to_string();
@@ -76,6 +79,7 @@ pub fn script(
             .to_string(),
         ),
         ("@DEVICE@", device.to_string()),
+        ("@NAME@", shown.to_string()),
         ("@VERSION@", downloads.version.clone()),
         ("@CODE@", code.to_string()),
         ("@SHA_INSTALLER@", sum("install-devagotchi.sh")),
@@ -173,7 +177,7 @@ pub async fn join(State(state): State<AppState>, Path(asked): Path<String>) -> R
         return text(StatusCode::OK, refusal(shell, hub));
     }
     match state.hub.links.join_script(code, shell) {
-        Ok(Some(device)) => match script(shell, hub, &device, code, &downloads) {
+        Ok(Some(device)) => match script(shell, hub, &device, &shown_name(&state, &device).await, code, &downloads) {
             Some(body) => text(StatusCode::OK, body),
             None => text(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -186,6 +190,18 @@ pub async fn join(State(state): State<AppState>, Path(asked): Path<String>) -> R
             "the hub could not check that code right now; run the same line again in a minute\n"
                 .into(),
         ),
+    }
+}
+
+/// The name `machines` shows the person whose machine `device` (its stored name) is.
+async fn shown_name(state: &AppState, device: &str) -> String {
+    let owner = state.hub.links.device(device).ok().flatten().and_then(|found| found.owner);
+    let (Some(owner), Some(hub)) = (owner, state.passkeys.as_ref()) else {
+        return device.to_string();
+    };
+    match hub.accounts().get(&owner).await {
+        Ok(Some(account)) => state.hub.shown_name(&hub.accounts().subject(&account, "passkey"), device),
+        _ => device.to_string(),
     }
 }
 
@@ -279,6 +295,7 @@ mod tests {
             "@HUB@",
             "@PROTO@",
             "@DEVICE@",
+            "@NAME@",
             "@VERSION@",
             "@CODE@",
             "@SHA_",
@@ -311,18 +328,27 @@ mod tests {
             "devagotchi-x86_64-unknown-linux-gnu.tar.xz",
             "devagotchi-x86_64-pc-windows-msvc.zip",
         ]);
+        // On a hosted hub the machine joins under its stored name (tenant tag first) and the
+        // person is told the name `machines` shows them.
         let sh = script(
             Shell::Sh,
             "https://app.devagotchi.com/",
-            "platinum",
+            "t0123456789ab-dabo",
+            "dabo",
             CODE,
             &downloads,
         )
         .unwrap();
         assert!(!unfilled(&sh), "every placeholder is filled:\n{sh}");
+        let done = sh.lines().find(|line| line.contains("done:")).unwrap();
+        assert!(
+            done.contains("dabo is connected to $hub and starts with the computer. Tell your AI to use \\\"dabo\\\"."),
+            "{done}"
+        );
+        assert!(!done.contains("t0123456789ab"), "the tag is not the person's word: {done}");
         for wanted in [
             "hub='https://app.devagotchi.com'",
-            "device='platinum'",
+            "device='t0123456789ab-dabo'",
             "version='main-9842d39'",
             "--proto '=https'",
             &format!("printf '%s\\n' '{CODE}' | bash"),
@@ -340,12 +366,17 @@ mod tests {
         let ps = script(
             Shell::PowerShell,
             "https://app.devagotchi.com",
-            "platinum",
+            "t0123456789ab-dabo",
+            "dabo",
             CODE,
             &downloads,
         )
         .unwrap();
         assert!(!unfilled(&ps), "every placeholder is filled:\n{ps}");
+        let done = ps.lines().find(|line| line.contains("done:")).unwrap();
+        assert!(done.contains("dabo is connected to $hub and starts with the computer. Tell your AI to use `\"dabo`\"."), "{done}");
+        assert!(!done.contains("t0123456789ab"), "{done}");
+        assert!(ps.contains("$device = 't0123456789ab-dabo'"), "--device keeps the stored name");
         assert!(ps.contains(&format!("$env:DEVAGOTCHI_ENROLL_CODE = '{CODE}'")));
         assert!(ps.contains(downloads.sha256("install-devagotchi.ps1").unwrap()));
         assert!(
@@ -366,12 +397,13 @@ mod tests {
             (hub, "platinum", "dvg-'$(id)'"),
         ] {
             assert!(
-                script(Shell::Sh, hub, device, code, &downloads).is_none(),
+                script(Shell::Sh, hub, device, "platinum", code, &downloads).is_none(),
                 "{hub} {device} {code}"
             );
         }
+        assert!(script(Shell::Sh, hub, "platinum", "plat'inum", CODE, &downloads).is_none());
         // A hub without the PowerShell installer writes no PowerShell script.
-        assert!(script(Shell::PowerShell, hub, "platinum", CODE, &downloads).is_none());
+        assert!(script(Shell::PowerShell, hub, "platinum", "platinum", CODE, &downloads).is_none());
         assert!(valid_code(CODE) && !valid_code("dvg-") && !valid_code(&format!("{CODE}0")));
     }
 
@@ -382,6 +414,7 @@ mod tests {
         let sh = script(
             Shell::Sh,
             "http://127.0.0.1:9",
+            "platinum",
             "platinum",
             CODE,
             &downloads,

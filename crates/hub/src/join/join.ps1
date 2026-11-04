@@ -42,7 +42,7 @@
         } finally {
             Remove-Item Env:\DEVAGOTCHI_ENROLL_CODE -ErrorAction SilentlyContinue
         }
-        Write-Host "devagotchi join: done: $device is on $hub. Tell your AI to use it by that name."
+        Write-Host "devagotchi join: done: @NAME@ is connected to $hub and starts with the computer. Tell your AI to use `"@NAME@`"."
     } finally {
         Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
     }

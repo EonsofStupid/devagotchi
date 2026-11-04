@@ -10,6 +10,8 @@
     -Autostart              HKCU Run entries so the broker (and the link, if set up) start at logon
     -RegisterClaudeDesktop  adds "devagotchi" to claude_desktop_config.json (backup first)
     -RegisterClaudeCode     runs `claude mcp add --scope user devagotchi ...`
+    -Developer              also prints the local MCP command, the Claude Code line and the
+                            adapter check (the hub's join script never passes it)
   Re-running moves the version and keeps the config. -Uninstall stops the broker and the
   link and removes the Run entries; files stay for you to delete.
 
@@ -50,6 +52,7 @@ param(
     [ValidateSet('granted', 'account')]
     [string]$ExecPolicy = '',
     [switch]$Uninstall,
+    [switch]$Developer,
     [switch]$PrintTarget
 )
 
@@ -371,6 +374,9 @@ if ($RegisterClaudeCode) {
 
 Step 'Done'
 if ($linked) { Write-Host "    Link:        this machine answers the hub as its broker; log $LinkLog" }
-Write-Host "    MCP command: `"$mcpExe`" mcp --socket $endpoint"
-Write-Host "    Claude Code: claude mcp add --scope user devagotchi -- `"$mcpExe`" mcp --socket $endpoint"
-Write-Host "    Check:       python tests\adapter_probe.py $endpoint --adapter `"$mcpExe`" mcp --git <path to git.exe> --cwd `"$Workspace`""
+Write-Host "    Log: $Log"
+if ($Developer) {
+    Write-Host "    MCP command: `"$mcpExe`" mcp --socket $endpoint"
+    Write-Host "    Claude Code: claude mcp add --scope user devagotchi -- `"$mcpExe`" mcp --socket $endpoint"
+    Write-Host "    Check:       python tests\adapter_probe.py $endpoint --adapter `"$mcpExe`" mcp --git <path to git.exe> --cwd `"$Workspace`""
+}

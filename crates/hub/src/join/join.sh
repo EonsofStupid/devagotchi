@@ -32,4 +32,4 @@ echo "$sum  $archive" > "$work/$archive.sha256"
 say "installing devagotchi $version and joining $hub as $device"
 printf '%s\n' '@CODE@' | bash "$work/install-devagotchi.sh" --version "$version" --artifact-dir "$work" \
     --hub "$hub" --device "$device" --enroll --exec-policy account "$@"
-say "done: $device is on $hub. Tell your AI to use it by that name."
+say "done: @NAME@ is connected to $hub and starts with the computer. Tell your AI to use \"@NAME@\"."

@@ -147,7 +147,7 @@ impl HubSignIn {
     }
 
     /// The accounts behind this sign-in, for the hub's own authorization server.
-    pub(super) fn accounts(&self) -> &Arc<Accounts> {
+    pub(crate) fn accounts(&self) -> &Arc<Accounts> {
         &self.accounts
     }
 
