@@ -256,6 +256,20 @@ async fn llms_txt_carries_this_hubs_address_and_the_steps_an_ai_follows() {
         "the docs at this hub's address"
     );
     assert!(full.contains("# Privacy policy") && full.contains("# Terms of service"));
+    // The docs name only tools the hub serves.
+    let docs = full
+        .split(&format!("<{url}/docs>"))
+        .nth(1)
+        .and_then(|rest| rest.split("\n---\n").next())
+        .unwrap();
+    let mut named = 0;
+    for name in docs.split('`').skip(1).step_by(2) {
+        if name.contains('_') && name.chars().all(|c| c.is_ascii_lowercase() || c == '_') {
+            assert!(served.iter().any(|s| s == name), "the docs name {name}");
+            named += 1;
+        }
+    }
+    assert!(named > 20, "{docs}");
     for unfilled in ["{product}", "{mcp}", ":::"] {
         assert!(!full.contains(unfilled), "{unfilled}");
     }
