@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
   Install Devagotchi on this Windows machine for the current user, start the broker, and
-  optionally register `devagotchi mcp` with Claude Desktop and Claude Code in place of Desktop Commander.
+  optionally register `devagotchi mcp` with Claude Desktop and Claude Code.
 
 .DESCRIPTION
   Everything lands under -Root (default D:\localdev\devagotchi): versioned binaries, the

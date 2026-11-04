@@ -1,6 +1,7 @@
 ---
 title: Docs
-updated: 1 November 2026
+updated: 3 November 2026
+description: How to connect Claude, ChatGPT, Codex, Cursor or Grok to {product}, add your machines, and every tool your AI gets.
 ---
 # {product}
 
@@ -35,17 +36,32 @@ operator set up.
 
 ## Add a machine
 
-A machine joins a hub with a one-time code from the hub's operator. The Linux installer
-(x86_64 and ARM64, systemd) and the Windows installer are in the
-[repository]({link:source}), under `deploy/`.
+Ask your AI to add one: a server, a PC or a laptop. It calls `workflow_start` and hands you
+one setup link that needs no sign-in: press one button, paste one line on that machine, and
+your AI follows each step until the machine is online. Or it calls `machine_add`, which
+returns a one-time code and the line for each system: Linux (x86_64 and ARM64, systemd),
+Windows (PowerShell, no administrator) and Docker Compose. Signed in, you can also add one
+from your account page.
+
+The line installs {product}, gives the machine its own key, and starts the broker and its
+link, now and after every reboot. Nothing on the machine listens on the network.
+
+## For AI agents
+
+[/llms.txt](/llms.txt) says what this hub is and the steps an AI follows to give its user a
+server; [/llms-full.txt](/llms-full.txt) is that with every page inlined.
 
 ## Tools
 
 | Tool | What it does |
 |---|---|
 | `machines` | The machines you can use and whether each is online now. Start here. |
-| `operation_start` | Runs a program the machine's owner has allowed, with exact arguments, as a job the machine's broker owns. |
-| `operation_get`, `operation_read` | A job's state, and its output after a cursor. |
+| `workflow_list`, `workflow_start`, `workflow_status`, `workflow_wait`, `workflow_cancel` | The setups the AI can hand you as one link (a machine, your phone, another AI app), and how it follows each to the end. |
+| `machine_add` | A one-time code and the one line that joins a machine to your account. |
+| `run` | Runs a command on a machine and returns its output in one call. |
+| `read_file`, `read_multiple_files`, `read_image`, `list_directory`, `get_file_info`, `write_file`, `edit_file`, `create_directory`, `move_file` | Work on a machine's files. |
+| `operation_start` | Runs a program as a job the machine's broker owns, for long jobs. |
+| `operation_wait`, `operation_get`, `operation_read` | Wait for a job, see its state, and read its output after a cursor. |
 | `operation_cancel` | Stops a job. Disconnecting never does. |
 | `approval_request`, `approval_wait` | Asks you to approve a step, with what, why and how to undo it; you decide on [Approvals](/approvals) and the AI continues on your answer. |
 | `whoami` | The account you are signed in as and what it may use. |

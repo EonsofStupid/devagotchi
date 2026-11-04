@@ -754,15 +754,21 @@ impl ServerHandler for Hub {
                 .build(),
         )
         .with_server_info(site.mcp_info())
-        .with_instructions(site.mcp_instructions())
+        .with_instructions(site.mcp_instructions(&self.config.public_url))
     }
+}
+
+/// Every tool the hub serves, as `tools/list` describes it.
+#[cfg(test)]
+pub(crate) fn tools() -> Vec<rmcp::model::Tool> {
+    (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router() + Hub::workflow_router())
+        .list_all()
 }
 
 /// The names of every tool the hub serves, for tests that hold a page's list to them.
 #[cfg(test)]
 pub(crate) fn tool_names() -> Vec<String> {
-    (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router() + Hub::workflow_router())
-        .list_all()
+    tools()
         .into_iter()
         .map(|tool| tool.name.to_string())
         .collect()

@@ -31,6 +31,9 @@ mod approvals;
 mod claim;
 pub(crate) mod counted;
 mod device;
+mod discovery;
+#[cfg(test)]
+mod discovery_tests;
 mod email;
 mod hosted;
 mod landing;

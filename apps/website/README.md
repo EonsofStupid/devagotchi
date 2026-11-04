@@ -9,7 +9,6 @@ Product site for the Devagotchi AI-to-workspace bridge. The current site provide
 | `/` | Product overview and actual Linux desktop screenshot |
 | `/connect` | Public API/MCP reference and local broker quickstart |
 | `/architecture` | Proposed task graph and internal mesh contracts |
-| `/research` | Qualified primary-source evidence and acceptance cases |
 | `/api/v1/capabilities` | Machine-readable availability and connection metadata |
 | `/api/v1/reference?topic=local-tools` | Versioned static reference topics |
 | `/openapi.json` | OpenAPI 3.1 description of the two public GET routes |

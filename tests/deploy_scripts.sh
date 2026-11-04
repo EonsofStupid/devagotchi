@@ -58,7 +58,10 @@ listed=$(tar -tzf "$work"/backups/state-*.tgz) || fail "the state archive reads 
 echo "PASS backup.sh: database dump and state archive"
 
 # The hub's site (tests/fixtures/neutral-site): checked with the hub image, put in place,
-# served; nothing of the built-in site shows.
+# served; nothing of the built-in site shows. This runs the published image, built from
+# main, not this commit: it gets the fixture's files that image reads (`site_files`), so a
+# site file a change adds reaches this test once the image it ships in is published. The
+# hub's own tests check every file of the fixture against this commit's code.
 # (Output captured, never piped to grep -q: an early exit would fail the pipe under pipefail.)
 page() { curl -fsS "http://127.0.0.1:$port/$1"; }
 has() { [[ "$(page "$1" 2>/dev/null)" == *"$2"* ]]; }
@@ -68,7 +71,10 @@ install_site() {
   "$root/deploy/compose/install.sh" --domain hub.test.example --rp-id test.example \
     --edge external --hub-bind 127.0.0.1 --hub-port "$port" --dir "$dir" --no-timer "$@"
 }
-cp -R "$root/tests/fixtures/neutral-site" "$work/site"
+site_files="site.json tokens.json assets content/landing.json content/messages.json content/docs.md
+  content/privacy.md content/terms.md content/support.md"
+mkdir -p "$work/site/content"
+for file in $site_files; do cp -R "$root/tests/fixtures/neutral-site/$file" "$work/site/$file"; done
 out=$(install_site --site "$work/site" 2>&1) || { printf '%s\n' "$out" >&2; fail "install.sh --site puts a site in place"; }
 grep -q "site Lumen Relay (lumen-relay) checks out" <<<"$out" || fail "install.sh checks the site with the hub image"
 [[ "$(env_get DEVAGOTCHI_SITE_DIR)" == "$dir/site" ]] || fail ".env names the site directory"

@@ -4,7 +4,7 @@
 
 Devagotchi is a universal workspace bridge, beginning with locally installed MCP clients and a native app for seeing commands, output, and workspace activity. The product direction represents every admitted task as a graph and grows into a trusted internal mesh, with public API/MCP surfaces for adoption. Windows, macOS, and Linux are required targets. Source is published at [EonsofStupid/devagotchi](https://github.com/EonsofStupid/devagotchi). The rebuilt [Devagotchi Site](https://devagotchi.justsayit.chatgpt.site) is published with a read-only HTTP/MCP reference service and Linux source download; [devagotchi.net](https://devagotchi.net) has been added and is pending DNS validation.
 
-This working copy starts the replacement for DesktopCommanderMCP with a separate process broker, a thin official-SDK MCP adapter, and a Tauri desktop inspector. **Execution providers are implemented for Linux and Windows. The macOS provider is still required before a cross-platform release.**
+This working copy is built from a separate process broker, a thin official-SDK MCP adapter, and a Tauri desktop inspector. **Execution providers are implemented for Linux and Windows. The macOS provider is still required before a cross-platform release.**
 
 ## Install: one line, for you or your AI
 
@@ -52,7 +52,7 @@ clients above, after printing that line.
   backed up beside themselves first (`.bak-<time>`), Claude Code's is set with `claude mcp`;
 - your broker, a background process that keeps running, with its config and state in
   `~/.config/devagotchi` and `~/.local/state/devagotchi` (Windows `%APPDATA%\devagotchi` and
-  `%LOCALAPPDATA%\devagotchi`). It runs what your account can, as Desktop Commander does:
+  `%LOCALAPPDATA%\devagotchi`). It runs what your account can:
   shell commands, any program, and files anywhere you can reach, starting in your home
   directory. So an AI client with Devagotchi can do whatever your account can, including root
   or administrator rights when you install it as root or from an elevated (Run as
@@ -94,7 +94,7 @@ download one from the release page and run
 
 This directory is the desktop foundation and planning source preview, not a signed product installer. Website/reference-service verification belongs to the existing Site's separate publication receipt and does not extend the original Linux evidence. A public tool schema is documentation; it does not grant access to the documented operation.
 
-**Planning revision, October 17, 2026 UTC:** the [architecture and growth plan](docs/product-and-platform-plan.md) retains the existing owners, G0–G5 native/scale gates, and immediate P0 reference publication. The [task-graph and mesh contract](docs/task-graph-and-mesh-contract.md) defines proposed task/step/attempt/output/event records, local-to-mesh packets, and failure/authorization semantics. The [performance specification](docs/performance-and-experience-spec.md) defines proposed budgets and reproducible comparisons; none is an achieved benchmark. The [execution guide](docs/implementation-guide.md) separates public publication from core baseline work. [Desktop Commander user evidence](docs/desktop-commander-user-evidence.md) preserves primary reports, corrections, and fix evidence without claiming every reported problem remains present.
+**Planning revision, October 17, 2026 UTC:** the [architecture and growth plan](docs/product-and-platform-plan.md) retains the existing owners, G0–G5 native/scale gates, and immediate P0 reference publication. The [task-graph and mesh contract](docs/task-graph-and-mesh-contract.md) defines proposed task/step/attempt/output/event records, local-to-mesh packets, and failure/authorization semantics. The [performance specification](docs/performance-and-experience-spec.md) defines proposed budgets and reproducible comparisons; none is an achieved benchmark. The [execution guide](docs/implementation-guide.md) separates public publication from core baseline work.
 
 ## Current desktop behavior
 
@@ -273,7 +273,7 @@ The current engine uses pipes, not a PTY. It clears inherited environment variab
 
 ## Source and release status
 
-DesktopCommanderMCP was inspected as the reference at commit `f508e524469c26f6366e17dbfd3ee5a69d112127`. The implementation here is a new foundation; it is not a claim of feature parity or benchmarked superiority over that project. The separate audit explains concrete behaviors being improved and preserves the reference's MIT license with its source snapshot.
+The implementation here is a new foundation written from scratch in Rust. It makes no claim of benchmarked superiority over any other project.
 
 The broker, desktop inspector, planning documents, audit evidence, and website source are published in this repository. The initial complete source import is commit [`72ea5db`](https://github.com/EonsofStupid/devagotchi/commit/72ea5db73e898efa0ebfc8800a531a2df29fe6f7), whose Git tree matches the verified 211-file source snapshot. Website code lives in [`apps/website`](apps/website/README.md) and retains its existing Sites deployment identity. The earlier `404` is preserved in historical audit artifacts; repository access is now verified.
 

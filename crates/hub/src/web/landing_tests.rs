@@ -1,6 +1,6 @@
 //! The landing page (`landing.rs`): every section is there for a claimed hub, a new hub
-//! offers only the claim, the MCP address is this hub's own, the comparison cites its
-//! sources, planned work says so, and nothing in it needs more than the plain pages' CSP.
+//! offers only the claim, the MCP address is this hub's own, no other product is named,
+//! planned work says so, and nothing in it needs more than the plain pages' CSP.
 //! The pages snap under a bar that stays, every term has its tooltip, every popup opens from
 //! a button and names itself, and the AI's tool list is the hub's own.
 
@@ -34,21 +34,20 @@ fn a_claimed_hub_shows_the_whole_product_page() {
     for (what, needle) in [
         (
             "hero",
-            "<h1>One hub between your AI and every machine you have.</h1>",
+            "<h1>Your AI gets your server.</h1>",
         ),
         (
             "sign-in",
             "href=\"/auth/login?return_to=/account\">Sign in</a>",
         ),
         ("how it works", "id=\"how\""),
-        ("comparison", "id=\"compare\""),
-        ("features", "id=\"features\""),
+        ("extended services", "id=\"features\""),
         ("connect", "id=\"connect\""),
         ("self-host", "id=\"self-host\""),
         ("the one command", "docker compose up -d"),
         ("kept current", "<code>install.sh</code>"),
         ("FAQ", "id=\"faq\""),
-        ("closing", "Give your AI the whole space. Keep the keys."),
+        ("closing", "Give your AI your server. Keep the keys."),
         ("footer", "<a href=\"/privacy\">Privacy</a>"),
     ] {
         assert!(html.contains(needle), "{what}: {needle} missing");
@@ -61,7 +60,6 @@ fn a_claimed_hub_shows_the_whole_product_page() {
     let order: Vec<usize> = [
         "<h1>",
         "id=\"how\"",
-        "id=\"compare\"",
         "id=\"features\"",
         "id=\"connect\"",
         "id=\"self-host\"",
@@ -87,26 +85,6 @@ fn ai_apps_connect_at_this_hubs_own_address_and_nothing_else_is_hard_coded() {
     // The address is escaped like every other value.
     let (_, odd) = page(&Front::Passkeys, "https://hub.example.org/a\"<b>/");
     assert!(odd.contains("<code>https://hub.example.org/a&quot;&lt;b&gt;/mcp</code>"));
-}
-
-#[test]
-fn the_comparison_cites_desktop_commanders_source_on_every_row() {
-    let html = body(Front::Passkeys);
-    let compare = section(&html, "id=\"compare\"");
-    let rows: Vec<&str> = compare.split("<tr><th scope=\"row\">").skip(1).collect();
-    assert_eq!(rows.len(), 11);
-    for row in rows {
-        let cite = row
-            .split("<span class=\"cite\">")
-            .nth(1)
-            .and_then(|rest| rest.split("</span>").next())
-            .unwrap_or_else(|| panic!("no citation: {row}"));
-        assert!(cite.starts_with('§') || cite == "plan §14", "{cite}");
-        assert!(row.contains("data-label=\"Devagotchi\""), "{row}");
-    }
-    assert!(compare.contains("commit c2b8795"));
-    assert!(compare.contains("/blob/main/docs/desktop-commander-teardown.md"));
-    assert!(compare.contains("Desktop Commander is #1."));
 }
 
 #[test]
@@ -141,7 +119,7 @@ fn a_hosted_hub_gets_people_started_and_never_offers_a_claim() {
 fn a_new_hub_leads_with_the_claim_and_offers_nothing_else() {
     let html = body(Front::Unclaimed);
     assert!(html.contains("Nobody owns this hub yet"));
-    assert!(html.contains("<h1>One hub between your AI and every machine you have.</h1>"));
+    assert!(html.contains("<h1>Your AI gets your server.</h1>"));
     // The first thing that reads "claim this hub" is the link to /claim (a browser test
     // clicks the first match), and it is the only button.
     let first = html.to_lowercase().find("claim this hub").unwrap();
@@ -183,10 +161,20 @@ async fn the_page_needs_nothing_the_plain_csp_refuses() {
         );
         assert!(html.contains("<body class=\"landing\">"));
         assert!(html.contains("<link rel=\"stylesheet\" href=\"/assets/hub.css\">"));
-        // No script, no inline style, nothing loaded from anywhere but this hub: inline
-        // SVG, and the setup video and its poster from /assets/.
-        for refused in ["<script", "<style", " style=", "<img", "<iframe"] {
+        // No script that runs, no inline style, nothing loaded from anywhere but this hub:
+        // inline SVG, and the setup video and its poster from /assets/. The only script
+        // elements are JSON-LD, data no browser runs, so the CSP needs no script-src.
+        for refused in ["<style", " style=", "<img", "<iframe"] {
             assert!(!html.contains(refused), "{refused}");
+        }
+        for script in html.split("<script").skip(1) {
+            assert!(script.starts_with(" type=\"application/ld+json\">"), "{script}");
+            let data = script
+                .split_once('>')
+                .and_then(|(_, rest)| rest.split_once("</script>"))
+                .map(|(data, _)| data)
+                .unwrap();
+            serde_json::from_str::<serde_json::Value>(data).unwrap();
         }
         for src in html.split(" src=\"").skip(1) {
             assert!(src.starts_with("/assets/turnkey.mp4?v="), "{src}");
@@ -203,12 +191,13 @@ async fn the_page_needs_nothing_the_plain_csp_refuses() {
         );
         // The diagram's arrowheads are markers in the same SVG, never a fetch.
         assert!(html.split("url(").skip(1).all(|rest| rest.starts_with('#')));
-        // Links leave only for the source on GitHub.
+        // Links leave only for the source on GitHub; the canonical link is this hub's own.
         for href in html.split("href=\"").skip(1) {
             let href = href.split('"').next().unwrap();
             assert!(
                 href.starts_with('/')
                     || href.starts_with('#')
+                    || href == format!("{URL}/")
                     || href.starts_with("https://github.com/EonsofStupid/devagotchi"),
                 "{href}"
             );
@@ -297,37 +286,6 @@ fn every_popup_opens_from_a_button_names_itself_and_closes() {
 }
 
 #[test]
-fn each_comparison_row_opens_its_evidence_from_the_teardown() {
-    let html = body(Front::Passkeys);
-    let compare = section(&html, "id=\"compare\"");
-    for n in 1..=11 {
-        let opener =
-            format!("<button type=\"button\" class=\"evidence\" popovertarget=\"ev-{n}\">");
-        assert!(compare.contains(&opener), "row {n} opens no evidence");
-        let popup = html
-            .split(&format!("<div class=\"modal\" id=\"ev-{n}\""))
-            .nth(1)
-            .and_then(|rest| rest.split("<div class=\"modal\" ").next())
-            .unwrap_or_else(|| panic!("no evidence popup {n}"));
-        // A file and line of Desktop Commander (the price row cites its pricing page), and
-        // the section it is read from.
-        let cited = popup.split("<code>").skip(1).any(|code| {
-            let code = code.split("</code>").next().unwrap();
-            code.rsplit_once(':')
-                .is_some_and(|(_, lines)| lines.starts_with(|c: char| c.is_ascii_digit()))
-        });
-        assert!(cited || popup.contains("pricing page"), "{popup}");
-        assert!(popup.contains("c2b8795"), "{popup}");
-        assert!(
-            popup.contains("/blob/main/docs/desktop-commander-teardown.md#")
-                || popup.contains("/blob/main/docs/product-and-platform-plan.md#14-"),
-            "{popup}"
-        );
-    }
-    assert!(!html.contains("id=\"ev-12\""));
-}
-
-#[test]
 fn the_tool_list_is_the_tools_the_hub_serves() {
     let listed: Vec<&str> = TOOLS
         .iter()
@@ -357,7 +315,7 @@ fn the_rail_names_every_page_in_the_order_they_read() {
         .skip(1)
         .map(|rest| rest.split('"').next().unwrap())
         .collect();
-    assert_eq!(targets.len(), 9, "{targets:?}");
+    assert_eq!(targets.len(), 8, "{targets:?}");
     let at: Vec<usize> = targets
         .iter()
         .map(|id| {

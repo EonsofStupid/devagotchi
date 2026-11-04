@@ -5,6 +5,8 @@
 //! ---
 //! title: Privacy policy          the page's <title>
 //! updated: 1 November 2026       {updated} in messages.json's page_footer
+//! description: What we keep      its <meta name="description"> (optional; else the
+//!                                product's description)
 //! ---
 //! # Heading, ## Heading, ### Heading
 //! A paragraph: lines run together, with the inline markup of text.rs.
@@ -30,6 +32,8 @@ pub const SWITCHES: [&str; 2] = ["analytics", "no-analytics"];
 pub struct Page {
     pub title: String,
     pub updated: String,
+    /// What a search result says about the page; empty for the product's description.
+    pub description: String,
     body: String,
 }
 
@@ -42,12 +46,17 @@ impl Page {
         let Some((head, body)) = rest.split_once("\n---\n") else {
             return Err("front matter has no closing ---".into());
         };
-        let (mut title, mut updated) = (None, None);
+        let (mut title, mut updated, mut description) = (None, None, None);
         for line in head.lines().filter(|l| !l.trim().is_empty()) {
             match line.split_once(':').map(|(k, v)| (k.trim(), v.trim())) {
                 Some(("title", value)) if !value.is_empty() => title = Some(value.to_string()),
                 Some(("updated", value)) => updated = Some(value.to_string()),
-                _ => return Err(format!("front matter: {line:?} is not title: or updated:")),
+                Some(("description", value)) => description = Some(value.to_string()),
+                _ => {
+                    return Err(format!(
+                        "front matter: {line:?} is not title:, updated: or description:"
+                    ));
+                }
             }
         }
         let mut depth = 0i32;
@@ -79,14 +88,13 @@ impl Page {
         Ok(Self {
             title: title.ok_or("front matter needs a title:")?,
             updated: updated.unwrap_or_default(),
+            description: description.unwrap_or_default(),
             body: body.to_string(),
         })
     }
 
-    /// The page's HTML on a hub that is each of `shown`: its kind (one of [`DOC_FRONTS`])
-    /// and, where it matters, one of [`SWITCHES`]. A block shows when it names one of them.
-    pub fn render(&self, ctx: &Ctx, shown_here: &[&str]) -> String {
-        // Only what this hub shows.
+    /// The lines of the page this hub shows (`render`'s choice of `::: …` blocks).
+    fn shown<'a>(&'a self, shown_here: &[&str]) -> Vec<&'a str> {
         let mut lines = Vec::new();
         let mut shown = vec![true];
         for line in self.body.lines() {
@@ -105,6 +113,36 @@ impl Page {
                 lines.push(line);
             }
         }
+        lines
+    }
+
+    /// The page as Markdown on a hub that is each of `shown_here`, its placeholders filled
+    /// (`/llms.txt`, `/llms-full.txt`): the same blocks `render` shows, blank lines run
+    /// together.
+    pub fn markdown(&self, ctx: &Ctx, shown_here: &[&str]) -> String {
+        let mut out = String::new();
+        let mut blank = true;
+        for line in self.shown(shown_here) {
+            let line = line.trim_end();
+            if line.trim().is_empty() {
+                if !blank {
+                    out.push('\n');
+                }
+                blank = true;
+                continue;
+            }
+            out.push_str(&ctx.plain(line));
+            out.push('\n');
+            blank = false;
+        }
+        out.trim_end().to_string() + "\n"
+    }
+
+    /// The page's HTML on a hub that is each of `shown`: its kind (one of [`DOC_FRONTS`])
+    /// and, where it matters, one of [`SWITCHES`]. A block shows when it names one of them.
+    pub fn render(&self, ctx: &Ctx, shown_here: &[&str]) -> String {
+        // Only what this hub shows.
+        let lines = self.shown(shown_here);
         let mut out = String::new();
         let mut i = 0;
         while i < lines.len() {

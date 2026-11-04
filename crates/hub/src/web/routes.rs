@@ -1,7 +1,9 @@
 //! The browser routes: the landing page and claiming a new hub (`/claim`), sign in, the
 //! account page, the operator page (`/operator`) and its analytics (`/operator/analytics`), sign out, `/api/v1/me` (which also takes a bearer token, so scripts and AI
-//! clients see the same view), `/approvals`, a workflow's link (`/go/<token>`), and the public
-//! pages the AI directories link to (`/docs`, `/privacy`, `/terms`, `/support`).
+//! clients see the same view), `/approvals`, a workflow's link (`/go/<token>`), the public
+//! pages the AI directories link to (`/docs`, `/privacy`, `/terms`, `/support`), and what
+//! search engines and AI agents read (`/llms.txt`, `/llms-full.txt`, `/robots.txt`,
+//! `/sitemap.xml`).
 
 use axum::{
     Router,
@@ -13,7 +15,7 @@ use axum::{
 use serde::Deserialize;
 
 use super::{
-    Exchange, SessionToken, WebLogin, analytics, approvals, claim, device, email, machines,
+    Exchange, SessionToken, WebLogin, analytics, approvals, claim, device, discovery, email, machines,
     notify, oauth, operator,
     pages::{self, Viewer},
     passkeys, providers, public, workflow,
@@ -69,6 +71,11 @@ pub fn router(hub_authorization: bool) -> Router<AppState> {
         .route("/privacy", get(public::privacy))
         .route("/terms", get(public::terms))
         .route("/support", get(public::support))
+        // What search engines and AI agents read (`discovery.rs`).
+        .route("/llms.txt", get(discovery::llms))
+        .route("/llms-full.txt", get(discovery::llms_full))
+        .route("/robots.txt", get(discovery::robots))
+        .route("/sitemap.xml", get(discovery::sitemap))
         // A workflow's link (`workflow.rs`).
         .route("/go/{token}", get(workflow::page))
         .route("/go/{token}/status", get(workflow::status))

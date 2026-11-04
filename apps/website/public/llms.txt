@@ -10,7 +10,6 @@
 - [OpenAPI](https://devagotchi.justsayit.chatgpt.site/openapi.json): read-only HTTP API.
 - [Local schemas](https://devagotchi.justsayit.chatgpt.site/reference/broker-contracts.schema.json): generated snapshot; these are not hosted execution routes.
 - [Architecture](https://devagotchi.justsayit.chatgpt.site/architecture): existing owners, proposed graph model, mesh semantics, build gates.
-- [Research](https://devagotchi.justsayit.chatgpt.site/research): recurring Desktop Commander user reports and resolution evidence.
 
 ## MCP
 

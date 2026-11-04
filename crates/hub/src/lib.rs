@@ -1194,8 +1194,8 @@ fn resource_metadata(state: &AppState, resource: String) -> Response {
         "resource": resource,
         "authorization_servers": [issuer],
         "bearer_methods_supported": ["header"],
-        "resource_name": format!("{} hub", state.hub.config.site().name()),
     });
+    resource_documents(&mut body, &state.hub.config.site(), &state.hub.config.public_url);
     if state.hub.config.has_accounts() {
         // The hub is its own authorization server (32b).
         body["scopes_supported"] = serde_json::json!(web::oauth::SCOPES);
@@ -1210,6 +1210,16 @@ fn resource_metadata(state: &AppState, resource: String) -> Response {
     let mut response = axum::Json(body).into_response();
     web::oauth::allow_any_origin(&mut response);
     response
+}
+
+/// RFC 9728's human-readable fields: the product's name, and where its docs, privacy
+/// policy and terms are on this hub.
+pub(crate) fn resource_documents(body: &mut serde_json::Value, site: &site::Site, public_url: &str) {
+    let hub = public_url.trim_end_matches('/');
+    body["resource_name"] = site.name().into();
+    body["resource_documentation"] = format!("{hub}/docs").into();
+    body["resource_policy_uri"] = format!("{hub}/privacy").into();
+    body["resource_tos_uri"] = format!("{hub}/terms").into();
 }
 
 /// Machines dial in here; the device proves its key inside the socket, not with a bearer.

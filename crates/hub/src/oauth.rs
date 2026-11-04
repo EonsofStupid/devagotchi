@@ -883,13 +883,14 @@ impl Authority {
     }
 
     pub fn protected_resource(&self, mcp: bool) -> Value {
-        json!({
+        let mut body = json!({
             "resource": if mcp { self.resource() } else { self.public_url.clone() },
             "authorization_servers": [self.public_url],
             "bearer_methods_supported": ["header"],
             "scopes_supported": ["openid", "email", "profile", "offline_access", "mcp"],
-            "resource_name": self.product(),
-        })
+        });
+        crate::resource_documents(&mut body, &self.site.get(), &self.public_url);
+        body
     }
 
     pub fn jwks(&self) -> Value {

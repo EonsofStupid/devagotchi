@@ -1,6 +1,7 @@
 ---
 title: Terms of service
 updated: 1 November 2026
+description: The terms of using {product}.
 ---
 # Terms of service
 
