@@ -111,7 +111,7 @@ async fn linked_account(
     }
 }
 
-async fn insert_identity(
+pub(super) async fn insert_identity(
     connection: &mut AnyConnection,
     account: &Account,
     proven: &Proven,
@@ -193,13 +193,30 @@ impl Accounts {
         now: u64,
     ) -> BridgeResult<Account> {
         proven.check()?;
+        transaction!(&self.store, |connection| {
+            self.sign_in_identity_in(connection, proven, current, tenant_random, account_random, now)
+                .await
+        })
+    }
+
+    /// `sign_in_identity_at` inside a transaction the caller holds (`proven` checked):
+    /// password sign-up makes its account this way and keeps its hash in the same one.
+    pub(super) async fn sign_in_identity_in(
+        &self,
+        connection: &mut AnyConnection,
+        proven: &Proven,
+        current: Option<&str>,
+        tenant_random: [u8; 16],
+        account_random: [u8; 16],
+        now: u64,
+    ) -> Result<Account, Failed> {
         let operator = self.is_operator_identity(proven);
         let multi = self.tenancy.multi();
         let fresh_id = new_account_id(account_random);
         let fresh_tenant = tenants::new_tenant_id(tenant_random);
         let name = proven.account_name();
         let email = proven.email();
-        transaction!(&self.store, |connection| {
+        {
             if let Some(account) = linked_account(self, connection, proven).await? {
                 if account.disabled_at.is_some() {
                     return Err(account_disabled(&account.id).into());
@@ -309,7 +326,7 @@ impl Accounts {
                 funnel::note_in(connection, &fresh_tenant, funnel::SECURED, how, now).await?;
             }
             Ok(account)
-        })
+        }
     }
 
     /// Link a proven sign-in to `account` (the one a browser is signed in to). Secures an

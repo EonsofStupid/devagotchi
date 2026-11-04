@@ -799,3 +799,112 @@ async fn two_instances_racing_for_one_link_register_once() {
         assert!(one.check_link(LinkPurpose::Owner, &link).await.is_err());
     }
 }
+
+/// These accounts on a hosted hub (`tenancy.mode multi`), where a sign-up makes a tenant.
+async fn hosted_stores() -> Vec<(TestStore, Accounts)> {
+    let tenancy = crate::config::TenancyConfig {
+        mode: crate::config::TenancyMode::Multi,
+        ..Default::default()
+    };
+    let mut out = Vec::new();
+    for (store, accounts) in stores().await {
+        out.push((store, accounts.with_tenancy(tenancy.clone(), Vec::new())));
+    }
+    out
+}
+
+#[tokio::test]
+async fn password_sign_up_then_sign_in_and_the_same_refusal_for_wrong_or_unknown() {
+    for (_store, accounts) in hosted_stores().await {
+        let made = accounts
+            .sign_up_password("  Person@Example.COM ", "correct horse")
+            .await
+            .unwrap();
+        // Its own tenant, secured from the start: nothing to "secure" afterwards.
+        assert!(crate::accounts::tenants::valid_tenant_id(&made.tenant), "{}", made.tenant);
+        assert!(!made.provisional);
+        assert!(!accounts.get(&made.id).await.unwrap().unwrap().provisional);
+        // Signed in by the trimmed, lowercased address.
+        let back = accounts
+            .sign_in_password("person@example.com", "correct horse")
+            .await
+            .unwrap();
+        assert_eq!(back.id, made.id);
+        // A wrong password and an unknown address: the same answer, word for word.
+        let wrong = accounts
+            .sign_in_password("person@example.com", "wrong horse")
+            .await
+            .unwrap_err();
+        let unknown = accounts
+            .sign_in_password("nobody@example.com", "correct horse")
+            .await
+            .unwrap_err();
+        assert_eq!(wrong.code, "password_wrong");
+        assert_eq!((wrong.code, wrong.message), (unknown.code, unknown.message));
+        // Too short, and an address that already has an account, are refused.
+        let short = accounts.sign_up_password("new@example.com", "1234567").await;
+        assert_eq!(short.unwrap_err().code, "password_short");
+        let taken = accounts.sign_up_password("PERSON@example.com", "another one").await;
+        assert_eq!(taken.unwrap_err().code, "email_taken");
+        // Nothing was made for the refused ones.
+        let short_again = accounts.sign_in_password("new@example.com", "1234567").await;
+        assert_eq!(short_again.unwrap_err().code, "password_wrong");
+    }
+}
+
+#[tokio::test]
+async fn ten_failures_for_an_address_and_it_waits() {
+    for (_store, accounts) in hosted_stores().await {
+        accounts
+            .sign_up_password("slow@example.com", "the right one")
+            .await
+            .unwrap();
+        for _ in 0..10 {
+            let failed = accounts.sign_in_password("slow@example.com", "not it at all").await;
+            assert_eq!(failed.unwrap_err().code, "password_wrong");
+        }
+        // Even the right password waits now; another address does not.
+        let waits = accounts.sign_in_password("slow@example.com", "the right one").await;
+        assert_eq!(waits.unwrap_err().code, "slow_down");
+        let other = accounts.sign_in_password("other@example.com", "not it at all").await;
+        assert_eq!(other.unwrap_err().code, "password_wrong");
+    }
+}
+
+#[tokio::test]
+async fn set_password_changes_it_and_gives_one_to_an_account_made_by_a_provider() {
+    for (_store, accounts) in hosted_stores().await {
+        let made = accounts
+            .sign_up_password("change@example.com", "first password")
+            .await
+            .unwrap();
+        accounts.set_password(&made.id, "second password").await.unwrap();
+        let old = accounts.sign_in_password("change@example.com", "first password").await;
+        assert_eq!(old.unwrap_err().code, "password_wrong");
+        let new = accounts
+            .sign_in_password("change@example.com", "second password")
+            .await
+            .unwrap();
+        assert_eq!(new.id, made.id);
+        assert_eq!(
+            accounts.set_password(&made.id, "short").await.unwrap_err().code,
+            "password_short"
+        );
+        // An account made by Google, with its verified address: that address signs in.
+        let google = accounts
+            .sign_in_identity(&identities::Proven {
+                provider: "google".into(),
+                subject: "g-1".into(),
+                verified_email: Some("g@example.com".into()),
+                name: None,
+            })
+            .await
+            .unwrap();
+        accounts.set_password(&google.id, "google's own").await.unwrap();
+        let signed_in = accounts
+            .sign_in_password("g@example.com", "google's own")
+            .await
+            .unwrap();
+        assert_eq!(signed_in.id, google.id);
+    }
+}
