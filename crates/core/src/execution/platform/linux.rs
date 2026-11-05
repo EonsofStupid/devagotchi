@@ -44,8 +44,9 @@ pub(crate) const EXECUTABLE_RULE: &str = "";
 
 /// The shell a `command` line runs in: the account's `$SHELL` when it is one of the
 /// Bourne family, else bash, else `/bin/sh`. A login shell of `nologin` or `false` (a
-/// service account) is never used.
-pub(crate) fn shell_command(command: &str) -> (std::path::PathBuf, Vec<String>) {
+/// service account) is never used. It never fails; the `Result` matches Windows, where a
+/// shell script needs Git Bash.
+pub(crate) fn shell_command(command: &str) -> BridgeResult<(std::path::PathBuf, Vec<String>)> {
     let bourne = |path: &Path| {
         matches!(
             path.file_name().and_then(|name| name.to_str()),
@@ -57,7 +58,7 @@ pub(crate) fn shell_command(command: &str) -> (std::path::PathBuf, Vec<String>) 
         .filter(|path| path.is_absolute() && bourne(path))
         .or_else(|| Some(std::path::PathBuf::from("/bin/bash")).filter(|path| bourne(path)))
         .unwrap_or_else(|| std::path::PathBuf::from("/bin/sh"));
-    (shell, vec!["-c".to_owned(), command.to_owned()])
+    Ok((shell, vec!["-c".to_owned(), command.to_owned()]))
 }
 
 /// A Linux grant or request target must be a regular file with an execute bit.
