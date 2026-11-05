@@ -2,6 +2,7 @@
 //! process group, or a Windows Job Object. Each provider implements the same
 //! `OwnedTree` API and the detail text recorded on its operations.
 
+pub(crate) mod git_bash;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(windows)]

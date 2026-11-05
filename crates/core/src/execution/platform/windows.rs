@@ -60,11 +60,22 @@ pub(crate) const TERMINATION_UNVERIFIED_DETAIL: &str = " Job Object termination 
 pub(crate) const PIPE_TIMEOUT_DETAIL: &str = " Output pipes did not close within one second of root settlement; a process holding them may have received them outside the job. Reading was stopped, output is incomplete, and processes outside the owned Job Object are not tracked or terminated.";
 pub(crate) const RUNNING_DETAIL_ACCOUNT: &str = "Root created suspended as the broker's account with its environment, null stdin, and no console window, then assigned to a broker-owned Job Object before it ran. Executable behavior is not sandboxed.";
 
-/// The shell a `command` line runs in: Windows PowerShell from System32, given the line
-/// as `-EncodedCommand` (UTF-16LE, base64) so no quoting layer can change it. Progress
-/// records are silenced first: with its output redirected, PowerShell otherwise writes them
-/// to stderr as `#< CLIXML` serialization around the command's real output.
-pub(crate) fn shell_command(command: &str) -> (std::path::PathBuf, Vec<String>) {
+/// The shell a `command` line runs in. A line that runs a shell script (see
+/// [`super::git_bash`]) runs in Git for Windows' bash.exe as `-c <line>`, and fails here,
+/// before anything is spawned, when this machine has no Git Bash. Every other line runs
+/// in Windows PowerShell from System32, given as `-EncodedCommand` (UTF-16LE, base64) so
+/// no quoting layer can change it. Progress records are silenced first: with its output
+/// redirected, PowerShell otherwise writes them to stderr as `#< CLIXML` serialization
+/// around the command's real output.
+pub(crate) fn shell_command(command: &str) -> BridgeResult<(std::path::PathBuf, Vec<String>)> {
+    if let Some(line) = super::git_bash::bash_line(command) {
+        let bash = super::git_bash::find_bash(
+            |name| std::env::var(name).ok(),
+            |path| Path::new(path).is_file(),
+        )
+        .ok_or_else(|| BridgeError::new("shell_unavailable", super::git_bash::NO_GIT_BASH))?;
+        return Ok((bash.into(), vec!["-c".to_owned(), line]));
+    }
     let command = format!("$ProgressPreference='SilentlyContinue';{command}");
     use base64::Engine as _;
     let root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
@@ -75,7 +86,7 @@ pub(crate) fn shell_command(command: &str) -> (std::path::PathBuf, Vec<String>) 
         .join("powershell.exe");
     let utf16: Vec<u8> = command.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let encoded = base64::engine::general_purpose::STANDARD.encode(utf16);
-    (
+    Ok((
         shell,
         [
             "-NoLogo",
@@ -89,7 +100,7 @@ pub(crate) fn shell_command(command: &str) -> (std::path::PathBuf, Vec<String>) 
         .map(str::to_owned)
         .chain(std::iter::once(encoded))
         .collect(),
-    )
+    ))
 }
 
 pub(crate) const EXECUTABLE_RULE: &str = " (Windows grants must be .exe or .com images; batch files run through cmd.exe parsing, so grant cmd.exe explicitly)";
@@ -454,7 +465,7 @@ mod tests {
 
     #[test]
     fn a_command_line_prints_its_output_and_no_progress_records() {
-        let (shell, args) = shell_command("Write-Progress -Activity x -Status y; 'ok'");
+        let (shell, args) = shell_command("Write-Progress -Activity x -Status y; 'ok'").unwrap();
         let out = std::process::Command::new(shell)
             .args(args)
             .stdin(Stdio::null())
@@ -464,6 +475,29 @@ mod tests {
         assert!(out.status.success(), "{stdout}\n{stderr}");
         assert_eq!(stdout.trim(), "ok", "{stderr}");
         assert!(!stderr.contains("#< CLIXML"), "{stderr}");
+    }
+
+    /// A `.sh` line runs in Git Bash. GitHub's Windows runners have Git for Windows; a
+    /// machine without it fails here, never skips.
+    #[test]
+    fn a_shell_script_runs_in_git_bash() {
+        let dir = std::env::temp_dir().join(format!("dvg-git-bash-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("ok.sh");
+        std::fs::write(&script, "echo ok\n").unwrap();
+        let (shell, args) = shell_command(&script.display().to_string()).unwrap_or_else(|error| {
+            panic!("Git for Windows is required on this machine for this test: {error}")
+        });
+        assert!(!shell.display().to_string().to_ascii_lowercase().contains("system32"));
+        let out = std::process::Command::new(&shell)
+            .args(args)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        let (stdout, stderr) = (String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        assert!(out.status.success(), "{}: {stdout}\n{stderr}", shell.display());
+        assert_eq!(stdout.trim(), "ok", "{stderr}");
     }
 
     #[tokio::test]

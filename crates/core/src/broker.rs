@@ -354,7 +354,7 @@ impl Broker {
                         "command must be 1..=16384 UTF-8 bytes without NUL bytes",
                     ));
                 }
-                platform::shell_command(command)
+                platform::shell_command(command)?
             }
             None => {
                 let executable =
