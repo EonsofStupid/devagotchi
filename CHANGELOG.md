@@ -7,6 +7,24 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Shell scripts on Windows run in Git Bash (increment 94)
+- On Windows, a `run` or `operation_start` command line whose first token (unquoted) ends in
+  `.sh`, or is `bash`, `sh`, `bash.exe` or `sh.exe`, runs in Git for Windows' bash.exe as
+  `-c <line>` instead of PowerShell. A line that starts with a `.sh` path runs that script
+  with the same bash (`"$BASH" <path> <rest>`), since Git Bash treats a file without `#!`
+  as not executable; an unquoted path with backslashes is single-quoted so bash keeps them.
+  Every other line still goes to PowerShell, unchanged. No file association or system
+  setting is changed.
+- bash.exe is found in this order: `DEVAGOTCHI_BASH` (when it is a file), Git under
+  `%ProgramFiles%`, `%ProgramFiles(x86)%`, `%LOCALAPPDATA%\Programs`, then beside the
+  `git.exe` on `PATH`. A bash.exe under System32, SysWOW64 or Sysnative (WSL) is never used.
+- No Git Bash: the start is refused before anything is spawned, with code
+  `shell_unavailable` and "This command runs a shell script, and this Windows machine has no
+  Git Bash. Install Git for Windows (winget install --id Git.Git -e) and run it again."
+- The `run` tool (hub and stdio adapter) says so in one sentence.
+- Tests: detection and lookup order on every OS (`execution::platform::git_bash`), and on the
+  Windows runners a real `ok.sh` run through the platform's command path printing `ok`.
+
 ### Is the live hub working? (increment 77)
 - `tests/live_check.py --hub URL [--site URL]` checks a deployed hub from the outside, as an
   AI app and a person reach it: health and builds, `/mcp` answering 401 with its metadata,
