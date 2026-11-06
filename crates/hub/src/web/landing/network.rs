@@ -14,7 +14,11 @@ pub fn section(ctx: &Ctx, front: Front) -> String {
     let items: String = offers
         .offered()
         .map(|item| {
-            let name = format!("<a href=\"{}\">{}</a>", attr(&item.href), ctx.inline(&item.name));
+            let name = format!(
+                "<a href=\"{}\">{}</a>",
+                attr(&item.href),
+                ctx.inline(&item.name)
+            );
             let text = if item.text.is_empty() {
                 String::new()
             } else {

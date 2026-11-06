@@ -10,9 +10,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::nomen::Found;
-use crate::{
-    accounts::identities::Proven, auth::Subject, devices::now_secs, hub::Hub, site::Ctx,
-};
+use crate::{accounts::identities::Proven, auth::Subject, devices::now_secs, hub::Hub, site::Ctx};
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct OffersView {
@@ -110,7 +108,11 @@ impl Hub {
         })
     }
 
-    async fn accept(&self, subject: &Subject, consent: &str) -> Result<Accepted, Json<BridgeError>> {
+    async fn accept(
+        &self,
+        subject: &Subject,
+        consent: &str,
+    ) -> Result<Accepted, Json<BridgeError>> {
         let engine = self.offers_engine().map_err(Json)?.clone();
         let tenant = Self::tenant_of(subject)?;
         let site = self.config.site();
@@ -129,7 +131,9 @@ impl Hub {
         if let Some(row) = accounts.offer(tenant).await.map_err(Json)?
             && row.linked()
         {
-            return Ok(linked(format!("The account is already linked to the {network}.")));
+            return Ok(linked(format!(
+                "The account is already linked to the {network}."
+            )));
         }
         let names: Vec<String> = offers.offered().map(|item| item.name.clone()).collect();
         // Their words first, kept whatever happens next.
@@ -243,7 +247,11 @@ impl Hub {
         name = "offers",
         description = "The free offerings of the network this hub belongs to, and the one question to ask the user about linking their account to it. Offer it once, and only after the user's first machine works (machines shows it online); never push, never ask again after a no or no answer. Ask `question` as it is. If the user says yes, call offers_accept with their own words. state linked: it is done, offer nothing; pending: they already said yes.",
         title = "What the network offers",
-        annotations(title = "What the network offers", read_only_hint = true, open_world_hint = false)
+        annotations(
+            title = "What the network offers",
+            read_only_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn offers(
         &self,
@@ -273,6 +281,7 @@ impl Hub {
     ) -> Result<Json<Accepted>, Json<BridgeError>> {
         let subject = self.subject(&context)?;
         let result = self.accept(&subject, &input.consent).await;
-        self.record_offers(&subject, "offers_accept", result).map(Json)
+        self.record_offers(&subject, "offers_accept", result)
+            .map(Json)
     }
 }

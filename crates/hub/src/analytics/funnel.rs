@@ -33,7 +33,15 @@ pub const WORKFLOW_DONE: &str = "workflow_done";
 /// Every milestone, in the funnel's order where it has one.
 #[cfg_attr(not(test), allow(dead_code))]
 pub const KINDS: [&str; 9] = [
-    MADE, SECURED, WAITING, ADMITTED, MACHINE, OPERATION, BOARD, WORKFLOW, WORKFLOW_DONE,
+    MADE,
+    SECURED,
+    WAITING,
+    ADMITTED,
+    MACHINE,
+    OPERATION,
+    BOARD,
+    WORKFLOW,
+    WORKFLOW_DONE,
 ];
 
 /// The AI client families an account is made by.

@@ -23,8 +23,7 @@ fn site_dir(dir: &Path, base: Option<&Path>, edit: impl FnOnce(&mut Value)) -> s
     let mut value: Value = match base {
         Some(base) => {
             copy(base, &site);
-            serde_json::from_str(&std::fs::read_to_string(base.join("site.json")).unwrap())
-                .unwrap()
+            serde_json::from_str(&std::fs::read_to_string(base.join("site.json")).unwrap()).unwrap()
         }
         None => serde_json::from_str(include_str!("../../site/default/site.json")).unwrap(),
     };

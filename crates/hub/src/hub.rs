@@ -396,7 +396,8 @@ impl Hub {
             }),
             // A machine the caller added is the caller's alone; anyone else is told it
             // does not exist, so names of other accounts' machines are not revealed.
-            None if self.config.broker(broker).is_none() => match self.own_machine(subject, broker) {
+            None if self.config.broker(broker).is_none() => match self.own_machine(subject, broker)
+            {
                 Some(device) => Ok(Route::Link(device.name)),
                 None => unknown(),
             },
@@ -858,9 +859,14 @@ impl ServerHandler for Hub {
             return Ok(answer.into());
         }
         let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        let answer = (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router() + Self::offers_router())
-            .call(call)
-            .await;
+        let answer = (Self::tool_router()
+            + Self::run_router()
+            + Self::files_router()
+            + Self::board_router()
+            + Self::workflow_router()
+            + Self::offers_router())
+        .call(call)
+        .await;
         // A successful call from an AI client of a known family: what a workflow's
         // `ai_client` step waits on (`workflows.rs`).
         if let Ok(rmcp::model::CallToolResponse::Complete(result)) = &answer
@@ -885,11 +891,16 @@ impl ServerHandler for Hub {
             .is_some_and(|version| version >= rmcp::model::ProtocolVersion::V_2026_07_28);
         let offered = self.offered();
         let mut listed = rmcp::model::ListToolsResult::with_all_items(
-            (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router() + Self::offers_router())
-                .list_all()
-                .into_iter()
-                .filter(|tool| offered || !crate::offers::TOOLS.contains(&tool.name.as_ref()))
-                .collect(),
+            (Self::tool_router()
+                + Self::run_router()
+                + Self::files_router()
+                + Self::board_router()
+                + Self::workflow_router()
+                + Self::offers_router())
+            .list_all()
+            .into_iter()
+            .filter(|tool| offered || !crate::offers::TOOLS.contains(&tool.name.as_ref()))
+            .collect(),
         );
         listed.ttl_ms = supports_cache_hints.then_some(0);
         listed.cache_scope = supports_cache_hints.then_some(rmcp::model::CacheScope::Public);
@@ -900,9 +911,14 @@ impl ServerHandler for Hub {
         if !self.offered() && crate::offers::TOOLS.contains(&name) {
             return None;
         }
-        (Self::tool_router() + Self::run_router() + Self::files_router() + Self::board_router() + Self::workflow_router() + Self::offers_router())
-            .get(name)
-            .cloned()
+        (Self::tool_router()
+            + Self::run_router()
+            + Self::files_router()
+            + Self::board_router()
+            + Self::workflow_router()
+            + Self::offers_router())
+        .get(name)
+        .cloned()
     }
 
     /// The MCP server's name and instructions are the site's (`site.json` `mcp`), so every
@@ -915,18 +931,28 @@ impl ServerHandler for Hub {
                 .build(),
         )
         .with_server_info(site.mcp_info())
-        .with_instructions(match site.offers_instructions().filter(|_| self.offered()) {
-            Some(offers) => format!("{} {offers}", site.mcp_instructions(&self.config.public_url)),
-            None => site.mcp_instructions(&self.config.public_url),
-        })
+        .with_instructions(
+            match site.offers_instructions().filter(|_| self.offered()) {
+                Some(offers) => format!(
+                    "{} {offers}",
+                    site.mcp_instructions(&self.config.public_url)
+                ),
+                None => site.mcp_instructions(&self.config.public_url),
+            },
+        )
     }
 }
 
 /// Every tool the hub serves, as `tools/list` describes it.
 #[cfg(test)]
 pub(crate) fn tools() -> Vec<rmcp::model::Tool> {
-    (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router() + Hub::workflow_router() + Hub::offers_router())
-        .list_all()
+    (Hub::tool_router()
+        + Hub::run_router()
+        + Hub::files_router()
+        + Hub::board_router()
+        + Hub::workflow_router()
+        + Hub::offers_router())
+    .list_all()
 }
 
 /// The names of every tool the hub serves, for tests that hold a page's list to them.
@@ -947,12 +973,16 @@ mod schema_tests {
     /// one missing through the MCP TypeScript SDK, which checks).
     #[test]
     fn whoami_output_has_every_required_property() {
-        let tool =
-            (Hub::tool_router() + Hub::run_router() + Hub::files_router() + Hub::board_router() + Hub::workflow_router() + Hub::offers_router())
-                .list_all()
-                .into_iter()
-                .find(|tool| tool.name == "whoami")
-                .expect("whoami is served");
+        let tool = (Hub::tool_router()
+            + Hub::run_router()
+            + Hub::files_router()
+            + Hub::board_router()
+            + Hub::workflow_router()
+            + Hub::offers_router())
+        .list_all()
+        .into_iter()
+        .find(|tool| tool.name == "whoami")
+        .expect("whoami is served");
         let schema = tool.output_schema.expect("whoami has an output schema");
         let written = serde_json::to_value(WhoAmI {
             subject: "300000000000000001".into(),

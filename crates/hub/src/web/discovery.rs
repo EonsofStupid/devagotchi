@@ -55,9 +55,14 @@ pub async fn llms_full(State(state): State<AppState>) -> Response {
 /// domain or this hub's own address.
 pub async fn robots(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let site = state.hub.config.site();
-    let host = headers.get(header::HOST).and_then(|value| value.to_str().ok());
+    let host = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok());
     let own = discovery::request_base(&site, &state.hub.config.public_url, host);
-    text(discovery::robots_txt(&site, &own), "text/plain; charset=utf-8")
+    text(
+        discovery::robots_txt(&site, &own),
+        "text/plain; charset=utf-8",
+    )
 }
 
 /// `/sitemap.xml`: the public pages; `/` only where it is a landing page (a hub with no

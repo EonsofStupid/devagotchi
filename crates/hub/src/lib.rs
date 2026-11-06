@@ -4,9 +4,13 @@
 //! is its whole behaviour; `devagotchi hub` and `devagotchi board` are its names, and
 //! `devagotchi login`, `logout` and `whoami` (`account`) are how a machine signs in to one.
 
+#[cfg(test)]
+mod access_tests;
 pub mod account;
 mod accounts;
 mod analytics;
+#[cfg(test)]
+mod analytics_tests;
 mod audit;
 mod auth;
 pub mod board;
@@ -23,31 +27,27 @@ mod machine_update;
 mod mail;
 mod nomen;
 mod oauth;
-mod push;
-mod run;
 mod offers;
-mod site;
-mod store;
-#[cfg(test)]
-mod access_tests;
-#[cfg(test)]
-mod analytics_tests;
-mod tenant_access;
-mod tenant_machines;
-mod workflows;
-#[cfg(test)]
-mod workflow_tests;
-#[cfg(test)]
-mod provider_tests;
 #[cfg(test)]
 mod offers_tests;
 #[cfg(test)]
 mod output_schema;
 #[cfg(test)]
+mod provider_tests;
+mod push;
+mod run;
+mod site;
+mod store;
+mod tenant_access;
+mod tenant_machines;
+#[cfg(test)]
 mod tenant_tests;
 #[cfg(test)]
 mod test_keys;
 mod web;
+#[cfg(test)]
+mod workflow_tests;
+mod workflows;
 
 use std::{
     env, ffi::OsString, net::SocketAddr, path::PathBuf, process::ExitCode, sync::Arc,
@@ -509,8 +509,9 @@ fn manage(command: Command) -> BridgeResult<()> {
             operator_event(&connect.state, "nomen.connect", "", "ok")?;
         }
         Command::CheckSite { dir } => {
-            let site = site::Site::load(&dir)
-                .map_err(|why| BridgeError::new("invalid_site", format!("{}: {why}", dir.display())))?;
+            let site = site::Site::load(&dir).map_err(|why| {
+                BridgeError::new("invalid_site", format!("{}: {why}", dir.display()))
+            })?;
             println!(
                 "site {} ({}) checks out: {}",
                 site.name(),
@@ -628,14 +629,19 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
     // Sign in with Google, GitHub, OpenID Connect and the email link: their secrets are read
     // now, so one that is missing stops the start rather than a sign-in later.
     let providers = if config.has_accounts() {
-        Some(web::Providers::from_config(&config).map_err(|why| BridgeError::new("invalid_config", why))?)
+        Some(
+            web::Providers::from_config(&config)
+                .map_err(|why| BridgeError::new("invalid_config", why))?,
+        )
     } else {
         None
     };
     // A tenant let in hears so by email when the hub can send mail (early access).
     if let (Some(accounts), Some(mailer)) = (
         &accounts,
-        providers.as_ref().and_then(|providers| providers.email.clone()),
+        providers
+            .as_ref()
+            .and_then(|providers| providers.email.clone()),
     ) {
         accounts.on_admitted(web::announce_admissions(mailer, config.clone()));
     }
@@ -912,12 +918,10 @@ fn app(state: AppState) -> Router {
                 .layer(middleware::from_fn_with_state(state.clone(), web::bar)),
         );
     let router = match authority {
-        Some(authority) => router
-            .merge(oauth::http_router(authority))
-            .route(
-                "/api/v1/admin/settings",
-                get(admin_settings_get).put(admin_settings_put),
-            ),
+        Some(authority) => router.merge(oauth::http_router(authority)).route(
+            "/api/v1/admin/settings",
+            get(admin_settings_get).put(admin_settings_put),
+        ),
         None => router,
     };
     router.with_state(state)
@@ -1191,7 +1195,12 @@ async fn protected_resource(State(state): State<AppState>) -> Response {
     if let Some(authority) = state.verifier.authority() {
         return axum::Json(authority.protected_resource(false)).into_response();
     }
-    let resource = state.hub.config.public_url.trim_end_matches('/').to_string();
+    let resource = state
+        .hub
+        .config
+        .public_url
+        .trim_end_matches('/')
+        .to_string();
     resource_metadata(&state, resource)
 }
 
@@ -1214,7 +1223,11 @@ fn resource_metadata(state: &AppState, resource: String) -> Response {
         "authorization_servers": [issuer],
         "bearer_methods_supported": ["header"],
     });
-    resource_documents(&mut body, &state.hub.config.site(), &state.hub.config.public_url);
+    resource_documents(
+        &mut body,
+        &state.hub.config.site(),
+        &state.hub.config.public_url,
+    );
     if state.hub.config.has_accounts() {
         // The hub is its own authorization server (32b).
         body["scopes_supported"] = serde_json::json!(web::oauth::SCOPES);
@@ -1233,7 +1246,11 @@ fn resource_metadata(state: &AppState, resource: String) -> Response {
 
 /// RFC 9728's human-readable fields: the product's name, and where its docs, privacy
 /// policy and terms are on this hub.
-pub(crate) fn resource_documents(body: &mut serde_json::Value, site: &site::Site, public_url: &str) {
+pub(crate) fn resource_documents(
+    body: &mut serde_json::Value,
+    site: &site::Site,
+    public_url: &str,
+) {
     let hub = public_url.trim_end_matches('/');
     body["resource_name"] = site.name().into();
     body["resource_documentation"] = format!("{hub}/docs").into();
@@ -1983,11 +2000,23 @@ mod tests {
         let mut nomen_mode = nomen.clone();
         nomen_mode["mode"] = "nomen".into();
         let cases = [
-            ("dev", serde_json::json!({ "mode": "dev", "tokens_file": tokens }), None),
+            (
+                "dev",
+                serde_json::json!({ "mode": "dev", "tokens_file": tokens }),
+                None,
+            ),
             ("nomen", nomen_mode, Some("300000000000000001")),
             ("hub", serde_json::json!({ "mode": "hub" }), None),
-            ("hub-nomen", serde_json::json!({ "mode": "hub", "nomen": nomen }), None),
-            ("devagotchi", serde_json::json!({ "mode": "devagotchi" }), None),
+            (
+                "hub-nomen",
+                serde_json::json!({ "mode": "hub", "nomen": nomen }),
+                None,
+            ),
+            (
+                "devagotchi",
+                serde_json::json!({ "mode": "devagotchi" }),
+                None,
+            ),
         ];
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())

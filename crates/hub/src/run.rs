@@ -56,7 +56,9 @@ fn outdated(error: BridgeError, machine: &str) -> BridgeError {
     if error.code == "invalid_request" && error.message.contains("operation_wait") {
         return BridgeError::new(
             "broker_outdated",
-            format!("{machine} runs a broker older than this hub; update it to use run. The command was started; follow it with operation_get and operation_read."),
+            format!(
+                "{machine} runs a broker older than this hub; update it to use run. The command was started; follow it with operation_get and operation_read."
+            ),
         );
     }
     error

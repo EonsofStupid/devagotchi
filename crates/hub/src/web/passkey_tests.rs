@@ -74,9 +74,11 @@ async fn world_configured(owner: Option<&str>, site: Option<&std::path::Path>) -
     );
     let accounts = Arc::new(
         Accounts::open(
-            crate::store::Store::open(&crate::store::sqlite_url(&dir.path().join("accounts.sqlite3")))
-                .await
-                .unwrap(),
+            crate::store::Store::open(&crate::store::sqlite_url(
+                &dir.path().join("accounts.sqlite3"),
+            ))
+            .await
+            .unwrap(),
         )
         .await
         .unwrap(),
@@ -94,8 +96,8 @@ async fn world_configured(owner: Option<&str>, site: Option<&std::path::Path>) -
         hub: Hub {
             downloads: None,
             analytics: None,
-                workflows: None,
-                offers: None,
+            workflows: None,
+            offers: None,
             push: Some(push),
             boards: Arc::new(crate::board::mcp::Boards::from_config(&config, dir.path())),
             config: config.clone(),
@@ -152,7 +154,12 @@ impl World {
     }
 
     /// A POST as the hub's own page makes it: same origin, JSON.
-    pub(super) async fn post(&self, path: &str, cookie: Option<&str>, body: Value) -> reqwest::Response {
+    pub(super) async fn post(
+        &self,
+        path: &str,
+        cookie: Option<&str>,
+        body: Value,
+    ) -> reqwest::Response {
         let mut request = self
             .http
             .post(format!("{}{path}", self.url))
@@ -225,7 +232,11 @@ impl World {
 #[tokio::test]
 async fn the_owner_makes_a_passkey_from_the_link_and_signs_in_with_it() {
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let owner = world
+        .accounts
+        .ensure_owner(None, "Jesse", [1; 16])
+        .await
+        .unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
@@ -318,7 +329,11 @@ async fn the_owner_makes_a_passkey_from_the_link_and_signs_in_with_it() {
 #[tokio::test]
 async fn ceremonies_answer_only_the_hubs_own_pages_and_work_once() {
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let owner = world
+        .accounts
+        .ensure_owner(None, "Jesse", [1; 16])
+        .await
+        .unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
@@ -458,7 +473,11 @@ async fn the_owner_takes_the_account_back_from_a_passkey_it_did_not_make() {
     // Someone used a leaked owner link first. `hub owner --replace` gives the owner a link
     // whose use removes every other passkey of the account and ends its sessions.
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let owner = world
+        .accounts
+        .ensure_owner(None, "Jesse", [1; 16])
+        .await
+        .unwrap();
     let leaked = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
@@ -472,7 +491,10 @@ async fn the_owner_takes_the_account_back_from_a_passkey_it_did_not_make() {
         .await
         .unwrap();
     let mine = world.make_passkey(&world.phone(), &replacing).await;
-    assert_eq!(world.accounts.passkeys_of(&owner.id).await.unwrap().len(), 1);
+    assert_eq!(
+        world.accounts.passkeys_of(&owner.id).await.unwrap().len(),
+        1
+    );
     assert_eq!(world.get("/account", Some(&theirs)).await.status(), 303);
     assert_eq!(world.get("/account", Some(&mine)).await.status(), 200);
     let (challenge, jar, _) = world.options("/passkey/sign-in/options", json!({})).await;
@@ -489,7 +511,11 @@ async fn the_owner_takes_the_account_back_from_a_passkey_it_did_not_make() {
 #[tokio::test]
 async fn using_an_owner_link_ends_the_owners_other_sessions() {
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let owner = world
+        .accounts
+        .ensure_owner(None, "Jesse", [1; 16])
+        .await
+        .unwrap();
     let first = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
@@ -505,13 +531,20 @@ async fn using_an_owner_link_ends_the_owners_other_sessions() {
     assert_eq!(world.get("/account", Some(&laptop)).await.status(), 303);
     assert_eq!(world.get("/account", Some(&phone)).await.status(), 200);
     // Without --replace, the laptop's passkey stays and signs in again.
-    assert_eq!(world.accounts.passkeys_of(&owner.id).await.unwrap().len(), 2);
+    assert_eq!(
+        world.accounts.passkeys_of(&owner.id).await.unwrap().len(),
+        2
+    );
 }
 
 #[tokio::test]
 async fn signing_out_takes_the_hubs_own_page() {
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let owner = world
+        .accounts
+        .ensure_owner(None, "Jesse", [1; 16])
+        .await
+        .unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
@@ -539,7 +572,11 @@ async fn signing_out_takes_the_hubs_own_page() {
 async fn a_link_for_another_owner_than_the_configs_is_refused_before_it_is_spent() {
     // The config names the Texas owner, but the store's owner was made without it.
     let world = world_owned_by(Some("395290028818825218")).await;
-    let stray = world.accounts.ensure_owner(None, "Owner", [1; 16]).await.unwrap();
+    let stray = world
+        .accounts
+        .ensure_owner(None, "Owner", [1; 16])
+        .await
+        .unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &stray.id)
@@ -575,13 +612,24 @@ async fn a_link_for_another_owner_than_the_configs_is_refused_before_it_is_spent
             .unwrap(),
         stray.id
     );
-    assert!(world.accounts.passkeys_of(&stray.id).await.unwrap().is_empty());
+    assert!(
+        world
+            .accounts
+            .passkeys_of(&stray.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
 async fn a_copied_passkey_ends_the_sessions_it_opened() {
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let owner = world
+        .accounts
+        .ensure_owner(None, "Jesse", [1; 16])
+        .await
+        .unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
@@ -625,9 +673,11 @@ async fn on_https_the_cookies_are_the_hosts_alone() {
     );
     let accounts = Arc::new(
         Accounts::open(
-            crate::store::Store::open(&crate::store::sqlite_url(&dir.path().join("accounts.sqlite3")))
-                .await
-                .unwrap(),
+            crate::store::Store::open(&crate::store::sqlite_url(
+                &dir.path().join("accounts.sqlite3"),
+            ))
+            .await
+            .unwrap(),
         )
         .await
         .unwrap(),
@@ -646,7 +696,11 @@ async fn a_replacing_link_lets_the_device_that_holds_the_old_passkey_make_the_ne
     // The owner's usual phone already holds a passkey for this hub: listing it in
     // excludeCredentials would make the phone refuse to make another.
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let owner = world
+        .accounts
+        .ensure_owner(None, "Jesse", [1; 16])
+        .await
+        .unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
@@ -678,7 +732,11 @@ async fn an_old_answer_replayed_signs_nobody_out() {
     // A captured sign-in from a key that keeps a counter, replayed after the counter has
     // moved on: refused, and the sessions opened since stay.
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let owner = world
+        .accounts
+        .ensure_owner(None, "Jesse", [1; 16])
+        .await
+        .unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
@@ -739,7 +797,11 @@ fn query_param(url: &str, key: &str) -> Option<String> {
 async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tokens() {
     // What Claude or ChatGPT does against `<hub>/mcp`, with nothing but the hub deployed.
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let owner = world
+        .accounts
+        .ensure_owner(None, "Jesse", [1; 16])
+        .await
+        .unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
@@ -755,7 +817,10 @@ async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tok
         .await
         .unwrap();
     assert_eq!(metadata["issuer"], world.url.as_str());
-    assert_eq!(metadata["code_challenge_methods_supported"], json!(["S256"]));
+    assert_eq!(
+        metadata["code_challenge_methods_supported"],
+        json!(["S256"])
+    );
     assert_eq!(
         metadata["token_endpoint"],
         format!("{}/oauth/token", world.url)
@@ -792,11 +857,21 @@ async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tok
     );
     let signed_out = world.get(&authorize, None).await;
     assert_eq!(signed_out.status(), 303);
-    let to_login = signed_out.headers()[header::LOCATION].to_str().unwrap().to_string();
+    let to_login = signed_out.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
     assert!(to_login.starts_with("/auth/login?return_to="), "{to_login}");
     let back = query_param(&to_login, "return_to").unwrap();
-    assert_eq!(super::safe_return_to(&back), back, "sign-in may return to it");
-    assert_eq!(query_param(&back, "client_id").as_deref(), Some(client_id.as_str()));
+    assert_eq!(
+        super::safe_return_to(&back),
+        back,
+        "sign-in may return to it"
+    );
+    assert_eq!(
+        query_param(&back, "client_id").as_deref(),
+        Some(client_id.as_str())
+    );
     assert_eq!(query_param(&back, "state").as_deref(), Some("st 1/2"));
 
     // Signed in: the approval page, whose form may lead to the client and nowhere else.
@@ -806,12 +881,18 @@ async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tok
         .to_str()
         .unwrap()
         .to_string();
-    assert!(csp.contains("form-action 'self' http://127.0.0.1:9;"), "{csp}");
+    assert!(
+        csp.contains("form-action 'self' http://127.0.0.1:9;"),
+        "{csp}"
+    );
     // A browser sends this page's POST with its true origin only under `same-origin`;
     // under `no-referrer` it sends `Origin: null`, refused below (tests/clients_oauth.py).
     assert_eq!(page.headers()[header::REFERRER_POLICY], "same-origin");
     let html = page.text().await.unwrap();
-    assert!(html.contains("Connect Test AI?") && html.contains("Jesse"), "{html}");
+    assert!(
+        html.contains("Connect Test AI?") && html.contains("Jesse"),
+        "{html}"
+    );
 
     let approve = |decision: &'static str, origin: Option<String>| {
         let mut request = world
@@ -835,7 +916,10 @@ async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tok
     // Another site, an opaque origin, or no Origin at all: not approved.
     assert_eq!(approve("approve", None).await.unwrap().status(), 403);
     assert_eq!(
-        approve("approve", Some("null".into())).await.unwrap().status(),
+        approve("approve", Some("null".into()))
+            .await
+            .unwrap()
+            .status(),
         403
     );
     assert_eq!(
@@ -847,12 +931,18 @@ async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tok
     );
     // Cancel: back to the client with access_denied.
     let denied = approve("deny", Some(world.url.clone())).await.unwrap();
-    let to = denied.headers()[header::LOCATION].to_str().unwrap().to_string();
+    let to = denied.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
     assert_eq!(query_param(&to, "error").as_deref(), Some("access_denied"));
     // Connect: back with a code, the state and the issuer (RFC 9207).
     let approved = approve("approve", Some(world.url.clone())).await.unwrap();
     assert_eq!(approved.status(), 303);
-    let to = approved.headers()[header::LOCATION].to_str().unwrap().to_string();
+    let to = approved.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
     assert!(to.starts_with(redirect), "{to}");
     assert_eq!(query_param(&to, "state").as_deref(), Some("st 1/2"));
     assert_eq!(query_param(&to, "iss").as_deref(), Some(world.url.as_str()));
@@ -880,7 +970,10 @@ async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tok
     assert_eq!(error["error"], "invalid_grant");
     // That code was spent by the wrong try: a new approval for a new one.
     let approved = approve("approve", Some(world.url.clone())).await.unwrap();
-    let to = approved.headers()[header::LOCATION].to_str().unwrap().to_string();
+    let to = approved.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
     let code = query_param(&to, "code").unwrap();
     let granted = token(vec![
         ("grant_type", "authorization_code".into()),
@@ -901,12 +994,18 @@ async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tok
     let refresh = tokens["refresh_token"].as_str().unwrap().to_string();
 
     // `/mcp` takes it: the account, as an AI the hub connected, never as the person.
-    let verifier_for_mcp =
-        Verifier::from_hub_config(&world.config, world._dir.path(), Some(world.accounts.clone()))
-            .await
-            .unwrap();
+    let verifier_for_mcp = Verifier::from_hub_config(
+        &world.config,
+        world._dir.path(),
+        Some(world.accounts.clone()),
+    )
+    .await
+    .unwrap();
     let subject = verifier_for_mcp.verify(&access).await.unwrap();
-    assert_eq!((subject.id.as_str(), subject.via), (owner.id.as_str(), "hub"));
+    assert_eq!(
+        (subject.id.as_str(), subject.via),
+        (owner.id.as_str(), "hub")
+    );
     assert_eq!(verifier_for_mcp.issuer(), Some(world.url.as_str()));
     assert!(verifier_for_mcp.verify("dgh_forged").await.is_err());
     assert!(verifier_for_mcp.verify(&refresh).await.is_err());
@@ -923,7 +1022,10 @@ async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tok
     .await
     .unwrap();
     let access2 = rotated["access_token"].as_str().unwrap().to_string();
-    assert!(verifier_for_mcp.verify(&access).await.is_err(), "rotated out");
+    assert!(
+        verifier_for_mcp.verify(&access).await.is_err(),
+        "rotated out"
+    );
     assert!(verifier_for_mcp.verify(&access2).await.is_ok());
     let revoked = world
         .http
@@ -940,7 +1042,11 @@ async fn an_ai_client_registers_the_owner_approves_it_and_the_hub_checks_its_tok
 async fn an_authorization_request_for_an_unknown_client_or_redirect_goes_nowhere() {
     // Redirecting an error to an address nobody registered would hand it to a stranger.
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let owner = world
+        .accounts
+        .ensure_owner(None, "Jesse", [1; 16])
+        .await
+        .unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
@@ -1004,7 +1110,11 @@ async fn an_authorization_request_for_an_unknown_client_or_redirect_goes_nowhere
 async fn a_terminal_signs_in_with_a_device_code_the_owner_approves() {
     // `devagotchi login --hub` against a hub with its own accounts (RFC 8628).
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let owner = world
+        .accounts
+        .ensure_owner(None, "Jesse", [1; 16])
+        .await
+        .unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)
@@ -1070,10 +1180,17 @@ async fn a_terminal_signs_in_with_a_device_code_the_owner_approves() {
     let page = format!("/device?code={user_code}");
     let signed_out = world.get(&page, None).await;
     assert_eq!(signed_out.status(), 303);
-    let to_login = signed_out.headers()[header::LOCATION].to_str().unwrap().to_string();
+    let to_login = signed_out.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
     let back = query_param(&to_login, "return_to").unwrap();
     assert_eq!(back, page);
-    assert_eq!(super::safe_return_to(&back), back, "sign-in may return to it");
+    assert_eq!(
+        super::safe_return_to(&back),
+        back,
+        "sign-in may return to it"
+    );
 
     // Signed in: the app, the account, the code to check; a form that posts back here.
     let shown = world.get(&back, Some(&session)).await;
@@ -1081,33 +1198,65 @@ async fn a_terminal_signs_in_with_a_device_code_the_owner_approves() {
     assert_eq!(shown.headers()[header::REFERRER_POLICY], "same-origin");
     let html = shown.text().await.unwrap();
     assert!(
-        html.contains("Sign in Devagotchi CLI?") && html.contains("Jesse") && html.contains(&user_code),
+        html.contains("Sign in Devagotchi CLI?")
+            && html.contains("Jesse")
+            && html.contains(&user_code),
         "{html}"
     );
     // No code: a box to type it. A wrong one: not valid.
-    assert!(world.get("/device", Some(&session)).await.text().await.unwrap().contains("name=\"code\""));
-    assert_eq!(world.get("/device?code=BCDF-GHJK", Some(&session)).await.status(), 400);
+    assert!(
+        world
+            .get("/device", Some(&session))
+            .await
+            .text()
+            .await
+            .unwrap()
+            .contains("name=\"code\"")
+    );
+    assert_eq!(
+        world
+            .get("/device?code=BCDF-GHJK", Some(&session))
+            .await
+            .status(),
+        400
+    );
 
     let decide = |decision: &'static str, origin: Option<String>| {
         let mut request = world
             .http
             .post(format!("{}/device", world.url))
             .header(header::COOKIE, &session)
-            .form(&[("code", user_code.to_lowercase().as_str()), ("decision", decision)]);
+            .form(&[
+                ("code", user_code.to_lowercase().as_str()),
+                ("decision", decision),
+            ]);
         if let Some(origin) = origin {
             request = request.header(header::ORIGIN, origin);
         }
         request.send()
     };
     // Another site, an opaque origin or none: not approved, and still waiting.
-    for origin in [None, Some("null".to_string()), Some("https://evil.example".to_string())] {
+    for origin in [
+        None,
+        Some("null".to_string()),
+        Some("https://evil.example".to_string()),
+    ] {
         assert_eq!(decide("approve", origin).await.unwrap().status(), 403);
     }
     let approved = decide("approve", Some(world.url.clone())).await.unwrap();
     assert_eq!(approved.status(), 200);
-    assert!(approved.text().await.unwrap().contains("Your terminal is signed in"));
+    assert!(
+        approved
+            .text()
+            .await
+            .unwrap()
+            .contains("Your terminal is signed in")
+    );
     assert_eq!(
-        decide("approve", Some(world.url.clone())).await.unwrap().status(),
+        decide("approve", Some(world.url.clone()))
+            .await
+            .unwrap()
+            .status(),
         400,
         "a code is decided once"
     );
@@ -1132,7 +1281,10 @@ async fn a_terminal_signs_in_with_a_device_code_the_owner_approves() {
         .json()
         .await
         .unwrap();
-    assert_eq!((me["subject"].as_str(), me["via"].as_str()), (Some(owner.id.as_str()), Some("hub")));
+    assert_eq!(
+        (me["subject"].as_str(), me["via"].as_str()),
+        (Some(owner.id.as_str()), Some("hub"))
+    );
     assert_eq!(me["name"], "Jesse");
     // The refresh token rotates for the CLI's client, as any AI connection's.
     let rotated = world
@@ -1152,7 +1304,11 @@ async fn a_terminal_signs_in_with_a_device_code_the_owner_approves() {
 #[tokio::test]
 async fn a_cancelled_device_code_tells_the_terminal() {
     let world = world().await;
-    let owner = world.accounts.ensure_owner(None, "Jesse", [1; 16]).await.unwrap();
+    let owner = world
+        .accounts
+        .ensure_owner(None, "Jesse", [1; 16])
+        .await
+        .unwrap();
     let link = world
         .accounts
         .issue_link(LinkPurpose::Owner, &owner.id)

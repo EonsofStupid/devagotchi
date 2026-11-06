@@ -116,18 +116,35 @@ fn refused(code: &str, message: impl Into<String>) -> Json<BridgeError> {
 impl Hub {
     /// The page a workflow's link opens.
     fn workflow_link(&self, token: &str) -> String {
-        format!("{}/go/{token}", self.config.public_url.trim_end_matches('/'))
+        format!(
+            "{}/go/{token}",
+            self.config.public_url.trim_end_matches('/')
+        )
     }
 
     /// Workflow `id` of `subject`'s: its tenant's, and started for this account. Anyone
     /// else's is not found, so ids of other accounts' workflows reveal nothing.
-    async fn own_workflow(&self, subject: &Subject, id: &str) -> Result<WorkflowRow, Json<BridgeError>> {
+    async fn own_workflow(
+        &self,
+        subject: &Subject,
+        id: &str,
+    ) -> Result<WorkflowRow, Json<BridgeError>> {
         let workflows = self.workflows().map_err(Json)?;
-        let not_found = || refused("unknown_workflow", "no workflow with that id was started for this account");
+        let not_found = || {
+            refused(
+                "unknown_workflow",
+                "no workflow with that id was started for this account",
+            )
+        };
         let Some(tenant) = subject.tenant.as_deref() else {
             return Err(not_found());
         };
-        match workflows.accounts().workflow(tenant, id.trim()).await.map_err(Json)? {
+        match workflows
+            .accounts()
+            .workflow(tenant, id.trim())
+            .await
+            .map_err(Json)?
+        {
             Some(row) if row.account == subject.id => Ok(row),
             _ => Err(not_found()),
         }
@@ -156,7 +173,11 @@ impl Hub {
         name = "workflow_list",
         description = "The setups this hub can walk the user through with one link they open and click through, no sign-in: connecting a Linux server, a Windows PC or laptop, their phone for approvals, another AI app (Claude, ChatGPT or Codex, Grok, Cursor), or everything to get started. Use it when the user asks to connect, add or set up a machine, server, computer, laptop, phone or AI app, before workflow_start; prefer it to machine_add unless the user wants the raw command. A workflow with available false cannot be done here: tell the user its `why`, plainly, and offer no workaround (a Mac, for one, has no build yet).",
         title = "What I can set up for you",
-        annotations(title = "What I can set up for you", read_only_hint = true, open_world_hint = false)
+        annotations(
+            title = "What I can set up for you",
+            read_only_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn workflow_list(
         &self,
@@ -194,7 +215,8 @@ impl Hub {
                     .collect(),
             }
         });
-        self.record_workflow(&subject, "workflow_list", "", result).map(Json)
+        self.record_workflow(&subject, "workflow_list", "", result)
+            .map(Json)
     }
 
     #[tool(
@@ -215,15 +237,23 @@ impl Hub {
     ) -> Result<Json<WorkflowStarted>, Json<BridgeError>> {
         let subject = self.subject(&context)?;
         let result = self.start_workflow(&subject, input).await;
-        let id = result.as_ref().map(|started| started.id.clone()).unwrap_or_default();
-        self.record_workflow(&subject, "workflow_start", &id, result).map(Json)
+        let id = result
+            .as_ref()
+            .map(|started| started.id.clone())
+            .unwrap_or_default();
+        self.record_workflow(&subject, "workflow_start", &id, result)
+            .map(Json)
     }
 
     #[tool(
         name = "workflow_status",
         description = "Where a workflow you started stands: each step done, current, pending or unavailable (an optional one, keeping the account, is never current), with what the hub sees in `fact` (for example \"nas is online\"). Use it to resume, or when the user says they did something; to follow along, workflow_wait is better. An unavailable step says `why`: tell the user plainly. When state is completed, carry on with what the user asked: a machine it added is in `machines`.",
         title = "Check a setup",
-        annotations(title = "Check a setup", read_only_hint = true, open_world_hint = false)
+        annotations(
+            title = "Check a setup",
+            read_only_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn workflow_status(
         &self,
@@ -238,14 +268,19 @@ impl Hub {
                 .map_err(Json),
             Err(error) => Err(error),
         };
-        self.record_workflow(&subject, "workflow_status", &input.id, result).map(Json)
+        self.record_workflow(&subject, "workflow_status", &input.id, result)
+            .map(Json)
     }
 
     #[tool(
         name = "workflow_wait",
         description = "Wait until a workflow you started changes (a step done, the link expiring) or timeout_secs (1 to 60, default 50) passes, then return where it stands, with changed true when something moved; it returns the moment something does. Use it right after giving the user the link, and again after each change, instead of calling workflow_status repeatedly. A wait that times out returns changed false: wait again, or ask the user how it is going.",
         title = "Wait for the user's next step",
-        annotations(title = "Wait for the user's next step", read_only_hint = true, open_world_hint = false)
+        annotations(
+            title = "Wait for the user's next step",
+            read_only_hint = true,
+            open_world_hint = false
+        )
     )]
     async fn workflow_wait(
         &self,
@@ -254,7 +289,8 @@ impl Hub {
     ) -> Result<Json<WorkflowWaited>, Json<BridgeError>> {
         let subject = self.subject(&context)?;
         let result = self.wait_workflow(&subject, &input, &context).await;
-        self.record_workflow(&subject, "workflow_wait", &input.id, result).map(Json)
+        self.record_workflow(&subject, "workflow_wait", &input.id, result)
+            .map(Json)
     }
 
     #[tool(
@@ -288,21 +324,32 @@ impl Hub {
             }
             Err(error) => Err(error),
         };
-        self.record_workflow(&subject, "workflow_cancel", &input.id, result).map(Json)
+        self.record_workflow(&subject, "workflow_cancel", &input.id, result)
+            .map(Json)
     }
 }
 
 impl Hub {
-    async fn start_workflow(&self, subject: &Subject, input: StartIn) -> Result<WorkflowStarted, Json<BridgeError>> {
+    async fn start_workflow(
+        &self,
+        subject: &Subject,
+        input: StartIn,
+    ) -> Result<WorkflowStarted, Json<BridgeError>> {
         let workflows = self.workflows().map_err(Json)?.clone();
         let Some(tenant) = subject.tenant.clone() else {
-            return Err(refused("workflows_unavailable", "this account has no space of its own on this hub"));
+            return Err(refused(
+                "workflows_unavailable",
+                "this account has no space of its own on this hub",
+            ));
         };
         let site = self.config.site();
         let Some(definition) = site.workflows.get(input.workflow.trim()) else {
             return Err(refused(
                 "unknown_workflow",
-                format!("no workflow {:?} here; workflow_list says which there are", input.workflow),
+                format!(
+                    "no workflow {:?} here; workflow_list says which there are",
+                    input.workflow
+                ),
             ));
         };
         if let Some(why) = self.workflow_unavailable(&site, definition) {
@@ -313,12 +360,19 @@ impl Hub {
         if let Some(refusal) = self.waiting_refusal(subject) {
             return Err(Json(refusal));
         }
-        if definition.steps.iter().any(|step| step.kind == crate::site::workflows::MACHINE)
+        if definition
+            .steps
+            .iter()
+            .any(|step| step.kind == crate::site::workflows::MACHINE)
             && let Some(refusal) = self.machine_room(subject)
         {
             return Err(Json(refusal));
         }
-        let machine_name = match input.machine_name.as_deref().map(|name| name.trim().to_ascii_lowercase()) {
+        let machine_name = match input
+            .machine_name
+            .as_deref()
+            .map(|name| name.trim().to_ascii_lowercase())
+        {
             Some(name) if name.is_empty() => None,
             Some(name) => {
                 let longest = if self.config.multi_tenant() {
@@ -329,7 +383,9 @@ impl Hub {
                 if !crate::config::valid_name(&name) || name.len() > longest {
                     return Err(refused(
                         "invalid_name",
-                        format!("a machine name is 1 to {longest} lowercase letters, digits and dashes, starting with a letter or digit"),
+                        format!(
+                            "a machine name is 1 to {longest} lowercase letters, digits and dashes, starting with a letter or digit"
+                        ),
                     ));
                 }
                 Some(name)
@@ -361,7 +417,12 @@ impl Hub {
             .workflow(&tenant, &id)
             .await
             .map_err(Json)?
-            .ok_or_else(|| refused("account_store", "the workflow just started is not in the store"))?;
+            .ok_or_else(|| {
+                refused(
+                    "account_store",
+                    "the workflow just started is not in the store",
+                )
+            })?;
         let status = self
             .look_at_workflow(subject, row, Some(link.clone()), now)
             .await

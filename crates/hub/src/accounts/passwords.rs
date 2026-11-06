@@ -5,15 +5,19 @@
 //! address answer the same after the same work; ten failures per address in 15 minutes
 //! and it waits. Neither the password nor its hash is ever logged.
 
-use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 use super::{email::normalize_email, identities::Proven, *};
+use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier, password_hash::SaltString};
 
 const MIN_LEN: usize = 8;
 const FAILURES_MAX: usize = 10; // per address in FAILURES_SECS
 const FAILURES_SECS: u64 = 15 * 60;
 
-fn wrong() -> BridgeError { BridgeError::new("password_wrong", "email or password is wrong") }
-fn taken() -> BridgeError { BridgeError::new("email_taken", "that email already has an account") }
+fn wrong() -> BridgeError {
+    BridgeError::new("password_wrong", "email or password is wrong")
+}
+fn taken() -> BridgeError {
+    BridgeError::new("email_taken", "that email already has an account")
+}
 
 fn checked(password: &str) -> BridgeResult<()> {
     let short = || BridgeError::new("password_short", "use at least 8 characters");
@@ -21,7 +25,10 @@ fn checked(password: &str) -> BridgeResult<()> {
 }
 
 fn hash_with(password: &[u8], salt: &[u8]) -> Option<String> {
-    Argon2::default().hash_password(password, &SaltString::encode_b64(salt).ok()?).ok().map(|h| h.to_string())
+    Argon2::default()
+        .hash_password(password, &SaltString::encode_b64(salt).ok()?)
+        .ok()
+        .map(|h| h.to_string())
 }
 
 /// The argon2id PHC string of `password`, under a fresh salt, off the async threads.
@@ -39,9 +46,14 @@ async fn matches(hash: Option<String>, password: &str) -> bool {
     static DUMMY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     let password = password.to_string();
     tokio::task::spawn_blocking(move || {
-        let dummy = DUMMY.get_or_init(|| hash_with(b"not anyone's password", &[7; 16]).unwrap_or_default());
+        let dummy =
+            DUMMY.get_or_init(|| hash_with(b"not anyone's password", &[7; 16]).unwrap_or_default());
         let parsed = PasswordHash::new(hash.as_deref().unwrap_or(dummy));
-        let ok = parsed.is_ok_and(|p| Argon2::default().verify_password(password.as_bytes(), &p).is_ok());
+        let ok = parsed.is_ok_and(|p| {
+            Argon2::default()
+                .verify_password(password.as_bytes(), &p)
+                .is_ok()
+        });
         ok && hash.is_some()
     })
     .await
@@ -50,31 +62,66 @@ async fn matches(hash: Option<String>, password: &str) -> bool {
 
 impl Accounts {
     fn too_many_failures(&self, email: &str, now: u64) -> bool {
-        let mut failures = self.password_failures.lock().unwrap_or_else(|e| e.into_inner());
-        failures.retain(|_, times| { times.retain(|at| now.saturating_sub(*at) < FAILURES_SECS); !times.is_empty() });
-        failures.get(email).is_some_and(|times| times.len() >= FAILURES_MAX)
+        let mut failures = self
+            .password_failures
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        failures.retain(|_, times| {
+            times.retain(|at| now.saturating_sub(*at) < FAILURES_SECS);
+            !times.is_empty()
+        });
+        failures
+            .get(email)
+            .is_some_and(|times| times.len() >= FAILURES_MAX)
     }
 
     /// A new account and tenant for `email`, signed in by `password` from now on.
     pub async fn sign_up_password(&self, email: &str, password: &str) -> BridgeResult<Account> {
-        let email = normalize_email(email).ok_or_else(|| BridgeError::new("invalid_email", "not an email address"))?;
+        let email = normalize_email(email)
+            .ok_or_else(|| BridgeError::new("invalid_email", "not an email address"))?;
         checked(password)?;
-        let proven = Proven { provider: "email".into(), subject: email.clone(), verified_email: None, name: None };
-        self.is_operator_identity(&proven).then(|| Err(taken())).unwrap_or(Ok(()))?;
+        let proven = Proven {
+            provider: "email".into(),
+            subject: email.clone(),
+            verified_email: None,
+            name: None,
+        };
+        self.is_operator_identity(&proven)
+            .then(|| Err(taken()))
+            .unwrap_or(Ok(()))?;
         let (hash, now) = (hash_of(password).await?, now_secs());
-        let (tenant_random, account_random) = (crate::link::random::<16>(), crate::link::random::<16>());
+        let (tenant_random, account_random) =
+            (crate::link::random::<16>(), crate::link::random::<16>());
         transaction!(&self.store, |connection| {
             // Any account this address already reaches, by password or email link, is taken.
-            if self.enter(connection, Lookup::Identity("email", &email)).await?.is_some() {
+            if self
+                .enter(connection, Lookup::Identity("email", &email))
+                .await?
+                .is_some()
+            {
                 return Err(taken().into());
             }
-            let account = self.sign_in_identity_in(connection, &proven, None, tenant_random, account_random, now).await?;
+            let account = self
+                .sign_in_identity_in(
+                    connection,
+                    &proven,
+                    None,
+                    tenant_random,
+                    account_random,
+                    now,
+                )
+                .await?;
             sqlx::query(
                 "INSERT INTO passwords (account_id, tenant_id, email, hash, created_at, updated_at)
                  VALUES ($1, $2, $3, $4, $5, $5)",
             )
-            .bind(&account.id).bind(&account.tenant).bind(&email).bind(&hash).bind(secs(now))
-            .execute(&mut *connection).await?;
+            .bind(&account.id)
+            .bind(&account.tenant)
+            .bind(&email)
+            .bind(&hash)
+            .bind(secs(now))
+            .execute(&mut *connection)
+            .await?;
             Ok(account)
         })
     }
@@ -85,36 +132,68 @@ impl Accounts {
         let email = normalize_email(email).unwrap_or_default();
         let now = now_secs();
         if self.too_many_failures(&email, now) {
-            return Err(BridgeError::new("slow_down", "too many tries; wait a few minutes"));
+            return Err(BridgeError::new(
+                "slow_down",
+                "too many tries; wait a few minutes",
+            ));
         }
         let found: Option<(Account, String)> = transaction!(&self.store, |connection| {
-            let known = !email.is_empty() && self.enter(connection, Lookup::Identity("email", &email)).await?.is_some();
-            if !known { return Ok(None) }
-            let row = sqlx::query("SELECT account_id, hash FROM passwords WHERE email = $1").bind(&email);
-            let Some(row) = row.fetch_optional(&mut *connection).await? else { return Ok(None) };
+            let known = !email.is_empty()
+                && self
+                    .enter(connection, Lookup::Identity("email", &email))
+                    .await?
+                    .is_some();
+            if !known {
+                return Ok(None);
+            }
+            let row =
+                sqlx::query("SELECT account_id, hash FROM passwords WHERE email = $1").bind(&email);
+            let Some(row) = row.fetch_optional(&mut *connection).await? else {
+                return Ok(None);
+            };
             let (id, hash): (String, String) = (row.try_get(0)?, row.try_get(1)?);
-            Ok(account_in(connection, &id).await?.map(|account| (account, hash)))
+            Ok(account_in(connection, &id)
+                .await?
+                .map(|account| (account, hash)))
         })?;
         let (account, hash) = found.map_or((None, None), |(a, h)| (Some(a), Some(h)));
         if !matches(hash, password).await {
-            let mut failures = self.password_failures.lock().unwrap_or_else(|e| e.into_inner());
+            let mut failures = self
+                .password_failures
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             failures.entry(email).or_default().push(now);
             return Err(wrong());
         }
         let account = account.ok_or_else(wrong)?;
-        account.disabled_at.map_or(Ok(account.clone()), |_| Err(account_disabled(&account.id)))
+        account
+            .disabled_at
+            .map_or(Ok(account.clone()), |_| Err(account_disabled(&account.id)))
     }
 
     /// The account a password sign-up made for `proven`'s verified address, when `proven`
     /// itself reaches no account yet: the page that offers to link them (`web/providers.rs`).
     pub async fn password_account_for(&self, proven: &Proven) -> BridgeResult<Option<String>> {
-        let Some(email) = proven.verified_email.as_deref().and_then(normalize_email) else { return Ok(None) };
+        let Some(email) = proven.verified_email.as_deref().and_then(normalize_email) else {
+            return Ok(None);
+        };
         transaction!(&self.store, |connection| {
-            let known = self.enter(connection, Lookup::Identity(&proven.provider, &proven.subject)).await?;
-            if known.is_some() || self.enter(connection, Lookup::Identity("email", &email)).await?.is_none() {
+            let known = self
+                .enter(
+                    connection,
+                    Lookup::Identity(&proven.provider, &proven.subject),
+                )
+                .await?;
+            if known.is_some()
+                || self
+                    .enter(connection, Lookup::Identity("email", &email))
+                    .await?
+                    .is_none()
+            {
                 return Ok(None);
             }
-            let found = sqlx::query_scalar("SELECT account_id FROM passwords WHERE email = $1").bind(&email);
+            let found = sqlx::query_scalar("SELECT account_id FROM passwords WHERE email = $1")
+                .bind(&email);
             Ok(found.fetch_optional(&mut *connection).await?)
         })
     }
@@ -126,7 +205,9 @@ impl Accounts {
         let (hash, now) = (hash_of(password).await?, now_secs());
         transaction!(&self.store, |connection| {
             self.enter(connection, Lookup::Account(account)).await?;
-            let holder = account_in(connection, account).await?.ok_or_else(|| BridgeError::new("no_account", account))?;
+            let holder = account_in(connection, account)
+                .await?
+                .ok_or_else(|| BridgeError::new("no_account", account))?;
             let first = |sql| sqlx::query_scalar::<_, String>(sql).bind(account);
             let mut email = first("SELECT subject FROM auth_identities WHERE account = $1 AND provider = 'email' ORDER BY created_at LIMIT 1")
                 .fetch_optional(&mut *connection).await?;
@@ -134,9 +215,28 @@ impl Accounts {
                 let verified = first("SELECT email FROM auth_identities WHERE account = $1 AND email IS NOT NULL ORDER BY created_at LIMIT 1")
                     .fetch_optional(&mut *connection).await?
                     .ok_or_else(|| BridgeError::new("no_email", "this account has no email to sign in with"))?;
-                if self.store.tenant_of(connection, Lookup::Identity("email", &verified)).await?.is_some() { return Err(taken().into()) }
-                let proven = Proven { provider: "email".into(), subject: verified.clone(), verified_email: Some(verified.clone()), name: None };
-                super::identities::insert_identity(connection, &holder, &proven, self.counting, now).await?;
+                if self
+                    .store
+                    .tenant_of(connection, Lookup::Identity("email", &verified))
+                    .await?
+                    .is_some()
+                {
+                    return Err(taken().into());
+                }
+                let proven = Proven {
+                    provider: "email".into(),
+                    subject: verified.clone(),
+                    verified_email: Some(verified.clone()),
+                    name: None,
+                };
+                super::identities::insert_identity(
+                    connection,
+                    &holder,
+                    &proven,
+                    self.counting,
+                    now,
+                )
+                .await?;
                 email = Some(verified);
             }
             sqlx::query("INSERT INTO passwords (account_id, tenant_id, email, hash, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $5)

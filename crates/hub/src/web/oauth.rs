@@ -74,7 +74,12 @@ pub async fn preflight() -> Response {
 }
 
 fn public_url(state: &AppState) -> String {
-    state.hub.config.public_url.trim_end_matches('/').to_string()
+    state
+        .hub
+        .config
+        .public_url
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// The resources a token may be for: the hub, or its `/mcp` (what clients are given).
@@ -175,7 +180,11 @@ pub struct Registration {
 /// RFC 7591: a public client registers its redirect URIs.
 pub async fn register(State(state): State<AppState>, body: axum::body::Bytes) -> Response {
     let Some(hub) = state.passkeys.clone() else {
-        return oauth_error(StatusCode::NOT_FOUND, "not_found", "no authorization server");
+        return oauth_error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no authorization server",
+        );
     };
     if body.len() > 16 * 1024 {
         return oauth_error(
@@ -204,7 +213,10 @@ pub async fn register(State(state): State<AppState>, body: axum::body::Bytes) ->
     }
     match hub
         .accounts()
-        .register_client(asked.client_name.as_deref().unwrap_or(""), &asked.redirect_uris)
+        .register_client(
+            asked.client_name.as_deref().unwrap_or(""),
+            &asked.redirect_uris,
+        )
         .await
     {
         Ok(client) => no_store(
@@ -298,7 +310,9 @@ async fn check(state: &AppState, query: &AuthorizeQuery) -> Result<Checked, Resp
             return Err(super::routes::unavailable());
         }
     };
-    if !client.redirect_uris.iter().any(|uri| uri == redirect_uri) || !valid_redirect_uri(redirect_uri) {
+    if !client.redirect_uris.iter().any(|uri| uri == redirect_uri)
+        || !valid_redirect_uri(redirect_uri)
+    {
         return Err(refuse_page(
             "It sends you back to an address the app did not register.",
         ));
@@ -314,12 +328,25 @@ async fn check(state: &AppState, query: &AuthorizeQuery) -> Result<Checked, Resp
     if query.response_type.as_deref() != Some("code") {
         return Err(fail("unsupported_response_type", "response_type is code"));
     }
-    let challenge = match (&query.code_challenge, query.code_challenge_method.as_deref()) {
-        (Some(challenge), Some("S256")) if (43..=128).contains(&challenge.len()) => challenge.clone(),
-        _ => return Err(fail("invalid_request", "PKCE with code_challenge_method S256 is required")),
+    let challenge = match (
+        &query.code_challenge,
+        query.code_challenge_method.as_deref(),
+    ) {
+        (Some(challenge), Some("S256")) if (43..=128).contains(&challenge.len()) => {
+            challenge.clone()
+        }
+        _ => {
+            return Err(fail(
+                "invalid_request",
+                "PKCE with code_challenge_method S256 is required",
+            ));
+        }
     };
     let Some(resource) = resource_for(state, query.resource.as_deref()) else {
-        return Err(fail("invalid_target", "this hub issues tokens for its own /mcp only"));
+        return Err(fail(
+            "invalid_target",
+            "this hub issues tokens for its own /mcp only",
+        ));
     };
     if query.state.as_deref().is_some_and(|s| s.len() > 1024) {
         return Err(fail("invalid_request", "state is at most 1024 characters"));
@@ -397,7 +424,10 @@ pub async fn authorize(
     };
     let who = match &person {
         Some(person) => pages::escape(person.name.as_deref().unwrap_or(&person.id)),
-        None => format!("your new {} account", pages::escape(state.hub.config.site().name())),
+        None => format!(
+            "your new {} account",
+            pages::escape(state.hub.config.site().name())
+        ),
     };
     let body = format!(
         "<h1>Connect {app}?</h1>\
@@ -413,7 +443,12 @@ until you disconnect it or it goes unused for {days} days.</p>\
         } else {
             String::new()
         },
-        days = state.hub.config.token_config().refresh_secs.div_ceil(86_400),
+        days = state
+            .hub
+            .config
+            .token_config()
+            .refresh_secs
+            .div_ceil(86_400),
         origin = pages::escape(&origin),
         fields = [
             hidden("client_id", &checked.client.id),
@@ -521,7 +556,10 @@ pub async fn decide(
             if let Some(sent) = checked.state.as_deref() {
                 params.push(("state", sent));
             }
-            see_other(&back_to(&checked.redirect_uri, &params, &public_url(&state)), &cookies)
+            see_other(
+                &back_to(&checked.redirect_uri, &params, &public_url(&state)),
+                &cookies,
+            )
         }
     }
 }
@@ -578,7 +616,10 @@ async fn approve(
     if let Some(sent) = checked.state.as_deref() {
         params.push(("state", sent));
     }
-    see_other(&back_to(&checked.redirect_uri, &params, &public_url(state)), &cookies)
+    see_other(
+        &back_to(&checked.redirect_uri, &params, &public_url(state)),
+        &cookies,
+    )
 }
 
 #[derive(Deserialize)]
@@ -609,10 +650,18 @@ fn tokens_json(tokens: Tokens) -> Response {
 /// A code or a refresh token for tokens (RFC 6749 §4.1.3, §6).
 pub async fn token(State(state): State<AppState>, Form(asked): Form<TokenRequest>) -> Response {
     let Some(hub) = state.passkeys.clone() else {
-        return oauth_error(StatusCode::NOT_FOUND, "not_found", "no authorization server");
+        return oauth_error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no authorization server",
+        );
     };
     let Some(client) = asked.client_id.as_deref() else {
-        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client", "client_id is required");
+        return oauth_error(
+            StatusCode::UNAUTHORIZED,
+            "invalid_client",
+            "client_id is required",
+        );
     };
     let resource = asked.resource.as_deref();
     if resource.is_some() && resource_for(&state, resource).is_none() {
@@ -689,7 +738,11 @@ pub struct Revocation {
 /// RFC 7009: end a token's family. Unknown tokens answer the same.
 pub async fn revoke(State(state): State<AppState>, Form(asked): Form<Revocation>) -> Response {
     let Some(hub) = state.passkeys.clone() else {
-        return oauth_error(StatusCode::NOT_FOUND, "not_found", "no authorization server");
+        return oauth_error(
+            StatusCode::NOT_FOUND,
+            "not_found",
+            "no authorization server",
+        );
     };
     match hub.accounts().revoke_token(&asked.token).await {
         Ok(()) => no_store(StatusCode::OK.into_response()),

@@ -72,7 +72,9 @@ fn everything(site: &Site) -> Vec<(String, String)> {
             "{}\n{}\n{}\n{}\n{}",
             site.waiting_message("1 January 2026", "https://hub.example.org/account"),
             access.waiting_title,
-            Ctx::new(site).with("since", "x").inline(&access.account_waiting),
+            Ctx::new(site)
+                .with("since", "x")
+                .inline(&access.account_waiting),
             Ctx::new(site)
                 .with("since", "x")
                 .with("plan", "y")
@@ -270,7 +272,9 @@ fn plans_say_which_one_a_tenant_starts_on_and_what_each_holds() {
     assert_eq!(team.cap("machines"), Cap::Unset);
     // Marked default: that one, whatever its place.
     let site = neutral_with(|d| {
-        edit_json(&d.join("site.json"), |v| v["plans"][1]["default"] = true.into())
+        edit_json(&d.join("site.json"), |v| {
+            v["plans"][1]["default"] = true.into()
+        })
     });
     assert_eq!(site.default_plan().unwrap().id, "team");
     // A plan id the site no longer lists reads as the default plan, and says it fell back.
@@ -281,7 +285,8 @@ fn plans_say_which_one_a_tenant_starts_on_and_what_each_holds() {
     let (plan, fell_back) = site.plan_for(None);
     assert_eq!((plan.unwrap().id.as_str(), fell_back), ("team", false));
     // No plans: nothing holds a tenant.
-    let none = neutral_with(|d| edit_json(&d.join("site.json"), |v| v["plans"] = serde_json::json!([])));
+    let none =
+        neutral_with(|d| edit_json(&d.join("site.json"), |v| v["plans"] = serde_json::json!([])));
     assert!(none.default_plan().is_none() && none.plan_for(Some("free")).0.is_none());
     // The limit message in the site's words: the plan, the limit, the count, the plans.
     let message = neutral().limit_message(
@@ -447,7 +452,10 @@ fn a_site_that_does_not_check_out_says_what_and_where() {
                     v["access"] = serde_json::json!({ "waiting": "Wait for {nobody}" })
                 })
             }),
-            &["content/messages.json access.waiting", "nothing fills {nobody}"],
+            &[
+                "content/messages.json access.waiting",
+                "nothing fills {nobody}",
+            ],
         ),
         (
             Box::new(|d| {
@@ -684,8 +692,14 @@ fn a_page_says_what_the_hub_counts_only_where_it_counts() {
         page.render(&ctx, &["hosted", "analytics"]),
         "<p>Counted, 30 days.</p><p>Hosted and counted.</p>"
     );
-    assert_eq!(page.render(&ctx, &["hosted", "no-analytics"]), "<p>Nothing counted.</p>");
-    assert_eq!(page.render(&ctx, &["passkeys", "analytics"]), "<p>Counted, 30 days.</p>");
+    assert_eq!(
+        page.render(&ctx, &["hosted", "no-analytics"]),
+        "<p>Nothing counted.</p>"
+    );
+    assert_eq!(
+        page.render(&ctx, &["passkeys", "analytics"]),
+        "<p>Counted, 30 days.</p>"
+    );
     let unknown = super::Page::parse("---\ntitle: T\n---\n::: counted\nx\n:::\n").unwrap_err();
     assert!(unknown.contains("analytics, no-analytics"), "{unknown}");
     // The built-in privacy page says exactly what a counting hub counts, and a hub that

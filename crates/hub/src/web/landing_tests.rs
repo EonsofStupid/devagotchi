@@ -32,10 +32,7 @@ async fn served(response: Response) -> (String, String) {
 fn a_claimed_hub_shows_the_whole_product_page() {
     let html = body(Front::Passkeys);
     for (what, needle) in [
-        (
-            "hero",
-            "<h1>Your AI gets your server.</h1>",
-        ),
+        ("hero", "<h1>Your AI gets your server.</h1>"),
         (
             "sign-in",
             "href=\"/auth/login?return_to=/account\">Sign in</a>",
@@ -107,7 +104,9 @@ fn a_hosted_hub_gets_people_started_and_never_offers_a_claim() {
     let html = body(Front::Hosted);
     // Its first button gets you started at the address your AI connects to.
     let first = html.find("class=\"button primary\"").unwrap();
-    assert!(html[first..].starts_with("class=\"button primary\" href=\"#connect\">Get started</a>"));
+    assert!(
+        html[first..].starts_with("class=\"button primary\" href=\"#connect\">Get started</a>")
+    );
     assert!(html.contains("your account is made the moment your AI connects"));
     assert!(html.contains("Your account is made when it first connects"));
     assert!(html.contains(&format!("<code>{URL}/mcp</code>")));
@@ -156,7 +155,12 @@ fn nomen_hubs_sign_in_with_their_providers_label() {
 
 #[tokio::test]
 async fn the_page_needs_nothing_the_plain_csp_refuses() {
-    for front in [Front::Unclaimed, Front::Passkeys, Front::Nomen, Front::Hosted] {
+    for front in [
+        Front::Unclaimed,
+        Front::Passkeys,
+        Front::Nomen,
+        Front::Hosted,
+    ] {
         let (csp, html) = served(home(front, URL)).await;
         assert!(
             csp.starts_with("default-src 'none'; style-src 'self';") && !csp.contains("script-src"),
@@ -171,7 +175,10 @@ async fn the_page_needs_nothing_the_plain_csp_refuses() {
             assert!(!html.contains(refused), "{refused}");
         }
         for script in html.split("<script").skip(1) {
-            assert!(script.starts_with(" type=\"application/ld+json\">"), "{script}");
+            assert!(
+                script.starts_with(" type=\"application/ld+json\">"),
+                "{script}"
+            );
             let data = script
                 .split_once('>')
                 .and_then(|(_, rest)| rest.split_once("</script>"))
@@ -219,7 +226,12 @@ async fn the_page_needs_nothing_the_plain_csp_refuses() {
 
 #[test]
 fn every_term_carries_its_tooltip_and_every_tooltip_is_named_once() {
-    for front in [Front::Unclaimed, Front::Passkeys, Front::Nomen, Front::Hosted] {
+    for front in [
+        Front::Unclaimed,
+        Front::Passkeys,
+        Front::Nomen,
+        Front::Hosted,
+    ] {
         let html = body(front);
         let terms: Vec<&str> = html.split("<span class=\"term\" ").skip(1).collect();
         assert!(!terms.is_empty());
@@ -252,7 +264,12 @@ fn every_term_carries_its_tooltip_and_every_tooltip_is_named_once() {
 
 #[test]
 fn every_popup_opens_from_a_button_names_itself_and_closes() {
-    for front in [Front::Unclaimed, Front::Passkeys, Front::Nomen, Front::Hosted] {
+    for front in [
+        Front::Unclaimed,
+        Front::Passkeys,
+        Front::Nomen,
+        Front::Hosted,
+    ] {
         let html = body(front);
         let popups: Vec<&str> = html.split("<div class=\"modal\" ").skip(1).collect();
         let mut ids = BTreeSet::new();
@@ -399,7 +416,12 @@ fn the_shell_stays_and_motion_is_optional_in_the_stylesheet() {
 
 #[test]
 fn the_video_plays_only_when_asked_and_every_id_is_unique() {
-    for front in [Front::Unclaimed, Front::Passkeys, Front::Nomen, Front::Hosted] {
+    for front in [
+        Front::Unclaimed,
+        Front::Passkeys,
+        Front::Nomen,
+        Front::Hosted,
+    ] {
         let html = body(front);
         // In the hero (wide screens) and in the Watch it set up popup; click to play.
         let videos: Vec<&str> = html.split("<video ").skip(1).collect();

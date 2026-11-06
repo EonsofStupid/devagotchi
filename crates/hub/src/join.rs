@@ -177,7 +177,14 @@ pub async fn join(State(state): State<AppState>, Path(asked): Path<String>) -> R
         return text(StatusCode::OK, refusal(shell, hub));
     }
     match state.hub.links.join_script(code, shell) {
-        Ok(Some(device)) => match script(shell, hub, &device, &shown_name(&state, &device).await, code, &downloads) {
+        Ok(Some(device)) => match script(
+            shell,
+            hub,
+            &device,
+            &shown_name(&state, &device).await,
+            code,
+            &downloads,
+        ) {
             Some(body) => text(StatusCode::OK, body),
             None => text(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -195,12 +202,20 @@ pub async fn join(State(state): State<AppState>, Path(asked): Path<String>) -> R
 
 /// The name `machines` shows the person whose machine `device` (its stored name) is.
 async fn shown_name(state: &AppState, device: &str) -> String {
-    let owner = state.hub.links.device(device).ok().flatten().and_then(|found| found.owner);
+    let owner = state
+        .hub
+        .links
+        .device(device)
+        .ok()
+        .flatten()
+        .and_then(|found| found.owner);
     let (Some(owner), Some(hub)) = (owner, state.passkeys.as_ref()) else {
         return device.to_string();
     };
     match hub.accounts().get(&owner).await {
-        Ok(Some(account)) => state.hub.shown_name(&hub.accounts().subject(&account, "passkey"), device),
+        Ok(Some(account)) => state
+            .hub
+            .shown_name(&hub.accounts().subject(&account, "passkey"), device),
         _ => device.to_string(),
     }
 }
@@ -345,7 +360,10 @@ mod tests {
             done.contains("dabo is connected to $hub and starts with the computer. Tell your AI to use \\\"dabo\\\"."),
             "{done}"
         );
-        assert!(!done.contains("t0123456789ab"), "the tag is not the person's word: {done}");
+        assert!(
+            !done.contains("t0123456789ab"),
+            "the tag is not the person's word: {done}"
+        );
         for wanted in [
             "hub='https://app.devagotchi.com'",
             "device='t0123456789ab-dabo'",
@@ -376,7 +394,10 @@ mod tests {
         let done = ps.lines().find(|line| line.contains("done:")).unwrap();
         assert!(done.contains("dabo is connected to $hub and starts with the computer. Tell your AI to use `\"dabo`\"."), "{done}");
         assert!(!done.contains("t0123456789ab"), "{done}");
-        assert!(ps.contains("$device = 't0123456789ab-dabo'"), "--device keeps the stored name");
+        assert!(
+            ps.contains("$device = 't0123456789ab-dabo'"),
+            "--device keeps the stored name"
+        );
         assert!(ps.contains(&format!("$env:DEVAGOTCHI_ENROLL_CODE = '{CODE}'")));
         assert!(ps.contains(downloads.sha256("install-devagotchi.ps1").unwrap()));
         assert!(
@@ -403,7 +424,17 @@ mod tests {
         }
         assert!(script(Shell::Sh, hub, "platinum", "plat'inum", CODE, &downloads).is_none());
         // A hub without the PowerShell installer writes no PowerShell script.
-        assert!(script(Shell::PowerShell, hub, "platinum", "platinum", CODE, &downloads).is_none());
+        assert!(
+            script(
+                Shell::PowerShell,
+                hub,
+                "platinum",
+                "platinum",
+                CODE,
+                &downloads
+            )
+            .is_none()
+        );
         assert!(valid_code(CODE) && !valid_code("dvg-") && !valid_code(&format!("{CODE}0")));
     }
 

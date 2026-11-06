@@ -697,12 +697,21 @@ struct Waiting {
 }
 
 fn link_cookie(hub: &HubSignIn) -> &'static str {
-    if hub.secure() { "__Host-dg_link" } else { "dg_link" }
+    if hub.secure() {
+        "__Host-dg_link"
+    } else {
+        "dg_link"
+    }
 }
 
 /// "<email> already has an account. Link Google to it?": Link (with that account's
 /// password), or Keep separate. `notice` is why it is shown again (a wrong password).
-fn link_page(hub: &Arc<HubSignIn>, proven: &Proven, return_to: &str, notice: Option<&str>) -> Response {
+fn link_page(
+    hub: &Arc<HubSignIn>,
+    proven: &Proven,
+    return_to: &str,
+    notice: Option<&str>,
+) -> Response {
     let waiting = Waiting {
         p: proven.provider.clone(),
         s: proven.subject.clone(),
@@ -713,7 +722,11 @@ fn link_page(hub: &Arc<HubSignIn>, proven: &Proven, return_to: &str, notice: Opt
     };
     let json = serde_json::to_vec(&waiting).unwrap_or_default();
     let tag = hub.accounts().mac("link sign-in", &json);
-    let sealed = format!("{}.{}", URL_SAFE_NO_PAD.encode(&json), URL_SAFE_NO_PAD.encode(tag));
+    let sealed = format!(
+        "{}.{}",
+        URL_SAFE_NO_PAD.encode(&json),
+        URL_SAFE_NO_PAD.encode(tag)
+    );
     let words = &hub.site().messages.sign_in;
     let email = proven.verified_email.as_deref().unwrap_or_default();
     let title = words.link_title.replace("{email}", email);
@@ -739,8 +752,13 @@ fn link_page(hub: &Arc<HubSignIn>, proven: &Proven, return_to: &str, notice: Opt
     let mut response = pages::html(StatusCode::OK, &title, &body);
     super::session::form_may_return(&mut response, return_to);
     let headers = response.headers_mut();
-    headers.insert(axum::http::header::REFERRER_POLICY, axum::http::HeaderValue::from_static("same-origin"));
-    if let Ok(value) = axum::http::HeaderValue::from_str(&hub.cookie(link_cookie(hub), &sealed, LINK_SECS)) {
+    headers.insert(
+        axum::http::header::REFERRER_POLICY,
+        axum::http::HeaderValue::from_static("same-origin"),
+    );
+    if let Ok(value) =
+        axum::http::HeaderValue::from_str(&hub.cookie(link_cookie(hub), &sealed, LINK_SECS))
+    {
         headers.append(axum::http::header::SET_COOKIE, value);
     }
     response
@@ -765,19 +783,35 @@ pub async fn link(
         return super::routes::not_set_up();
     };
     if !super::approvals::same_origin(&headers, &state.hub.config.public_url) {
-        return failed(StatusCode::FORBIDDEN, "Not from this hub", "Answer on this hub's own page.");
+        return failed(
+            StatusCode::FORBIDDEN,
+            "Not from this hub",
+            "Answer on this hub's own page.",
+        );
     }
     let waiting = cookie_value_up_to(&headers, link_cookie(&hub), 2048).and_then(|cookie| {
         let (json, tag) = cookie.split_once('.')?;
-        let (json, tag) = (URL_SAFE_NO_PAD.decode(json).ok()?, URL_SAFE_NO_PAD.decode(tag).ok()?);
+        let (json, tag) = (
+            URL_SAFE_NO_PAD.decode(json).ok()?,
+            URL_SAFE_NO_PAD.decode(tag).ok()?,
+        );
         let ok = hub.accounts().mac_ok("link sign-in", &json, &tag);
         let waiting: Waiting = serde_json::from_slice(&json).ok().filter(|_| ok)?;
         (now_secs() < waiting.t.saturating_add(LINK_SECS)).then_some(waiting)
     });
     let Some(waiting) = waiting else {
-        return failed(StatusCode::BAD_REQUEST, "This sign-in expired", "Start again.");
+        return failed(
+            StatusCode::BAD_REQUEST,
+            "This sign-in expired",
+            "Start again.",
+        );
     };
-    let proven = Proven { provider: waiting.p, subject: waiting.s, verified_email: waiting.e, name: waiting.n };
+    let proven = Proven {
+        provider: waiting.p,
+        subject: waiting.s,
+        verified_email: waiting.e,
+        name: waiting.n,
+    };
     let accounts = hub.accounts().clone();
     let done = match form.decision.as_str() {
         "link" => match accounts.password_account_for(&proven).await {
@@ -786,8 +820,13 @@ pub async fn link(
             Ok(Some(account)) => {
                 let email = proven.verified_email.as_deref().unwrap_or_default();
                 match accounts.sign_in_password(email, &form.password).await {
-                    Ok(holder) if holder.id == account => accounts.link_identity(&account, &proven).await,
-                    Ok(_) => Err(devagotchi_contracts::BridgeError::new("password_wrong", "wrong")),
+                    Ok(holder) if holder.id == account => {
+                        accounts.link_identity(&account, &proven).await
+                    }
+                    Ok(_) => Err(devagotchi_contracts::BridgeError::new(
+                        "password_wrong",
+                        "wrong",
+                    )),
                     Err(error) => Err(error),
                 }
             }
@@ -804,16 +843,27 @@ pub async fn link(
     };
     let account = match done {
         Ok(account) => account,
-        Err(error) if error.code == "password_wrong" => return again(StatusCode::BAD_REQUEST, &words.wrong),
-        Err(error) if error.code == "slow_down" => return again(StatusCode::TOO_MANY_REQUESTS, &words.slow_down),
+        Err(error) if error.code == "password_wrong" => {
+            return again(StatusCode::BAD_REQUEST, &words.wrong);
+        }
+        Err(error) if error.code == "slow_down" => {
+            return again(StatusCode::TOO_MANY_REQUESTS, &words.slow_down);
+        }
         Err(error) if error.code == "account_disabled" => {
-            return failed(StatusCode::FORBIDDEN, "This account is disabled", "Ask the hub's owner.");
+            return failed(
+                StatusCode::FORBIDDEN,
+                "This account is disabled",
+                "Ask the hub's owner.",
+            );
         }
         Err(error) => {
             eprintln!("devagotchi-hub: account store: {}", error.message);
             return super::routes::unavailable();
         }
     };
-    let cookies = [hub.cookie(link_cookie(&hub), "", 0), super::sign_in::fresh_cookie(&hub, &waiting.r)];
+    let cookies = [
+        hub.cookie(link_cookie(&hub), "", 0),
+        super::sign_in::fresh_cookie(&hub, &waiting.r),
+    ];
     super::session::open_and_return(&hub, None, &account, &waiting.r, &cookies).await
 }

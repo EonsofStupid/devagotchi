@@ -222,8 +222,8 @@ async fn world_with(downloads: Option<Arc<crate::downloads::Downloads>>) -> Worl
         hub: Hub {
             downloads,
             analytics: None,
-                workflows: None,
-                offers: None,
+            workflows: None,
+            offers: None,
             push: Some(push),
             boards: Arc::new(crate::board::mcp::Boards::from_config(&config, dir.path())),
             config,
@@ -1688,7 +1688,10 @@ mod first_connect {
     }
 
     fn location(response: &reqwest::Response) -> String {
-        response.headers()[header::LOCATION].to_str().unwrap().to_string()
+        response.headers()[header::LOCATION]
+            .to_str()
+            .unwrap()
+            .to_string()
     }
 
     #[tokio::test]
@@ -1701,7 +1704,10 @@ mod first_connect {
         let login = location(&first);
         assert!(login.starts_with("/auth/login?return_to="), "{login}");
         let return_to = query_param(&login, "return_to").unwrap();
-        assert!(return_to.starts_with("/oauth/authorize?") && return_to.contains("state=s1"), "{return_to}");
+        assert!(
+            return_to.starts_with("/oauth/authorize?") && return_to.contains("state=s1"),
+            "{return_to}"
+        );
         // The page: Google, "or", email and password, sign in / sign up, forgot. Nothing else.
         let (status, page) = Hosted::text(hub.get(&login, None).await).await;
         assert_eq!(status, 200, "{page}");
@@ -1721,14 +1727,23 @@ mod first_connect {
         for absent in ["passkey", "secure", "connect"] {
             assert!(!lower.contains(absent), "{absent}: {page}");
         }
-        let up = Hosted::text(hub.get(&format!("{login}&tab=up"), None).await).await.1;
-        assert!(up.contains("action=\"/auth/password/new\"") && up.contains("Create account"), "{up}");
+        let up = Hosted::text(hub.get(&format!("{login}&tab=up"), None).await)
+            .await
+            .1;
+        assert!(
+            up.contains("action=\"/auth/password/new\"") && up.contains("Create account"),
+            "{up}"
+        );
         // Sign up: back to the authorize request, signed in and fresh.
         let made = hub
             .form(
                 "/auth/password/new",
                 None,
-                &[("email", "new@example.com"), ("password", "a good password"), ("return_to", &return_to)],
+                &[
+                    ("email", "new@example.com"),
+                    ("password", "a good password"),
+                    ("return_to", &return_to),
+                ],
             )
             .await;
         assert_eq!(made.status(), 303);
@@ -1736,13 +1751,19 @@ mod first_connect {
         let session = set_cookie(&made, "dg_session").expect("signed in");
         let fresh = set_cookie(&made, "dvg_fresh").expect("a fresh sign-in");
         // That request now goes straight to the app with its code: no Connect page.
-        let back = hub.get(&return_to, Some(&format!("{session}; {fresh}"))).await;
+        let back = hub
+            .get(&return_to, Some(&format!("{session}; {fresh}")))
+            .await;
         assert_eq!(back.status(), 303);
         let to_app = location(&back);
         assert!(to_app.starts_with(REDIRECT), "{to_app}");
         assert_eq!(query_param(&to_app, "state").as_deref(), Some("s1"));
         let code = query_param(&to_app, "code").expect("a code");
-        assert_eq!(set_cookie(&back, "dvg_fresh").as_deref(), Some("dvg_fresh="), "spent");
+        assert_eq!(
+            set_cookie(&back, "dvg_fresh").as_deref(),
+            Some("dvg_fresh="),
+            "spent"
+        );
         // The app's tokens, and whoami: secured, nothing to secure.
         let tokens: Value = hub
             .http
@@ -1762,18 +1783,25 @@ mod first_connect {
             .unwrap();
         let mut person = Person {
             cookie: session.clone(),
-            token: tokens["access_token"].as_str().expect("a token").to_string(),
+            token: tokens["access_token"]
+                .as_str()
+                .expect("a token")
+                .to_string(),
             session: None,
         };
         let who = hub.call(&mut person, "whoami", json!({})).await;
-        assert!(who["structuredContent"].get("secure_url").is_none(), "{who}");
+        assert!(
+            who["structuredContent"].get("secure_url").is_none(),
+            "{who}"
+        );
         // A second app later, same browser, no fresh sign-in: the Connect page, as today.
         let (_, second) = app(&hub, "Codex").await;
         let (status, page) = Hosted::text(hub.get(&second, Some(&session)).await).await;
         assert_eq!(status, 200);
         assert!(page.contains("<h1>Connect Codex?</h1>"), "{page}");
         // The fresh cookie of one request does not skip another's Connect page.
-        let (status, page) = Hosted::text(hub.get(&second, Some(&format!("{session}; {fresh}"))).await).await;
+        let (status, page) =
+            Hosted::text(hub.get(&second, Some(&format!("{session}; {fresh}"))).await).await;
         assert_eq!(status, 200);
         assert!(page.contains("<h1>Connect Codex?</h1>"), "{page}");
     }
@@ -1781,17 +1809,40 @@ mod first_connect {
     #[tokio::test]
     async fn a_wrong_password_says_so_on_the_same_page() {
         let hub = hub().await;
-        hub.accounts.sign_up_password("kim@example.com", "kims password").await.unwrap();
+        hub.accounts
+            .sign_up_password("kim@example.com", "kims password")
+            .await
+            .unwrap();
         let (_, authorize) = app(&hub, "Claude").await;
         let wrong = hub
-            .form("/auth/password", None, &[("email", "kim@example.com"), ("password", "nope nope"), ("return_to", &authorize)])
+            .form(
+                "/auth/password",
+                None,
+                &[
+                    ("email", "kim@example.com"),
+                    ("password", "nope nope"),
+                    ("return_to", &authorize),
+                ],
+            )
             .await;
         assert!(set_cookie(&wrong, "dg_session").is_none());
         let (status, page) = Hosted::text(wrong).await;
         assert_eq!(status, 400);
-        assert!(page.contains("Email or password is wrong.") && page.contains("action=\"/auth/password\""), "{page}");
+        assert!(
+            page.contains("Email or password is wrong.")
+                && page.contains("action=\"/auth/password\""),
+            "{page}"
+        );
         let right = hub
-            .form("/auth/password", None, &[("email", "kim@example.com"), ("password", "kims password"), ("return_to", &authorize)])
+            .form(
+                "/auth/password",
+                None,
+                &[
+                    ("email", "kim@example.com"),
+                    ("password", "kims password"),
+                    ("return_to", &authorize),
+                ],
+            )
             .await;
         assert_eq!(right.status(), 303);
         assert_eq!(location(&right), authorize);

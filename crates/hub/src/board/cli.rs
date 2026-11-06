@@ -952,6 +952,7 @@ fn dispatch(
                     parent: parsed.flag("--parent").map(str::to_string),
                     assignee: parsed.flag("--assign").map(str::to_string),
                     discovered_from: parsed.flag("--found-in").map(str::to_string),
+                    ..NewTicket::default()
                 },
             ))?;
             output.value(&ticket, || format!("{}  {}", ticket.id, ticket.title));
@@ -1145,6 +1146,7 @@ fn dispatch(
                     .flag("--assign")
                     .map(|a| if a == "-" { None } else { Some(a.to_string()) }),
                 state: parsed.flag("--state").map(str::to_string),
+                ..Patch::default()
             };
             let ticket = with_id(id, board.update(actor, id, version, patch))?;
             output.value(&ticket, || {

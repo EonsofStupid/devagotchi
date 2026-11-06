@@ -11,7 +11,12 @@ pub const NOTE_EVERY_SECS: u64 = 3600;
 impl Accounts {
     /// `family` made a successful MCP call for `tenant` at `now`: kept once, its latest
     /// refreshed. Returns whether this is the tenant's first call from that family.
-    pub async fn note_client_call(&self, tenant: &str, family: &str, now: u64) -> BridgeResult<bool> {
+    pub async fn note_client_call(
+        &self,
+        tenant: &str,
+        family: &str,
+        now: u64,
+    ) -> BridgeResult<bool> {
         transaction!(&self.store, |connection| {
             self.store.scope(connection, tenant).await?;
             let made = sqlx::query(
