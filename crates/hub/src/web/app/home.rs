@@ -32,7 +32,7 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> Response
         Err(response) => return response,
     };
     let machines = state.hub.machine_status(&subject).await;
-    let approvals = if state.hub.config.is_human(&subject.id) {
+    let approvals = if state.hub.may_approve(&subject) {
         super::super::approvals::pending(&state, &subject).await
     } else {
         Vec::new()

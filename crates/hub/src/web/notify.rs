@@ -88,7 +88,8 @@ pub async fn subscribe(
         Who::NotSetUp => return plain(StatusCode::NOT_FOUND, "push_not_set_up"),
         Who::Unavailable => return plain(StatusCode::SERVICE_UNAVAILABLE, "issuer_unavailable"),
     };
-    if !state.hub.config.is_human(&subject.id) {
+    // The people who approve here (`Hub::may_approve`): on a hosted hub, every account.
+    if !state.hub.may_approve(&subject) {
         return plain(StatusCode::FORBIDDEN, "not_a_person");
     }
     match save(&state, &subject.id, &sub) {

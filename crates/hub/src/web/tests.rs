@@ -853,6 +853,106 @@ async fn a_person_approves_on_the_phone_page_and_the_agent_sees_it() {
     assert_eq!(signed_out.status(), StatusCode::SEE_OTHER);
 }
 
+/// Configured boards decide as they always have: the owner and a grant marked human that
+/// names the board; a grant that is not a person, and an account without one, never.
+#[tokio::test]
+async fn configured_boards_decide_for_the_owner_and_human_grants_only() {
+    use crate::{
+        auth::Subject,
+        board::{Actor, open_project},
+    };
+    let w = world().await;
+    let (_, board) = open_project(&w.board_dir).unwrap();
+    let asked = board
+        .request_approval(&Actor::agent("claude"), "Deploy", "deploy", "", "")
+        .unwrap();
+
+    // Over HTTP: OTHER holds no board grant and is not a person; its decision is refused.
+    let other = w.sign_in("tok-other").await;
+    let refused = w
+        .http
+        .post(format!("{}/approvals/decide", w.url))
+        .header(header::COOKIE, &other)
+        .header("sec-fetch-site", "same-origin")
+        .form(&[
+            ("project", "estate".to_string()),
+            ("id", asked.id.clone()),
+            ("version", asked.version.to_string()),
+            ("verdict", "approved".to_string()),
+        ])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+    assert_eq!(board.approval_status(&asked.id).unwrap().status, "pending");
+
+    // The resolver on a config with both kinds of grant on `estate`.
+    let config = Arc::new(
+        HubConfig::parse(
+            &json!({
+                "listen": "127.0.0.1:1",
+                "public_url": w.url,
+                "auth": {"mode": "dev", "tokens_file": w.dir.path().join("tokens.json")},
+                "owner": OWNER,
+                "brokers": [],
+                "grants": [
+                    {"subject": "300000000000000003", "boards": ["estate"], "human": true},
+                    {"subject": "300000000000000004", "boards": ["estate"]}
+                ],
+                "boards": [{"project": "estate", "dir": w.board_dir.to_str().unwrap()}]
+            })
+            .to_string(),
+        )
+        .unwrap(),
+    );
+    let hub = Hub {
+        boards: Arc::new(crate::board::mcp::Boards::from_config(&config, w.dir.path())),
+        config,
+        ..w.hub.clone()
+    };
+    let person = |id: &str| Subject {
+        id: id.into(),
+        via: "nomen",
+        tenant: None,
+        name: None,
+        org: None,
+        provisional_until: None,
+        agent: None,
+        claim_code: None,
+        client: None,
+        provisional_warning: false,
+        access: None,
+    };
+    for (id, decides) in [
+        (OWNER, true),
+        ("300000000000000003", true),
+        ("300000000000000004", false),
+        ("300000000000000005", false),
+    ] {
+        let subject = person(id);
+        assert_eq!(hub.approval_board(&subject, "estate").is_ok(), decides, "{id}");
+        assert_eq!(
+            hub.approval_boards(&subject)
+                .iter()
+                .map(|(p, _)| p.as_str())
+                .collect::<Vec<_>>(),
+            if decides { vec!["estate"] } else { vec![] },
+            "{id}"
+        );
+        assert_eq!(hub.may_approve(&subject), decides, "{id}");
+    }
+    let refused = hub
+        .approval_board(&person("300000000000000004"), "estate")
+        .err()
+        .unwrap();
+    assert_eq!(refused.code, "humans_only");
+    let unknown = hub
+        .approval_board(&person("300000000000000005"), "estate")
+        .err()
+        .unwrap();
+    assert_eq!(unknown.code, "not_granted");
+}
+
 #[tokio::test]
 async fn notify_this_phone_then_an_approval_buzzes_it_encrypted() {
     use crate::board::{Actor, open_project};
