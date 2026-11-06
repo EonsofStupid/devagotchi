@@ -621,7 +621,8 @@ impl Links {
                                     let _ = waiter.send(response);
                                 }
                             }
-                            Ok(LinkFrame::Heartbeat) => {}
+                            // Updates: the hub does not ask for one yet (U4 of the spec).
+                            Ok(LinkFrame::Heartbeat | LinkFrame::UpdateStatus { .. }) => {}
                             Ok(LinkFrame::Hello { .. }) | Err(_) => break "protocol_error",
                         }
                     }
@@ -676,6 +677,7 @@ impl Links {
             public_key,
             signature,
             enroll_code,
+            ..
         }) = hello
         else {
             return refuse("protocol_error", "expected a hello frame".into());
@@ -845,6 +847,7 @@ mod tests {
                     .to_bytes(),
             ),
             enroll_code: code.map(str::to_string),
+            build: None,
         })
     }
 
@@ -961,6 +964,7 @@ mod tests {
             public_key: hex::encode(identity),
             signature: hex::encode([0u8; 64]),
             enroll_code: Some(code),
+            build: None,
         });
         assert_eq!(links.admit(frame, "n").unwrap_err().code, "bad_key");
         assert!(links.devices.get("gus").unwrap().is_none());
