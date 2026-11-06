@@ -46,13 +46,21 @@ if ($logonLine -notmatch '^(\S+)\s+(.+)$') { throw "cannot split the Run value: 
 Start-Process -FilePath $Matches[1] -ArgumentList $Matches[2] -WindowStyle Hidden | Out-Null
 for ($i = 0; $i -lt 300 -and -not (Test-BrokerPipe); $i++) { Start-Sleep -Milliseconds 100 }
 if (-not (Test-BrokerPipe)) { Get-Content (Join-Path $root 'logs\broker.log') -ErrorAction SilentlyContinue; throw 'the broker started by the Run entry did not become ready' }
-if ((Get-RootProcess 'powershell.exe').Count -lt 1) { throw 'no powershell wrapper around the logon broker' }
-Write-Host 'ok   the broker runs as logon starts it, under the powershell wrapper holding broker.log'
+$wrappers = @(Get-RootProcess 'powershell.exe')
+if ($wrappers.Count -ne 1) { Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'powershell|pwsh|devagotchi' } | Format-List ProcessId, ParentProcessId, Name, CommandLine; throw "expected one powershell wrapper around the logon broker, found $($wrappers.Count)" }
+# On dabo the wrapper outlived the broker the installer killed and still held broker.log
+# when the installer cleared it. A runner tears the wrapper down faster than dabo did, so
+# hold it there: suspended, it keeps broker.log open exactly as it did on dabo.
+Add-Type -Namespace DvgCi -Name Nt -MemberDefinition '[System.Runtime.InteropServices.DllImport("ntdll.dll")] public static extern int NtSuspendProcess(System.IntPtr process);'
+$wrapperProcess = Get-Process -Id $wrappers[0].ProcessId
+$status = [DvgCi.Nt]::NtSuspendProcess($wrapperProcess.Handle)
+if ($status -ne 0) { throw "could not suspend the logon wrapper (NTSTATUS $status)" }
+Write-Host "ok   the broker runs as logon starts it, under powershell wrapper pid $($wrapperProcess.Id) holding broker.log (suspended)"
 $hostExe = (Get-Process -Id $PID).Path
 & $hostExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PSScriptRoot\install-devagotchi.ps1" `
     -BinDir (Resolve-Path 'target\debug').ProviderPath -Root $root -Workspace $ws -Autostart
 if ($LASTEXITCODE -ne 0) { throw "the upgrade over the logon broker failed ($LASTEXITCODE)" }
-if ((Get-RootProcess 'powershell.exe').Count -ne 0) { throw 'the logon wrapper survived the upgrade' }
+if (@(Get-RootProcess 'powershell.exe').Count -ne 0) { throw 'the logon wrapper survived the upgrade' }
 python tests/windows_install_check.py --root $root --claude-config $cfg --workspace $ws
 if ($LASTEXITCODE -ne 0) { throw 'the broker does not answer after the upgrade over the logon broker' }
 Write-Host 'ok   the upgrade over the logon broker exited 0 and its broker answers'
