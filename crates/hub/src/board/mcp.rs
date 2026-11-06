@@ -2292,5 +2292,109 @@ mod tests {
         );
         let unknown = refuse(BridgeError::new("something_new", "?"), None);
         assert!(unknown.0.next.contains("board_prime"));
+        let environment = refuse(
+            BridgeError::new(
+                "unknown_environment",
+                "environment \"qa\" is not one of this board's: dev, prod",
+            ),
+            None,
+        );
+        assert!(
+            environment.0.next.contains("(dev, prod)"),
+            "{}",
+            environment.0.next
+        );
+    }
+
+    /// Every board tool that answers with tickets answers within its declared output schema
+    /// with the anchors present and absent (`Hosted::call` holds each result to it).
+    #[tokio::test]
+    async fn ticket_results_match_their_schemas_with_anchors_present_and_absent() {
+        use serde_json::json;
+
+        use crate::tenant_tests::{hosted_with, refused};
+
+        let hub = hosted_with(None, |_, _| json!({})).await;
+        let mut person = hub.first_connect("Claude").await;
+        let bound = hub
+            .call(&mut person, "board_bind", json!({ "project": "anchors" }))
+            .await;
+        assert!(!refused(&bound), "{bound}");
+        let anchored = hub
+            .call(
+                &mut person,
+                "board_create",
+                json!({
+                    "project": "anchors", "title": "dabo is down", "machine": "dabo",
+                    "repo": "https://github.com/x/y", "environment": "prod", "agent": "claude",
+                    "session": "s-1", "fingerprint": "fp-1",
+                }),
+            )
+            .await["structuredContent"]
+            .clone();
+        assert_eq!(anchored["machine"], "dabo", "{anchored}");
+        assert_eq!(anchored["environment"], "prod");
+        assert_eq!(anchored["fingerprint"], "fp-1");
+        let id = anchored["id"].as_str().unwrap().to_string();
+        let plain = hub
+            .call(
+                &mut person,
+                "board_create",
+                json!({ "project": "anchors", "title": "plain" }),
+            )
+            .await["structuredContent"]
+            .clone();
+        assert!(plain["machine"].is_null(), "{plain}");
+        for project_id in [&id, plain["id"].as_str().unwrap()] {
+            let got = hub
+                .call(
+                    &mut person,
+                    "board_get",
+                    json!({ "project": "anchors", "id": project_id }),
+                )
+                .await;
+            assert!(!refused(&got), "{got}");
+        }
+        let all = hub
+            .call(&mut person, "board_list", json!({ "project": "anchors" }))
+            .await;
+        assert!(!refused(&all), "{all}");
+        let filtered = hub
+            .call(
+                &mut person,
+                "board_list",
+                json!({ "project": "anchors", "machine": "dabo", "environment": "prod" }),
+            )
+            .await;
+        let text = filtered.to_string();
+        assert!(
+            text.contains(&id) && !text.contains(plain["id"].as_str().unwrap()),
+            "{text}"
+        );
+        let updated = hub
+            .call(
+                &mut person,
+                "board_update",
+                json!({ "project": "anchors", "id": id, "version": 1, "machine": "", "environment": "dev" }),
+            )
+            .await["structuredContent"]
+            .clone();
+        assert!(
+            updated["machine"].is_null(),
+            "an empty string clears: {updated}"
+        );
+        assert_eq!(updated["environment"], "dev");
+        let refused_env = hub
+            .call(
+                &mut person,
+                "board_create",
+                json!({ "project": "anchors", "title": "qa", "environment": "qa" }),
+            )
+            .await;
+        assert!(refused(&refused_env), "{refused_env}");
+        assert!(
+            refused_env.to_string().contains("dev, staging, prod"),
+            "the refusal names the list: {refused_env}"
+        );
     }
 }
