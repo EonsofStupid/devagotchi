@@ -231,9 +231,17 @@ fn hub_and_devagotchi_modes_parse_side_by_side_and_keep_their_own_fields() {
     for (mode, field, value) in [
         ("hub", "upstream", serde_json::json!([])),
         ("hub", "provisional", serde_json::json!({ "ttl_days": 14 })),
-        ("hub", "legacy", serde_json::json!({ "issuer": "https://id.shippin.cloud" })),
+        (
+            "hub",
+            "legacy",
+            serde_json::json!({ "issuer": "https://id.shippin.cloud" }),
+        ),
         ("hub", "local", serde_json::json!({ "magic_link": true })),
-        ("devagotchi", "tokens", serde_json::json!({ "access_secs": 600 })),
+        (
+            "devagotchi",
+            "tokens",
+            serde_json::json!({ "access_secs": 600 }),
+        ),
         ("devagotchi", "rp_id", serde_json::json!("devagotchi.com")),
         ("devagotchi", "nomen", serde_json::json!({})),
     ] {
@@ -271,7 +279,11 @@ fn a_hosted_hub_and_its_operators_come_from_the_config_or_the_environment() {
         (name == TENANCY_ENV).then(|| "many".to_string())
     })
     .unwrap_err();
-    assert!(wrong.message.contains("single or multi"), "{}", wrong.message);
+    assert!(
+        wrong.message.contains("single or multi"),
+        "{}",
+        wrong.message
+    );
 
     // A one-owner hub with operators set at deploy is not claimed either.
     let mut operated = hub();
@@ -323,17 +335,52 @@ fn sign_in_providers_take_their_secrets_from_the_environment_or_a_file() {
     )
     .unwrap();
     let (providers, email) = good.sign_ins();
-    assert_eq!(providers.iter().map(|p| p.name()).collect::<Vec<_>>(), ["google", "github", "nomen"]);
+    assert_eq!(
+        providers.iter().map(|p| p.name()).collect::<Vec<_>>(),
+        ["google", "github", "nomen"]
+    );
     assert_eq!(providers[2].label(), "Shippin");
     assert!(email.is_some());
     for (providers, email, why) in [
-        (serde_json::json!([{ "kind": "google", "client_id_env": "MISSING", "client_secret_env": "GOOGLE_SECRET" }]), None, "MISSING is not set"),
-        (serde_json::json!([{ "kind": "github", "client_id": "x" }]), None, "client_secret_env"),
-        (serde_json::json!([{ "kind": "oidc", "issuer": "https://id.example.com", "client_id": "x" }]), None, "needs a name"),
-        (serde_json::json!([{ "kind": "oidc", "name": "x", "issuer": "http://id.example.com", "client_id": "x" }]), None, "https"),
-        (serde_json::json!([{ "kind": "github", "client_id": "a", "client_secret_env": "GITHUB_SECRET" }, { "kind": "github", "client_id": "b", "client_secret_env": "GITHUB_SECRET" }]), None, "twice"),
-        (serde_json::json!([]), Some(serde_json::json!({ "smtp_url": "smtp://mail.example.com?tls=none", "from": "a@b.co" })), "loopback"),
-        (serde_json::json!([]), Some(serde_json::json!({ "smtp_url": "smtps://u:pw@mail.example.com", "from": "a@b.co" })), "password"),
+        (
+            serde_json::json!([{ "kind": "google", "client_id_env": "MISSING", "client_secret_env": "GOOGLE_SECRET" }]),
+            None,
+            "MISSING is not set",
+        ),
+        (
+            serde_json::json!([{ "kind": "github", "client_id": "x" }]),
+            None,
+            "client_secret_env",
+        ),
+        (
+            serde_json::json!([{ "kind": "oidc", "issuer": "https://id.example.com", "client_id": "x" }]),
+            None,
+            "needs a name",
+        ),
+        (
+            serde_json::json!([{ "kind": "oidc", "name": "x", "issuer": "http://id.example.com", "client_id": "x" }]),
+            None,
+            "https",
+        ),
+        (
+            serde_json::json!([{ "kind": "github", "client_id": "a", "client_secret_env": "GITHUB_SECRET" }, { "kind": "github", "client_id": "b", "client_secret_env": "GITHUB_SECRET" }]),
+            None,
+            "twice",
+        ),
+        (
+            serde_json::json!([]),
+            Some(
+                serde_json::json!({ "smtp_url": "smtp://mail.example.com?tls=none", "from": "a@b.co" }),
+            ),
+            "loopback",
+        ),
+        (
+            serde_json::json!([]),
+            Some(
+                serde_json::json!({ "smtp_url": "smtps://u:pw@mail.example.com", "from": "a@b.co" }),
+            ),
+            "password",
+        ),
     ] {
         let refused = with(providers, email).unwrap_err();
         assert!(refused.message.contains(why), "{why}: {}", refused.message);

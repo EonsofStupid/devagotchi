@@ -99,7 +99,6 @@ pub struct WorkflowRow {
     pub expires_at: u64,
 }
 
-
 /// A new workflow's id: `wf_` and 96 random bits in hex.
 pub fn new_workflow_id(random: [u8; 12]) -> String {
     format!("wf_{}", hex::encode(random))
@@ -107,8 +106,12 @@ pub fn new_workflow_id(random: [u8; 12]) -> String {
 
 /// A workflow id as the hub makes them.
 pub fn valid_workflow_id(id: &str) -> bool {
-    id.strip_prefix("wf_")
-        .is_some_and(|hex| hex.len() == 24 && hex.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()))
+    id.strip_prefix("wf_").is_some_and(|hex| {
+        hex.len() == 24
+            && hex
+                .bytes()
+                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    })
 }
 
 /// A link token: `dgw_` and 256 random bits, base64url. Only its SHA-256 is kept.
@@ -119,7 +122,10 @@ pub fn new_link_token(random: [u8; 32]) -> String {
 /// A link token's shape, checked before anything is looked up.
 pub fn valid_link_token(token: &str) -> bool {
     token.strip_prefix("dgw_").is_some_and(|rest| {
-        rest.len() == 43 && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        rest.len() == 43
+            && rest
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     })
 }
 
@@ -140,7 +146,9 @@ pub fn browser_hash(secret: &str) -> Option<String> {
         .strip_prefix("dgb_")
         .filter(|rest| {
             rest.len() == 43
-                && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+                && rest
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
         })
         .map(|_| hash(secret))
 }
@@ -203,7 +211,10 @@ async fn save_progress(
 }
 
 fn unknown_workflow() -> BridgeError {
-    BridgeError::new("unknown_workflow", "no workflow with that id was started for this account")
+    BridgeError::new(
+        "unknown_workflow",
+        "no workflow with that id was started for this account",
+    )
 }
 
 /// What `note_done` did.
@@ -477,7 +488,13 @@ impl Accounts {
 
     /// A browser did a step of workflow `id` through its link (turned a phone on): it is
     /// remembered, by the SHA-256 of its cookie, as one that may keep the account.
-    pub async fn note_browser(&self, tenant: &str, id: &str, browser: &str, now: u64) -> BridgeResult<()> {
+    pub async fn note_browser(
+        &self,
+        tenant: &str,
+        id: &str,
+        browser: &str,
+        now: u64,
+    ) -> BridgeResult<()> {
         transaction!(&self.store, |connection| {
             self.store.scope(connection, tenant).await?;
             let Some(row) = workflow_in(connection, tenant, id).await? else {
@@ -526,7 +543,8 @@ impl Accounts {
             progress.mark_browser(browser, now);
             save_progress(connection, &row, &progress).await?;
             let session =
-                sessions::insert_session(connection, tenant, &holder.id, None, session_random, now).await?;
+                sessions::insert_session(connection, tenant, &holder.id, None, session_random, now)
+                    .await?;
             tenants::record_in(
                 connection,
                 tenant,
@@ -561,10 +579,16 @@ impl Accounts {
                 return Err(unknown_workflow().into());
             };
             if row.state == "cancelled" || !row.progress.did_a_step(browser, window, now) {
-                return Err(refused("not_this_browser", "only the browser that did a step here keeps the account"));
+                return Err(refused(
+                    "not_this_browser",
+                    "only the browser that did a step here keeps the account",
+                ));
             }
             if !row.progress.any_done() {
-                return Err(refused("too_soon", "the account is kept once a step is done"));
+                return Err(refused(
+                    "too_soon",
+                    "the account is kept once a step is done",
+                ));
             }
             let holder = account_in(connection, &row.account)
                 .await?
@@ -576,7 +600,8 @@ impl Accounts {
                 return Err(refused("secured", "this account is secured: sign in to it"));
             }
             let session =
-                sessions::insert_session(connection, tenant, &holder.id, None, session_random, now).await?;
+                sessions::insert_session(connection, tenant, &holder.id, None, session_random, now)
+                    .await?;
             tenants::record_in(
                 connection,
                 tenant,
@@ -599,7 +624,12 @@ mod tests {
     fn ids_tokens_and_cookies_have_their_shapes() {
         let id = new_workflow_id([0xab; 12]);
         assert!(valid_workflow_id(&id), "{id}");
-        for bad in ["wf_", "wf_ABABABABABABABABABABABAB", "acct_x", "wf_abababababababababababab0"] {
+        for bad in [
+            "wf_",
+            "wf_ABABABABABABABABABABABAB",
+            "acct_x",
+            "wf_abababababababababababab0",
+        ] {
             assert!(!valid_workflow_id(bad), "{bad}");
         }
         let token = new_link_token([7; 32]);
@@ -609,7 +639,11 @@ mod tests {
         assert_eq!(link_hash(&token).len(), 64);
         let secret = new_browser_secret([9; 32]);
         assert_eq!(browser_hash(&secret).map(|key| key.len()), Some(64));
-        for bad in ["dgb_short", "dgs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ""] {
+        for bad in [
+            "dgb_short",
+            "dgs_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "",
+        ] {
             assert_eq!(browser_hash(bad), None, "{bad}");
         }
     }
@@ -627,7 +661,11 @@ mod progress_tests {
         progress.mark_browser("b", 20);
         progress.mark_browser("a", 30);
         assert_eq!(
-            progress.browsers.iter().map(|m| (m.hash.as_str(), m.at)).collect::<Vec<_>>(),
+            progress
+                .browsers
+                .iter()
+                .map(|m| (m.hash.as_str(), m.at))
+                .collect::<Vec<_>>(),
             [("b", 20), ("a", 30)]
         );
         assert!(progress.did_a_step("a", 60, 89) && !progress.did_a_step("a", 60, 90));

@@ -341,9 +341,15 @@ async fn finished_days_roll_into_daily_totals_and_raw_visits_go_after_the_retent
         funnel::note_in(&mut connection, &tenant, funnel::MADE, "claude", yesterday)
             .await
             .unwrap();
-        funnel::note_in(&mut connection, &tenant, funnel::SECURED, "github", yesterday)
-            .await
-            .unwrap();
+        funnel::note_in(
+            &mut connection,
+            &tenant,
+            funnel::SECURED,
+            "github",
+            yesterday,
+        )
+        .await
+        .unwrap();
         drop(connection);
         writer::maintain(store, 2, now).await.unwrap();
         assert_eq!(
@@ -457,7 +463,11 @@ async fn a_visit_written_after_its_day_was_rolled_up_is_counted_the_next_pass() 
                 "total/=1/1",
             ]
         );
-        assert_eq!(raw_days(store).await, [today - DAY], "the too-old one never kept");
+        assert_eq!(
+            raw_days(store).await,
+            [today - DAY],
+            "the too-old one never kept"
+        );
     }
 }
 

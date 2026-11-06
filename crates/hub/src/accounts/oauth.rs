@@ -106,7 +106,11 @@ impl Accounts {
         redirect_uris: &[String],
     ) -> BridgeResult<Client> {
         let name = name.trim();
-        let name = if name.is_empty() { "An MCP client" } else { name };
+        let name = if name.is_empty() {
+            "An MCP client"
+        } else {
+            name
+        };
         if name.len() > 128 || name.chars().any(char::is_control) {
             return Err(BridgeError::new(
                 "invalid_client_metadata",
@@ -122,7 +126,10 @@ impl Accounts {
                 "1 to 10 redirect URIs, each https or http on loopback, with no fragment",
             ));
         }
-        let id = format!("dgc_{}", URL_SAFE_NO_PAD.encode(crate::link::random::<16>()));
+        let id = format!(
+            "dgc_{}",
+            URL_SAFE_NO_PAD.encode(crate::link::random::<16>())
+        );
         let uris = serde_json::to_string(redirect_uris).unwrap_or_default();
         let now = now_secs();
         let max = secs(self.tokens.max_clients);
@@ -189,8 +196,16 @@ impl Accounts {
         resource: &str,
         scope: &str,
     ) -> BridgeResult<String> {
-        self.issue_code_at(client, account, redirect_uri, challenge, resource, scope, now_secs())
-            .await
+        self.issue_code_at(
+            client,
+            account,
+            redirect_uri,
+            challenge,
+            resource,
+            scope,
+            now_secs(),
+        )
+        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -204,7 +219,10 @@ impl Accounts {
         scope: &str,
         now: u64,
     ) -> BridgeResult<String> {
-        let code = format!("dga_{}", URL_SAFE_NO_PAD.encode(crate::link::random::<32>()));
+        let code = format!(
+            "dga_{}",
+            URL_SAFE_NO_PAD.encode(crate::link::random::<32>())
+        );
         let expires = secs(now.saturating_add(self.tokens.code_secs));
         transaction!(&self.store, |connection| {
             let tenant = self
@@ -348,7 +366,10 @@ impl Accounts {
     ) -> BridgeResult<Tokens> {
         let fresh = (crate::link::random::<32>(), crate::link::random::<32>());
         transaction!(&self.store, |connection| {
-            let Some(tenant) = self.enter(connection, Lookup::Token(&hash(refresh))).await? else {
+            let Some(tenant) = self
+                .enter(connection, Lookup::Token(&hash(refresh)))
+                .await?
+            else {
                 return Ok(Err(invalid_grant()));
             };
             let stored = sqlx::query(
@@ -599,7 +620,8 @@ impl Accounts {
             return Ok(());
         };
         if self.tenancy.multi() && !holder.owner {
-            self.room_on_the_plan(connection, &holder.tenant, now).await?;
+            self.room_on_the_plan(connection, &holder.tenant, now)
+                .await?;
         }
         if !holder.provisional {
             return Ok(());

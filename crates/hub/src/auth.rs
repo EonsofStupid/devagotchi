@@ -136,8 +136,13 @@ impl Verifier {
         state_dir: &Path,
         accounts: Option<std::sync::Arc<crate::accounts::Accounts>>,
     ) -> BridgeResult<Self> {
-        let mut primary =
-            Self::primary(&config.auth, state_dir, &config.public_url, config.site_cell()).await?;
+        let mut primary = Self::primary(
+            &config.auth,
+            state_dir,
+            &config.public_url,
+            config.site_cell(),
+        )
+        .await?;
         if let (true, Some(accounts)) = (config.has_accounts(), accounts) {
             let nomen = match primary {
                 Verifier::Closed => None,
@@ -255,9 +260,9 @@ impl Verifier {
                             client: grant.client_name,
                             ..accounts.subject(&grant.account, "hub")
                         }),
-                        Ok(None) => Err(AuthError::Invalid(
-                            "unknown, expired or revoked hub token",
-                        )),
+                        Ok(None) => {
+                            Err(AuthError::Invalid("unknown, expired or revoked hub token"))
+                        }
                         Err(error) => Err(AuthError::Unavailable(format!(
                             "account store: {}",
                             error.message

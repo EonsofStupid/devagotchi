@@ -24,7 +24,11 @@ pub struct Session {
 impl Accounts {
     /// Open a session on `account`, opened with `passkey` (none for a session a one-time
     /// link opened). Returns the token for the browser's cookie; only its hash is kept.
-    pub async fn open_session(&self, account: &str, passkey: Option<&[u8]>) -> BridgeResult<String> {
+    pub async fn open_session(
+        &self,
+        account: &str,
+        passkey: Option<&[u8]>,
+    ) -> BridgeResult<String> {
         self.open_session_at(account, passkey, crate::link::random::<32>(), now_secs())
             .await
     }
@@ -37,15 +41,16 @@ impl Accounts {
         now: u64,
     ) -> BridgeResult<String> {
         transaction!(&self.store, |connection| {
-                self.enter(connection, crate::store::Lookup::Account(account)).await?;
-                let holder = account_in(connection, account)
-                    .await?
-                    .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
-                if holder.disabled_at.is_some() {
-                    return Err(account_disabled(account).into());
-                }
-                insert_session(connection, &holder.tenant, account, passkey, random, now).await
-            })
+            self.enter(connection, crate::store::Lookup::Account(account))
+                .await?;
+            let holder = account_in(connection, account)
+                .await?
+                .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
+            if holder.disabled_at.is_some() {
+                return Err(account_disabled(account).into());
+            }
+            insert_session(connection, &holder.tenant, account, passkey, random, now).await
+        })
     }
 
     /// The live session `token` names, if any: not idle too long, not past its limit, on
@@ -115,7 +120,9 @@ impl Accounts {
                 tenants::touch(connection, &mut session.account, now).await?;
             }
             // Its tenant's access, settled now: let in, if sign-up opened while it waited.
-            let admitted = self.settle_in(connection, &mut session.account, now).await?;
+            let admitted = self
+                .settle_in(connection, &mut session.account, now)
+                .await?;
             Ok(Some((session, admitted)))
         })?;
         Ok(found.map(|(session, admitted)| {
@@ -152,7 +159,8 @@ impl Accounts {
     pub async fn end_session(&self, token: &str) -> BridgeResult<bool> {
         let key = hash(token);
         transaction!(&self.store, |connection| {
-            self.enter(connection, crate::store::Lookup::Session(&key)).await?;
+            self.enter(connection, crate::store::Lookup::Session(&key))
+                .await?;
             let removed = sqlx::query("DELETE FROM auth_sessions WHERE hash = $1")
                 .bind(&key)
                 .execute(&mut *connection)
@@ -166,7 +174,8 @@ impl Accounts {
     #[allow(dead_code)] // "sign out everywhere" on the account page (32a-3)
     pub async fn end_sessions(&self, account: &str) -> BridgeResult<u64> {
         transaction!(&self.store, |connection| {
-            self.enter(connection, crate::store::Lookup::Account(account)).await?;
+            self.enter(connection, crate::store::Lookup::Account(account))
+                .await?;
             Ok(sqlx::query("DELETE FROM auth_sessions WHERE account = $1")
                 .bind(account)
                 .execute(&mut *connection)

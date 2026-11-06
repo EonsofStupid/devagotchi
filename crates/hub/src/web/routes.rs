@@ -15,8 +15,8 @@ use axum::{
 use serde::Deserialize;
 
 use super::{
-    Exchange, SessionToken, WebLogin, analytics, approvals, claim, device, discovery, email, machines,
-    notify, oauth, offers, operator,
+    Exchange, SessionToken, WebLogin, analytics, approvals, claim, device, discovery, email,
+    machines, notify, oauth, offers, operator,
     pages::{self, Viewer},
     passkeys, providers, public, safe_return_to, sign_in, workflow,
 };
@@ -107,10 +107,19 @@ pub fn router(hub_authorization: bool) -> Router<AppState> {
             "/oauth/register",
             post(oauth::register).options(oauth::preflight),
         )
-        .route("/oauth/authorize", get(oauth::authorize).post(oauth::decide))
+        .route(
+            "/oauth/authorize",
+            get(oauth::authorize).post(oauth::decide),
+        )
         .route("/oauth/token", post(oauth::token).options(oauth::preflight))
-        .route("/oauth/revoke", post(oauth::revoke).options(oauth::preflight))
-        .route("/oauth/device", post(device::start).options(oauth::preflight))
+        .route(
+            "/oauth/revoke",
+            post(oauth::revoke).options(oauth::preflight),
+        )
+        .route(
+            "/oauth/device",
+            post(device::start).options(oauth::preflight),
+        )
         .route("/device", get(device::page).post(device::decide))
 }
 
@@ -284,12 +293,20 @@ async fn login(
 ) -> Response {
     // A hosted hub: Google, or an email and a password (`sign_in.rs`). The owner's own
     // hub keeps its passkey page.
-    if let Some(hub) = state.passkeys.clone().filter(|_| state.hub.config.multi_tenant()) {
+    if let Some(hub) = state
+        .passkeys
+        .clone()
+        .filter(|_| state.hub.config.multi_tenant())
+    {
         let return_to = safe_return_to(query.return_to.as_deref().unwrap_or("/account"));
         if hub.signed_in(&headers).await {
             return see_other(return_to, &[]);
         }
-        let tab = if query.tab.as_deref() == Some("up") { sign_in::Tab::Up } else { sign_in::Tab::In };
+        let tab = if query.tab.as_deref() == Some("up") {
+            sign_in::Tab::Up
+        } else {
+            sign_in::Tab::In
+        };
         return sign_in::page(&hub, return_to, tab, None);
     }
     if state.passkeys.is_some() {
@@ -417,7 +434,11 @@ async fn account(State(state): State<AppState>, headers: HeaderMap) -> Response 
                 ways.push_str(&set_password_form());
             }
             let linked = match &state.passkeys {
-                Some(hub) => hub.accounts().identities_of(&subject.id).await.unwrap_or_default(),
+                Some(hub) => hub
+                    .accounts()
+                    .identities_of(&subject.id)
+                    .await
+                    .unwrap_or_default(),
                 None => Vec::new(),
             };
             // Early access and plans, on a hosted hub.
@@ -586,7 +607,12 @@ async fn set_password(
         return not_set_up();
     };
     if !super::approvals::same_origin(&headers, &state.hub.config.public_url) {
-        return pages::message(StatusCode::FORBIDDEN, "Not from this hub", "Set it on this hub's own page.", None);
+        return pages::message(
+            StatusCode::FORBIDDEN,
+            "Not from this hub",
+            "Set it on this hub's own page.",
+            None,
+        );
     }
     let person = match hub.who(&headers).await {
         Ok(Some(person)) => person,
@@ -594,17 +620,35 @@ async fn set_password(
         Err(()) => return unavailable(),
     };
     let words = pages::site().messages.sign_in.clone();
-    match hub.accounts().set_password(&person.id, &form.password).await {
-        Ok(()) => pages::message(StatusCode::OK, &words.set_password, "Done.", Some(("/account", "Your account"))),
-        Err(error) if error.code == "password_short" => {
-            pages::message(StatusCode::BAD_REQUEST, &words.set_password, &words.short, Some(("/account", "Back")))
-        }
-        Err(error) if error.code == "email_taken" => {
-            pages::message(StatusCode::CONFLICT, &words.set_password, &words.taken, Some(("/account", "Back")))
-        }
-        Err(error) if error.code == "no_email" => {
-            pages::message(StatusCode::BAD_REQUEST, &words.set_password, &error.message, Some(("/account", "Back")))
-        }
+    match hub
+        .accounts()
+        .set_password(&person.id, &form.password)
+        .await
+    {
+        Ok(()) => pages::message(
+            StatusCode::OK,
+            &words.set_password,
+            "Done.",
+            Some(("/account", "Your account")),
+        ),
+        Err(error) if error.code == "password_short" => pages::message(
+            StatusCode::BAD_REQUEST,
+            &words.set_password,
+            &words.short,
+            Some(("/account", "Back")),
+        ),
+        Err(error) if error.code == "email_taken" => pages::message(
+            StatusCode::CONFLICT,
+            &words.set_password,
+            &words.taken,
+            Some(("/account", "Back")),
+        ),
+        Err(error) if error.code == "no_email" => pages::message(
+            StatusCode::BAD_REQUEST,
+            &words.set_password,
+            &error.message,
+            Some(("/account", "Back")),
+        ),
         Err(error) => {
             eprintln!("devagotchi-hub: account store: {}", error.message);
             unavailable()

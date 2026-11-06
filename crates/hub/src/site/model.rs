@@ -359,7 +359,10 @@ impl SiteFile {
                     .bytes()
                     .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-'))
         {
-            return bad("product.domain", "a host name, like example.org, with no https:// or path");
+            return bad(
+                "product.domain",
+                "a host name, like example.org, with no https:// or path",
+            );
         }
         if self.operator.name.trim().is_empty() {
             return bad("operator.name", "who runs the service");
@@ -447,10 +450,15 @@ impl SiteFile {
             offers.check()?;
         }
         if let Some(offer) = &self.software.offer {
-            if offer.price.parse::<f64>().map_or(true, |p| !p.is_finite() || p < 0.0) {
+            if offer
+                .price
+                .parse::<f64>()
+                .map_or(true, |p| !p.is_finite() || p < 0.0)
+            {
                 return bad("software.offer.price", "a number as text, \"0\" for free");
             }
-            if offer.currency.len() != 3 || !offer.currency.bytes().all(|b| b.is_ascii_uppercase()) {
+            if offer.currency.len() != 3 || !offer.currency.bytes().all(|b| b.is_ascii_uppercase())
+            {
                 return bad("software.offer.currency", "an ISO 4217 code such as USD");
             }
         }
@@ -1046,7 +1054,9 @@ impl Default for SignInMessages {
             short: s("Use at least 8 characters."),
             slow_down: s("Too many tries. Wait a few minutes."),
             reset_sent: s("Check your email for a sign-in link."),
-            reset_unavailable: s("Password reset isn't available yet \u{2014} sign in with Google."),
+            reset_unavailable: s(
+                "Password reset isn't available yet \u{2014} sign in with Google.",
+            ),
             set_password: s("Set a password"),
             link_title: s("{email} already has an account. Link Google to it?"),
             link: s("Link"),

@@ -117,7 +117,9 @@ impl WorkflowsFile {
             if workflow.title.trim().is_empty() {
                 return Err(what(format!("{id}: title is empty")));
             }
-            workflow.check_steps().map_err(|why| what(format!("{id}: {why}")))?;
+            workflow
+                .check_steps()
+                .map_err(|why| what(format!("{id}: {why}")))?;
         }
         Ok(())
     }
@@ -137,7 +139,9 @@ impl Workflow {
             return Ok(());
         }
         if self.steps.is_empty() {
-            return Err("steps: a workflow has at least one step (or says why it is unavailable)".into());
+            return Err(
+                "steps: a workflow has at least one step (or says why it is unavailable)".into(),
+            );
         }
         if self.steps.len() > STEPS_MAX {
             return Err(format!("steps: at most {STEPS_MAX}"));
@@ -174,7 +178,10 @@ impl Workflow {
                     ));
                 }
                 (AI_CLIENT, None) => {
-                    return Err(format!("{at}: an ai_client step names its client ({})", AI_CLIENTS.join(", ")));
+                    return Err(format!(
+                        "{at}: an ai_client step names its client ({})",
+                        AI_CLIENTS.join(", ")
+                    ));
                 }
                 (_, None) => {}
                 (kind, Some(_)) => return Err(format!("{at}: a {kind} step takes no client")),
@@ -186,7 +193,12 @@ impl Workflow {
                 return Err(format!("steps: at most one {kind} step"));
             }
         }
-        if self.steps.iter().rposition(|step| step.kind == DONE).is_some_and(|at| at + 1 != self.steps.len()) {
+        if self
+            .steps
+            .iter()
+            .rposition(|step| step.kind == DONE)
+            .is_some_and(|at| at + 1 != self.steps.len())
+        {
             return Err("steps: the done step closes a workflow, so it is the last".into());
         }
         if self.steps.iter().all(|step| step.kind == DONE) {
@@ -346,7 +358,9 @@ impl Site {
             ));
         }
         for (os, name) in &copy.default_names {
-            if !crate::config::valid_name(name) || name.len() > crate::tenant_machines::HOSTED_NAME_MAX {
+            if !crate::config::valid_name(name)
+                || name.len() > crate::tenant_machines::HOSTED_NAME_MAX
+            {
                 return Err(format!(
                     "content/messages.json workflow.default_names.{os}: {name:?} is not a machine name (lowercase letters, digits and dashes, at most {})",
                     crate::tenant_machines::HOSTED_NAME_MAX
@@ -355,11 +369,21 @@ impl Site {
         }
         let machine = ("machine", "nas");
         let mut checks: Vec<Check<'_>> = vec![
-            ("step_of".into(), &copy.step_of, vec![("n", "1"), ("total", "3")], false),
+            (
+                "step_of".into(),
+                &copy.step_of,
+                vec![("n", "1"), ("total", "3")],
+                false,
+            ),
             ("state_done".into(), &copy.state_done, vec![], false),
             ("state_current".into(), &copy.state_current, vec![], false),
             ("state_pending".into(), &copy.state_pending, vec![], false),
-            ("state_unavailable".into(), &copy.state_unavailable, vec![], false),
+            (
+                "state_unavailable".into(),
+                &copy.state_unavailable,
+                vec![],
+                false,
+            ),
             ("state_optional".into(), &copy.state_optional, vec![], false),
             ("dead_title".into(), &copy.dead_title, vec![], false),
             ("dead_text".into(), &copy.dead_text, vec![], true),
@@ -377,25 +401,95 @@ impl Site {
             ("os_label".into(), &copy.os_label, vec![], false),
             ("mac".into(), &copy.mac, vec![], true),
             ("no_downloads".into(), &copy.no_downloads, vec![], true),
-            ("no_build_for".into(), &copy.no_build_for, vec![("os", "Windows")], true),
+            (
+                "no_build_for".into(),
+                &copy.no_build_for,
+                vec![("os", "Windows")],
+                true,
+            ),
             ("no_push".into(), &copy.no_push, vec![], true),
             ("notify".into(), &copy.notify, vec![], false),
             ("phone_hint".into(), &copy.phone_hint, vec![], true),
             ("refused".into(), &copy.refused, vec![], true),
             ("facts.secured".into(), &copy.facts.secured, vec![], false),
-            ("facts.not_secured".into(), &copy.facts.not_secured, vec![], false),
-            ("facts.machine_none".into(), &copy.facts.machine_none, vec![], false),
-            ("facts.machine_waiting".into(), &copy.facts.machine_waiting, vec![machine], false),
-            ("facts.machine_offline".into(), &copy.facts.machine_offline, vec![machine], false),
-            ("facts.machine_online".into(), &copy.facts.machine_online, vec![machine], false),
-            ("facts.phone_on".into(), &copy.facts.phone_on, vec![("n", "1")], false),
-            ("facts.phone_off".into(), &copy.facts.phone_off, vec![], false),
-            ("facts.client_waiting".into(), &copy.facts.client_waiting, vec![("client", "Claude")], false),
-            ("facts.client_done".into(), &copy.facts.client_done, vec![("client", "Claude")], false),
-            ("client_browser".into(), &copy.client_browser, vec![("client", "Claude")], true),
-            ("client_here".into(), &copy.client_here, vec![("client", "Claude")], false),
-            ("client_ready".into(), &copy.client_ready, vec![("client", "Claude")], true),
-            ("client_secured".into(), &copy.client_secured, vec![("client", "Claude")], true),
+            (
+                "facts.not_secured".into(),
+                &copy.facts.not_secured,
+                vec![],
+                false,
+            ),
+            (
+                "facts.machine_none".into(),
+                &copy.facts.machine_none,
+                vec![],
+                false,
+            ),
+            (
+                "facts.machine_waiting".into(),
+                &copy.facts.machine_waiting,
+                vec![machine],
+                false,
+            ),
+            (
+                "facts.machine_offline".into(),
+                &copy.facts.machine_offline,
+                vec![machine],
+                false,
+            ),
+            (
+                "facts.machine_online".into(),
+                &copy.facts.machine_online,
+                vec![machine],
+                false,
+            ),
+            (
+                "facts.phone_on".into(),
+                &copy.facts.phone_on,
+                vec![("n", "1")],
+                false,
+            ),
+            (
+                "facts.phone_off".into(),
+                &copy.facts.phone_off,
+                vec![],
+                false,
+            ),
+            (
+                "facts.client_waiting".into(),
+                &copy.facts.client_waiting,
+                vec![("client", "Claude")],
+                false,
+            ),
+            (
+                "facts.client_done".into(),
+                &copy.facts.client_done,
+                vec![("client", "Claude")],
+                false,
+            ),
+            (
+                "client_browser".into(),
+                &copy.client_browser,
+                vec![("client", "Claude")],
+                true,
+            ),
+            (
+                "client_here".into(),
+                &copy.client_here,
+                vec![("client", "Claude")],
+                false,
+            ),
+            (
+                "client_ready".into(),
+                &copy.client_ready,
+                vec![("client", "Claude")],
+                true,
+            ),
+            (
+                "client_secured".into(),
+                &copy.client_secured,
+                vec![("client", "Claude")],
+                true,
+            ),
             ("qr".into(), &copy.qr, vec![], false),
             ("facts.done".into(), &copy.facts.done, vec![], false),
         ];
@@ -409,10 +503,25 @@ impl Site {
         let server = ("server", "hub");
         for (client, words) in &copy.clients {
             checks.push((format!("clients.{client}.name"), &words.name, vec![], false));
-            checks.push((format!("clients.{client}.how"), &words.how, vec![mcp, server], true));
+            checks.push((
+                format!("clients.{client}.how"),
+                &words.how,
+                vec![mcp, server],
+                true,
+            ));
             for (index, line) in words.boxes.iter().enumerate() {
-                checks.push((format!("clients.{client}.boxes[{index}].label"), &line.label, vec![], false));
-                checks.push((format!("clients.{client}.boxes[{index}].text"), &line.text, vec![mcp, server], false));
+                checks.push((
+                    format!("clients.{client}.boxes[{index}].label"),
+                    &line.label,
+                    vec![],
+                    false,
+                ));
+                checks.push((
+                    format!("clients.{client}.boxes[{index}].text"),
+                    &line.text,
+                    vec![mcp, server],
+                    false,
+                ));
             }
             if let Some(why) = &words.unavailable {
                 checks.push((format!("clients.{client}.unavailable"), why, vec![], true));
@@ -420,7 +529,14 @@ impl Site {
         }
         let mut out: Vec<Check<'_>> = checks
             .into_iter()
-            .map(|(what, text, vars, inline)| (format!("content/messages.json workflow.{what}"), text, vars, inline))
+            .map(|(what, text, vars, inline)| {
+                (
+                    format!("content/messages.json workflow.{what}"),
+                    text,
+                    vars,
+                    inline,
+                )
+            })
             .collect();
         for workflow in &self.workflows.workflows {
             let at = |what: &str| format!("content/workflows.json {}: {what}", workflow.id);
@@ -430,8 +546,18 @@ impl Site {
                 out.push((at("unavailable"), why, vec![], true));
             }
             for (index, step) in workflow.steps.iter().enumerate() {
-                out.push((at(&format!("steps[{index}].title")), &step.title, vec![], false));
-                out.push((at(&format!("steps[{index}].text")), &step.text, vec![("mcp", "https://hub.example/mcp"), ("server", "hub")], true));
+                out.push((
+                    at(&format!("steps[{index}].title")),
+                    &step.title,
+                    vec![],
+                    false,
+                ));
+                out.push((
+                    at(&format!("steps[{index}].text")),
+                    &step.text,
+                    vec![("mcp", "https://hub.example/mcp"), ("server", "hub")],
+                    true,
+                ));
             }
         }
         Ok(out)

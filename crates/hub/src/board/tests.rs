@@ -7,7 +7,8 @@ use std::sync::{
 };
 
 use super::{
-    Actor, Board, DepKind, Filter, NewTicket, NextFilter, Patch, Settings, StateKind, Workflow,
+    Actor, AnchorPatch, Anchors, Board, DepKind, Filter, NewTicket, NextFilter, Patch, Settings,
+    StateKind, Workflow,
 };
 
 struct Fixture {
@@ -1535,7 +1536,9 @@ fn a_new_board_starts_with_the_getting_started_steps_once() {
     let used = fixture();
     used.new_ticket(&claude, "real work");
     assert_eq!(
-        used.board.welcome_if_new(&hub, &title, &steps).expect("used"),
+        used.board
+            .welcome_if_new(&hub, &title, &steps)
+            .expect("used"),
         None
     );
     assert_eq!(used.board.list(&Filter::default()).expect("list").len(), 1);
@@ -1548,10 +1551,16 @@ fn a_committed_change_advances_the_signal_and_an_empty_reap_does_not() {
     let mut changes = f.board.changes();
     assert!(!changes.has_changed().unwrap());
     let id = f.new_ticket(&Actor::human("jesse"), "wake the waiters");
-    assert!(changes.has_changed().unwrap(), "a committed event wakes waiters");
+    assert!(
+        changes.has_changed().unwrap(),
+        "a committed event wakes waiters"
+    );
     changes.borrow_and_update();
     assert_eq!(f.board.reap().unwrap(), 0);
-    assert!(!changes.has_changed().unwrap(), "a write that records nothing wakes nobody");
+    assert!(
+        !changes.has_changed().unwrap(),
+        "a write that records nothing wakes nobody"
+    );
     assert_eq!(f.board.next_lease_expiry().unwrap(), None);
     f.board
         .claim(&Actor::agent("claude"), &id, Some(30_000))
@@ -1559,4 +1568,349 @@ fn a_committed_change_advances_the_signal_and_an_empty_reap_does_not() {
     let now = f.now.load(Ordering::SeqCst);
     assert_eq!(f.board.next_lease_expiry().unwrap(), Some(now + 30_000));
     assert!(changes.has_changed().unwrap());
+}
+
+/// Turn a schema-2 file back into what schema 1 wrote: no anchor columns or indexes,
+/// settings without `repo` / `environments`, version 1.
+fn downgrade_to_v1(path: &std::path::Path) {
+    let connection = rusqlite::Connection::open(path).expect("open raw");
+    connection
+        .execute_batch(
+            "DROP INDEX tickets_machine; DROP INDEX tickets_environment; DROP INDEX tickets_fingerprint;
+             ALTER TABLE tickets DROP COLUMN machine; ALTER TABLE tickets DROP COLUMN repo;
+             ALTER TABLE tickets DROP COLUMN environment; ALTER TABLE tickets DROP COLUMN agent;
+             ALTER TABLE tickets DROP COLUMN session; ALTER TABLE tickets DROP COLUMN fingerprint;
+             ALTER TABLE tickets DROP COLUMN occurrences; ALTER TABLE tickets DROP COLUMN last_seen_at;
+             UPDATE meta SET value = '1' WHERE key = 'schema_version';",
+        )
+        .expect("downgrade");
+    let raw: String = connection
+        .query_row(
+            "SELECT value FROM settings WHERE key = 'settings'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("settings");
+    let mut settings: serde_json::Value = serde_json::from_str(&raw).expect("json");
+    let object = settings.as_object_mut().expect("object");
+    object.remove("repo");
+    object.remove("environments");
+    connection
+        .execute(
+            "UPDATE settings SET value = ?1 WHERE key = 'settings'",
+            [settings.to_string()],
+        )
+        .expect("old settings");
+}
+
+#[test]
+fn a_version_1_board_migrates_and_keeps_every_ticket_note_and_event() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("board.sqlite3");
+    let jesse = Actor::human("jesse");
+    let (ids, notes, events) = {
+        let board = Board::open(&path, "devagotchi").expect("open");
+        let a = board
+            .create(
+                &jesse,
+                NewTicket {
+                    title: "one".into(),
+                    ..NewTicket::default()
+                },
+            )
+            .expect("a");
+        let b = board
+            .create(
+                &jesse,
+                NewTicket {
+                    title: "two".into(),
+                    parent: Some(a.id.clone()),
+                    ..NewTicket::default()
+                },
+            )
+            .expect("b");
+        board
+            .add_note(&jesse, &a.id, "note", "kept", None, None)
+            .expect("note");
+        board
+            .add_dep(&jesse, &b.id, &a.id, DepKind::Blocks)
+            .expect("dep");
+        let events = board.events(0, 1000).expect("events");
+        (
+            vec![a.id, b.id],
+            board.get(&events[0].ticket.clone().unwrap()).unwrap().notes,
+            events,
+        )
+    };
+    downgrade_to_v1(&path);
+
+    let board = Board::open(&path, "devagotchi").expect("a version-1 board opens");
+    let listed: Vec<String> = board
+        .list(&Filter::default())
+        .expect("list")
+        .into_iter()
+        .map(|t| t.id)
+        .collect();
+    assert_eq!(listed.len(), 2);
+    for id in &ids {
+        assert!(listed.contains(id), "{id} kept");
+        let ticket = board.get(id).expect("get").ticket;
+        assert_eq!(ticket.machine, None);
+        assert_eq!(ticket.occurrences, 1);
+    }
+    assert_eq!(board.get(&ids[0]).unwrap().notes, notes);
+    assert_eq!(
+        board.get(&ids[1]).unwrap().ticket.blocked_by,
+        vec![ids[0].clone()]
+    );
+    let after = board.events(0, 1000).expect("events");
+    assert_eq!(&after[..events.len()], &events[..], "every event kept");
+    let migrated = after.last().expect("migration event");
+    assert_eq!(migrated.action, "board.migrated");
+    assert_eq!(migrated.data, serde_json::json!({ "from": 1, "to": 2 }));
+    let chain = board.verify_chain().expect("verify");
+    assert!(chain.ok, "{chain:?}");
+    assert_eq!(chain.entries as usize, events.len() + 1);
+    assert_eq!(board.settings().expect("settings"), Settings::default());
+    board
+        .create(
+            &jesse,
+            NewTicket {
+                title: "anchored after migrating".into(),
+                anchors: Anchors {
+                    machine: Some("dabo".into()),
+                    ..Anchors::default()
+                },
+                ..NewTicket::default()
+            },
+        )
+        .expect("the new columns work");
+    drop(board);
+    let again = Board::open(&path, "devagotchi").expect("reopen");
+    assert_eq!(
+        again
+            .events(0, 1000)
+            .unwrap()
+            .iter()
+            .filter(|e| e.action == "board.migrated")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn an_unknown_schema_version_is_still_refused() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("board.sqlite3");
+    drop(Board::open(&path, "devagotchi").expect("open"));
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE meta SET value = '3' WHERE key = 'schema_version'",
+            [],
+        )
+        .unwrap();
+    match Board::open(&path, "devagotchi") {
+        Ok(_) => panic!("schema 3 must be refused"),
+        Err(error) => assert_eq!(error.code, "board_version"),
+    }
+}
+
+#[test]
+fn anchors_round_trip_through_create_update_and_list() {
+    let f = fixture();
+    let jesse = Actor::human("jesse");
+    let anchors = Anchors {
+        machine: Some("dabo".into()),
+        repo: Some("https://github.com/x/y".into()),
+        environment: Some("prod".into()),
+        agent: Some("claude".into()),
+        session: Some("s-1".into()),
+        fingerprint: Some("fp-1".into()),
+    };
+    let created = f
+        .board
+        .create(
+            &jesse,
+            NewTicket {
+                title: "anchored".into(),
+                anchors: anchors.clone(),
+                occurrences: Some(3),
+                last_seen_at: Some(42),
+                ..NewTicket::default()
+            },
+        )
+        .expect("create");
+    assert_eq!(created.machine.as_deref(), Some("dabo"));
+    assert_eq!(created.repo.as_deref(), Some("https://github.com/x/y"));
+    assert_eq!(created.environment.as_deref(), Some("prod"));
+    assert_eq!(created.agent.as_deref(), Some("claude"));
+    assert_eq!(created.session.as_deref(), Some("s-1"));
+    assert_eq!(created.fingerprint.as_deref(), Some("fp-1"));
+    assert_eq!((created.occurrences, created.last_seen_at), (3, Some(42)));
+    assert_eq!(f.board.get(&created.id).unwrap().ticket, created);
+    let plain = f.new_ticket(&jesse, "plain");
+    assert_eq!(f.board.get(&plain).unwrap().ticket.occurrences, 1);
+
+    let updated = f
+        .board
+        .update(
+            &jesse,
+            &created.id,
+            created.version,
+            Patch {
+                anchors: AnchorPatch {
+                    machine: Some(Some("wisconsin".into())),
+                    environment: Some(Some("dev".into())),
+                    session: Some(None),
+                    ..AnchorPatch::default()
+                },
+                occurrences: Some(4),
+                last_seen_at: Some(Some(99)),
+                ..Patch::default()
+            },
+        )
+        .expect("update");
+    assert_eq!(updated.machine.as_deref(), Some("wisconsin"));
+    assert_eq!(updated.environment.as_deref(), Some("dev"));
+    assert_eq!(updated.session, None, "Some(None) clears");
+    assert_eq!(updated.agent.as_deref(), Some("claude"), "untouched stays");
+    assert_eq!((updated.occurrences, updated.last_seen_at), (4, Some(99)));
+    assert_eq!(updated.version, created.version + 1);
+
+    let by = |anchors: Anchors| -> Vec<String> {
+        f.board
+            .list(&Filter {
+                anchors,
+                ..Filter::default()
+            })
+            .expect("list")
+            .into_iter()
+            .map(|t| t.id)
+            .collect()
+    };
+    let only = vec![created.id.clone()];
+    assert_eq!(
+        by(Anchors {
+            machine: Some("wisconsin".into()),
+            ..Anchors::default()
+        }),
+        only
+    );
+    assert_eq!(
+        by(Anchors {
+            repo: Some("https://github.com/x/y".into()),
+            ..Anchors::default()
+        }),
+        only
+    );
+    assert_eq!(
+        by(Anchors {
+            environment: Some("dev".into()),
+            ..Anchors::default()
+        }),
+        only
+    );
+    assert_eq!(
+        by(Anchors {
+            agent: Some("claude".into()),
+            ..Anchors::default()
+        }),
+        only
+    );
+    assert_eq!(
+        by(Anchors {
+            fingerprint: Some("fp-1".into()),
+            ..Anchors::default()
+        }),
+        only
+    );
+    assert!(
+        by(Anchors {
+            machine: Some("dabo".into()),
+            ..Anchors::default()
+        })
+        .is_empty()
+    );
+    assert!(
+        by(Anchors {
+            session: Some("s-1".into()),
+            ..Anchors::default()
+        })
+        .is_empty()
+    );
+    assert!(
+        by(Anchors {
+            machine: Some("wisconsin".into()),
+            environment: Some("prod".into()),
+            ..Anchors::default()
+        })
+        .is_empty(),
+        "filters combine"
+    );
+    assert_eq!(by(Anchors::default()).len(), 2);
+}
+
+#[test]
+fn an_environment_outside_the_boards_list_is_refused_with_the_list() {
+    let f = fixture();
+    let jesse = Actor::human("jesse");
+    let refused = f
+        .board
+        .create(
+            &jesse,
+            NewTicket {
+                title: "qa".into(),
+                anchors: Anchors {
+                    environment: Some("qa".into()),
+                    ..Anchors::default()
+                },
+                ..NewTicket::default()
+            },
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, "unknown_environment");
+    assert!(
+        refused.message.contains("dev, staging, prod"),
+        "{}",
+        refused.message
+    );
+
+    let mut settings = f.board.settings().unwrap();
+    assert_eq!(settings.environments, ["dev", "staging", "prod"]);
+    settings.environments.push("qa".into());
+    settings.repo = Some("https://github.com/x/y".into());
+    f.board.put_settings(&jesse, &settings).unwrap();
+    assert_eq!(f.board.settings().unwrap(), settings);
+    let ticket = f
+        .board
+        .create(
+            &jesse,
+            NewTicket {
+                title: "qa".into(),
+                anchors: Anchors {
+                    environment: Some("qa".into()),
+                    ..Anchors::default()
+                },
+                ..NewTicket::default()
+            },
+        )
+        .expect("qa is on the list now");
+    let refused = f
+        .board
+        .update(
+            &jesse,
+            &ticket.id,
+            ticket.version,
+            Patch {
+                anchors: AnchorPatch {
+                    environment: Some(Some("moon".into())),
+                    ..AnchorPatch::default()
+                },
+                ..Patch::default()
+            },
+        )
+        .unwrap_err();
+    assert_eq!(refused.code, "unknown_environment");
+    assert!(refused.message.contains("qa"), "{}", refused.message);
 }

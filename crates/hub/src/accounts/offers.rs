@@ -98,14 +98,21 @@ fn offer_row(row: &AnyRow) -> Result<OfferRow, sqlx::Error> {
     })
 }
 
-async fn offer_in(connection: &mut AnyConnection, tenant: &str) -> Result<Option<OfferRow>, sqlx::Error> {
-    sqlx::query(concat!("SELECT ", offer_columns!(), " FROM tenancy_offers WHERE tenant_id = $1"))
-        .bind(tenant)
-        .fetch_optional(&mut *connection)
-        .await?
-        .as_ref()
-        .map(offer_row)
-        .transpose()
+async fn offer_in(
+    connection: &mut AnyConnection,
+    tenant: &str,
+) -> Result<Option<OfferRow>, sqlx::Error> {
+    sqlx::query(concat!(
+        "SELECT ",
+        offer_columns!(),
+        " FROM tenancy_offers WHERE tenant_id = $1"
+    ))
+    .bind(tenant)
+    .fetch_optional(&mut *connection)
+    .await?
+    .as_ref()
+    .map(offer_row)
+    .transpose()
 }
 
 /// Mark `tenant`'s offer linked, once, on its chain; inside the caller's transaction.
@@ -178,7 +185,8 @@ impl Accounts {
             .bind(secs(now))
             .execute(&mut *connection)
             .await?;
-            tenants::record_in(connection, tenant, account, "offers.accepted", consent, now).await?;
+            tenants::record_in(connection, tenant, account, "offers.accepted", consent, now)
+                .await?;
             offer_in(connection, tenant)
                 .await?
                 .ok_or_else(|| Failed::Store(sqlx::Error::RowNotFound))
@@ -275,7 +283,8 @@ impl Accounts {
                 return Err(refused("secured", "this account is secured: sign in to it"));
             }
             let session =
-                sessions::insert_session(connection, &tenant, &holder.id, None, random, now).await?;
+                sessions::insert_session(connection, &tenant, &holder.id, None, random, now)
+                    .await?;
             tenants::record_in(
                 connection,
                 &tenant,
