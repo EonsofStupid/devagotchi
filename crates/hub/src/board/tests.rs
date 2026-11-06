@@ -1117,6 +1117,88 @@ mod cli {
     }
 
     #[test]
+    fn a_new_ticket_carries_the_session_the_hook_pack_exported() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            run(dir.path(), None, false, &["init", "--project", "demo"]).0,
+            EXIT_OK
+        );
+        let new = |session: Option<&str>, args: &[&str]| {
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let code = cli::run(
+                Invocation {
+                    args: args.iter().map(OsString::from).collect(),
+                    cwd: dir.path().to_path_buf(),
+                    actor_env: Some("claude".into()),
+                    session_env: session.map(str::to_string),
+                    os_user: Some("jesse".into()),
+                    stdout_is_terminal: false,
+                    account_file: None,
+                },
+                &mut out,
+                &mut err,
+            );
+            assert_eq!(code, EXIT_OK, "{}", String::from_utf8_lossy(&err));
+            json(&String::from_utf8(out).unwrap())
+        };
+        assert_eq!(
+            new(Some("s-env"), &["new", "from the hook"])["session"],
+            "s-env"
+        );
+        assert_eq!(
+            new(Some("s-env"), &["new", "flag wins", "--session", "s-flag"])["session"],
+            "s-flag"
+        );
+        assert!(new(None, &["new", "none"])["session"].is_null());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_session_start_hook_exports_the_clis_session_id() {
+        use std::{io::Write, process::Command, process::Stdio};
+
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            run(dir.path(), None, false, &["init", "--project", "demo"]).0,
+            EXIT_OK
+        );
+        assert_eq!(run(dir.path(), None, false, &["hooks"]).0, EXIT_OK);
+        let script = dir.path().join(".devagotchi/hooks/session-start.sh");
+        let hook = |input: &str| -> String {
+            let env_file = dir.path().join("claude-env");
+            let _ = std::fs::remove_file(&env_file);
+            let mut child = Command::new("sh")
+                .arg(&script)
+                .arg("claude")
+                // `true board prime --text`: the prime itself is not under test here.
+                .env("DEVAGOTCHI", "true")
+                .env("CLAUDE_ENV_FILE", &env_file)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .spawn()
+                .unwrap();
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(input.as_bytes())
+                .unwrap();
+            assert!(child.wait().unwrap().success());
+            std::fs::read_to_string(&env_file).unwrap_or_default()
+        };
+        assert_eq!(
+            hook(r#"{"session_id": "4f1c-9a.b_2", "hook_event_name": "SessionStart"}"#),
+            "export DEVAGOTCHI_SESSION=4f1c-9a.b_2\n"
+        );
+        assert_eq!(
+            hook(r#"{"session_id":"x; rm -rf /"}"#),
+            "",
+            "only a plain id is exported"
+        );
+        assert_eq!(hook(r#"{"hook_event_name": "SessionStart"}"#), "");
+    }
+
+    #[test]
     fn anchors_are_flags_on_new_set_and_ls_and_in_the_json() {
         let dir = tempfile::tempdir().unwrap();
         let d = dir.path();

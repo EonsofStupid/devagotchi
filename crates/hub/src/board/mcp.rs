@@ -1245,10 +1245,15 @@ impl Hub {
                 }),
                 repo: input.repo,
                 environment: input.environment,
+                // The token's seat; a token without one works as the seat the board uses
+                // for it (`actor_for`): the X-Devagotchi-Seat header, or "ai" for an AI
+                // the hub connected itself.
                 agent: given_or(input.agent, || {
-                    self.subject(&context)
-                        .ok()
-                        .and_then(|subject| subject.agent)
+                    let subject = self.subject(&context).ok()?;
+                    subject
+                        .agent
+                        .or_else(|| self.seat(&context).ok().flatten())
+                        .or_else(|| (subject.via == "hub").then(|| "ai".to_string()))
                 }),
                 session: given_or(input.session, || mcp_session(&context)),
                 fingerprint: input.fingerprint,
@@ -2414,8 +2419,9 @@ mod tests {
             .clone();
         assert_eq!(first["machine"], "dabo", "{first}");
         assert_eq!(first["repo"], "https://github.com/x/y");
-        assert!(who["agent"].is_string(), "{who}");
-        assert_eq!(first["agent"], who["agent"], "the token's seat: {first}");
+        // A hub-connected AI's token names no seat of its own: it is the account's "ai".
+        assert!(who.get("agent").is_none(), "{who}");
+        assert_eq!(first["agent"], "ai", "the seat: {first}");
         assert_eq!(
             first["session"].as_str(),
             person.session.as_deref(),
