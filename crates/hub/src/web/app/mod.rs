@@ -141,3 +141,5 @@ async fn script() -> Response {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod ticket_tests;
