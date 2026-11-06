@@ -174,6 +174,41 @@ pub struct Ticket {
     pub lease_expired: bool,
 }
 
+impl Ticket {
+    /// Where it belongs, as one line: `dabo · prod · github.com/x/y · claude (session …)`.
+    /// `None` when nothing is known.
+    pub fn anchor_line(&self) -> Option<String> {
+        let mut parts: Vec<String> = Vec::new();
+        parts.extend(self.machine.clone());
+        parts.extend(self.environment.clone());
+        if let Some(repo) = &self.repo {
+            let bare = repo
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
+            parts.push(
+                bare.trim_end_matches(".git")
+                    .trim_end_matches('/')
+                    .to_string(),
+            );
+        }
+        let session = self.session.as_deref().map(|s| {
+            let short: String = s.chars().take(8).collect();
+            if short.len() < s.len() {
+                format!("{short}…")
+            } else {
+                short
+            }
+        });
+        match (&self.agent, session) {
+            (Some(agent), Some(session)) => parts.push(format!("{agent} (session {session})")),
+            (Some(agent), None) => parts.push(agent.clone()),
+            (None, Some(session)) => parts.push(format!("session {session}")),
+            (None, None) => {}
+        }
+        (!parts.is_empty()).then(|| parts.join(" · "))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Note {
     pub seq: i64,
@@ -489,6 +524,9 @@ pub struct Held {
     pub fence: i64,
     pub version: i64,
     pub lease_expires_in_ms: i64,
+    /// Where it belongs, as one line (`Ticket::anchor_line`); absent when nothing is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchors: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -497,6 +535,9 @@ pub struct Ready {
     pub title: String,
     pub state: String,
     pub priority: i64,
+    /// Where it belongs, as one line (`Ticket::anchor_line`); absent when nothing is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchors: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -789,6 +830,7 @@ impl Board {
             title: t.title.clone(),
             state: t.state.clone(),
             priority: t.priority,
+            anchors: t.anchor_line(),
         };
         Ok(Prime {
             project: self.project.clone(),
@@ -803,6 +845,7 @@ impl Board {
                     fence: t.fence,
                     version: t.version,
                     lease_expires_in_ms: t.lease_expires_at.map(|e| e - now).unwrap_or_default(),
+                    anchors: t.anchor_line(),
                 })
                 .collect(),
             ready: ready.iter().map(summary).collect(),

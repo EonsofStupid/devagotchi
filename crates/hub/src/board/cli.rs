@@ -781,7 +781,7 @@ fn dispatch(
                     lines.push(format!("held by you ({}): finish or hand off before you stop", prime.held.len()));
                     for t in prime.held.iter().take(10) {
                         let left = t.lease_expires_in_ms.max(0) / 60_000;
-                        lines.push(format!("  {}  fence {}  lease {}m left  {}", t.id, t.fence, left, trim(&t.title, 60)));
+                        lines.push(format!("  {}  fence {}  lease {}m left  {}{}", t.id, t.fence, left, trim(&t.title, 60), anchored(&t.anchors)));
                     }
                 }
                 if prime.ready.is_empty() {
@@ -789,13 +789,13 @@ fn dispatch(
                 } else {
                     lines.push(format!("ready for you ({}): board claim <id>, or board claim for the first", prime.ready.len()));
                     for t in &prime.ready {
-                        lines.push(format!("  {}  P{}  {}", t.id, t.priority, trim(&t.title, 60)));
+                        lines.push(format!("  {}  P{}  {}{}", t.id, t.priority, trim(&t.title, 60), anchored(&t.anchors)));
                     }
                 }
                 if !prime.attention.is_empty() {
                     lines.push(format!("needs a person ({}):", prime.attention.len()));
                     for t in &prime.attention {
-                        lines.push(format!("  {}  {}", t.id, trim(&t.title, 60)));
+                        lines.push(format!("  {}  {}{}", t.id, trim(&t.title, 60), anchored(&t.anchors)));
                     }
                 }
                 if !prime.notes_to_me.is_empty() {
@@ -952,6 +952,9 @@ fn dispatch(
                         t.fence
                     ),
                 ];
+                if let Some(anchors) = t.anchor_line() {
+                    lines.push(format!("  {anchors}"));
+                }
                 if !t.blocked_by.is_empty() {
                     lines.push(format!("  blocked by {}", t.blocked_by.join(", ")));
                 }
@@ -1278,6 +1281,14 @@ fn dispatch(
         }
         other => Err(usage_error(format!("unknown command {other}"))),
     }
+}
+
+/// A prime row's anchor line, after the title on the same row (prime stays under 50 lines).
+fn anchored(anchors: &Option<String>) -> String {
+    anchors
+        .as_deref()
+        .map(|line| format!("  · {line}"))
+        .unwrap_or_default()
 }
 
 fn table(tickets: &[Ticket]) -> String {

@@ -204,10 +204,21 @@ value=\"{}\">{inner}</form>",
             escape(&copy.comment_button)
         ),
     );
+    // Where it belongs, as one line (machine · environment · repo · agent and session).
+    let anchors = ticket
+        .anchor_line()
+        .map(|line| {
+            format!(
+                "<dt>{}</dt><dd id=\"anchors\">{}</dd>",
+                escape(&copy.ticket_anchors),
+                escape(&line)
+            )
+        })
+        .unwrap_or_default();
     let body = format!(
         "<p class=\"meta\"><a href=\"/app/boards/{}\">{}</a> · {}</p><h1>{}</h1>{flash}{undo}\
 <section class=\"card\" id=\"ticket\"><dl class=\"facts\"><dt>{}</dt><dd id=\"state\">{}</dd>\
-<dt>{}</dt><dd>P{}</dd><dt>{}</dt><dd>{}</dd><dt>{}</dt><dd id=\"assignee\">{}</dd><dt>{}</dt><dd>{}</dd></dl>\
+<dt>{}</dt><dd>P{}</dd><dt>{}</dt><dd>{}</dd><dt>{}</dt><dd id=\"assignee\">{}</dd><dt>{}</dt><dd>{}</dd>{anchors}</dl>\
 <pre class=\"what\">{}</pre>{actions}</section><h2>{}</h2>{notes}{comment}<h2>{}</h2>\
 <ul class=\"rows\" id=\"history\">{history}</ul>",
         encode(&project),

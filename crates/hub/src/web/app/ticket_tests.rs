@@ -186,3 +186,60 @@ async fn undo_lasts_ten_seconds() {
     let (_, html) = page(&hub, &format!("/app/tickets/alpha/{id}?done=close&from=ready"), &alice).await;
     assert!(!html.contains("id=\"undo\""), "no Undo once its time is up");
 }
+
+#[tokio::test]
+async fn the_board_filters_by_anchor_chips_and_the_ticket_shows_its_anchors() {
+    let hub = hosted().await;
+    let mut alice = hub.first_connect("Claude").await;
+    things_of(&hub, &mut alice).await;
+    let made = hub
+        .call(
+            &mut alice,
+            "board_create",
+            json!({ "project": "alpha", "title": "dabo is down", "machine": "dabo",
+                    "environment": "prod", "repo": "https://github.com/x/y" }),
+        )
+        .await;
+    let id = made["structuredContent"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let (status, html) = page(&hub, "/app/boards/alpha", &alice).await;
+    assert_eq!(status, 200, "{html}");
+    for seen in [
+        "id=\"chips-machine\"",
+        "id=\"chips-environment\"",
+        "id=\"chips-repo\"",
+        "id=\"chips-agent\"",
+        ">dabo</a>",
+        ">prod</a>",
+    ] {
+        assert!(html.contains(seen), "the board shows {seen}: {html}");
+    }
+    let (_, on_dabo) = page(&hub, "/app/boards/alpha?machine=dabo", &alice).await;
+    assert!(
+        on_dabo.contains("dabo is down") && !on_dabo.contains("A-PRIVATE-TICKET"),
+        "{on_dabo}"
+    );
+    assert!(
+        on_dabo.contains("href=\"/app/boards/alpha\" aria-current=\"true\">dabo</a>"),
+        "tapping it again clears it"
+    );
+    let (_, in_dev) = page(&hub, "/app/boards/alpha?environment=dev", &alice).await;
+    assert!(!in_dev.contains("dabo is down"), "{in_dev}");
+    let (_, searched) = page(&hub, "/app/boards/alpha?machine=dabo&q=down", &alice).await;
+    assert!(
+        searched.contains("name=\"machine\" value=\"dabo\""),
+        "the search keeps the chip"
+    );
+
+    let (status, html) = page(&hub, &format!("/app/tickets/alpha/{id}"), &alice).await;
+    assert_eq!(status, 200, "{html}");
+    assert!(
+        html.contains(
+            "<dt>Where</dt><dd id=\"anchors\">dabo · prod · github.com/x/y · ai (session "
+        ),
+        "{html}"
+    );
+}
