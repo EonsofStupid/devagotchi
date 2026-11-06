@@ -224,6 +224,7 @@ async fn world_with(downloads: Option<Arc<crate::downloads::Downloads>>) -> Worl
             analytics: None,
             workflows: None,
             offers: None,
+            routed: Default::default(),
             push: Some(push),
             boards: Arc::new(crate::board::mcp::Boards::from_config(&config, dir.path())),
             config,

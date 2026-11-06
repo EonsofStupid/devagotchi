@@ -71,6 +71,9 @@ pub struct Invocation {
     pub cwd: PathBuf,
     /// `DEVAGOTCHI_ACTOR`, if set.
     pub actor_env: Option<String>,
+    /// `DEVAGOTCHI_SESSION`, if set: the agent CLI's session id, which the hook pack
+    /// exports at session start. A new ticket carries it unless `--session` says otherwise.
+    pub session_env: Option<String>,
     /// The OS user (`USER` / `USERNAME`).
     pub os_user: Option<String>,
     pub stdout_is_terminal: bool,
@@ -372,13 +375,24 @@ impl Output<'_> {
 
 /// Run one invocation. Returns the process exit code; writes to `out` and `err`.
 pub fn run(invocation: Invocation, out: &mut dyn Write, err: &mut dyn Write) -> u8 {
-    let parsed = match parse(&invocation.args) {
+    let mut parsed = match parse(&invocation.args) {
         Ok(p) => p,
         Err(message) => {
             let _ = writeln!(err, "error usage: {message}\n  next: board --help");
             return EXIT_USAGE;
         }
     };
+    if parsed.command == "new"
+        && let Some(session) = invocation
+            .session_env
+            .as_ref()
+            .filter(|s| !s.trim().is_empty())
+    {
+        parsed
+            .flags
+            .entry("--session".into())
+            .or_insert_with(|| vec![session.clone()]);
+    }
     let json =
         parsed.switch("--json") || (!invocation.stdout_is_terminal && !parsed.switch("--text"));
     let mut output = Output {
@@ -1349,9 +1363,19 @@ pub const HOOK_SCRIPTS: &[(&str, &str)] = &[
         "session-start.sh",
         "#!/bin/sh
 # devagotchi board: what to do now, as context for the session. Argument: the actor name.
+# The CLI's session id (Claude Code and Codex pass `session_id` on stdin) becomes
+# DEVAGOTCHI_SESSION, and for the rest of the session where the CLI keeps an env file
+# (Claude Code's CLAUDE_ENV_FILE), so tickets made with `board new` carry it.
 cd \"$(dirname \"$0\")/../..\" || exit 0
 actor=${1:-${DEVAGOTCHI_ACTOR:-}}
 [ -z \"$actor\" ] || export DEVAGOTCHI_ACTOR=\"$actor\"
+[ -t 0 ] || input=$(cat 2>/dev/null)
+session=$(printf '%s' \"${input:-}\" | sed -n 's/.*\"session_id\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p' | head -n 1)
+case $session in *[!A-Za-z0-9._-]*) session= ;; esac
+if [ -n \"$session\" ]; then
+  export DEVAGOTCHI_SESSION=\"$session\"
+  [ -z \"${CLAUDE_ENV_FILE:-}\" ] || printf 'export DEVAGOTCHI_SESSION=%s\\n' \"$session\" >> \"$CLAUDE_ENV_FILE\"
+fi
 \"${DEVAGOTCHI:-devagotchi}\" board prime --text 2>/dev/null || true
 exit 0
 ",

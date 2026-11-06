@@ -503,6 +503,25 @@ fn next_for(code: &str, id: Option<&str>) -> String {
     }
 }
 
+/// `given` unless it is absent or blank; then what the hub knows, if anything.
+fn given_or(given: Option<String>, known: impl FnOnce() -> Option<String>) -> Option<String> {
+    match given {
+        Some(value) if !value.trim().is_empty() => Some(value),
+        _ => known(),
+    }
+}
+
+/// The MCP session id of this connection, when the transport has one.
+fn mcp_session(context: &RequestContext<RoleServer>) -> Option<String> {
+    context
+        .extensions
+        .get::<http::request::Parts>()
+        .and_then(|parts| parts.headers.get("mcp-session-id"))
+        .and_then(|value| value.to_str().ok())
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 fn refuse(error: BridgeError, ticket: Option<&str>) -> Json<BoardError> {
     let next = match error.code.as_str() {
         // The store's message ends with the board's list: name it in `next` too.
@@ -1219,11 +1238,19 @@ impl Hub {
             assignee: input.assignee,
             discovered_from: input.discovered_from,
             anchors: Anchors {
-                machine: input.machine,
+                // What the caller left empty, the hub fills from what it knows: the seat
+                // of the token, this MCP session, the one machine this session routed to.
+                machine: given_or(input.machine, || {
+                    self.routed.lock().expect("routed lock").only()
+                }),
                 repo: input.repo,
                 environment: input.environment,
-                agent: input.agent,
-                session: input.session,
+                agent: given_or(input.agent, || {
+                    self.subject(&context)
+                        .ok()
+                        .and_then(|subject| subject.agent)
+                }),
+                session: given_or(input.session, || mcp_session(&context)),
                 fingerprint: input.fingerprint,
             },
             ..NewTicket::default()
@@ -1233,7 +1260,18 @@ impl Hub {
             &input.project,
             None,
             &context,
-            move |board, actor| board.create(actor, new),
+            move |board, actor| {
+                let mut new = new;
+                if new
+                    .anchors
+                    .repo
+                    .as_deref()
+                    .is_none_or(|r| r.trim().is_empty())
+                {
+                    new.anchors.repo = board.settings()?.repo;
+                }
+                board.create(actor, new)
+            },
         )
         .await
     }
@@ -2304,6 +2342,121 @@ mod tests {
             "{}",
             environment.0.next
         );
+    }
+
+    /// P2c: a ticket an AI makes through the hub carries what the hub knows without the AI
+    /// passing it: the one machine this session ran on, the token's seat, this MCP session,
+    /// the board's repo. After runs on two machines the machine is left empty.
+    #[tokio::test]
+    async fn a_ticket_made_after_a_run_carries_the_machine_the_seat_and_the_repo() {
+        use serde_json::json;
+
+        use crate::tenant_tests::{hosted_with, refused};
+
+        let hub = hosted_with(None, |_, _| json!({})).await;
+        let mut person = hub.first_connect("Claude").await;
+        // Two machines that joined (enrolled; neither is online).
+        for name in ["dabo", "wisconsin"] {
+            let added = hub
+                .call(&mut person, "machine_add", json!({ "name": name }))
+                .await;
+            let added = &added["structuredContent"];
+            let stored = added["manual"]
+                .as_str()
+                .unwrap()
+                .split("--device ")
+                .nth(1)
+                .unwrap();
+            let stored = stored.split(' ').next().unwrap();
+            let enrolled = hub
+                .http
+                .post(format!("{}/enroll", hub.url))
+                .json(&json!({ "name": stored, "code": added["code"], "public_key": format!("{name}-key") }))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(enrolled.status(), 201);
+        }
+        let bound = hub
+            .call(&mut person, "board_bind", json!({ "project": "fills" }))
+            .await;
+        assert!(!refused(&bound), "{bound}");
+        let who = hub.call(&mut person, "whoami", json!({})).await["structuredContent"].clone();
+        let subject = who["subject"].as_str().unwrap();
+        let board = hub
+            .hub
+            .boards
+            .open_account(subject, "fills")
+            .unwrap()
+            .expect("bound board");
+        let mut settings = board.settings().unwrap();
+        settings.repo = Some("https://github.com/x/y".into());
+        board
+            .put_settings(&Actor::human("jesse"), &settings)
+            .unwrap();
+
+        // The machine is offline (it never enrolled), but the call was routed to it.
+        let ran = hub
+            .call(
+                &mut person,
+                "run",
+                json!({ "machine": "dabo", "command": "true" }),
+            )
+            .await;
+        assert!(ran.to_string().contains("dabo"), "{ran}");
+        let first = hub
+            .call(
+                &mut person,
+                "board_create",
+                json!({ "project": "fills", "title": "after dabo" }),
+            )
+            .await["structuredContent"]
+            .clone();
+        assert_eq!(first["machine"], "dabo", "{first}");
+        assert_eq!(first["repo"], "https://github.com/x/y");
+        assert!(who["agent"].is_string(), "{who}");
+        assert_eq!(first["agent"], who["agent"], "the token's seat: {first}");
+        assert_eq!(
+            first["session"].as_str(),
+            person.session.as_deref(),
+            "{first}"
+        );
+
+        let given = hub
+            .call(
+                &mut person,
+                "board_create",
+                json!({
+                    "project": "fills", "title": "what the caller gives wins", "machine": "other",
+                    "repo": "https://github.com/a/b", "agent": "codex", "session": "s-9",
+                }),
+            )
+            .await["structuredContent"]
+            .clone();
+        assert_eq!(given["machine"], "other");
+        assert_eq!(given["repo"], "https://github.com/a/b");
+        assert_eq!(given["agent"], "codex");
+        assert_eq!(given["session"], "s-9");
+
+        hub.call(
+            &mut person,
+            "run",
+            json!({ "machine": "wisconsin", "command": "true" }),
+        )
+        .await;
+        let second = hub
+            .call(
+                &mut person,
+                "board_create",
+                json!({ "project": "fills", "title": "after both" }),
+            )
+            .await["structuredContent"]
+            .clone();
+        assert!(
+            second["machine"].is_null(),
+            "two machines: none is guessed: {second}"
+        );
+        assert_eq!(second["repo"], "https://github.com/x/y");
     }
 
     /// Every board tool that answers with tickets answers within its declared output schema
