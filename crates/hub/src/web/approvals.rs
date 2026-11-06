@@ -70,7 +70,7 @@ pub async fn list(
         Who::Unavailable => return unavailable(),
         Who::NotSetUp => return not_set_up(),
     };
-    if !state.hub.config.is_human(&subject.id) {
+    if !state.hub.may_approve(&subject) {
         return pages::message(
             StatusCode::FORBIDDEN,
             "Only people approve",
@@ -84,28 +84,23 @@ pub async fn list(
         done: shown.done.as_deref(),
         test: shown.test.as_deref(),
     };
-    let can_test = !state.hub.config.boards_for(&subject.id).is_empty();
+    let can_test = !state.hub.approval_boards(&subject).is_empty();
     page(&pending, &flash, key.as_deref(), &subject.id, can_test)
 }
 
-/// The approvals waiting for `subject`, by project: on every board it decides on. Also the
-/// phone app's Needs you (`web/app/home.rs`).
-pub(super) async fn pending(state: &AppState, subject: &crate::auth::Subject) -> Vec<(String, ApprovalStatus)> {
-    let projects: Vec<String> = state
-        .hub
-        .config
-        .boards_for(&subject.id)
-        .iter()
-        .map(|b| b.project.clone())
-        .collect();
-    let boards = state.hub.boards.clone();
+/// The approvals waiting for `subject`, by project: on every board it decides on, its
+/// account's own first (`Hub::approval_boards`). Also the phone app's Needs you
+/// (`web/app/home.rs`).
+pub(super) async fn pending(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+) -> Vec<(String, ApprovalStatus)> {
+    let boards = state.hub.approval_boards(subject);
     tokio::task::spawn_blocking(move || {
         let mut all = Vec::new();
-        for project in projects {
-            if let Ok(board) = boards.open(&project) {
-                for approval in board.pending_approvals().unwrap_or_default() {
-                    all.push((project.clone(), approval));
-                }
+        for (project, board) in boards {
+            for approval in board.pending_approvals().unwrap_or_default() {
+                all.push((project.clone(), approval));
             }
         }
         all
@@ -138,13 +133,7 @@ pub async fn test(State(state): State<AppState>, headers: HeaderMap) -> Response
     let Some(push) = state.hub.push.clone() else {
         return see_other("/approvals", &[]);
     };
-    let project = state
-        .hub
-        .config
-        .boards_for(&subject.id)
-        .first()
-        .map(|b| b.project.clone());
-    let (true, Some(project)) = (state.hub.config.is_human(&subject.id), project) else {
+    let Some((project, board)) = state.hub.approval_boards(&subject).into_iter().next() else {
         return pages::message(
             StatusCode::FORBIDDEN,
             "Not yours to test",
@@ -160,10 +149,8 @@ pub async fn test(State(state): State<AppState>, headers: HeaderMap) -> Response
     if phones == 0 {
         return see_other("/approvals?test=no-phone", &[]);
     }
-    let boards = state.hub.boards.clone();
-    let on = project.clone();
     let made = tokio::task::spawn_blocking(move || {
-        boards.open(&on)?.request_approval(
+        board.request_approval(
             &Actor::agent(TEST_ASKER),
             TEST_TITLE,
             "Nothing runs. This checks that your phone gets the notification and that your answer comes back.",
@@ -211,25 +198,17 @@ pub async fn decide(
     if let Some(refused) = state.hub.waiting_refusal(&subject) {
         return waiting_page(&refused);
     }
-    let human = state.hub.config.is_human(&subject.id);
-    let granted = state
-        .hub
-        .config
-        .boards_for(&subject.id)
-        .iter()
-        .any(|b| b.project == form.project);
-    if !human || !granted {
+    // Its account's own board, or a configured one it is a person on (`Hub::approval_board`).
+    let Ok(board) = state.hub.approval_board(&subject, &form.project) else {
         return pages::message(
             StatusCode::FORBIDDEN,
             "Not yours to decide",
             "This account cannot decide approvals on that board.",
             Some(("/approvals", "Approvals")),
         );
-    }
-    let boards = state.hub.boards.clone();
+    };
     let id = subject.id.clone();
     let result = tokio::task::spawn_blocking(move || {
-        let board = boards.open(&form.project)?;
         let actor = Actor {
             id: &id,
             human: true,
