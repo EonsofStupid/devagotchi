@@ -247,7 +247,8 @@ def install_windows(dist_a):
         for name in ("Devagotchi Broker", "Devagotchi Link"):
             line = winreg.QueryValueEx(key, name)[0]
             subprocess.Popen(line, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                             creationflags=0x00000008 | 0x00000200)  # detached, as logon starts it
+                             # A hidden console of its own, in its own group, as logon starts it.
+                             creationflags=0x08000000 | 0x00000200)
     return lambda: subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                                    str(installer_path()), "-Root", str(root), "-Uninstall"])
 
