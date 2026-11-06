@@ -5,7 +5,7 @@ code-anchored spec for approval before any agent works on it. The point of this 
 to settle the shape **before** building, so no later brand, domain or licence choice forces a
 rewrite.
 
-Ruled 2026-11-06 (Jesse): AgentHub gets its own boundary at **agenthub.devagotchi.com**; the
+Ruled 2026-11-06 (Jesse): Devagotchi is the self-hosted product with its own GitHub org; the hosted, network-connected version evolves in a private enterprise repo (§5). AgentHub gets its own boundary at **agenthub.devagotchi.com**; the
 brand/name must be changeable (with a UI) so the same service can be offered under another
 name (e.g. **shippin.online**) and can **link to the Shippin Network**; likely offered openly
 under BSL.
@@ -79,7 +79,38 @@ and which network it belongs to.
 - The "public core + private repo for commercial features" ruling (2026-11-03) fits this: the
   public repo under BSL, the commercial hosted features private.
 
+### 5. Two repos, one product line (ruled 2026-11-06)
+Jesse: Devagotchi gets **its own GitHub org**. **Devagotchi is the self-hosted product**: people
+deploy it on their own VM as a central connection point they own (their privacy). The version
+that connects to and offers Shippin, Vaultix and the rest evolves in the private enterprise repo.
+
+| Repo | Visibility | Holds | Builds |
+|---|---|---|---|
+| `devagotchi/devagotchi` | public (BSL, §4) | broker, link, stdio MCP, hub with the machines MCP **and AgentHub**, the default edition, installers, docs | the self-host image and binaries |
+| `devagotchi/devagotchi-enterprise` | private | SSO + org admin (SAML/OIDC per org, SCIM, roles); audit + compliance (export, retention, SIEM streaming); the editions/white-label editor (§2); Shippin Network hosting (plans, billing, network edition, Vaultix/rrflow offers) | the enterprise image (private registry) and the shippin.online deployment |
+
+How they fit (the open-core pattern Mattermost and Sentry use):
+- The public hub defines **extension points**: a registry where an extension adds routes, MCP
+  tools, sign-in providers, audit sinks and edition storage. With none registered it is the
+  complete self-host product; nothing in it reaches the network unless configured.
+- The enterprise repo is a Cargo workspace that depends on the public crates **at a pinned tag**
+  (git dependency), registers its extensions, and builds its own `devagotchi` binary and image.
+  It never forks public code; a public change reaches enterprise by bumping the pin.
+- CI: the public repo runs today's CI; the enterprise repo runs its own CI against the pinned
+  public tag plus a nightly job against public `main` to catch breakage early.
+- Secrets, the private registry and the enterprise deploys live only in the enterprise repo
+  and Vaultix.
+
 ## Phases (each: spec → approval → one agent, one PR per item, merged on green)
+- **E0 Org + repos + workspace** (first, because every later PR lands in the right place):
+  Jesse creates the `devagotchi` GitHub org and transfers `EonsofStupid/devagotchi` into it
+  (GitHub keeps redirects; CI secrets and the GHCR image name move with it — the image path
+  changes to `ghcr.io/devagotchi/devagotchi`, so the hub deploy's `DEVAGOTCHI_TRACK` is updated
+  in the same step). Then the agent: creates `devagotchi/devagotchi-enterprise` skeleton
+  (workspace, pinned dependency, one example extension, CI, CLAUDE.md, the agent-board hooks),
+  adds the extension registry to the public hub (empty by default), and updates the devspace
+  (`deploy/devspace/`) to clone both. Needs: the org, and this session given access to the new
+  repos.
 - **E1 Surfaces:** host-based routing; `agenthub.<domain>` with its own MCP endpoint and
   resource metadata; audience-bound tokens; `agenthub_connect` + paste line; deprecate
   `board_*` on `/mcp`. DNS/Caddy for `agenthub.devagotchi.com` is Jesse's (or with his OK).
