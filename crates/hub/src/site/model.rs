@@ -976,6 +976,12 @@ pub struct AppCopy {
     pub filter_state: String,
     pub filter_assignee: String,
     pub filter_label: String,
+    /// The anchor chips on the board page, and the ticket page's one line of them.
+    pub filter_machine: String,
+    pub filter_environment: String,
+    pub filter_repo: String,
+    pub filter_agent: String,
+    pub ticket_anchors: String,
     pub search_label: String,
     pub search_button: String,
     pub tickets_empty: String,

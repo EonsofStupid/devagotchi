@@ -1,6 +1,6 @@
 //! `/app/boards/<project>`: a board's open tickets, read with `Board::list`. Filters are
-//! chips (state, assignee, label: each value the open tickets have; tapping the chosen one
-//! clears it) and a search box over titles and descriptions. Approvals are not listed:
+//! chips (state, assignee, label and the anchors machine, environment, repo, agent: each
+//! value the open tickets have; tapping the chosen one clears it) and a search box over titles and descriptions. Approvals are not listed:
 //! they are decided on `/approvals`.
 
 use std::collections::BTreeSet;
@@ -15,7 +15,7 @@ use serde::Deserialize;
 use super::{open_board, person, words};
 use crate::{
     AppState,
-    board::{Filter, Ticket, approval},
+    board::{Anchors, Filter, Ticket, approval},
     web::{
         encode,
         pages::{self, Tab, escape},
@@ -27,6 +27,10 @@ pub struct Chosen {
     state: Option<String>,
     assignee: Option<String>,
     label: Option<String>,
+    machine: Option<String>,
+    environment: Option<String>,
+    repo: Option<String>,
+    agent: Option<String>,
     q: Option<String>,
 }
 
@@ -38,6 +42,10 @@ impl Chosen {
             "state" => &mut next.state,
             "assignee" => &mut next.assignee,
             "label" => &mut next.label,
+            "machine" => &mut next.machine,
+            "environment" => &mut next.environment,
+            "repo" => &mut next.repo,
+            "agent" => &mut next.agent,
             _ => &mut next.q,
         };
         *slot = value.map(str::to_string);
@@ -45,6 +53,10 @@ impl Chosen {
             ("state", &next.state),
             ("assignee", &next.assignee),
             ("label", &next.label),
+            ("machine", &next.machine),
+            ("environment", &next.environment),
+            ("repo", &next.repo),
+            ("agent", &next.agent),
             ("q", &next.q),
         ]
         .iter()
@@ -94,6 +106,13 @@ pub async fn page(
         label: chosen.label.clone(),
         text: chosen.q.clone().filter(|q| !q.trim().is_empty()),
         open_only: true,
+        anchors: Anchors {
+            machine: chosen.machine.clone(),
+            environment: chosen.environment.clone(),
+            repo: chosen.repo.clone(),
+            agent: chosen.agent.clone(),
+            ..Anchors::default()
+        },
         ..Filter::default()
     };
     let (all, shown) = tokio::task::spawn_blocking(move || {
@@ -150,6 +169,9 @@ pub async fn page(
     let states: BTreeSet<String> = all.iter().map(|t| t.state.clone()).collect();
     let assignees: BTreeSet<String> = all.iter().filter_map(|t| t.assignee.clone()).collect();
     let labels: BTreeSet<String> = all.iter().flat_map(|t| t.labels.clone()).collect();
+    let anchor = |of: fn(&Ticket) -> &Option<String>| -> BTreeSet<String> {
+        all.iter().filter_map(|t| of(t).clone()).collect()
+    };
     let rows: Vec<String> = shown
         .iter()
         .map(|ticket| {
@@ -179,6 +201,10 @@ pub async fn page(
         ("state", &chosen.state),
         ("assignee", &chosen.assignee),
         ("label", &chosen.label),
+        ("machine", &chosen.machine),
+        ("environment", &chosen.environment),
+        ("repo", &chosen.repo),
+        ("agent", &chosen.agent),
     ]
     .iter()
     .filter_map(|(k, v)| {
@@ -199,7 +225,7 @@ placeholder=\"{l}\"><button type=\"submit\">{}</button></form>",
         l = escape(&copy.search_label),
     );
     let body = format!(
-        "<h1>{}</h1>{search}{}{}{}<section class=\"card\">{list}</section>",
+        "<h1>{}</h1>{search}{}{}{}{}{}{}{}<section class=\"card\">{list}</section>",
         escape(&project),
         chips("state", &copy.filter_state, states, &chosen.state),
         chips(
@@ -209,6 +235,25 @@ placeholder=\"{l}\"><button type=\"submit\">{}</button></form>",
             &chosen.assignee
         ),
         chips("label", &copy.filter_label, labels, &chosen.label),
+        chips(
+            "machine",
+            &copy.filter_machine,
+            anchor(|t| &t.machine),
+            &chosen.machine
+        ),
+        chips(
+            "environment",
+            &copy.filter_environment,
+            anchor(|t| &t.environment),
+            &chosen.environment
+        ),
+        chips("repo", &copy.filter_repo, anchor(|t| &t.repo), &chosen.repo),
+        chips(
+            "agent",
+            &copy.filter_agent,
+            anchor(|t| &t.agent),
+            &chosen.agent
+        ),
     );
     pages::app_page(StatusCode::OK, &project, &body, Tab::Boards)
 }

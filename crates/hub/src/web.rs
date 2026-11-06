@@ -25,9 +25,9 @@
 //! - Redirects are not followed when talking to Nomen.
 
 mod analytics;
-mod app;
 #[cfg(test)]
 mod analytics_tests;
+mod app;
 mod approvals;
 mod claim;
 #[cfg(test)]
