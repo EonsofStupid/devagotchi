@@ -110,7 +110,7 @@ fn the_windows_updater_runs_detached_and_logs_to_a_file() {
     let deadline = std::time::Instant::now() + Duration::from_secs(60);
     let mut text = String::new();
     while std::time::Instant::now() < deadline {
-        text = std::fs::read_to_string(&log).unwrap_or_default();
+        text = String::from_utf8_lossy(&std::fs::read(&log).unwrap_or_default()).into_owned();
         if text.contains("devagotchi update to ci-test done") {
             break;
         }

@@ -1,9 +1,9 @@
 //! Handing a checked update to something that outlives this link and the broker it replaces
 //! (docs/spec-machine-update.md, U3 step 3). The link never installs anything itself.
 //!
-//! Windows: `powershell.exe` runs the updater script (`update-windows.ps1`), detached, outside
-//! any job of ours (breakaway is asked for and dropped when a job refuses it), its output to
-//! `<root>\logs\update-<version>.log`: a file, never a pipe back to the link, which kept the
+//! Windows: `powershell.exe` runs the updater script (`update-windows.ps1`) on a hidden
+//! console of its own, in a new process group, outside any job of ours (breakaway is asked
+//! for and dropped when a job refuses it), its output to `<root>\logs\update-<version>.log`: a file, never a pipe back to the link, which kept the
 //! 2026-11-05 updater waiting forever. The script runs the installer in upgrade mode and
 //! re-runs it with the previous version when the new one does not come up.
 //!
@@ -129,7 +129,7 @@ pub fn log_path(_state_dir: &Path, _version: &str) -> Option<PathBuf> {
 pub fn start(state_dir: &Path, dir: &Path, version: &str) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     const CREATE_BREAKAWAY_FROM_JOB: u32 = 0x0100_0000;
 
@@ -164,7 +164,7 @@ pub fn start(state_dir: &Path, dir: &Path, version: &str) -> Result<(), String> 
             .stdin(Stdio::null())
             .stdout(out)
             .stderr(err)
-            .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | flags)
+            .creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP | flags)
             .spawn()
             .map(drop)
     };
