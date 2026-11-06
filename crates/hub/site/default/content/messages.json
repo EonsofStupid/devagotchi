@@ -288,6 +288,23 @@
     "boards_empty": "No boards yet.",
     "open_count": "{n} open",
     "offline_title": "You're offline",
-    "offline_text": "This page needs the hub. It opens again as soon as you're back online."
+    "offline_text": "This page needs the hub. It opens again as soon as you're back online.",
+    "machine_status": "Status",
+    "machine_build": "Build",
+    "machine_build_unknown": "Not known while it is offline",
+    "last_seen": "Last seen",
+    "seen_now": "Now",
+    "seen_never": "Not since the hub started",
+    "update_now": "Update now",
+    "update_state": "Update: {state}",
+    "jobs_title": "Recent jobs",
+    "jobs_empty": "No jobs through the hub yet.",
+    "job_when": "When",
+    "job_command": "Command",
+    "job_state": "State",
+    "job_exit": "Exit",
+    "machine_unknown": "No such machine",
+    "machine_unknown_text": "It is not one of your machines.",
+    "not_from_here": "That came from another site, so nothing was changed."
   }
 }

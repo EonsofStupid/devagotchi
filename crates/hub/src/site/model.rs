@@ -943,6 +943,26 @@ pub struct AppCopy {
     pub open_count: String,
     pub offline_title: String,
     pub offline_text: String,
+    /// The machine page (`web/app/machine.rs`).
+    pub machine_status: String,
+    pub machine_build: String,
+    pub machine_build_unknown: String,
+    pub last_seen: String,
+    pub seen_now: String,
+    pub seen_never: String,
+    pub update_now: String,
+    /// `{state}`: where the update is (`done`, `failed`, `requested`, …).
+    pub update_state: String,
+    pub jobs_title: String,
+    pub jobs_empty: String,
+    pub job_when: String,
+    pub job_command: String,
+    pub job_state: String,
+    pub job_exit: String,
+    pub machine_unknown: String,
+    pub machine_unknown_text: String,
+    /// A form posted from another site.
+    pub not_from_here: String,
 }
 
 /// The sign-in page's words (`web/sign_in.rs`): Google, or an email and a password.
