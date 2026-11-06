@@ -1072,6 +1072,7 @@ impl Hub {
             open_only: input.open_only,
             text: input.text,
             limit: Some(input.limit.unwrap_or(50).clamp(1, 500) as usize),
+            ..Filter::default()
         };
         self.board_call(
             "board_list",
@@ -1143,6 +1144,7 @@ impl Hub {
             parent: input.parent,
             assignee: input.assignee,
             discovered_from: input.discovered_from,
+            ..NewTicket::default()
         };
         self.board_call(
             "board_create",
@@ -1271,6 +1273,7 @@ impl Hub {
                 input.assignee.map(Some)
             },
             state: input.state,
+            ..Patch::default()
         };
         let id = input.id.clone();
         let version = input.version;

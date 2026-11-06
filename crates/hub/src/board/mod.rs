@@ -149,6 +149,25 @@ pub struct Ticket {
     pub created_at: i64,
     pub updated_at: i64,
     pub closed_at: Option<i64>,
+    /// Where the ticket belongs (the project is the board it lives on). Each is
+    /// optional and filled when known.
+    #[serde(default)]
+    pub machine: Option<String>,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub environment: Option<String>,
+    #[serde(default)]
+    pub agent: Option<String>,
+    #[serde(default)]
+    pub session: Option<String>,
+    /// Folds repeats of one failure into this ticket (P3), counted in `occurrences`.
+    #[serde(default)]
+    pub fingerprint: Option<String>,
+    #[serde(default = "one")]
+    pub occurrences: i64,
+    #[serde(default)]
+    pub last_seen_at: Option<i64>,
     /// Open `blocks` dependencies, computed on read.
     pub blocked_by: Vec<String>,
     /// The lease has lapsed but the reaper has not run yet, computed on read.
@@ -209,6 +228,85 @@ pub struct NewTicket {
     pub assignee: Option<String>,
     /// Records a `discovered-from` dependency.
     pub discovered_from: Option<String>,
+    pub anchors: Anchors,
+    /// Defaults to 1.
+    pub occurrences: Option<i64>,
+    pub last_seen_at: Option<i64>,
+}
+
+/// Where a ticket belongs, plus its fingerprint. Empty strings count as absent.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Anchors {
+    pub machine: Option<String>,
+    pub repo: Option<String>,
+    pub environment: Option<String>,
+    pub agent: Option<String>,
+    pub session: Option<String>,
+    pub fingerprint: Option<String>,
+}
+
+impl Anchors {
+    /// Column name and value, in column order.
+    fn columns(&self) -> [(&'static str, &Option<String>); 6] {
+        [
+            ("machine", &self.machine),
+            ("repo", &self.repo),
+            ("environment", &self.environment),
+            ("agent", &self.agent),
+            ("session", &self.session),
+            ("fingerprint", &self.fingerprint),
+        ]
+    }
+}
+
+/// An edit to the anchors: `Some(None)` clears one, `None` leaves it.
+#[derive(Debug, Clone, Default)]
+pub struct AnchorPatch {
+    pub machine: Option<Option<String>>,
+    pub repo: Option<Option<String>>,
+    pub environment: Option<Option<String>>,
+    pub agent: Option<Option<String>>,
+    pub session: Option<Option<String>>,
+    pub fingerprint: Option<Option<String>>,
+}
+
+impl AnchorPatch {
+    fn columns(&self) -> [(&'static str, &Option<Option<String>>); 6] {
+        [
+            ("machine", &self.machine),
+            ("repo", &self.repo),
+            ("environment", &self.environment),
+            ("agent", &self.agent),
+            ("session", &self.session),
+            ("fingerprint", &self.fingerprint),
+        ]
+    }
+}
+
+fn one() -> i64 {
+    1
+}
+
+fn clean_anchor(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
+/// An environment must be one the board's settings name; the refusal lists them.
+fn check_environment(settings: &Settings, environment: Option<&str>) -> BridgeResult<()> {
+    match environment {
+        Some(env) if !settings.environments.iter().any(|e| e == env) => Err(fail(
+            "unknown_environment",
+            format!(
+                "environment {env:?} is not one of this board's: {}",
+                settings.environments.join(", ")
+            ),
+        )),
+        _ => Ok(()),
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -221,6 +319,10 @@ pub struct Patch {
     pub assignee: Option<Option<String>>,
     /// A workflow transition for an unheld ticket; held tickets move only through lease operations.
     pub state: Option<String>,
+    pub anchors: AnchorPatch,
+    pub occurrences: Option<i64>,
+    /// `Some(None)` clears it.
+    pub last_seen_at: Option<Option<i64>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -235,6 +337,8 @@ pub struct Filter {
     pub ready: bool,
     pub open_only: bool,
     pub text: Option<String>,
+    /// Equality on each anchor and the fingerprint.
+    pub anchors: Anchors,
     pub limit: Option<usize>,
 }
 
@@ -246,6 +350,16 @@ pub struct Settings {
     pub max_lease_expiries: i64,
     pub wip_limit_default: i64,
     pub default_priority: i64,
+    /// The project's repository URL, named once; tickets pick it up.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// The environments a ticket's `environment` may name.
+    #[serde(default = "default_environments")]
+    pub environments: Vec<String>,
+}
+
+fn default_environments() -> Vec<String> {
+    ["dev", "staging", "prod"].map(String::from).to_vec()
 }
 
 impl Default for Settings {
@@ -257,6 +371,8 @@ impl Default for Settings {
             max_lease_expiries: 3,
             wip_limit_default: 2,
             default_priority: 2,
+            repo: None,
+            environments: default_environments(),
         }
     }
 }
@@ -276,7 +392,7 @@ pub struct Board {
     activity: Option<Arc<Notify>>,
 }
 
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 pub const BOARD_DIR: &str = ".devagotchi";
 pub const BOARD_FILE: &str = "board.sqlite3";
 
@@ -429,6 +545,9 @@ impl Board {
                 connection
                     .execute_batch("BEGIN IMMEDIATE")
                     .map_err(store_error)?;
+                connection
+                    .execute_batch(ANCHOR_INDEXES)
+                    .map_err(store_error)?;
                 for (key, value) in [
                     ("schema_version", SCHEMA_VERSION.to_string()),
                     ("project", project.to_string()),
@@ -455,13 +574,18 @@ impl Board {
                 prefix
             }
         };
-        let version: String = connection
+        let mut connection = connection;
+        let mut version: String = connection
             .query_row(
                 "SELECT value FROM meta WHERE key = 'schema_version'",
                 [],
                 |row| row.get(0),
             )
             .map_err(store_error)?;
+        if version == "1" {
+            migrate_v1(&mut connection, clock())?;
+            version = SCHEMA_VERSION.to_string();
+        }
         if version != SCHEMA_VERSION.to_string() {
             return Err(fail(
                 "board_version",
@@ -748,9 +872,22 @@ impl Board {
             return Err(invalid("kind must be task, epic or message"));
         }
         let labels = clean_labels(&new.labels);
+        let anchors = Anchors {
+            machine: clean_anchor(&new.anchors.machine),
+            repo: clean_anchor(&new.anchors.repo),
+            environment: clean_anchor(&new.anchors.environment),
+            agent: clean_anchor(&new.anchors.agent),
+            session: clean_anchor(&new.anchors.session),
+            fingerprint: clean_anchor(&new.anchors.fingerprint),
+        };
+        let occurrences = new.occurrences.unwrap_or(1);
+        if occurrences < 1 {
+            return Err(invalid("occurrences must be at least 1"));
+        }
         self.write(actor, |w| {
             let workflow = load_workflow(w.tx)?;
             let settings = load_settings(w.tx)?;
+            check_environment(&settings, anchors.environment.as_deref())?;
             let now = w.now;
             let id = match &new.parent {
                 Some(parent) => {
@@ -777,8 +914,10 @@ impl Board {
             w.tx
                 .execute(
                     "INSERT INTO tickets (id, kind, title, description, state, priority, labels, parent,
-                       assignee, created_by, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                       assignee, created_by, created_at, updated_at, machine, repo, environment, agent,
+                       session, fingerprint, occurrences, last_seen_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, ?12, ?13, ?14, ?15,
+                       ?16, ?17, ?18, ?19)",
                     params![
                         id,
                         kind,
@@ -791,6 +930,14 @@ impl Board {
                         new.assignee,
                         actor.id,
                         now,
+                        anchors.machine,
+                        anchors.repo,
+                        anchors.environment,
+                        anchors.agent,
+                        anchors.session,
+                        anchors.fingerprint,
+                        occurrences,
+                        new.last_seen_at,
                     ],
                 )
                 .map_err(store_error)?;
@@ -883,6 +1030,39 @@ impl Board {
                 )
                 .map_err(store_error)?;
                 changed.insert("assignee".into(), serde_json::json!(assignee));
+            }
+            for (column, value) in patch.anchors.columns() {
+                let Some(value) = value else { continue };
+                let value = clean_anchor(value);
+                if column == "environment" {
+                    check_environment(&load_settings(w.tx)?, value.as_deref())?;
+                }
+                // `column` is one of six fixed names, never caller text.
+                w.tx.execute(
+                    &format!("UPDATE tickets SET {column} = ?2 WHERE id = ?1"),
+                    params![id, value],
+                )
+                .map_err(store_error)?;
+                changed.insert(column.into(), serde_json::json!(value));
+            }
+            if let Some(occurrences) = patch.occurrences {
+                if occurrences < 1 {
+                    return Err(invalid("occurrences must be at least 1"));
+                }
+                w.tx.execute(
+                    "UPDATE tickets SET occurrences = ?2 WHERE id = ?1",
+                    params![id, occurrences],
+                )
+                .map_err(store_error)?;
+                changed.insert("occurrences".into(), serde_json::json!(occurrences));
+            }
+            if let Some(last_seen_at) = patch.last_seen_at {
+                w.tx.execute(
+                    "UPDATE tickets SET last_seen_at = ?2 WHERE id = ?1",
+                    params![id, last_seen_at],
+                )
+                .map_err(store_error)?;
+                changed.insert("last_seen_at".into(), serde_json::json!(last_seen_at));
             }
             if let Some(to) = patch.state.as_ref().filter(|to| *to != &current.state) {
                 check_transition(&workflow, &current, to, actor.id)?;
@@ -1225,7 +1405,8 @@ pub(crate) fn load_workflow(connection: &Connection) -> BridgeResult<Workflow> {
 
 const TICKET_COLUMNS: &str = "id, kind, title, description, state, priority, labels, parent, assignee, holder,
     lease_id, lease_ttl_ms, lease_expires_at, heartbeat_at, fence, version, expiry_count, last_worker,
-    progress, created_by, created_at, updated_at, closed_at";
+    progress, created_by, created_at, updated_at, closed_at, machine, repo, environment, agent, session,
+    fingerprint, occurrences, last_seen_at";
 
 fn ticket_from_row(row: &Row<'_>, now: i64) -> rusqlite::Result<Ticket> {
     let labels: String = row.get(6)?;
@@ -1255,6 +1436,14 @@ fn ticket_from_row(row: &Row<'_>, now: i64) -> rusqlite::Result<Ticket> {
         created_at: row.get(20)?,
         updated_at: row.get(21)?,
         closed_at: row.get(22)?,
+        machine: row.get(23)?,
+        repo: row.get(24)?,
+        environment: row.get(25)?,
+        agent: row.get(26)?,
+        session: row.get(27)?,
+        fingerprint: row.get(28)?,
+        occurrences: row.get(29)?,
+        last_seen_at: row.get(30)?,
         blocked_by: Vec::new(),
         lease_expired: lease_expires_at.is_some_and(|at| at <= now),
     })
@@ -1452,6 +1641,12 @@ pub(crate) fn list_tickets(
             ")",
         );
     }
+    for (column, value) in filter.anchors.columns() {
+        if let Some(value) = clean_anchor(value) {
+            // `column` is one of six fixed names; the value is bound.
+            query.and(&format!("{column} = "), Box::new(value));
+        }
+    }
     if let Some(text) = &filter.text {
         let pattern = format!(
             "%{}%",
@@ -1637,6 +1832,14 @@ CREATE TABLE IF NOT EXISTS tickets (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   closed_at INTEGER,
+  machine TEXT,
+  repo TEXT,
+  environment TEXT,
+  agent TEXT,
+  session TEXT,
+  fingerprint TEXT,
+  occurrences INTEGER NOT NULL DEFAULT 1,
+  last_seen_at INTEGER,
   CHECK ((holder IS NULL) = (lease_id IS NULL))
 );
 CREATE INDEX IF NOT EXISTS tickets_queue ON tickets (state, priority, created_at) WHERE holder IS NULL;
@@ -1684,3 +1887,49 @@ CREATE TRIGGER IF NOT EXISTS notes_no_update BEFORE UPDATE ON notes
 CREATE TRIGGER IF NOT EXISTS notes_no_delete BEFORE DELETE ON notes
   BEGIN SELECT RAISE(ABORT, 'notes is append-only'); END;
 ";
+
+/// Schema 2's indexes on the anchors, for new boards and the migration alike.
+const ANCHOR_INDEXES: &str = "
+CREATE INDEX IF NOT EXISTS tickets_machine ON tickets (machine);
+CREATE INDEX IF NOT EXISTS tickets_environment ON tickets (environment);
+CREATE INDEX IF NOT EXISTS tickets_fingerprint ON tickets (fingerprint);
+";
+
+/// Schema 1 -> 2 in one transaction: the anchor columns, their indexes, the version,
+/// and a `board.migrated` event so the chain records it. Every row is kept.
+fn migrate_v1(connection: &mut Connection, now: i64) -> BridgeResult<()> {
+    let tx = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(store_error)?;
+    tx.execute_batch(
+        "ALTER TABLE tickets ADD COLUMN machine TEXT;
+         ALTER TABLE tickets ADD COLUMN repo TEXT;
+         ALTER TABLE tickets ADD COLUMN environment TEXT;
+         ALTER TABLE tickets ADD COLUMN agent TEXT;
+         ALTER TABLE tickets ADD COLUMN session TEXT;
+         ALTER TABLE tickets ADD COLUMN fingerprint TEXT;
+         ALTER TABLE tickets ADD COLUMN occurrences INTEGER NOT NULL DEFAULT 1;
+         ALTER TABLE tickets ADD COLUMN last_seen_at INTEGER;",
+    )
+    .map_err(store_error)?;
+    tx.execute_batch(ANCHOR_INDEXES).map_err(store_error)?;
+    tx.execute(
+        "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+        params![SCHEMA_VERSION.to_string()],
+    )
+    .map_err(store_error)?;
+    let appended = Cell::new(false);
+    Writer {
+        tx: &tx,
+        actor: "system",
+        now,
+        appended: &appended,
+    }
+    .event(
+        "board.migrated",
+        None,
+        None,
+        serde_json::json!({ "from": 1, "to": SCHEMA_VERSION }),
+    )?;
+    tx.commit().map_err(store_error)
+}
