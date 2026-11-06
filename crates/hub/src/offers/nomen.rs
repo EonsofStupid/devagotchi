@@ -178,9 +178,7 @@ fn names(name: &str, email: &str) -> (String, String) {
         name
     };
     match name.split_once(' ') {
-        Some((given, family)) if !family.trim().is_empty() => {
-            (clip(given), clip(family.trim()))
-        }
+        Some((given, family)) if !family.trim().is_empty() => (clip(given), clip(family.trim())),
         _ => (clip(name), clip(name)),
     }
 }
@@ -227,7 +225,10 @@ mod tests {
 
     #[test]
     fn nomen_gets_a_given_and_a_family_name() {
-        assert_eq!(names("Ada Lovelace", "a@x.org"), ("Ada".into(), "Lovelace".into()));
+        assert_eq!(
+            names("Ada Lovelace", "a@x.org"),
+            ("Ada".into(), "Lovelace".into())
+        );
         assert_eq!(names("ada", "a@x.org"), ("ada".into(), "ada".into()));
         assert_eq!(names("  ", "ada.l@x.org"), ("ada.l".into(), "ada.l".into()));
     }

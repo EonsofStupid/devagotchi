@@ -57,8 +57,10 @@ fn bar_html(bar: &Bar, site: &Site) -> String {
         ),
     };
     let nudge = match bar {
-        Bar::SignedIn { unsecured: true } => "<p class=\"nudge\" role=\"status\">Your account is not \
-secured yet: nothing can recover it if you lose this browser. <a href=\"/account#secure\">Secure it</a></p>",
+        Bar::SignedIn { unsecured: true } => {
+            "<p class=\"nudge\" role=\"status\">Your account is not \
+secured yet: nothing can recover it if you lose this browser. <a href=\"/account#secure\">Secure it</a></p>"
+        }
         _ => "",
     };
     // The site's mark, inline: the pages' CSP loads no images, and CSS colours it per theme.
@@ -140,7 +142,13 @@ pub fn app(status: StatusCode, title: &str, body: &str) -> Response {
 /// A workflow's page (`workflow.rs`): its own script, which follows the steps, and the
 /// passkey script while the account can be secured there, and the phone's (with the app's
 /// manifest) while a phone can be turned on there. All from this origin.
-pub fn workflow(status: StatusCode, title: &str, body: &str, passkey: bool, push: bool) -> Response {
+pub fn workflow(
+    status: StatusCode,
+    title: &str,
+    body: &str,
+    passkey: bool,
+    push: bool,
+) -> Response {
     let mut response = render(status, title, body, Kind::Workflow { passkey, push }, "");
     // Its forms post here: the browser sends a POST's true Origin only under `same-origin`.
     response.headers_mut().insert(
@@ -164,7 +172,10 @@ enum Kind {
     Landing,
     App,
     Script(&'static str),
-    Workflow { passkey: bool, push: bool },
+    Workflow {
+        passkey: bool,
+        push: bool,
+    },
 }
 
 /// A page: `meta` is what search engines and link previews read in its head, on the
@@ -380,8 +391,15 @@ autocapitalize=\"none\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"
                 )
             })
             .collect();
-        let rows = if rows.is_empty() { "<li>Passkeys only</li>".to_string() } else { rows };
-        format!("<h2>How you sign in</h2><ul class=\"linked\">{rows}</ul>{}", viewer.ways)
+        let rows = if rows.is_empty() {
+            "<li>Passkeys only</li>".to_string()
+        } else {
+            rows
+        };
+        format!(
+            "<h2>How you sign in</h2><ul class=\"linked\">{rows}</ul>{}",
+            viewer.ways
+        )
     } else {
         String::new()
     };

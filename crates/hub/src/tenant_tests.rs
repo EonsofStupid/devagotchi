@@ -81,9 +81,9 @@ pub(crate) async fn hosted_with(
             .with_analytics(config.counts_visits()),
     );
     // As `run` wires it: a hosted hub counts unless its config says not to.
-    let analytics = config.counts_visits().then(|| {
-        analytics::Analytics::start(accounts.store().clone(), config.analytics, &url)
-    });
+    let analytics = config
+        .counts_visits()
+        .then(|| analytics::Analytics::start(accounts.store().clone(), config.analytics, &url));
     let devices = Arc::new(devices_at(dir.path()).unwrap());
     let audit = Arc::new(Audit::open(&dir.path().join("audit.sqlite3")).unwrap());
     let changes = Arc::new(tokio::sync::Notify::new());
@@ -98,9 +98,10 @@ pub(crate) async fn hosted_with(
     let push = Some(Arc::new(
         crate::push::Push::open(dir.path(), &url, devices.clone()).unwrap(),
     ));
-    let downloads = config.downloads.as_ref().map(|dir| {
-        Arc::new(crate::downloads::Downloads::open(std::path::Path::new(dir)).unwrap())
-    });
+    let downloads = config
+        .downloads
+        .as_ref()
+        .map(|dir| Arc::new(crate::downloads::Downloads::open(std::path::Path::new(dir)).unwrap()));
     let state = AppState {
         verifier: Arc::new(
             Verifier::from_hub_config(&config, dir.path(), Some(accounts.clone()))

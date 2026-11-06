@@ -112,17 +112,28 @@ async fn one_owner_and_unique_ids() {
         let owner = accounts.create(A, "Jesse", true).await.unwrap();
         assert!(owner.owner);
         assert_eq!(accounts.owner().await.unwrap().unwrap().id, owner.id);
-        assert_eq!(accounts.get(&owner.id).await.unwrap().unwrap().name, "Jesse");
+        assert_eq!(
+            accounts.get(&owner.id).await.unwrap().unwrap().name,
+            "Jesse"
+        );
         assert_eq!(
             accounts.create(B, "Two", true).await.unwrap_err().code,
             "owner_exists"
         );
         assert_eq!(
-            accounts.create(&owner.id, "Again", false).await.unwrap_err().code,
+            accounts
+                .create(&owner.id, "Again", false)
+                .await
+                .unwrap_err()
+                .code,
             "account_exists"
         );
         assert_eq!(
-            accounts.create("../x", "Bad", false).await.unwrap_err().code,
+            accounts
+                .create("../x", "Bad", false)
+                .await
+                .unwrap_err()
+                .code,
             "invalid_account"
         );
         assert!(
@@ -146,7 +157,10 @@ async fn one_owner_and_unique_ids() {
 async fn owner_link_is_one_time_and_stored_only_as_a_hash() {
     for (store, accounts) in stores().await {
         let owner = accounts.create(A, "Jesse", true).await.unwrap();
-        let token = accounts.issue_link(LinkPurpose::Owner, &owner.id).await.unwrap();
+        let token = accounts
+            .issue_link(LinkPurpose::Owner, &owner.id)
+            .await
+            .unwrap();
         assert!(
             token.starts_with("dgl_") && token.len() == 4 + 43,
             "{token}"
@@ -154,7 +168,10 @@ async fn owner_link_is_one_time_and_stored_only_as_a_hash() {
         // Checking does not spend it, so a link preview cannot burn it.
         for _ in 0..2 {
             assert_eq!(
-                accounts.check_link(LinkPurpose::Owner, &token).await.unwrap(),
+                accounts
+                    .check_link(LinkPurpose::Owner, &token)
+                    .await
+                    .unwrap(),
                 owner.id
             );
         }
@@ -172,7 +189,9 @@ async fn owner_link_is_one_time_and_stored_only_as_a_hash() {
                 .unwrap();
             let file = store.dir.path().join("accounts.sqlite3");
             let mut raw = std::fs::read(&file).unwrap();
-            raw.extend(std::fs::read(store.dir.path().join("accounts.sqlite3-wal")).unwrap_or_default());
+            raw.extend(
+                std::fs::read(store.dir.path().join("accounts.sqlite3-wal")).unwrap_or_default(),
+            );
             let contains = |needle: &[u8]| raw.windows(needle.len()).any(|w| w == needle);
             assert!(contains(hash(&token).as_bytes()), "the hash is stored");
             assert!(!contains(token.as_bytes()), "the link itself is not");
@@ -282,7 +301,10 @@ async fn a_refused_passkey_leaves_the_link_unspent() {
         let owner = accounts.create(A, "Jesse", true).await.unwrap();
         accounts.create(B, "Friend", false).await.unwrap();
         seed(&accounts, B, 1, "theirs").await.unwrap();
-        let link = accounts.issue_link(LinkPurpose::Owner, &owner.id).await.unwrap();
+        let link = accounts
+            .issue_link(LinkPurpose::Owner, &owner.id)
+            .await
+            .unwrap();
         let with_link = async |account: &str, id: u8| {
             accounts
                 .add_passkey(
@@ -299,7 +321,10 @@ async fn a_refused_passkey_leaves_the_link_unspent() {
         // The owner's link spent on someone else's account: refused, and still the owner's.
         assert_eq!(with_link(B, 2).await, Err("invalid_link".into()));
         assert_eq!(
-            accounts.check_link(LinkPurpose::Owner, &link).await.unwrap(),
+            accounts
+                .check_link(LinkPurpose::Owner, &link)
+                .await
+                .unwrap(),
             A
         );
         assert_eq!(with_link(A, 3).await, Ok(()));
@@ -356,8 +381,15 @@ async fn challenges_are_the_hubs_own_bound_to_their_purpose_and_spent_once() {
         assert_eq!(add(B, 3, &challenge, 101).await, refused);
         let sign_in = accounts.challenge_at(Ceremony::SignIn, None, [3; 16], 100);
         assert_eq!(add(A, 4, &sign_in, 101).await, refused);
-        assert_eq!(add(A, 5, &challenge, 100 + CHALLENGE_TTL_SECS).await, refused);
-        assert_eq!(add(A, 11, &challenge, 99).await, refused, "issued in the future");
+        assert_eq!(
+            add(A, 5, &challenge, 100 + CHALLENGE_TTL_SECS).await,
+            refused
+        );
+        assert_eq!(
+            add(A, 11, &challenge, 99).await,
+            refused,
+            "issued in the future"
+        );
         // Made up, altered, or made by another hub: refused.
         let mut altered = challenge.clone();
         let last = altered.len() - 1;
@@ -397,8 +429,7 @@ async fn a_spent_challenge_stays_spent_across_a_clock_step() {
         seed(&accounts, A, 1, "synced").await.unwrap();
         let at = |nonce: u8, issued: u64| {
             let mut sign_in = asserted(&accounts, 1, 0, A);
-            sign_in.challenge =
-                accounts.challenge_at(Ceremony::SignIn, None, [nonce; 16], issued);
+            sign_in.challenge = accounts.challenge_at(Ceremony::SignIn, None, [nonce; 16], issued);
             sign_in
         };
         let c = at(1, 1_000);
@@ -425,8 +456,7 @@ async fn a_clock_set_back_does_not_lock_everyone_out() {
         seed(&accounts, A, 1, "synced").await.unwrap();
         let at = |nonce: u8, issued: u64| {
             let mut sign_in = asserted(&accounts, 1, 0, A);
-            sign_in.challenge =
-                accounts.challenge_at(Ceremony::SignIn, None, [nonce; 16], issued);
+            sign_in.challenge = accounts.challenge_at(Ceremony::SignIn, None, [nonce; 16], issued);
             sign_in
         };
         accounts.sign_in_at(&at(1, 5_000), 5_000).await.unwrap();
@@ -436,7 +466,11 @@ async fn a_clock_set_back_does_not_lock_everyone_out() {
         // Set back about an hour. The ceremony that finds it fails; challenges made before
         // the step fail too, so none whose record was cleared can come back.
         assert_eq!(
-            accounts.sign_in_at(&at(3, 1_800), 1_801).await.unwrap_err().code,
+            accounts
+                .sign_in_at(&at(3, 1_800), 1_801)
+                .await
+                .unwrap_err()
+                .code,
             "invalid_ceremony"
         );
         assert_eq!(
@@ -540,7 +574,12 @@ async fn signing_in_moves_the_counter_forward_once_and_only_for_a_live_account()
 
         assert_eq!(go(1, 7, A).await, Ok(A.to_string()));
         assert_eq!(
-            accounts.passkey(&[1; 16]).await.unwrap().unwrap().sign_count,
+            accounts
+                .passkey(&[1; 16])
+                .await
+                .unwrap()
+                .unwrap()
+                .sign_count,
             7
         );
         // Two sign-ins that both read 7: the second to store finds the counter moved.
@@ -821,7 +860,11 @@ async fn password_sign_up_then_sign_in_and_the_same_refusal_for_wrong_or_unknown
             .await
             .unwrap();
         // Its own tenant, secured from the start: nothing to "secure" afterwards.
-        assert!(crate::accounts::tenants::valid_tenant_id(&made.tenant), "{}", made.tenant);
+        assert!(
+            crate::accounts::tenants::valid_tenant_id(&made.tenant),
+            "{}",
+            made.tenant
+        );
         assert!(!made.provisional);
         assert!(!accounts.get(&made.id).await.unwrap().unwrap().provisional);
         // Signed in by the trimmed, lowercased address.
@@ -842,12 +885,18 @@ async fn password_sign_up_then_sign_in_and_the_same_refusal_for_wrong_or_unknown
         assert_eq!(wrong.code, "password_wrong");
         assert_eq!((wrong.code, wrong.message), (unknown.code, unknown.message));
         // Too short, and an address that already has an account, are refused.
-        let short = accounts.sign_up_password("new@example.com", "1234567").await;
+        let short = accounts
+            .sign_up_password("new@example.com", "1234567")
+            .await;
         assert_eq!(short.unwrap_err().code, "password_short");
-        let taken = accounts.sign_up_password("PERSON@example.com", "another one").await;
+        let taken = accounts
+            .sign_up_password("PERSON@example.com", "another one")
+            .await;
         assert_eq!(taken.unwrap_err().code, "email_taken");
         // Nothing was made for the refused ones.
-        let short_again = accounts.sign_in_password("new@example.com", "1234567").await;
+        let short_again = accounts
+            .sign_in_password("new@example.com", "1234567")
+            .await;
         assert_eq!(short_again.unwrap_err().code, "password_wrong");
     }
 }
@@ -860,13 +909,19 @@ async fn ten_failures_for_an_address_and_it_waits() {
             .await
             .unwrap();
         for _ in 0..10 {
-            let failed = accounts.sign_in_password("slow@example.com", "not it at all").await;
+            let failed = accounts
+                .sign_in_password("slow@example.com", "not it at all")
+                .await;
             assert_eq!(failed.unwrap_err().code, "password_wrong");
         }
         // Even the right password waits now; another address does not.
-        let waits = accounts.sign_in_password("slow@example.com", "the right one").await;
+        let waits = accounts
+            .sign_in_password("slow@example.com", "the right one")
+            .await;
         assert_eq!(waits.unwrap_err().code, "slow_down");
-        let other = accounts.sign_in_password("other@example.com", "not it at all").await;
+        let other = accounts
+            .sign_in_password("other@example.com", "not it at all")
+            .await;
         assert_eq!(other.unwrap_err().code, "password_wrong");
     }
 }
@@ -878,8 +933,13 @@ async fn set_password_changes_it_and_gives_one_to_an_account_made_by_a_provider(
             .sign_up_password("change@example.com", "first password")
             .await
             .unwrap();
-        accounts.set_password(&made.id, "second password").await.unwrap();
-        let old = accounts.sign_in_password("change@example.com", "first password").await;
+        accounts
+            .set_password(&made.id, "second password")
+            .await
+            .unwrap();
+        let old = accounts
+            .sign_in_password("change@example.com", "first password")
+            .await;
         assert_eq!(old.unwrap_err().code, "password_wrong");
         let new = accounts
             .sign_in_password("change@example.com", "second password")
@@ -887,7 +947,11 @@ async fn set_password_changes_it_and_gives_one_to_an_account_made_by_a_provider(
             .unwrap();
         assert_eq!(new.id, made.id);
         assert_eq!(
-            accounts.set_password(&made.id, "short").await.unwrap_err().code,
+            accounts
+                .set_password(&made.id, "short")
+                .await
+                .unwrap_err()
+                .code,
             "password_short"
         );
         // An account made by Google, with its verified address: that address signs in.
@@ -900,7 +964,10 @@ async fn set_password_changes_it_and_gives_one_to_an_account_made_by_a_provider(
             })
             .await
             .unwrap();
-        accounts.set_password(&google.id, "google's own").await.unwrap();
+        accounts
+            .set_password(&google.id, "google's own")
+            .await
+            .unwrap();
         let signed_in = accounts
             .sign_in_password("g@example.com", "google's own")
             .await

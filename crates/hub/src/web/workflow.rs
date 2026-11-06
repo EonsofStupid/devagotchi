@@ -65,12 +65,20 @@ fn secure(state: &AppState) -> bool {
 
 /// The line this browser was handed: `<workflow id>.<step>.<code>`.
 fn code_cookie(state: &AppState) -> &'static str {
-    if secure(state) { "__Host-dg_wfc" } else { "dg_wfc" }
+    if secure(state) {
+        "__Host-dg_wfc"
+    } else {
+        "dg_wfc"
+    }
 }
 
 /// This browser's own secret: what marks it as one that did a step through a link.
 fn browser_cookie(state: &AppState) -> &'static str {
-    if secure(state) { "__Host-dg_wfb" } else { "dg_wfb" }
+    if secure(state) {
+        "__Host-dg_wfb"
+    } else {
+        "dg_wfb"
+    }
 }
 
 /// A `Set-Cookie` value as the hub's sign-in sets them; `max_age` 0 deletes it.
@@ -127,7 +135,11 @@ fn standing(row: &WorkflowRow, ttl: u64, now: u64) -> Option<Standing> {
 
 /// The workflow a link names and its account, while the link shows anything; else the
 /// answer for a link that does not work.
-async fn found(state: &AppState, token: &str, now: u64) -> Result<(WorkflowRow, Subject, Standing), Response> {
+async fn found(
+    state: &AppState,
+    token: &str,
+    now: u64,
+) -> Result<(WorkflowRow, Subject, Standing), Response> {
     let Some(workflows) = &state.hub.workflows else {
         return Err(dead());
     };
@@ -186,18 +198,31 @@ fn browser_secret(state: &AppState, headers: &HeaderMap) -> (String, String) {
     let secret = cookie_value(headers, browser_cookie(state))
         .filter(|secret| browser_hash(secret).is_some())
         .unwrap_or_else(|| new_browser_secret(crate::link::random::<32>()));
-    let set = cookie(state, browser_cookie(state), &secret, ttl(state).saturating_mul(2));
+    let set = cookie(
+        state,
+        browser_cookie(state),
+        &secret,
+        ttl(state).saturating_mul(2),
+    );
     (secret, set)
 }
 
 /// `GET /go/<token>`: the workflow and its steps. Never a code but this browser's own.
-pub async fn page(State(state): State<AppState>, headers: HeaderMap, Path(token): Path<String>) -> Response {
+pub async fn page(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+) -> Response {
     let now = now_secs();
     let (row, subject, standing) = match found(&state, &token, now).await {
         Ok(found) => found,
         Err(page) => return page,
     };
-    let status = match state.hub.look_at_workflow(&subject, row.clone(), None, now).await {
+    let status = match state
+        .hub
+        .look_at_workflow(&subject, row.clone(), None, now)
+        .await
+    {
         Ok(status) => status,
         Err(error) => {
             eprintln!("devagotchi-hub: account store: {}", error.message);
@@ -219,7 +244,12 @@ pub async fn page(State(state): State<AppState>, headers: HeaderMap, Path(token)
         live: standing == Standing::Live && status.state == "open",
         now,
         session_account: match state.passkeys.as_ref() {
-            Some(hub) => hub.who(&headers).await.ok().flatten().map(|subject| subject.id),
+            Some(hub) => hub
+                .who(&headers)
+                .await
+                .ok()
+                .flatten()
+                .map(|subject| subject.id),
             None => None,
         },
     };
@@ -227,11 +257,20 @@ pub async fn page(State(state): State<AppState>, headers: HeaderMap, Path(token)
     // A machine's workflow opened on a phone: the link is for a computer, so that comes
     // first, to copy or scan.
     let machine = row.definition.steps.iter().any(|step| step.kind == MACHINE);
-    let phone = machine && headers
-        .get(header::USER_AGENT)
-        .and_then(|agent| agent.to_str().ok())
-        .is_some_and(|agent| ["Mobi", "Android", "iPhone"].iter().any(|word| agent.contains(word)));
-    let body = if phone { format!("{}{body}", view.on_a_phone()) } else { body };
+    let phone = machine
+        && headers
+            .get(header::USER_AGENT)
+            .and_then(|agent| agent.to_str().ok())
+            .is_some_and(|agent| {
+                ["Mobi", "Android", "iPhone"]
+                    .iter()
+                    .any(|word| agent.contains(word))
+            });
+    let body = if phone {
+        format!("{}{body}", view.on_a_phone())
+    } else {
+        body
+    };
     pages::workflow(StatusCode::OK, &title, &body, passkey, push)
 }
 
@@ -285,15 +324,29 @@ impl View<'_> {
         let (site, copy, ctx) = (self.site, &self.site.messages.workflow, Ctx::new(self.site));
         let (mut passkey, mut push) = (false, false);
         let keep = self.keep_section(&mut passkey);
-        let has_keep_step = self.row.definition.steps.iter().any(|step| step.kind == SECURE_ACCOUNT);
+        let has_keep_step = self
+            .row
+            .definition
+            .steps
+            .iter()
+            .any(|step| step.kind == SECURE_ACCOUNT);
         let mut items = String::new();
-        for (index, (step, seen)) in self.row.definition.steps.iter().zip(&self.status.steps).enumerate() {
+        for (index, (step, seen)) in self
+            .row
+            .definition
+            .steps
+            .iter()
+            .zip(&self.status.steps)
+            .enumerate()
+        {
             let mut body = format!("<p>{}</p>", self.words().inline(&step.text));
             if seen.state != "done" && seen.why.is_none() {
                 match step.kind.as_str() {
                     MACHINE if self.live => body.push_str(&self.machine_step(index, seen, shown)),
                     PHONE if self.live => {
-                        if let Some(key) = self.state.hub.push.as_ref().map(|p| p.public_key.clone()) {
+                        if let Some(key) =
+                            self.state.hub.push.as_ref().map(|p| p.public_key.clone())
+                        {
                             push = true;
                             body.push_str(&format!(
                                 "<p><button class=\"button primary\" id=\"notify\" type=\"button\" data-key=\"{}\" \
@@ -307,7 +360,9 @@ data-subscribe=\"{}/phone\" data-auto=\"off\">{}</button></p>\
                             ));
                         }
                     }
-                    AI_CLIENT if self.live => body.push_str(&self.client_step(index, step.client.as_deref())),
+                    AI_CLIENT if self.live => {
+                        body.push_str(&self.client_step(index, step.client.as_deref()))
+                    }
                     SECURE_ACCOUNT => body.push_str(&keep),
                     _ => {}
                 }
@@ -333,7 +388,11 @@ data-subscribe=\"{}/phone\" data-auto=\"off\">{}</button></p>\
         }
         let finished = format!(
             "<p class=\"note finished\" id=\"finished\" role=\"status\"{}>{}</p>",
-            if self.status.state == "completed" { "" } else { " hidden" },
+            if self.status.state == "completed" {
+                ""
+            } else {
+                " hidden"
+            },
             ctx.inline(&copy.finished)
         );
         let access = self
@@ -345,7 +404,10 @@ data-subscribe=\"{}/phone\" data-auto=\"off\">{}</button></p>\
                 format!(
                     "<p class=\"note\" id=\"access\" role=\"status\">{}</p>",
                     Ctx::new(site)
-                        .with("since", access.waiting_since.map(pages::utc).unwrap_or_default())
+                        .with(
+                            "since",
+                            access.waiting_since.map(pages::utc).unwrap_or_default()
+                        )
                         .inline(&site.messages.access.account_waiting)
                 )
             })
@@ -421,7 +483,11 @@ data-return-to=\"{}\" disabled>{}</button></p><p class=\"meta\" id=\"passkey-sta
         format!(
             "<section class=\"keep\" id=\"keep\" aria-labelledby=\"keep-title\"{}><h2 id=\"keep-title\">{}</h2>\
 <p>{}</p>{ways}</section>",
-            if succeeded(self.status) { "" } else { " hidden" },
+            if succeeded(self.status) {
+                ""
+            } else {
+                " hidden"
+            },
             escape(&ctx.plain(&copy.keep_title)),
             ctx.inline(&copy.keep_text),
         )
@@ -430,7 +496,9 @@ data-return-to=\"{}\" disabled>{}</button></p><p class=\"meta\" id=\"passkey-sta
     /// Copy that may name this hub's MCP address (`{mcp}`) and the name an AI client adds it
     /// under (`{server}`).
     fn words(&self) -> Ctx<'_> {
-        Ctx::new(self.site).with("mcp", mcp_url(self.state)).with("server", server_name(self.site))
+        Ctx::new(self.site)
+            .with("mcp", mcp_url(self.state))
+            .with("server", server_name(self.site))
     }
 
     /// First on the page on a phone: open it on the computer, with the link to copy and its
@@ -438,7 +506,11 @@ data-return-to=\"{}\" disabled>{}</button></p><p class=\"meta\" id=\"passkey-sta
     fn on_a_phone(&self) -> String {
         let copy = &self.site.messages.workflow;
         let ctx = Ctx::new(self.site);
-        let link = format!("{}{}", self.state.hub.config.public_url.trim_end_matches('/'), self.path);
+        let link = format!(
+            "{}{}",
+            self.state.hub.config.public_url.trim_end_matches('/'),
+            self.path
+        );
         format!(
             "<section class=\"note\" id=\"open-on-computer\"><p><strong>{}</strong></p>\
 <div class=\"command\"><pre><code id=\"page-link\">{}</code></pre>\
@@ -452,7 +524,11 @@ data-return-to=\"{}\" disabled>{}</button></p><p class=\"meta\" id=\"passkey-sta
 
     /// The link as a QR code, for a phone's camera: drawn here as inline SVG, nothing fetched.
     fn qr(&self) -> String {
-        let link = format!("{}{}", self.state.hub.config.public_url.trim_end_matches('/'), self.path);
+        let link = format!(
+            "{}{}",
+            self.state.hub.config.public_url.trim_end_matches('/'),
+            self.path
+        );
         let Ok(code) = qrcode::QrCode::new(link.as_bytes()) else {
             return String::new();
         };
@@ -464,9 +540,14 @@ data-return-to=\"{}\" disabled>{}</button></p><p class=\"meta\" id=\"passkey-sta
             .quiet_zone(true)
             .build();
         // The SVG alone, without its XML declaration, labelled for a screen reader.
-        let svg = svg.split_once("<svg").map(|(_, rest)| rest).unwrap_or_default();
+        let svg = svg
+            .split_once("<svg")
+            .map(|(_, rest)| rest)
+            .unwrap_or_default();
         let label = escape(&Ctx::new(self.site).plain(&self.site.messages.workflow.qr));
-        format!("<figure class=\"qr\" id=\"qr\"><svg role=\"img\" aria-label=\"{label}\"{svg}</figure>")
+        format!(
+            "<figure class=\"qr\" id=\"qr\"><svg role=\"img\" aria-label=\"{label}\"{svg}</figure>"
+        )
     }
 
     /// An `ai_client` step that is not done: the client's own steps, the address or command to
@@ -491,7 +572,10 @@ data-return-to=\"{}\" disabled>{}</button></p><p class=\"meta\" id=\"passkey-sta
             ));
         }
         if self.subject.provisional_until.is_none() {
-            out.push_str(&format!("<p class=\"meta\">{}</p>", named().inline(&copy.client_secured)));
+            out.push_str(&format!(
+                "<p class=\"meta\">{}</p>",
+                named().inline(&copy.client_secured)
+            ));
         } else if self.session_account.as_deref() == Some(self.subject.id.as_str()) {
             out.push_str(&format!(
                 "<p class=\"note\" id=\"client-ready-{}\">{}</p>",
@@ -514,14 +598,20 @@ data-return-to=\"{}\" disabled>{}</button></p><p class=\"meta\" id=\"passkey-sta
     /// A machine step that is not done: the line, while this browser holds a live code for
     /// the step's machine; else the form that gets it (the OS to pick, unless the step
     /// names one, and the name).
-    fn machine_step(&self, index: usize, seen: &crate::workflows::StepStatus, shown: Option<&str>) -> String {
+    fn machine_step(
+        &self,
+        index: usize,
+        seen: &crate::workflows::StepStatus,
+        shown: Option<&str>,
+    ) -> String {
         let (copy, ctx) = (&self.site.messages.workflow, Ctx::new(self.site));
         let progress = self.row.progress.step(index);
         let stored = progress.and_then(|p| p.machine.as_deref());
         let live = shown.and_then(|value| {
             let mut parts = value.splitn(3, '.');
             let (id, at, code) = (parts.next()?, parts.next()?, parts.next()?);
-            (id == self.row.id && at == index.to_string() && crate::join::valid_code(code)).then_some(code)
+            (id == self.row.id && at == index.to_string() && crate::join::valid_code(code))
+                .then_some(code)
         });
         if let (Some(code), Some(stored)) = (live, stored)
             && matches!(self.state.hub.links.live_code(code), Ok(Some(device)) if device == stored)
@@ -532,7 +622,10 @@ data-return-to=\"{}\" disabled>{}</button></p><p class=\"meta\" id=\"passkey-sta
                 "<p class=\"meta\">{}</p><div class=\"command\"><pre><code id=\"command-{n}\">{}</code></pre>\
 <button type=\"button\" class=\"copy\" data-copy=\"command-{n}\" hidden>{}</button></div>\
 <p class=\"meta\">{}</p>{}",
-                copy.os_hint.get(os).map(|hint| ctx.inline(hint)).unwrap_or_default(),
+                copy.os_hint
+                    .get(os)
+                    .map(|hint| ctx.inline(hint))
+                    .unwrap_or_default(),
                 escape(&line),
                 escape(&ctx.plain(&copy.copy)),
                 ctx.inline(&copy.command_note),
@@ -550,12 +643,20 @@ data-return-to=\"{}\" disabled>{}</button></p><p class=\"meta\" id=\"passkey-sta
         self.command_form(index, seen, false)
     }
 
-    fn command_form(&self, index: usize, seen: &crate::workflows::StepStatus, again: bool) -> String {
+    fn command_form(
+        &self,
+        index: usize,
+        seen: &crate::workflows::StepStatus,
+        again: bool,
+    ) -> String {
         let (copy, ctx) = (&self.site.messages.workflow, Ctx::new(self.site));
         let fixed = self.row.definition.steps[index].os.clone();
         let picked = seen.os.clone();
         let choice = match &fixed {
-            Some(os) => format!("<input type=\"hidden\" name=\"os\" value=\"{}\">", escape(os)),
+            Some(os) => format!(
+                "<input type=\"hidden\" name=\"os\" value=\"{}\">",
+                escape(os)
+            ),
             None => {
                 let offered = self.state.hub.machine_oses();
                 let first = picked
@@ -580,7 +681,10 @@ data-return-to=\"{}\" disabled>{}</button></p><p class=\"meta\" id=\"passkey-sta
             }
         };
         let os = fixed.or(picked).unwrap_or_else(|| "linux".into());
-        let name = self.state.hub.machine_name_for(self.subject, self.row, index, &os);
+        let name = self
+            .state
+            .hub
+            .machine_name_for(self.subject, self.row, index, &os);
         format!(
             "<form method=\"post\" action=\"{path}/command\" class=\"get-command\">\
 <input type=\"hidden\" name=\"step\" value=\"{index}\">{choice}\
@@ -607,13 +711,26 @@ fn json(status: StatusCode, body: serde_json::Value) -> Response {
 
 /// `GET /go/<token>/status`: what the page's script moves. The same view as the page: the
 /// steps' states and facts, and whether this browser may keep the account now.
-pub async fn status(State(state): State<AppState>, headers: HeaderMap, Path(token): Path<String>) -> Response {
+pub async fn status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(token): Path<String>,
+) -> Response {
     let now = now_secs();
     let (row, subject, _) = match found(&state, &token, now).await {
         Ok(found) => found,
-        Err(_) => return json(StatusCode::NOT_FOUND, serde_json::json!({ "state": "gone" })),
+        Err(_) => {
+            return json(
+                StatusCode::NOT_FOUND,
+                serde_json::json!({ "state": "gone" }),
+            );
+        }
     };
-    match state.hub.look_at_workflow(&subject, row.clone(), None, now).await {
+    match state
+        .hub
+        .look_at_workflow(&subject, row.clone(), None, now)
+        .await
+    {
         Ok(status) => {
             let site = pages::site();
             let keep = subject.provisional_until.is_some()
@@ -632,7 +749,10 @@ pub async fn status(State(state): State<AppState>, headers: HeaderMap, Path(toke
                 }),
             )
         }
-        Err(_) => json(StatusCode::SERVICE_UNAVAILABLE, serde_json::json!({ "state": "unavailable" })),
+        Err(_) => json(
+            StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({ "state": "unavailable" }),
+        ),
     }
 }
 
@@ -650,7 +770,10 @@ fn refusal(site: &Site, status: StatusCode, title: &str, text: &str, path: &str)
         status,
         title,
         text,
-        Some((path, &Ctx::new(site).plain(&site.messages.workflow.check_again))),
+        Some((
+            path,
+            &Ctx::new(site).plain(&site.messages.workflow.check_again),
+        )),
     )
 }
 
@@ -688,7 +811,12 @@ pub async fn command(
     let site = pages::site();
     let path = link_path(&token);
     let title = Ctx::new(&site).plain(&row.definition.title);
-    let Some(step) = row.definition.steps.get(form.step).filter(|step| step.kind == MACHINE) else {
+    let Some(step) = row
+        .definition
+        .steps
+        .get(form.step)
+        .filter(|step| step.kind == MACHINE)
+    else {
         return see_other(&path, &[]);
     };
     let os = match (&step.os, form.os.as_deref()) {
@@ -718,7 +846,16 @@ pub async fn command(
     let browser = browser_hash(&secret).unwrap_or_default();
     if let Err(error) = workflows
         .accounts()
-        .note_machine(&row.tenant, &row.id, form.step, &os, &stored, &name, &browser, now)
+        .note_machine(
+            &row.tenant,
+            &row.id,
+            form.step,
+            &os,
+            &stored,
+            &name,
+            &browser,
+            now,
+        )
         .await
     {
         eprintln!("devagotchi-hub: account store: {}", error.message);
@@ -765,7 +902,12 @@ pub async fn phone(
     if let Some(workflows) = &state.hub.workflows
         && let Err(error) = workflows
             .accounts()
-            .note_browser(&row.tenant, &row.id, &browser_hash(&secret).unwrap_or_default(), now)
+            .note_browser(
+                &row.tenant,
+                &row.id,
+                &browser_hash(&secret).unwrap_or_default(),
+                now,
+            )
             .await
     {
         eprintln!("devagotchi-hub: account store: {}", error.message);
@@ -803,7 +945,12 @@ pub async fn client(
         Err(page) => return page,
     };
     let path = link_path(&token);
-    let Some(step) = row.definition.steps.get(form.step).filter(|step| step.kind == AI_CLIENT) else {
+    let Some(step) = row
+        .definition
+        .steps
+        .get(form.step)
+        .filter(|step| step.kind == AI_CLIENT)
+    else {
         return see_other(&path, &[]);
     };
     let (Some(workflows), Some(hub)) = (&state.hub.workflows, &state.passkeys) else {
@@ -817,15 +964,27 @@ pub async fn client(
     let client = step.client.clone().unwrap_or_default();
     match workflows
         .accounts()
-        .client_session(&row.tenant, &row.id, &browser, &client, crate::link::random::<32>(), now)
+        .client_session(
+            &row.tenant,
+            &row.id,
+            &browser,
+            &client,
+            crate::link::random::<32>(),
+            now,
+        )
         .await
     {
         Ok(session) => see_other(
             &format!("{path}#step-{}", form.step + 1),
-            &[hub.cookie(hub.session_cookie(), &session, SESSION_MAX_SECS), keep_browser],
+            &[
+                hub.cookie(hub.session_cookie(), &session, SESSION_MAX_SECS),
+                keep_browser,
+            ],
         ),
         Err(error) => match error.code.as_str() {
-            "secured" | "expired" | "unknown_workflow" | "account_disabled" => see_other(&path, &[]),
+            "secured" | "expired" | "unknown_workflow" | "account_disabled" => {
+                see_other(&path, &[])
+            }
             _ => {
                 eprintln!("devagotchi-hub: account store: {}", error.message);
                 unavailable()
@@ -863,24 +1022,35 @@ pub async fn keep(
         return dead();
     };
     let names = hub.provider_names();
-    let provider = names.iter().find(|(name, _)| *name == form.how).map(|(name, _)| name.clone());
+    let provider = names
+        .iter()
+        .find(|(name, _)| *name == form.how)
+        .map(|(name, _)| name.clone());
     if provider.is_none() && (form.how != "passkey" || !names.is_empty()) {
         return see_other(&path, &[]);
     }
-    let Some(browser) = cookie_value(&headers, browser_cookie(&state)).and_then(|secret| browser_hash(&secret)) else {
+    let Some(browser) =
+        cookie_value(&headers, browser_cookie(&state)).and_then(|secret| browser_hash(&secret))
+    else {
         return see_other(&path, &[]);
     };
     let session = match workflows
         .accounts()
-        .keep_session(&row.tenant, &row.id, &browser, workflows.link_ttl(), crate::link::random::<32>(), now)
+        .keep_session(
+            &row.tenant,
+            &row.id,
+            &browser,
+            workflows.link_ttl(),
+            crate::link::random::<32>(),
+            now,
+        )
         .await
     {
         Ok(session) => session,
         Err(error) => {
             return match error.code.as_str() {
-                "not_this_browser" | "too_soon" | "secured" | "unknown_workflow" | "account_disabled" => {
-                    see_other(&path, &[])
-                }
+                "not_this_browser" | "too_soon" | "secured" | "unknown_workflow"
+                | "account_disabled" => see_other(&path, &[]),
                 _ => {
                     eprintln!("devagotchi-hub: account store: {}", error.message);
                     unavailable()
@@ -891,7 +1061,10 @@ pub async fn keep(
     let signed_in = hub.cookie(hub.session_cookie(), &session, SESSION_MAX_SECS);
     match provider {
         Some(name) => see_other(
-            &format!("/auth/provider/{name}?return_to={}&link=1", super::encode(&path)),
+            &format!(
+                "/auth/provider/{name}?return_to={}&link=1",
+                super::encode(&path)
+            ),
             &[signed_in],
         ),
         None => {
@@ -915,6 +1088,9 @@ pub async fn script() -> Response {
         HeaderValue::from_static("text/javascript; charset=utf-8"),
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
     response
 }

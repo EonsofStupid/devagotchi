@@ -12,17 +12,17 @@
 
 pub mod access;
 pub mod claim;
+pub mod clients;
 pub mod email;
 pub mod identities;
 pub mod oauth;
+pub mod offers;
 pub mod operator;
 pub mod passkey;
+mod passwords;
 pub mod sessions;
 pub mod tenants;
 pub mod workflows;
-pub mod clients;
-pub mod offers;
-mod passwords;
 
 use aws_lc_rs::hmac;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -239,23 +239,34 @@ macro_rules! passkey_columns {
     };
 }
 
-async fn account_in(connection: &mut AnyConnection, id: &str) -> Result<Option<Account>, sqlx::Error> {
-    sqlx::query(concat!("SELECT ", account_columns!(), " FROM auth_accounts WHERE id = $1"))
-        .bind(id)
-        .fetch_optional(&mut *connection)
-        .await?
-        .as_ref()
-        .map(account_row)
-        .transpose()
+async fn account_in(
+    connection: &mut AnyConnection,
+    id: &str,
+) -> Result<Option<Account>, sqlx::Error> {
+    sqlx::query(concat!(
+        "SELECT ",
+        account_columns!(),
+        " FROM auth_accounts WHERE id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(&mut *connection)
+    .await?
+    .as_ref()
+    .map(account_row)
+    .transpose()
 }
 
 async fn owner_in(connection: &mut AnyConnection) -> Result<Option<Account>, sqlx::Error> {
-    sqlx::query(concat!("SELECT ", account_columns!(), " FROM auth_accounts WHERE owner = 1"))
-        .fetch_optional(&mut *connection)
-        .await?
-        .as_ref()
-        .map(account_row)
-        .transpose()
+    sqlx::query(concat!(
+        "SELECT ",
+        account_columns!(),
+        " FROM auth_accounts WHERE owner = 1"
+    ))
+    .fetch_optional(&mut *connection)
+    .await?
+    .as_ref()
+    .map(account_row)
+    .transpose()
 }
 
 impl Accounts {
@@ -280,18 +291,18 @@ impl Accounts {
         let home = tenants::new_tenant_id(crate::link::random::<16>());
         let now = now_secs();
         let key = transaction!(&store, |connection| {
-                sqlx::query(
-                    "INSERT INTO hub_secrets (name, value) VALUES ('challenge_key', $1)
+            sqlx::query(
+                "INSERT INTO hub_secrets (name, value) VALUES ('challenge_key', $1)
                      ON CONFLICT (name) DO NOTHING",
-                )
-                .bind(&fresh)
-                .execute(&mut *connection)
-                .await?;
-                // Every account belongs to a tenant: the hub's first one is made now if
-                // missing (migration 0007 put the accounts made before tenants in it).
-                tenants::settle_in(&store, connection, &home, now).await?;
-                Ok(stored_key(connection).await?)
-            })?;
+            )
+            .bind(&fresh)
+            .execute(&mut *connection)
+            .await?;
+            // Every account belongs to a tenant: the hub's first one is made now if
+            // missing (migration 0007 put the accounts made before tenants in it).
+            tenants::settle_in(&store, connection, &home, now).await?;
+            Ok(stored_key(connection).await?)
+        })?;
         Ok(Self {
             store,
             tokens: crate::config::TokenConfig::default(),
@@ -362,7 +373,12 @@ impl Accounts {
         message.extend_from_slice(purpose.as_bytes());
         message.push(0);
         message.extend_from_slice(data);
-        hmac::verify(&self.challenge_key.read().expect("challenge key"), &message, tag).is_ok()
+        hmac::verify(
+            &self.challenge_key.read().expect("challenge key"),
+            &message,
+            tag,
+        )
+        .is_ok()
     }
 
     /// The tenancy these accounts were opened with.
@@ -375,11 +391,11 @@ impl Accounts {
         let name = check_name(id, name)?;
         let now = now_secs();
         let tenant = transaction!(&self.store, |connection| {
-                let tenant = tenants::home_in(connection).await?;
-                self.store.scope(connection, &tenant).await?;
-                create_in(&self.store, connection, id, name, owner, &tenant, now).await?;
-                Ok(tenant)
-            })?;
+            let tenant = tenants::home_in(connection).await?;
+            self.store.scope(connection, &tenant).await?;
+            create_in(&self.store, connection, id, name, owner, &tenant, now).await?;
+            Ok(tenant)
+        })?;
         Ok(Account {
             id: id.to_string(),
             name: name.to_string(),
@@ -426,7 +442,9 @@ impl Accounts {
     }
 
     pub async fn owner(&self) -> BridgeResult<Option<Account>> {
-        transaction!(&self.store, |connection| { Ok(self.owner_in(connection).await?) })
+        transaction!(&self.store, |connection| {
+            Ok(self.owner_in(connection).await?)
+        })
     }
 
     /// The hub's owner, inside the caller's transaction, which is scoped to the owner's
@@ -487,9 +505,9 @@ impl Accounts {
     ) -> BridgeResult<String> {
         let token = link_token(random);
         transaction!(&self.store, |connection| {
-                self.enter(connection, Lookup::Account(account)).await?;
-                issue_in(connection, purpose, account, &token, now, replaces).await
-            })?;
+            self.enter(connection, Lookup::Account(account)).await?;
+            issue_in(connection, purpose, account, &token, now, replaces).await
+        })?;
         Ok(token)
     }
 
@@ -578,9 +596,17 @@ impl Accounts {
         label: &str,
         session: &str,
     ) -> BridgeResult<()> {
-        self.put_passkey(account, credential, label, None, Some(session), now_secs(), None)
-            .await
-            .map(|_| ())
+        self.put_passkey(
+            account,
+            credential,
+            label,
+            None,
+            Some(session),
+            now_secs(),
+            None,
+        )
+        .await
+        .map(|_| ())
     }
 
     /// Store a passkey and, with `session`, open the session it signs in to, in the same
@@ -607,31 +633,31 @@ impl Accounts {
             return Err(invalid_ceremony());
         }
         transaction!(&self.store, |connection| {
-                let (mac, issued) = self
-                    .check_challenge(
-                        connection,
-                        Ceremony::Register,
-                        Some(account),
-                        &credential.challenge,
-                        now,
-                    )
-                    .await?;
-                spend_challenge(connection, &mac, issued, now).await?;
-                // Taken anywhere on the hub, whichever tenant holds it.
-                let taken = self
-                    .store
-                    .tenant_of(connection, Lookup::Passkey(&credential.id))
-                    .await?
-                    .is_some();
-                self.enter(connection, Lookup::Account(account)).await?;
-                let holder = account_in(connection, account)
-                    .await?
-                    .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
-                if holder.disabled_at.is_some() {
-                    return Err(account_disabled(account).into());
-                }
-                if let Some(session) = signed_in {
-                    let theirs = sqlx::query(
+            let (mac, issued) = self
+                .check_challenge(
+                    connection,
+                    Ceremony::Register,
+                    Some(account),
+                    &credential.challenge,
+                    now,
+                )
+                .await?;
+            spend_challenge(connection, &mac, issued, now).await?;
+            // Taken anywhere on the hub, whichever tenant holds it.
+            let taken = self
+                .store
+                .tenant_of(connection, Lookup::Passkey(&credential.id))
+                .await?
+                .is_some();
+            self.enter(connection, Lookup::Account(account)).await?;
+            let holder = account_in(connection, account)
+                .await?
+                .ok_or_else(|| BridgeError::new("no_account", format!("no account {account}")))?;
+            if holder.disabled_at.is_some() {
+                return Err(account_disabled(account).into());
+            }
+            if let Some(session) = signed_in {
+                let theirs = sqlx::query(
                         "SELECT 1 FROM auth_sessions WHERE hash = $1 AND account = $2 AND expires_at > $3",
                     )
                     .bind(hash(session))
@@ -640,62 +666,62 @@ impl Accounts {
                     .fetch_optional(&mut *connection)
                     .await?
                     .is_some();
-                    if !theirs {
-                        return Err(BridgeError::new(
-                            "invalid_link",
-                            "this browser is no longer signed in to that account",
-                        )
-                        .into());
-                    }
-                }
-                if let Some((purpose, token)) = link {
-                    let live = live_link(connection, purpose, token, now).await?;
-                    if live.account != account {
-                        return Err(BridgeError::new(
-                            "invalid_link",
-                            "this link is for another account",
-                        )
-                        .into());
-                    }
-                    // A replacing link takes the account back: every other passkey goes, and
-                    // with them every session they opened.
-                    if live.replaces {
-                        sqlx::query("DELETE FROM auth_passkeys WHERE account = $1")
-                            .bind(account)
-                            .execute(&mut *connection)
-                            .await?;
-                    }
-                    // Spent only if still unspent: two uses racing cannot both count.
-                    let spent = sqlx::query(
-                        "UPDATE auth_links SET used_at = $1 WHERE hash = $2 AND used_at IS NULL",
+                if !theirs {
+                    return Err(BridgeError::new(
+                        "invalid_link",
+                        "this browser is no longer signed in to that account",
                     )
-                    .bind(secs(now))
-                    .bind(hash(token))
-                    .execute(&mut *connection)
-                    .await?
-                    .rows_affected();
-                    if spent != 1 {
-                        return Err(BridgeError::new(
-                            "invalid_link",
-                            "this link is used, expired or unknown",
-                        )
-                        .into());
-                    }
-                    // A link spent ends the account's other sessions: whoever had them, the
-                    // passkey registered now is how the account signs in from here.
-                    sqlx::query("DELETE FROM auth_sessions WHERE account = $1")
+                    .into());
+                }
+            }
+            if let Some((purpose, token)) = link {
+                let live = live_link(connection, purpose, token, now).await?;
+                if live.account != account {
+                    return Err(BridgeError::new(
+                        "invalid_link",
+                        "this link is for another account",
+                    )
+                    .into());
+                }
+                // A replacing link takes the account back: every other passkey goes, and
+                // with them every session they opened.
+                if live.replaces {
+                    sqlx::query("DELETE FROM auth_passkeys WHERE account = $1")
                         .bind(account)
                         .execute(&mut *connection)
                         .await?;
                 }
-                if taken {
+                // Spent only if still unspent: two uses racing cannot both count.
+                let spent = sqlx::query(
+                    "UPDATE auth_links SET used_at = $1 WHERE hash = $2 AND used_at IS NULL",
+                )
+                .bind(secs(now))
+                .bind(hash(token))
+                .execute(&mut *connection)
+                .await?
+                .rows_affected();
+                if spent != 1 {
                     return Err(BridgeError::new(
-                        "passkey_exists",
-                        "this passkey is already registered",
+                        "invalid_link",
+                        "this link is used, expired or unknown",
                     )
                     .into());
                 }
-                sqlx::query(
+                // A link spent ends the account's other sessions: whoever had them, the
+                // passkey registered now is how the account signs in from here.
+                sqlx::query("DELETE FROM auth_sessions WHERE account = $1")
+                    .bind(account)
+                    .execute(&mut *connection)
+                    .await?;
+            }
+            if taken {
+                return Err(BridgeError::new(
+                    "passkey_exists",
+                    "this passkey is already registered",
+                )
+                .into());
+            }
+            sqlx::query(
                     "INSERT INTO auth_passkeys (id, account, label, public_key, alg, sign_count, backup_eligible, created_at, tenant_id)
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
                 )
@@ -710,30 +736,30 @@ impl Accounts {
                 .bind(&holder.tenant)
                 .execute(&mut *connection)
                 .await?;
-                // An account made on first connect is secured by its first passkey.
-                tenants::secure_in(connection, &holder, "passkey", self.counting, now).await?;
-                // The owner can sign in now: the hub is claimed, and no claim code it
-                // printed works any more (`claim.rs`).
-                if holder.owner {
-                    sqlx::query("DELETE FROM auth_claim_codes")
-                        .execute(&mut *connection)
-                        .await?;
-                }
-                match session {
-                    Some(random) => Ok(Some(
-                        sessions::insert_session(
-                            connection,
-                            &holder.tenant,
-                            account,
-                            Some(&credential.id),
-                            random,
-                            now,
-                        )
-                        .await?,
-                    )),
-                    None => Ok(None),
-                }
-            })
+            // An account made on first connect is secured by its first passkey.
+            tenants::secure_in(connection, &holder, "passkey", self.counting, now).await?;
+            // The owner can sign in now: the hub is claimed, and no claim code it
+            // printed works any more (`claim.rs`).
+            if holder.owner {
+                sqlx::query("DELETE FROM auth_claim_codes")
+                    .execute(&mut *connection)
+                    .await?;
+            }
+            match session {
+                Some(random) => Ok(Some(
+                    sessions::insert_session(
+                        connection,
+                        &holder.tenant,
+                        account,
+                        Some(&credential.id),
+                        random,
+                        now,
+                    )
+                    .await?,
+                )),
+                None => Ok(None),
+            }
+        })
     }
 
     /// A challenge for one ceremony: to register a passkey on `account`, or to sign in
@@ -799,21 +825,21 @@ impl Accounts {
     async fn clock_set_back(&self, now: u64) -> BridgeResult<bool> {
         let key = crate::link::random::<32>();
         let replaced = transaction!(&self.store, |connection| {
-                if now.saturating_add(CHALLENGE_TTL_SECS) > spent_horizon(connection).await? {
-                    return Ok(false);
-                }
-                sqlx::query("UPDATE hub_secrets SET value = $1 WHERE name = 'challenge_key'")
-                    .bind(key.to_vec())
-                    .execute(&mut *connection)
-                    .await?;
-                sqlx::query("DELETE FROM hub_secrets WHERE name = 'spent_horizon'")
-                    .execute(&mut *connection)
-                    .await?;
-                sqlx::query("DELETE FROM hub_spent_challenges")
-                    .execute(&mut *connection)
-                    .await?;
-                Ok(true)
-            })?;
+            if now.saturating_add(CHALLENGE_TTL_SECS) > spent_horizon(connection).await? {
+                return Ok(false);
+            }
+            sqlx::query("UPDATE hub_secrets SET value = $1 WHERE name = 'challenge_key'")
+                .bind(key.to_vec())
+                .execute(&mut *connection)
+                .await?;
+            sqlx::query("DELETE FROM hub_secrets WHERE name = 'spent_horizon'")
+                .execute(&mut *connection)
+                .await?;
+            sqlx::query("DELETE FROM hub_spent_challenges")
+                .execute(&mut *connection)
+                .await?;
+            Ok(true)
+        })?;
         if replaced {
             *self.challenge_key.write().expect("challenge key") =
                 hmac::Key::new(hmac::HMAC_SHA256, &key);
@@ -827,11 +853,15 @@ impl Accounts {
     pub async fn passkey(&self, id: &[u8]) -> BridgeResult<Option<Passkey>> {
         transaction!(&self.store, |connection| {
             self.enter(connection, Lookup::Passkey(id)).await?;
-            Ok(sqlx::query(concat!("SELECT ", passkey_columns!(), " FROM auth_passkeys WHERE id = $1"))
-                .bind(id)
-                .fetch_optional(&mut *connection)
-                .await
-                .and_then(|row| row.as_ref().map(passkey_row).transpose())?)
+            Ok(sqlx::query(concat!(
+                "SELECT ",
+                passkey_columns!(),
+                " FROM auth_passkeys WHERE id = $1"
+            ))
+            .bind(id)
+            .fetch_optional(&mut *connection)
+            .await
+            .and_then(|row| row.as_ref().map(passkey_row).transpose())?)
         })
     }
 
@@ -864,71 +894,74 @@ impl Accounts {
             return Err(invalid_ceremony());
         }
         transaction!(&self.store, |connection| {
-                let (mac, issued) = self
-                    .check_challenge(connection, Ceremony::SignIn, None, &asserted.challenge, now)
-                    .await?;
-                spend_challenge(connection, &mac, issued, now).await?;
-                self.enter(connection, Lookup::Passkey(&asserted.id)).await?;
-                let not_here =
-                    || BridgeError::new("invalid_passkey", "this passkey is not registered here");
-                let passkey = sqlx::query(concat!(
-                    "SELECT ",
-                    passkey_columns!(),
-                    " FROM auth_passkeys WHERE id = $1"
-                ))
-                .bind(&asserted.id)
-                .fetch_optional(&mut *connection)
+            let (mac, issued) = self
+                .check_challenge(connection, Ceremony::SignIn, None, &asserted.challenge, now)
+                .await?;
+            spend_challenge(connection, &mac, issued, now).await?;
+            self.enter(connection, Lookup::Passkey(&asserted.id))
+                .await?;
+            let not_here =
+                || BridgeError::new("invalid_passkey", "this passkey is not registered here");
+            let passkey = sqlx::query(concat!(
+                "SELECT ",
+                passkey_columns!(),
+                " FROM auth_passkeys WHERE id = $1"
+            ))
+            .bind(&asserted.id)
+            .fetch_optional(&mut *connection)
+            .await?
+            .as_ref()
+            .map(passkey_row)
+            .transpose()?
+            .ok_or_else(not_here)?;
+            // The key, algorithm and backup eligibility the signature was checked with
+            // must be the ones stored for this passkey.
+            if passkey.public_key != asserted.public_key
+                || passkey.alg != asserted.alg
+                || passkey.backup_eligible != asserted.backup_eligible
+            {
+                return Err(not_here().into());
+            }
+            let account = account_in(connection, &passkey.account)
                 .await?
-                .as_ref()
-                .map(passkey_row)
-                .transpose()?
                 .ok_or_else(not_here)?;
-                // The key, algorithm and backup eligibility the signature was checked with
-                // must be the ones stored for this passkey.
-                if passkey.public_key != asserted.public_key
-                    || passkey.alg != asserted.alg
-                    || passkey.backup_eligible != asserted.backup_eligible
-                {
-                    return Err(not_here().into());
-                }
-                let account = account_in(connection, &passkey.account)
-                    .await?
-                    .ok_or_else(not_here)?;
-                if account.disabled_at.is_some() {
-                    return Err(account_disabled(&account.id).into());
-                }
-                if asserted.user_handle != account.id.as_bytes() {
-                    return Err(BridgeError::new(
-                        "user_handle",
-                        "the passkey answered for another account",
-                    )
-                    .into());
-                }
-                // Authenticators that keep no counter (most synced passkeys) report 0 every
-                // time.
-                let count = asserted.sign_count;
-                if (count != 0 || passkey.sign_count != 0) && count <= passkey.sign_count {
-                    // A copy of the key is about: whoever holds the sessions this passkey
-                    // opened may be the copy's holder, so they end. The challenge stays
-                    // spent, so the same answer cannot do it again. This is committed, and
-                    // the refusal returned after.
-                    sqlx::query("DELETE FROM auth_sessions WHERE passkey = $1")
-                        .bind(&asserted.id)
-                        .execute(&mut *connection)
-                        .await?;
-                    return Ok(Err(BridgeError::new(
-                        "signature_counter",
-                        "this passkey's counter went backwards: it may have been copied",
-                    )));
-                }
-                sqlx::query("UPDATE auth_passkeys SET sign_count = $1, last_used_at = $2 WHERE id = $3")
-                    .bind(i64::from(count))
-                    .bind(secs(now))
+            if account.disabled_at.is_some() {
+                return Err(account_disabled(&account.id).into());
+            }
+            if asserted.user_handle != account.id.as_bytes() {
+                return Err(BridgeError::new(
+                    "user_handle",
+                    "the passkey answered for another account",
+                )
+                .into());
+            }
+            // Authenticators that keep no counter (most synced passkeys) report 0 every
+            // time.
+            let count = asserted.sign_count;
+            if (count != 0 || passkey.sign_count != 0) && count <= passkey.sign_count {
+                // A copy of the key is about: whoever holds the sessions this passkey
+                // opened may be the copy's holder, so they end. The challenge stays
+                // spent, so the same answer cannot do it again. This is committed, and
+                // the refusal returned after.
+                sqlx::query("DELETE FROM auth_sessions WHERE passkey = $1")
                     .bind(&asserted.id)
                     .execute(&mut *connection)
                     .await?;
-                Ok(Ok(account))
-            })?
+                return Ok(Err(BridgeError::new(
+                    "signature_counter",
+                    "this passkey's counter went backwards: it may have been copied",
+                )));
+            }
+            sqlx::query(
+                "UPDATE auth_passkeys SET sign_count = $1, last_used_at = $2 WHERE id = $3",
+            )
+            .bind(i64::from(count))
+            .bind(secs(now))
+            .bind(&asserted.id)
+            .execute(&mut *connection)
+            .await?;
+            Ok(Ok(account))
+        })?
     }
 
     /// Remove one of `account`'s passkeys; false when it has no such passkey. Its last one
@@ -936,35 +969,35 @@ impl Accounts {
     #[allow(dead_code)] // the account page (32a-3)
     pub async fn remove_passkey(&self, account: &str, id: &[u8]) -> BridgeResult<bool> {
         transaction!(&self.store, |connection| {
-                self.enter(connection, Lookup::Account(account)).await?;
-                let held: i64 = sqlx::query("SELECT COUNT(*) FROM auth_passkeys WHERE account = $1")
-                    .bind(account)
-                    .fetch_one(&mut *connection)
-                    .await?
-                    .try_get(0)?;
-                let theirs = sqlx::query("SELECT 1 FROM auth_passkeys WHERE id = $1 AND account = $2")
-                    .bind(id)
-                    .bind(account)
-                    .fetch_optional(&mut *connection)
-                    .await?
-                    .is_some();
-                if !theirs {
-                    return Ok(false);
-                }
-                if held <= 1 {
-                    return Err(BridgeError::new(
-                        "last_passkey",
-                        "this is the account's only passkey; add another before removing it",
-                    )
-                    .into());
-                }
-                sqlx::query("DELETE FROM auth_passkeys WHERE id = $1 AND account = $2")
-                    .bind(id)
-                    .bind(account)
-                    .execute(&mut *connection)
-                    .await?;
-                Ok(true)
-            })
+            self.enter(connection, Lookup::Account(account)).await?;
+            let held: i64 = sqlx::query("SELECT COUNT(*) FROM auth_passkeys WHERE account = $1")
+                .bind(account)
+                .fetch_one(&mut *connection)
+                .await?
+                .try_get(0)?;
+            let theirs = sqlx::query("SELECT 1 FROM auth_passkeys WHERE id = $1 AND account = $2")
+                .bind(id)
+                .bind(account)
+                .fetch_optional(&mut *connection)
+                .await?
+                .is_some();
+            if !theirs {
+                return Ok(false);
+            }
+            if held <= 1 {
+                return Err(BridgeError::new(
+                    "last_passkey",
+                    "this is the account's only passkey; add another before removing it",
+                )
+                .into());
+            }
+            sqlx::query("DELETE FROM auth_passkeys WHERE id = $1 AND account = $2")
+                .bind(id)
+                .bind(account)
+                .execute(&mut *connection)
+                .await?;
+            Ok(true)
+        })
     }
 
     /// The store, for the modules that keep their tables beside the accounts.
@@ -1007,7 +1040,11 @@ async fn create_in(
     tenant: &str,
     now: u64,
 ) -> Result<(), Failed> {
-    if store.tenant_of(connection, Lookup::Account(id)).await?.is_some() {
+    if store
+        .tenant_of(connection, Lookup::Account(id))
+        .await?
+        .is_some()
+    {
         return Err(BridgeError::new("account_exists", format!("{id} already exists")).into());
     }
     if owner {
@@ -1026,7 +1063,11 @@ async fn create_in(
     .bind(tenant)
     .execute(&mut *connection)
     .await?;
-    let event = if owner { "account.owner_created" } else { "account.created" };
+    let event = if owner {
+        "account.owner_created"
+    } else {
+        "account.created"
+    };
     tenants::record_in(connection, tenant, id, event, "", now).await?;
     Ok(())
 }
@@ -1156,11 +1197,12 @@ async fn stored_key(connection: &mut AnyConnection) -> Result<hmac::Key, Failed>
 /// The latest expiry of the spent challenges cleared so far (0 before any). A value that is
 /// not 8 bytes stops ceremonies rather than switching the protection off.
 async fn spent_horizon(connection: &mut AnyConnection) -> Result<u64, Failed> {
-    let stored: Option<Vec<u8>> = sqlx::query("SELECT value FROM hub_secrets WHERE name = 'spent_horizon'")
-        .fetch_optional(&mut *connection)
-        .await?
-        .map(|row| row.try_get(0))
-        .transpose()?;
+    let stored: Option<Vec<u8>> =
+        sqlx::query("SELECT value FROM hub_secrets WHERE name = 'spent_horizon'")
+            .fetch_optional(&mut *connection)
+            .await?
+            .map(|row| row.try_get(0))
+            .transpose()?;
     match stored {
         None => Ok(0),
         Some(bytes) => bytes.try_into().map(u64::from_be_bytes).map_err(|_| {
@@ -1199,7 +1241,12 @@ async fn live_link(
         return Err(invalid());
     };
     let decode = |row: &AnyRow| -> Result<(String, i64, Option<i64>, i64), sqlx::Error> {
-        Ok((row.try_get(0)?, row.try_get(1)?, row.try_get(2)?, row.try_get(3)?))
+        Ok((
+            row.try_get(0)?,
+            row.try_get(1)?,
+            row.try_get(2)?,
+            row.try_get(3)?,
+        ))
     };
     match decode(&row).map_err(store_error)? {
         (account, expires_at, None, replaces) if secs(now) < expires_at => Ok(LiveLink {

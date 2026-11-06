@@ -47,7 +47,11 @@ mod tests {
         assert!(WorkflowsConfig::default().check().is_ok());
         for (secs, ok) in [(299, false), (300, true), (86_400, true), (86_401, false)] {
             assert_eq!(
-                WorkflowsConfig { link_ttl_secs: secs }.check().is_ok(),
+                WorkflowsConfig {
+                    link_ttl_secs: secs
+                }
+                .check()
+                .is_ok(),
                 ok,
                 "{secs}"
             );

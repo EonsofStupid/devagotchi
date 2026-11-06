@@ -99,7 +99,9 @@ impl HubSignIn {
         let buttons = self.providers.buttons(&self.site(), "/account", true);
         let mut ways = String::new();
         if !buttons.is_empty() {
-            ways.push_str(&format!("<p class=\"ways\">Or add a sign-in you already have: {buttons}</p>"));
+            ways.push_str(&format!(
+                "<p class=\"ways\">Or add a sign-in you already have: {buttons}</p>"
+            ));
         }
         if self.providers.email.is_some() {
             ways.push_str(&super::email::form("/account", true));
@@ -120,7 +122,10 @@ impl HubSignIn {
                 let name = provider.config.name();
                 (
                     name.to_string(),
-                    format!("Continue with {}", site.label(name, &provider.config.label())),
+                    format!(
+                        "Continue with {}",
+                        site.label(name, &provider.config.label())
+                    ),
                 )
             })
             .collect()
@@ -520,7 +525,9 @@ async fn securing(hub: Arc<HubSignIn>, headers: &HeaderMap) -> Response {
         Ok(found) => found,
         Err(page) => return page,
     };
-    let challenge = hub.accounts.challenge(Ceremony::Register, Some(&subject.id));
+    let challenge = hub
+        .accounts
+        .challenge(Ceremony::Register, Some(&subject.id));
     let name = subject.name.clone().unwrap_or_else(|| subject.id.clone());
     hub.with_challenge(
         &challenge,
@@ -695,13 +702,7 @@ pub async fn register(
         let label = format!("Passkey made {}", pages::utc(crate::devices::now_secs()));
         // The passkey, the link spent and the session it signs in to: all or nothing.
         let token = accounts
-            .register_with_link(
-                &account,
-                &credential,
-                &label,
-                LinkPurpose::Owner,
-                &link,
-            )
+            .register_with_link(&account, &credential, &label, LinkPurpose::Owner, &link)
             .await?;
         Ok::<_, devagotchi_contracts::BridgeError>((account, token))
     })

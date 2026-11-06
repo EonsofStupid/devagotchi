@@ -1217,7 +1217,8 @@ impl Board {
                 drop(connection);
                 // Only a write that recorded something wakes anyone: an empty reap does not.
                 if appended.get() {
-                    self.changes.send_modify(|revision| *revision = revision.wrapping_add(1));
+                    self.changes
+                        .send_modify(|revision| *revision = revision.wrapping_add(1));
                     if let Some(activity) = &self.activity {
                         activity.notify_one();
                     }

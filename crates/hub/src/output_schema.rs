@@ -205,9 +205,16 @@ fn bound(keyword: &str, rule: &Value, len: Option<usize>, path: &str, out: &mut 
     let (Some(limit), Some(len)) = (rule.as_u64(), len) else {
         return;
     };
-    let ok = if keyword.starts_with("min") { len as u64 >= limit } else { len as u64 <= limit };
+    let ok = if keyword.starts_with("min") {
+        len as u64 >= limit
+    } else {
+        len as u64 <= limit
+    };
     if !ok {
-        out.push(format!("{} must have {keyword} {limit}, has {len}", at(path)));
+        out.push(format!(
+            "{} must have {keyword} {limit}, has {len}",
+            at(path)
+        ));
     }
 }
 
@@ -269,7 +276,10 @@ mod tests {
             "/note must be string or null",
             "/state must be one of",
         ] {
-            assert!(found.iter().any(|f| f.starts_with(expected)), "{expected} in {found:?}");
+            assert!(
+                found.iter().any(|f| f.starts_with(expected)),
+                "{expected} in {found:?}"
+            );
         }
         assert!(errors(&schema, &json!({ "count": 1, "state": "a" }))[0].contains("'offerings'"));
         // A keyword it does not know fails; it is never skipped.

@@ -585,10 +585,19 @@ async fn on_postgres_the_hubs_role_reads_and_writes_one_tenants_rows_only() {
             .await
             .unwrap();
         // An AI client of its that made a call, and a workflow its AI started.
-        accounts.note_client_call(&account.tenant, "claude", now_secs()).await.unwrap();
+        accounts
+            .note_client_call(&account.tenant, "claude", now_secs())
+            .await
+            .unwrap();
         // Its yes to the site's offers, and their one-tap link.
         accounts
-            .accept_offers(&account.tenant, &account.id, "yes", &["An offering".to_string()], now_secs())
+            .accept_offers(
+                &account.tenant,
+                &account.id,
+                "yes",
+                &["An offering".to_string()],
+                now_secs(),
+            )
             .await
             .unwrap();
         accounts

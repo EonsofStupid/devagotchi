@@ -437,7 +437,13 @@ impl Site {
                 ctx.plain(text);
             }
             let link = &offers.link;
-            for text in [&link.title, &link.text, &link.button, &link.done, &link.gone] {
+            for text in [
+                &link.title,
+                &link.text,
+                &link.button,
+                &link.done,
+                &link.gone,
+            ] {
                 ctx.inline(text);
             }
             errors.extend(

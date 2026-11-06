@@ -21,9 +21,9 @@ pub use analytics::AnalyticsConfig;
 pub use machines::MachinesConfig;
 pub use providers::{EmailConfig, ProviderConfig, ProviderKind};
 pub use shippin::ShippinConfig;
+use tenancy::check_operator;
 pub use tenancy::{OPERATORS_ENV, TENANCY_ENV, TenancyConfig, TenancyMode, is_operator};
 pub use workflows::WorkflowsConfig;
-use tenancy::check_operator;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -314,7 +314,9 @@ impl TokenConfig {
             return Err("auth.tokens.access_secs is 60 to 86400".into());
         }
         if self.refresh_secs < self.access_secs || self.refresh_secs > 366 * 24 * 3600 {
-            return Err("auth.tokens.refresh_secs is at least access_secs and at most a year".into());
+            return Err(
+                "auth.tokens.refresh_secs is at least access_secs and at most a year".into(),
+            );
         }
         if !(10..=600).contains(&self.code_secs) {
             return Err("auth.tokens.code_secs is 10 to 600".into());
@@ -576,9 +578,7 @@ impl HubConfig {
                 "single" => TenancyMode::Single,
                 "multi" => TenancyMode::Multi,
                 other => {
-                    return Err(invalid(format!(
-                        "{TENANCY_ENV}={other:?}: single or multi"
-                    )));
+                    return Err(invalid(format!("{TENANCY_ENV}={other:?}: single or multi")));
                 }
             };
         }
@@ -602,9 +602,8 @@ impl HubConfig {
         }
         if let Some(dir) = &config.site.dir {
             // A site that does not check out stops the start, with what is wrong in it.
-            let site = crate::site::Site::load(Path::new(dir)).map_err(|why| {
-                invalid(format!("site.dir {dir}: {why}"))
-            })?;
+            let site = crate::site::Site::load(Path::new(dir))
+                .map_err(|why| invalid(format!("site.dir {dir}: {why}")))?;
             config.loaded_site = Arc::new(crate::site::SiteCell::new(Arc::new(site)));
         }
         if let Some(owner) = &config.owner {
@@ -646,7 +645,8 @@ impl HubConfig {
             && !matches!(self.auth, AuthConfig::Hub { .. })
         {
             return Err(invalid(
-                "tenancy.mode multi and operators need the hub's own accounts (auth.mode hub)".into(),
+                "tenancy.mode multi and operators need the hub's own accounts (auth.mode hub)"
+                    .into(),
             ));
         }
         if self.tenancy.multi() && self.owner.is_some() {
@@ -1052,13 +1052,17 @@ impl HubConfig {
 
     /// The store the config names, if any (the environment can override it).
     pub fn storage_url(&self) -> Option<&str> {
-        self.storage.as_ref().and_then(|storage| storage.url.as_deref())
+        self.storage
+            .as_ref()
+            .and_then(|storage| storage.url.as_deref())
     }
 
     /// The Postgres schema the config names for the store, if any (the environment can
     /// override it).
     pub fn storage_schema(&self) -> Option<&str> {
-        self.storage.as_ref().and_then(|storage| storage.schema.as_deref())
+        self.storage
+            .as_ref()
+            .and_then(|storage| storage.schema.as_deref())
     }
 
     /// Whether this hub is a hosted service where everyone who connects gets an account

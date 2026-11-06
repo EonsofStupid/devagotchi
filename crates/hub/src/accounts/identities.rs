@@ -194,8 +194,15 @@ impl Accounts {
     ) -> BridgeResult<Account> {
         proven.check()?;
         transaction!(&self.store, |connection| {
-            self.sign_in_identity_in(connection, proven, current, tenant_random, account_random, now)
-                .await
+            self.sign_in_identity_in(
+                connection,
+                proven,
+                current,
+                tenant_random,
+                account_random,
+                now,
+            )
+            .await
         })
     }
 

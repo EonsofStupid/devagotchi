@@ -284,7 +284,13 @@ impl Hub {
         let route = match self.route(&subject, &input.machine) {
             Ok(route) => route,
             Err(Json(error)) => {
-                self.record(&subject, "read_multiple_files", &input.machine, &asked, &error.code)?;
+                self.record(
+                    &subject,
+                    "read_multiple_files",
+                    &input.machine,
+                    &asked,
+                    &error.code,
+                )?;
                 return Err(Json(error));
             }
         };
@@ -305,7 +311,13 @@ impl Hub {
             Ok(_) => "ok",
             Err(error) => error.code.as_str(),
         };
-        self.record(&subject, "read_multiple_files", &input.machine, &asked, code)?;
+        self.record(
+            &subject,
+            "read_multiple_files",
+            &input.machine,
+            &asked,
+            code,
+        )?;
         files.map(Json).map_err(Json)
     }
 
@@ -411,7 +423,13 @@ impl Hub {
         let route = match self.route(&subject, &input.machine) {
             Ok(route) => route,
             Err(Json(error)) => {
-                self.record(&subject, "read_image", &input.machine, &input.path, &error.code)?;
+                self.record(
+                    &subject,
+                    "read_image",
+                    &input.machine,
+                    &input.path,
+                    &error.code,
+                )?;
                 return Err(Json(error));
             }
         };
