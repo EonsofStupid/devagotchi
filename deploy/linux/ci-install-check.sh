@@ -359,8 +359,11 @@ for build in a b; do
     mkdir -p "$WORK/build-$build" && cp target/debug/devagotchi "$WORK/build-$build/"
 done
 cargo build --locked --bin devagotchi
-chmod 0755 "$WORK"
+# The probe runs as root, so what it writes is root's: removed here, before the cleanup.
+updated=0
 sudo python3 tests/machine_update_probe.py --installer linux --a "$WORK/build-a" --b "$WORK/build-b" --work "$WORK/update" \
-    || fail "the machine did not update itself through its hub"
+    && updated=1
+sudo rm -rf "$WORK/update"
+[ $updated = 1 ] || fail "the machine did not update itself through its hub"
 ok "a broken build rolled back to ci-a and said so; ci-b came up by itself"
 echo "HOST INSTALL CHECK PASSED"
