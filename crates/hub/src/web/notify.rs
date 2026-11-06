@@ -17,7 +17,7 @@ use super::{
 };
 use crate::AppState;
 
-fn asset(body: String, content_type: &'static str, cache: &'static str) -> Response {
+pub(super) fn asset(body: String, content_type: &'static str, cache: &'static str) -> Response {
     let mut response = body.into_response();
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(content_type));

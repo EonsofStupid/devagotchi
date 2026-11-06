@@ -904,6 +904,45 @@ pub struct Messages {
     /// The sign-in page of a hosted hub (`web/sign_in.rs`). Plain text.
     #[serde(default)]
     pub sign_in: SignInMessages,
+    /// The phone control app (`web/app/`). Plain text; `{name}` and the like are filled in.
+    pub app: AppCopy,
+}
+
+/// The phone control app's words (`web/app/`), every one of them: the tab bar, the install
+/// banner, the home page's cards and the offline page.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppCopy {
+    pub tab_home: String,
+    pub tab_machines: String,
+    pub tab_boards: String,
+    pub tab_approvals: String,
+    /// The install banner: on iPhone the gesture, on Android the install prompt's button.
+    pub install_iphone: String,
+    pub install_android: String,
+    pub install_button: String,
+    pub home_title: String,
+    pub needs_you: String,
+    pub needs_you_empty: String,
+    /// What each line under Needs you is.
+    pub approval_waiting: String,
+    pub assigned_to_you: String,
+    pub update_failed: String,
+    pub machines_title: String,
+    pub machines_empty: String,
+    pub online: String,
+    pub offline: String,
+    pub revoked: String,
+    pub not_enrolled: String,
+    pub updating: String,
+    /// `{build}`: the build a machine runs.
+    pub build: String,
+    pub boards_title: String,
+    pub boards_empty: String,
+    /// `{n}`: how many tickets are open.
+    pub open_count: String,
+    pub offline_title: String,
+    pub offline_text: String,
 }
 
 /// The sign-in page's words (`web/sign_in.rs`): Google, or an email and a password.
