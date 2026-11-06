@@ -14,10 +14,23 @@ async fn page(hub: &Hosted, path: &str, person: &Person) -> (u16, String) {
     Hosted::text(hub.get(path, Some(&person.cookie)).await).await
 }
 
-/// A's things: a machine added, a board with one open ticket assigned to A.
+/// A's things: a machine that joined, a board with its getting-started ticket and one more
+/// assigned to A (2 open).
 async fn things_of(hub: &Hosted, person: &mut Person) {
     let added = hub.call(person, "machine_add", json!({ "name": "desk" })).await;
     assert!(!refused(&added), "{added}");
+    // It joins with its code, as `tenant_tests.rs` enrolls one.
+    let added = &added["structuredContent"];
+    let stored = added["manual"].as_str().unwrap().split("--device ").nth(1).unwrap();
+    let stored = stored.split(' ').next().unwrap();
+    let enrolled = hub
+        .http
+        .post(format!("{}/enroll", hub.url))
+        .json(&json!({ "name": stored, "code": added["code"], "public_key": "desk-key" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(enrolled.status(), 201);
     let bound = hub.call(person, "board_bind", json!({ "project": "alpha" })).await;
     assert!(!refused(&bound), "{bound}");
     let me: Value = hub.call(person, "whoami", json!({})).await["structuredContent"].clone();
@@ -40,7 +53,7 @@ async fn the_app_shows_only_the_accounts_own_machines_and_boards_in_one_frame() 
 
     let (status, home) = page(&hub, "/app", &alice).await;
     assert_eq!(status, 200, "{home}");
-    for seen in ["id=\"needs-you\"", "id=\"machines\"", "id=\"boards\"", "desk", "alpha", "1 open"] {
+    for seen in ["id=\"needs-you\"", "id=\"machines\"", "id=\"boards\"", "desk", "alpha", "2 open"] {
         assert!(home.contains(seen), "home shows {seen}: {home}");
     }
     assert!(home.contains("A-PRIVATE-TICKET"), "Needs you lists the ticket assigned to A");
@@ -61,7 +74,7 @@ async fn the_app_shows_only_the_accounts_own_machines_and_boards_in_one_frame() 
     let (_, machines) = page(&hub, "/app/machines", &alice).await;
     assert!(machines.contains("desk"));
     let (_, boards) = page(&hub, "/app/boards", &alice).await;
-    assert!(boards.contains("alpha") && boards.contains("1 open"));
+    assert!(boards.contains("alpha") && boards.contains("2 open"));
 
     // B sees none of A's: not on any page of the app.
     for path in ["/app", "/app/machines", "/app/boards"] {
