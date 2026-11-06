@@ -78,6 +78,19 @@ pub async fn list(
             Some(("/account", "Your account")),
         );
     }
+    let pending = pending(&state, &subject).await;
+    let key = state.hub.push.as_ref().map(|p| p.public_key.clone());
+    let flash = Flash {
+        done: shown.done.as_deref(),
+        test: shown.test.as_deref(),
+    };
+    let can_test = !state.hub.config.boards_for(&subject.id).is_empty();
+    page(&pending, &flash, key.as_deref(), &subject.id, can_test)
+}
+
+/// The approvals waiting for `subject`, by project: on every board it decides on. Also the
+/// phone app's Needs you (`web/app/home.rs`).
+pub(super) async fn pending(state: &AppState, subject: &crate::auth::Subject) -> Vec<(String, ApprovalStatus)> {
     let projects: Vec<String> = state
         .hub
         .config
@@ -86,7 +99,7 @@ pub async fn list(
         .map(|b| b.project.clone())
         .collect();
     let boards = state.hub.boards.clone();
-    let pending = tokio::task::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let mut all = Vec::new();
         for project in projects {
             if let Ok(board) = boards.open(&project) {
@@ -98,14 +111,7 @@ pub async fn list(
         all
     })
     .await
-    .unwrap_or_default();
-    let key = state.hub.push.as_ref().map(|p| p.public_key.clone());
-    let flash = Flash {
-        done: shown.done.as_deref(),
-        test: shown.test.as_deref(),
-    };
-    let can_test = !state.hub.config.boards_for(&subject.id).is_empty();
-    page(&pending, &flash, key.as_deref(), &subject.id, can_test)
+    .unwrap_or_default()
 }
 
 /// "Send me a test approval": a harmless approval on the person's first board, pushed to
