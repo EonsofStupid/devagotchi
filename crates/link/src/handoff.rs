@@ -3,8 +3,8 @@
 //!
 //! Windows: `powershell.exe` runs the updater script (`update-windows.ps1`) on a hidden
 //! console of its own, in a new process group, outside any job of ours (breakaway is asked
-//! for and dropped when a job refuses it), its output to `<root>\logs\update-<version>.log`: a file, never a pipe back to the link, which kept the
-//! 2026-11-05 updater waiting forever. The script runs the installer in upgrade mode and
+//! for and dropped when a job refuses it), its output to `<root>\logs\update-<version>.log`:
+//! a file, never a pipe back to the link, which kept the 2026-11-05 updater waiting forever. The script runs the installer in upgrade mode and
 //! re-runs it with the previous version when the new one does not come up.
 //!
 //! Linux: the services run as an unprivileged account and the binaries are root's, so the
