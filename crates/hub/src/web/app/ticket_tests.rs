@@ -243,3 +243,79 @@ async fn the_board_filters_by_anchor_chips_and_the_ticket_shows_its_anchors() {
         "{html}"
     );
 }
+
+/// A's board `alpha` as an earlier build left it, before this hub opens it: its workflow is
+/// `workflow`, stored without an event.
+async fn earlier_board(hub: &Hosted, alice: &mut Person, workflow: &crate::board::Workflow) {
+    let me = hub.call(alice, "whoami", json!({})).await["structuredContent"]["subject"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let dir = hub.dir.path().join("account-boards").join(&me);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("alpha.sqlite3");
+    drop(crate::board::Board::open(&path, "alpha").unwrap());
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE settings SET value = ?1 WHERE key = 'workflow'",
+            [serde_json::to_string(workflow).unwrap()],
+        )
+        .unwrap();
+}
+
+/// Close a new ticket on `alpha` from the phone and press Undo; where Undo sends the browser.
+async fn close_and_undo(hub: &Hosted, alice: &mut Person) -> (String, String) {
+    let made = hub
+        .call(alice, "board_create", json!({ "project": "alpha", "title": "Reopen me" }))
+        .await;
+    assert!(!refused(&made), "{made}");
+    let id = made["structuredContent"]["id"].as_str().unwrap().to_string();
+    let view = ticket(hub, alice, &id).await;
+    let to = press(hub, alice, &id, "close", &[("version", &version(&view))]).await;
+    assert!(to.ends_with("?done=close&from=ready"), "{to}");
+    let view = ticket(hub, alice, &id).await;
+    assert_eq!(view["ticket"]["state"], "cancelled");
+    let to = press(hub, alice, &id, "undo", &[("version", &version(&view)), ("from", "ready")]).await;
+    (id, to)
+}
+
+#[tokio::test]
+async fn undo_works_on_a_board_made_before_closed_tickets_reopened() {
+    let hub = hosted().await;
+    let mut alice = hub.first_connect("Claude").await;
+    earlier_board(&hub, &mut alice, &crate::board::Workflow::previous_default()).await;
+    let (id, to) = close_and_undo(&hub, &mut alice).await;
+    assert!(to.ends_with("?done=undo"), "{to}");
+    assert_eq!(ticket(&hub, &mut alice, &id).await["ticket"]["state"], "ready");
+    let events = hub.call(&mut alice, "board_events", json!({ "project": "alpha" })).await;
+    let events: Value =
+        serde_json::from_str(events["content"][0]["text"].as_str().unwrap()).unwrap();
+    let upgrades = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["action"] == "board.workflow_upgraded")
+        .count();
+    assert_eq!(upgrades, 1, "{events}");
+    let verified = hub.call(&mut alice, "board_verify", json!({ "project": "alpha" })).await;
+    assert_eq!(verified["structuredContent"]["ok"], true, "{verified}");
+}
+
+#[tokio::test]
+async fn undo_on_a_customised_workflow_says_which_transition_to_add() {
+    let hub = hosted().await;
+    let mut alice = hub.first_connect("Claude").await;
+    let mut ours = crate::board::Workflow::previous_default();
+    ours.id = "ours".into();
+    earlier_board(&hub, &mut alice, &ours).await;
+    let (id, to) = close_and_undo(&hub, &mut alice).await;
+    assert!(to.contains("?done=no&why="), "{to}");
+    let why = crate::tenant_tests::query_param(&to, "why").unwrap();
+    assert!(
+        why.contains("workflow (ours) has no transition cancelled -> ready")
+            && why.contains("add {\"from\": \"cancelled\", \"to\": \"ready\"}"),
+        "{why}"
+    );
+    assert_eq!(ticket(&hub, &mut alice, &id).await["ticket"]["state"], "cancelled");
+}
