@@ -225,3 +225,21 @@ table.jobs th:nth-child(1) { width: 27%; }
 table.jobs th:nth-child(3) { width: 27%; }
 table.jobs th:nth-child(4) { width: 14%; }
 table.jobs th:nth-child(4), table.jobs td:nth-child(4) { display: table-cell; }
+/* A board's page: filter chips that wrap, a search box; a ticket's actions side by side. */
+.search { display: flex; gap: 8px; margin: 12px 0; }
+.search input { flex: 1; min-width: 0; font: inherit; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: var(--radius-s); background: var(--bg); color: var(--text); }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0; }
+.chips-title { color: var(--muted); font-size: .85rem; margin-right: 4px; }
+.chip { display: inline-block; max-width: 100%; padding: 4px 12px; border: 1px solid var(--line);
+  border-radius: 999px; color: var(--text); text-decoration: none; font-size: .9rem;
+  overflow-wrap: anywhere; }
+.chip[aria-current="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.ticket-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.ticket-actions form { margin: 0; flex: 1; }
+.ticket-actions button { width: 100%; padding: 12px 8px; font-weight: 600; }
+.undo form { margin: 0 0 12px; }
+.undo button { width: 100%; padding: 12px; font-weight: 600; border-color: var(--accent); }
+form textarea { display: block; width: 100%; font: inherit; padding: 10px; margin-top: 4px;
+  border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); color: var(--text); }
+.rows .body { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }

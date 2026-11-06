@@ -1,7 +1,8 @@
 // The phone app's one script (`web/app/`): registers the service worker (which keeps the
 // frame for offline), shows the install banner for iPhone (Share, then Add to Home Screen)
-// or Android (the browser's install prompt) while the app is not installed, and reloads
-// the page when it is pulled down from the top. Everything it shows is already on the page.
+// or Android (the browser's install prompt) while the app is not installed, takes a closed
+// ticket's Undo away when its 10 seconds run out, and reloads the page when it is pulled
+// down from the top. Everything it shows is already on the page.
 (function () {
   "use strict";
   if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(function () {});
@@ -31,6 +32,13 @@
     banner.hidden = true;
   });
   window.addEventListener("appinstalled", function () { if (banner) banner.hidden = true; });
+
+  // Undo lasts until the time the page gives (the hub refuses it after that anyway).
+  var undo = document.getElementById("undo");
+  if (undo) {
+    var left = Number(undo.dataset.until) - Date.now();
+    window.setTimeout(function () { undo.hidden = true; }, Math.max(0, left));
+  }
 
   // Pull to refresh: the page scrolls inside the frame, so the browser's own pull does not
   // reach it (and an installed app has none).
