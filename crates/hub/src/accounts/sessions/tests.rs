@@ -178,8 +178,14 @@ async fn spending_a_link_ends_the_accounts_other_sessions() {
     // `devagotchi hub owner` run again: the new passkey's session is the owner's only one.
     for (_store, accounts) in stores().await {
         let now = now_secs();
-        let before = accounts.open_session_at(A, None, [1; 32], now).await.unwrap();
-        let theirs = accounts.open_session_at(B, None, [2; 32], now).await.unwrap();
+        let before = accounts
+            .open_session_at(A, None, [1; 32], now)
+            .await
+            .unwrap();
+        let theirs = accounts
+            .open_session_at(B, None, [2; 32], now)
+            .await
+            .unwrap();
         let link = accounts.issue_link(LinkPurpose::Owner, A).await.unwrap();
         accounts
             .add_passkey(
@@ -218,7 +224,10 @@ async fn an_account_keeps_a_bounded_number_of_sessions() {
             .open_session_at(A, None, [0xee; 32], T + 10_001)
             .await
             .unwrap();
-        assert_eq!(who(&accounts, &newest, T + 10_002).await, Some(A.to_string()));
+        assert_eq!(
+            who(&accounts, &newest, T + 10_002).await,
+            Some(A.to_string())
+        );
         assert_eq!(
             who(&accounts, &tokens[0], T + 10_002).await,
             Some(A.to_string())
@@ -273,7 +282,10 @@ async fn a_link_adds_the_passkey_and_opens_its_session_together_or_not_at_all() 
                 .is_err()
         );
         assert_eq!(
-            accounts.check_link(LinkPurpose::Owner, &link).await.unwrap(),
+            accounts
+                .check_link(LinkPurpose::Owner, &link)
+                .await
+                .unwrap(),
             A,
             "still live"
         );

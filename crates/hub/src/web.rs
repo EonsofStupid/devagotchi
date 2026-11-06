@@ -30,6 +30,8 @@ mod app;
 mod analytics_tests;
 mod approvals;
 mod claim;
+#[cfg(test)]
+mod claim_tests;
 pub(crate) mod counted;
 mod device;
 mod discovery;
@@ -45,12 +47,14 @@ mod media;
 #[cfg(test)]
 mod media_tests;
 mod notify;
-mod offers;
 pub mod oauth;
+mod offers;
 mod operator;
 #[cfg(test)]
 mod operator_tests;
 mod pages;
+#[cfg(test)]
+mod passkey_tests;
 mod passkeys;
 mod providers;
 mod public;
@@ -58,10 +62,6 @@ mod routes;
 mod session;
 mod sessions;
 mod sign_in;
-#[cfg(test)]
-mod claim_tests;
-#[cfg(test)]
-mod passkey_tests;
 #[cfg(test)]
 mod site_tests;
 #[cfg(test)]
@@ -86,10 +86,10 @@ pub(crate) fn utc(secs: u64) -> String {
 }
 
 pub(crate) use email::announce_admissions;
+pub(crate) use landing::render as landing_for;
 pub use passkeys::HubSignIn;
 pub use providers::Providers;
 pub use routes::router;
-pub(crate) use landing::render as landing_for;
 
 /// Every web page's top bar says whether the browser is signed in: the account and a
 /// one-tap Sign out, or Sign in back to this page (`pages::Bar`). On a hub waiting to be

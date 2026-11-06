@@ -129,7 +129,10 @@ pub fn llms_full_txt(
 /// that host's sitemap and `/llms.txt`.
 pub fn robots_txt(site: &Site, own: &str) -> String {
     let hub = base(own);
-    let mut out = format!("# {}: {hub}\n# {hub}/llms.txt\n\nUser-agent: *\nAllow: /\n", site.name());
+    let mut out = format!(
+        "# {}: {hub}\n# {hub}/llms.txt\n\nUser-agent: *\nAllow: /\n",
+        site.name()
+    );
     for path in PRIVATE {
         out.push_str(&format!("Disallow: {path}\n"));
     }
@@ -291,7 +294,8 @@ fn png_size(bytes: &[u8]) -> Option<(u32, u32)> {
     if bytes.len() < 24 || &bytes[..8] != b"\x89PNG\r\n\x1a\n" || &bytes[12..16] != b"IHDR" {
         return None;
     }
-    let word = |at: usize| u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
+    let word =
+        |at: usize| u32::from_be_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]]);
     Some((word(16), word(20)))
 }
 
@@ -327,7 +331,8 @@ pub fn landing_json_ld(site: &Site, front: Front, public_url: &str) -> Vec<Value
         software["image"] = format!("{hub}{}", poster.url()).into();
     }
     if site.pages.contains_key("docs") {
-        software["softwareHelp"] = json!({ "@type": "CreativeWork", "url": format!("{pages}/docs") });
+        software["softwareHelp"] =
+            json!({ "@type": "CreativeWork", "url": format!("{pages}/docs") });
     }
     let mut out = vec![software];
     if front == Front::Unclaimed {

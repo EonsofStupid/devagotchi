@@ -6,7 +6,9 @@ use super::{testing::*, *};
 
 #[test]
 fn a_configured_url_is_postgres_or_an_absolute_sqlite_file_and_never_carries_a_password() {
-    let state = std::env::temp_dir().join("devagotchi hub#1").join("accounts.sqlite3");
+    let state = std::env::temp_dir()
+        .join("devagotchi hub#1")
+        .join("accounts.sqlite3");
     for good in [
         "postgres://hub@db.internal:5432/devagotchi".to_string(),
         "postgresql://hub@10.40.0.30/devagotchi?sslmode=require".to_string(),
@@ -46,7 +48,11 @@ async fn a_sqlite_path_with_spaces_and_url_characters_round_trips() {
     // Spaces, `#`, `%` (and `?` where a file name may hold one): the file opened is the
     // file named.
     let dir = tempfile::tempdir().unwrap();
-    let name = if cfg!(windows) { "my state #2 100%" } else { "my state #2 ?100%" };
+    let name = if cfg!(windows) {
+        "my state #2 100%"
+    } else {
+        "my state #2 ?100%"
+    };
     let path = dir.path().join(name).join("accounts.sqlite3");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let url = sqlite_url(&path);
@@ -259,7 +265,9 @@ async fn on_postgres_the_hubs_tables_live_in_their_own_schema() {
 #[tokio::test]
 async fn sqlite_has_no_schemas_and_ignores_one() {
     let test = sqlite().await;
-    let store = Store::open_in(&test.url, Some("devagotchi_hub")).await.unwrap();
+    let store = Store::open_in(&test.url, Some("devagotchi_hub"))
+        .await
+        .unwrap();
     let accounts = crate::accounts::Accounts::open(store).await.unwrap();
     assert!(accounts.owner().await.unwrap().is_none());
 }
@@ -281,6 +289,8 @@ async fn a_store_a_newer_hub_migrated_still_opens() {
         .execute(store.store.admin())
         .await
         .unwrap();
-        Store::open(&store.url).await.expect("an older hub opens a newer store");
+        Store::open(&store.url)
+            .await
+            .expect("an older hub opens a newer store");
     }
 }

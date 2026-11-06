@@ -218,7 +218,10 @@ on the machines you reach, until you sign it out or it goes unused for {days} da
         app = pages::escape(&app),
         who = match &person {
             Some(person) => pages::escape(person.name.as_deref().unwrap_or(&person.id)),
-            None => format!("your new {} account", pages::escape(state.hub.config.site().name())),
+            None => format!(
+                "your new {} account",
+                pages::escape(state.hub.config.site().name())
+            ),
         },
         new = if person.is_none() {
             super::hosted::new_account_note(&sign_in)

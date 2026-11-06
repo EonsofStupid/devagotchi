@@ -28,12 +28,7 @@ pub async fn asset(
 }
 
 /// `bytes` as `kind`, whole, as the one range asked for, or not modified.
-pub fn serve(
-    bytes: Bytes,
-    kind: &'static str,
-    etag: &str,
-    headers: &HeaderMap,
-) -> Response {
+pub fn serve(bytes: Bytes, kind: &'static str, etag: &str, headers: &HeaderMap) -> Response {
     let total = bytes.len() as u64;
     let matches = |value: &HeaderValue| {
         value.to_str().is_ok_and(|v| {

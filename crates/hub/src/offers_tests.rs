@@ -97,7 +97,10 @@ fn decode(text: &str) -> String {
 
 /// The link's path on the hub.
 fn path_of(link: &str, hub: &Hosted) -> String {
-    let path = link.strip_prefix(&hub.url).expect("a link on this hub").to_string();
+    let path = link
+        .strip_prefix(&hub.url)
+        .expect("a link on this hub")
+        .to_string();
     assert!(path.starts_with("/offers/dgo_"), "{path}");
     path
 }
@@ -112,7 +115,10 @@ async fn on_by_default_offered_once_and_a_yes_is_kept_in_the_users_own_words() {
         let names = tool_names(&hub, &mut person).await;
         assert!(names.iter().any(|n| n == "offers") && names.iter().any(|n| n == "offers_accept"));
         let said = instructions(&hub);
-        assert!(said.contains("The Shippin Network: after the user's first machine works"), "{said}");
+        assert!(
+            said.contains("The Shippin Network: after the user's first machine works"),
+            "{said}"
+        );
         assert!(said.contains("Never ask twice and never push"), "{said}");
         // The offer: the site's question, as it is, and its offerings.
         let offer = structured(&hub, &mut person, "offers", json!({})).await;
@@ -123,7 +129,10 @@ async fn on_by_default_offered_once_and_a_yes_is_kept_in_the_users_own_words() {
         assert_eq!(offer["question"], offers.question.as_str());
         // Only what is offered: an offering the site left blank (no address) is not.
         let offered: Vec<&str> = offers.offered().map(|item| item.name.as_str()).collect();
-        assert!(offered.len() < offers.items.len(), "the built-in site has blank offerings");
+        assert!(
+            offered.len() < offers.items.len(),
+            "the built-in site has blank offerings"
+        );
         let names: Vec<&str> = offer["offerings"]
             .as_array()
             .unwrap()
@@ -141,10 +150,22 @@ async fn on_by_default_offered_once_and_a_yes_is_kept_in_the_users_own_words() {
         // A yes is kept exactly as said, whatever it says, with the time.
         let words = "Yes! Sure — link it 🙂\nthanks";
         let before = crate::devices::now_secs();
-        let accepted = structured(&hub, &mut person, "offers_accept", json!({ "consent": words })).await;
+        let accepted = structured(
+            &hub,
+            &mut person,
+            "offers_accept",
+            json!({ "consent": words }),
+        )
+        .await;
         // No provisioning and no Shippin sign-in on this hub: kept, and said plainly.
         assert_eq!(accepted["state"], "unavailable", "{accepted}");
-        assert!(accepted["message"].as_str().unwrap().contains("yes is kept"), "{accepted}");
+        assert!(
+            accepted["message"]
+                .as_str()
+                .unwrap()
+                .contains("yes is kept"),
+            "{accepted}"
+        );
         let row = hub.accounts.offer(&tenant).await.unwrap().unwrap();
         assert_eq!(row.consent, words);
         assert_eq!(row.account, subject);
@@ -152,21 +173,38 @@ async fn on_by_default_offered_once_and_a_yes_is_kept_in_the_users_own_words() {
         assert_eq!(row.offerings, offered);
         assert_eq!(row.state, "pending");
         let events = hub.accounts.events(&tenant, 50).await.unwrap();
-        let yes = events.iter().find(|e| e.event == "offers.accepted").unwrap();
-        assert_eq!((yes.detail.as_str(), yes.actor.as_str()), (words, subject.as_str()));
+        let yes = events
+            .iter()
+            .find(|e| e.event == "offers.accepted")
+            .unwrap();
+        assert_eq!(
+            (yes.detail.as_str(), yes.actor.as_str()),
+            (words, subject.as_str())
+        );
         assert!(yes.at >= before);
         assert!(hub.accounts.chain_intact(&tenant).await.unwrap());
         let offer = structured(&hub, &mut person, "offers", json!({})).await;
         assert_eq!(offer["state"], "pending");
         // Words that are not words are refused, and nothing is kept for them.
         for bad in ["", "   ", "yes\u{0}", &"y".repeat(1001)] {
-            let answer = hub.call(&mut person, "offers_accept", json!({ "consent": bad })).await;
+            let answer = hub
+                .call(&mut person, "offers_accept", json!({ "consent": bad }))
+                .await;
             assert!(refused(&answer), "{bad:?}: {answer}");
         }
-        assert_eq!(hub.accounts.offer(&tenant).await.unwrap().unwrap().consent, words);
+        assert_eq!(
+            hub.accounts.offer(&tenant).await.unwrap().unwrap().consent,
+            words
+        );
         // One yes on the chain: the refused words left nothing.
         let accepted = chain(&hub, &tenant).await;
-        assert_eq!(accepted.iter().filter(|(e, _)| e == "offers.accepted").count(), 1);
+        assert_eq!(
+            accepted
+                .iter()
+                .filter(|(e, _)| e == "offers.accepted")
+                .count(),
+            1
+        );
     }
 }
 
@@ -186,21 +224,29 @@ async fn list_users(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
     let auth = headers[header::AUTHORIZATION].to_str().unwrap().to_string();
-    fake.requests.lock().unwrap().push(("/v2/users".into(), auth, body.clone()));
+    fake.requests
+        .lock()
+        .unwrap()
+        .push(("/v2/users".into(), auth, body.clone()));
     if fake.down.load(std::sync::atomic::Ordering::SeqCst) {
         return axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
-    let email = body["queries"][0]["emailQuery"]["emailAddress"].as_str().unwrap().to_lowercase();
+    let email = body["queries"][0]["emailQuery"]["emailAddress"]
+        .as_str()
+        .unwrap()
+        .to_lowercase();
     let result: Vec<Value> = fake
         .users
         .lock()
         .unwrap()
         .iter()
         .filter(|(_, address, _)| *address == email)
-        .map(|(id, address, verified)| json!({
+        .map(|(id, address, verified)| {
+            json!({
             "userId": id, "username": address, "state": "USER_STATE_ACTIVE",
             "human": { "profile": { "givenName": "A", "familyName": "B" },
-                       "email": { "email": address, "isVerified": verified } } }))
+                       "email": { "email": address, "isVerified": verified } } })
+        })
         .collect();
     Json(json!({ "details": { "totalResult": result.len().to_string() }, "result": result }))
         .into_response()
@@ -212,10 +258,16 @@ async fn create_user(
     Json(body): Json<Value>,
 ) -> Json<Value> {
     let auth = headers[header::AUTHORIZATION].to_str().unwrap().to_string();
-    fake.requests.lock().unwrap().push(("/v2/users/new".into(), auth, body.clone()));
+    fake.requests
+        .lock()
+        .unwrap()
+        .push(("/v2/users/new".into(), auth, body.clone()));
     let mut users = fake.users.lock().unwrap();
     let id = format!("3500000000000000{:02}", users.len() + 1);
-    let email = body["human"]["email"]["email"].as_str().unwrap().to_string();
+    let email = body["human"]["email"]["email"]
+        .as_str()
+        .unwrap()
+        .to_string();
     users.push((id.clone(), email, true));
     Json(json!({ "id": id, "creationDate": "2026-11-03T00:00:00Z" }))
 }
@@ -229,9 +281,12 @@ async fn fake_nomen() -> (String, Arc<FakeNomen>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     tokio::spawn(async move {
-        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
-            .await
-            .unwrap()
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .unwrap()
     });
     (url, fake)
 }
@@ -271,23 +326,47 @@ async fn with_provisioning_a_yes_links_the_account_on_nomen_with_no_click() {
         .await;
         // Nobody on Nomen has the address: the hub makes the user, verified, in the org.
         let (mut ada, ada_id, ada_tenant) = verified_person(&hub, 1, "ada@example.org").await;
-        let accepted = structured(&hub, &mut ada, "offers_accept", json!({ "consent": "yes" })).await;
+        let accepted =
+            structured(&hub, &mut ada, "offers_accept", json!({ "consent": "yes" })).await;
         assert_eq!(accepted["state"], "linked", "{accepted}");
-        assert!(accepted["message"].as_str().unwrap().contains("made an account for ada@example.org"));
+        assert!(
+            accepted["message"]
+                .as_str()
+                .unwrap()
+                .contains("made an account for ada@example.org")
+        );
         {
             let requests = fake.requests.lock().unwrap();
             assert_eq!(requests.len(), 2, "{requests:?}");
             let (path, auth, body) = &requests[0];
-            assert_eq!((path.as_str(), auth.as_str()), ("/v2/users", "Bearer pat-123"));
-            assert_eq!(body["queries"][0]["emailQuery"]["method"], "TEXT_QUERY_METHOD_EQUALS_IGNORE_CASE");
-            assert_eq!(body["queries"][1]["organizationIdQuery"]["organizationId"], "org-1");
+            assert_eq!(
+                (path.as_str(), auth.as_str()),
+                ("/v2/users", "Bearer pat-123")
+            );
+            assert_eq!(
+                body["queries"][0]["emailQuery"]["method"],
+                "TEXT_QUERY_METHOD_EQUALS_IGNORE_CASE"
+            );
+            assert_eq!(
+                body["queries"][1]["organizationIdQuery"]["organizationId"],
+                "org-1"
+            );
             let (path, auth, body) = &requests[1];
-            assert_eq!((path.as_str(), auth.as_str()), ("/v2/users/new", "Bearer pat-123"));
+            assert_eq!(
+                (path.as_str(), auth.as_str()),
+                ("/v2/users/new", "Bearer pat-123")
+            );
             assert_eq!(body["organizationId"], "org-1");
             assert_eq!(body["username"], "ada@example.org");
-            assert_eq!(body["human"]["email"], json!({ "email": "ada@example.org", "isVerified": true }));
+            assert_eq!(
+                body["human"]["email"],
+                json!({ "email": "ada@example.org", "isVerified": true })
+            );
             for name in ["givenName", "familyName"] {
-                assert!(!body["human"]["profile"][name].as_str().unwrap().is_empty(), "{body}");
+                assert!(
+                    !body["human"]["profile"][name].as_str().unwrap().is_empty(),
+                    "{body}"
+                );
             }
         }
         // Linked: Sign in with Shippin as that Nomen user reaches this account from now on.
@@ -304,20 +383,48 @@ async fn with_provisioning_a_yes_links_the_account_on_nomen_with_no_click() {
             .unwrap();
         assert_eq!(reached.id, ada_id);
         let row = hub.accounts.offer(&ada_tenant).await.unwrap().unwrap();
-        assert_eq!((row.state.as_str(), row.linked_via.as_deref()), ("linked", Some("provisioned")));
-        let events: Vec<String> = chain(&hub, &ada_tenant).await.into_iter().map(|(e, _)| e).collect();
+        assert_eq!(
+            (row.state.as_str(), row.linked_via.as_deref()),
+            ("linked", Some("provisioned"))
+        );
+        let events: Vec<String> = chain(&hub, &ada_tenant)
+            .await
+            .into_iter()
+            .map(|(e, _)| e)
+            .collect();
         let yes = events.iter().position(|e| e == "offers.accepted").unwrap();
         let linked = events.iter().position(|e| e == "offers.linked").unwrap();
         assert!(yes < linked, "{events:?}");
-        assert_eq!(structured(&hub, &mut ada, "offers", json!({})).await["state"], "linked");
+        assert_eq!(
+            structured(&hub, &mut ada, "offers", json!({})).await["state"],
+            "linked"
+        );
         // Asked again: already linked, nothing more kept and nothing asked of Nomen.
-        let again = structured(&hub, &mut ada, "offers_accept", json!({ "consent": "yes again" })).await;
+        let again = structured(
+            &hub,
+            &mut ada,
+            "offers_accept",
+            json!({ "consent": "yes again" }),
+        )
+        .await;
         assert_eq!(again["state"], "linked");
         assert_eq!(fake.requests.lock().unwrap().len(), 2);
-        assert_eq!(hub.accounts.offer(&ada_tenant).await.unwrap().unwrap().consent, "yes");
+        assert_eq!(
+            hub.accounts
+                .offer(&ada_tenant)
+                .await
+                .unwrap()
+                .unwrap()
+                .consent,
+            "yes"
+        );
 
         // Someone Nomen has, verified: found and linked, nothing made.
-        fake.users.lock().unwrap().push(("350000000000000099".into(), "bo@example.org".into(), true));
+        fake.users.lock().unwrap().push((
+            "350000000000000099".into(),
+            "bo@example.org".into(),
+            true,
+        ));
         let (mut bo, bo_id, _) = verified_person(&hub, 2, "bo@example.org").await;
         let accepted = structured(&hub, &mut bo, "offers_accept", json!({ "consent": "ok" })).await;
         assert_eq!(accepted["state"], "linked", "{accepted}");
@@ -335,25 +442,42 @@ async fn with_provisioning_a_yes_links_the_account_on_nomen_with_no_click() {
         assert_eq!(reached.id, bo_id);
 
         // An address Nomen has but never verified is not linked: the one-tap link instead.
-        fake.users.lock().unwrap().push(("350000000000000098".into(), "cy@example.org".into(), false));
+        fake.users.lock().unwrap().push((
+            "350000000000000098".into(),
+            "cy@example.org".into(),
+            false,
+        ));
         let (mut cy, _, cy_tenant) = verified_person(&hub, 3, "cy@example.org").await;
-        let accepted = structured(&hub, &mut cy, "offers_accept", json!({ "consent": "yes" })).await;
+        let accepted =
+            structured(&hub, &mut cy, "offers_accept", json!({ "consent": "yes" })).await;
         assert_eq!(accepted["state"], "link", "{accepted}");
         path_of(accepted["link"].as_str().unwrap(), &hub);
-        assert_eq!(hub.accounts.offer(&cy_tenant).await.unwrap().unwrap().state, "pending");
+        assert_eq!(
+            hub.accounts.offer(&cy_tenant).await.unwrap().unwrap().state,
+            "pending"
+        );
 
         // Nomen down: the yes is kept, and the one-tap link is the way.
         fake.down.store(true, std::sync::atomic::Ordering::SeqCst);
         let (mut di, _, di_tenant) = verified_person(&hub, 4, "di@example.org").await;
         let accepted = structured(&hub, &mut di, "offers_accept", json!({ "consent": "go" })).await;
         assert_eq!(accepted["state"], "link", "{accepted}");
-        assert_eq!(hub.accounts.offer(&di_tenant).await.unwrap().unwrap().consent, "go");
+        assert_eq!(
+            hub.accounts
+                .offer(&di_tenant)
+                .await
+                .unwrap()
+                .unwrap()
+                .consent,
+            "go"
+        );
 
         // No verified email (an account made on first connect): the link, Nomen not asked.
         fake.down.store(false, std::sync::atomic::Ordering::SeqCst);
         let asked = fake.requests.lock().unwrap().len();
         let mut new = hub.first_connect("ChatGPT").await;
-        let accepted = structured(&hub, &mut new, "offers_accept", json!({ "consent": "yes" })).await;
+        let accepted =
+            structured(&hub, &mut new, "offers_accept", json!({ "consent": "yes" })).await;
         assert_eq!(accepted["state"], "link", "{accepted}");
         assert_eq!(fake.requests.lock().unwrap().len(), asked);
     }
@@ -362,10 +486,20 @@ async fn with_provisioning_a_yes_links_the_account_on_nomen_with_no_click() {
 #[tokio::test]
 async fn the_one_tap_link_signs_in_with_the_network_and_offers_then_says_linked() {
     for url in stores().await {
-        let hub = hosted_with(url.as_deref(), |dir, _| json!({ "auth": nomen_sign_in(dir) })).await;
+        let hub = hosted_with(
+            url.as_deref(),
+            |dir, _| json!({ "auth": nomen_sign_in(dir) }),
+        )
+        .await;
         let mut person = hub.first_connect("Claude").await;
         let (subject, tenant) = who(&hub, &mut person).await;
-        let accepted = structured(&hub, &mut person, "offers_accept", json!({ "consent": "Yes please" })).await;
+        let accepted = structured(
+            &hub,
+            &mut person,
+            "offers_accept",
+            json!({ "consent": "Yes please" }),
+        )
+        .await;
         assert_eq!(accepted["state"], "link", "{accepted}");
         assert!(accepted["expires_at"].as_u64().unwrap() > crate::devices::now_secs());
         let path = path_of(accepted["link"].as_str().unwrap(), &hub);
@@ -374,8 +508,14 @@ async fn the_one_tap_link_signs_in_with_the_network_and_offers_then_says_linked(
         assert_eq!(opened.headers()[header::REFERRER_POLICY], "same-origin");
         let (status, page) = Hosted::text(opened).await;
         assert_eq!(status, 200, "{page}");
-        assert!(page.contains("<h1>Link your account to the Shippin Network</h1>"), "{page}");
-        assert!(page.contains(&format!("<form method=\"post\" action=\"{path}\">")), "{page}");
+        assert!(
+            page.contains("<h1>Link your account to the Shippin Network</h1>"),
+            "{page}"
+        );
+        assert!(
+            page.contains(&format!("<form method=\"post\" action=\"{path}\">")),
+            "{page}"
+        );
         assert!(page.contains(">Sign in with Shippin</button>"), "{page}");
         // A post from another site does nothing.
         let crossed = hub
@@ -391,7 +531,10 @@ async fn the_one_tap_link_signs_in_with_the_network_and_offers_then_says_linked(
         // on to Sign in with Shippin, which links it and comes back here.
         let tapped = hub.form(&path, None, &[]).await;
         assert_eq!(tapped.status(), 303);
-        let location = tapped.headers()[header::LOCATION].to_str().unwrap().to_string();
+        let location = tapped.headers()[header::LOCATION]
+            .to_str()
+            .unwrap()
+            .to_string();
         assert_eq!(
             location
                 .strip_prefix("/auth/provider/nomen?return_to=")
@@ -401,7 +544,12 @@ async fn the_one_tap_link_signs_in_with_the_network_and_offers_then_says_linked(
             "{location}"
         );
         let cookie = set_cookie(&tapped, "dg_session").expect("a session of the account");
-        let me: Value = hub.get("/api/v1/me", Some(&cookie)).await.json().await.unwrap();
+        let me: Value = hub
+            .get("/api/v1/me", Some(&cookie))
+            .await
+            .json()
+            .await
+            .unwrap();
         assert_eq!(me["subject"], subject.as_str());
         // (Sign in with Shippin proves this user, and the hub links it, as the account page does.)
         hub.accounts
@@ -418,12 +566,21 @@ async fn the_one_tap_link_signs_in_with_the_network_and_offers_then_says_linked(
             .unwrap();
         let (status, page) = Hosted::text(hub.get(&path, Some(&cookie)).await).await;
         assert_eq!(status, 200);
-        assert!(page.contains("Your account is linked to the Shippin Network."), "{page}");
+        assert!(
+            page.contains("Your account is linked to the Shippin Network."),
+            "{page}"
+        );
         assert!(!page.contains("action=\"/offers/"), "{page}");
         // The AI sees it.
-        assert_eq!(structured(&hub, &mut person, "offers", json!({})).await["state"], "linked");
+        assert_eq!(
+            structured(&hub, &mut person, "offers", json!({})).await["state"],
+            "linked"
+        );
         let row = hub.accounts.offer(&tenant).await.unwrap().unwrap();
-        assert_eq!((row.state.as_str(), row.linked_via.as_deref()), ("linked", Some("sign_in")));
+        assert_eq!(
+            (row.state.as_str(), row.linked_via.as_deref()),
+            ("linked", Some("sign_in"))
+        );
         assert_eq!(row.consent, "Yes please");
         let events = chain(&hub, &tenant).await;
         assert!(events.contains(&("offers.linked".to_string(), "sign_in".to_string())));
@@ -444,7 +601,13 @@ async fn the_one_tap_link_signs_in_with_the_network_and_offers_then_says_linked(
             )
             .await
             .unwrap();
-        let first = structured(&hub, &mut other, "offers_accept", json!({ "consent": "yes" })).await;
+        let first = structured(
+            &hub,
+            &mut other,
+            "offers_accept",
+            json!({ "consent": "yes" }),
+        )
+        .await;
         let first = path_of(first["link"].as_str().unwrap(), &hub);
         let tapped = hub.form(&first, None, &[]).await;
         assert_eq!(tapped.status(), 303);
@@ -463,12 +626,21 @@ async fn the_one_tap_link_signs_in_with_the_network_and_offers_then_says_linked(
                 .starts_with("/auth/provider/nomen?return_to=")
         );
         // A new yes replaces the link; one past its time works no more.
-        let second = structured(&hub, &mut other, "offers_accept", json!({ "consent": "yes!" })).await;
+        let second = structured(
+            &hub,
+            &mut other,
+            "offers_accept",
+            json!({ "consent": "yes!" }),
+        )
+        .await;
         let second = path_of(second["link"].as_str().unwrap(), &hub);
         for gone in [&first, "/offers/dgo_nothing-here"] {
             let (status, page) = Hosted::text(hub.get(gone, None).await).await;
             assert_eq!(status, 404, "{gone}");
-            assert!(page.contains("This link has expired or was replaced."), "{page}");
+            assert!(
+                page.contains("This link has expired or was replaced."),
+                "{page}"
+            );
         }
         sqlx::query("UPDATE tenancy_offers SET link_expires_at = 1 WHERE tenant_id = $1")
             .bind(&other_tenant)
@@ -487,7 +659,16 @@ async fn surfaces(hub: &Hosted, person: &mut Person) -> (Vec<String>, String, St
     let names = tool_names(hub, person).await;
     let said = instructions(hub);
     let mut pages = String::new();
-    for path in ["/", "/docs", "/privacy", "/terms", "/support", "/llms.txt", "/llms-full.txt", "/assets/hub.css"] {
+    for path in [
+        "/",
+        "/docs",
+        "/privacy",
+        "/terms",
+        "/support",
+        "/llms.txt",
+        "/llms-full.txt",
+        "/assets/hub.css",
+    ] {
         pages.push_str(&Hosted::text(hub.get(path, None).await).await.1);
     }
     (names, said, pages)
@@ -499,17 +680,40 @@ fn assert_nothing_of_the_offers(what: &str, (names, said, pages): &(Vec<String>,
     for tool in crate::offers::TOOLS {
         assert!(!names.iter().any(|n| n == tool), "{what}: {tool} is listed");
     }
-    let mut words = vec![offers.brand.clone(), "id=\"network\"".into(), "--p-network".into(), "offers_accept".into()];
-    words.extend(offers.items.iter().filter(|i| !i.href.is_empty()).map(|i| i.href.clone()));
-    words.extend(offers.items.iter().filter(|i| !i.text.is_empty()).map(|i| i.text.clone()));
+    let mut words = vec![
+        offers.brand.clone(),
+        "id=\"network\"".into(),
+        "--p-network".into(),
+        "offers_accept".into(),
+    ];
+    words.extend(
+        offers
+            .items
+            .iter()
+            .filter(|i| !i.href.is_empty())
+            .map(|i| i.href.clone()),
+    );
+    words.extend(
+        offers
+            .items
+            .iter()
+            .filter(|i| !i.text.is_empty())
+            .map(|i| i.text.clone()),
+    );
     for word in &words {
-        assert!(!said.contains(word.as_str()), "{what}: the instructions say {word}");
+        assert!(
+            !said.contains(word.as_str()),
+            "{what}: the instructions say {word}"
+        );
         assert!(!pages.contains(word.as_str()), "{what}: a page says {word}");
     }
 }
 
 /// A copy of the built-in site changed by `edit`.
-pub(crate) fn builtin_with(dir: &std::path::Path, edit: impl FnOnce(&mut Value)) -> std::path::PathBuf {
+pub(crate) fn builtin_with(
+    dir: &std::path::Path,
+    edit: impl FnOnce(&mut Value),
+) -> std::path::PathBuf {
     let site = dir.join("site");
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("site/default");
     for sub in ["", "content", "assets"] {
@@ -547,25 +751,57 @@ async fn off_or_empty_or_on_a_neutral_site_nothing_of_the_offers_shows() {
     }
     // Off, or with no offerings, and on the neutral site: gone, everywhere.
     let neutral = crate::site::tests::neutral_dir();
-    let cases: Vec<(&str, Box<dyn FnOnce(&std::path::Path) -> std::path::PathBuf + Send>)> = vec![
-        ("enabled false", Box::new(|dir| builtin_with(dir, |v| v["offers"]["enabled"] = false.into()))),
-        ("no offerings", Box::new(|dir| builtin_with(dir, |v| v["offers"]["items"] = json!([])))),
-        ("no offers block", Box::new(|dir| builtin_with(dir, |v| { v.as_object_mut().unwrap().remove("offers"); }))),
+    let cases: Vec<(
+        &str,
+        Box<dyn FnOnce(&std::path::Path) -> std::path::PathBuf + Send>,
+    )> = vec![
+        (
+            "enabled false",
+            Box::new(|dir| builtin_with(dir, |v| v["offers"]["enabled"] = false.into())),
+        ),
+        (
+            "no offerings",
+            Box::new(|dir| builtin_with(dir, |v| v["offers"]["items"] = json!([]))),
+        ),
+        (
+            "no offers block",
+            Box::new(|dir| {
+                builtin_with(dir, |v| {
+                    v.as_object_mut().unwrap().remove("offers");
+                })
+            }),
+        ),
         ("the neutral site", Box::new(move |_| neutral.clone())),
     ];
     for (what, site) in cases {
-        let hub = hosted_with(None, |dir, _| json!({ "site": { "dir": site(dir).to_string_lossy() } })).await;
+        let hub = hosted_with(
+            None,
+            |dir, _| json!({ "site": { "dir": site(dir).to_string_lossy() } }),
+        )
+        .await;
         let mut person = hub.first_connect("Claude").await;
         let seen = surfaces(&hub, &mut person).await;
         assert_nothing_of_the_offers(what, &seen);
         // Asked for anyway: no such tool, and no such page.
         let answer = hub.call(&mut person, "offers", json!({})).await;
         assert!(refused(&answer), "{what}: {answer}");
-        let answer = hub.call(&mut person, "offers_accept", json!({ "consent": "yes" })).await;
+        let answer = hub
+            .call(&mut person, "offers_accept", json!({ "consent": "yes" }))
+            .await;
         assert!(refused(&answer), "{what}: {answer}");
         let (_, tenant) = who(&hub, &mut person).await;
-        assert!(hub.accounts.offer(&tenant).await.unwrap().is_none(), "{what}: nothing kept");
-        let (status, _) = Hosted::text(hub.get("/offers/dgo_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", None).await).await;
+        assert!(
+            hub.accounts.offer(&tenant).await.unwrap().is_none(),
+            "{what}: nothing kept"
+        );
+        let (status, _) = Hosted::text(
+            hub.get(
+                "/offers/dgo_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                None,
+            )
+            .await,
+        )
+        .await;
         assert_eq!(status, 404, "{what}");
     }
 }
@@ -585,7 +821,11 @@ async fn a_blank_offering_is_left_out_and_offers_matches_its_output_schema() {
     .await;
     let mut person = hub.first_connect("Claude").await;
     let answer = hub
-        .mcp(&mut person, "tools/call", json!({ "name": "offers", "arguments": {} }))
+        .mcp(
+            &mut person,
+            "tools/call",
+            json!({ "name": "offers", "arguments": {} }),
+        )
         .await;
     assert_ne!(answer["isError"], true, "{answer}");
     let structured = &answer["structuredContent"];
@@ -596,10 +836,14 @@ async fn a_blank_offering_is_left_out_and_offers_matches_its_output_schema() {
     assert_eq!(offerings[0]["description"], "Shippin secrets you own.");
     assert_eq!(offerings[0]["url"], "https://vaultix.cloud");
     // As a client that checks holds it: the result matches the declared output schema.
-    let schema = crate::output_schema::declared("offers").expect("offers declares an output schema");
+    let schema =
+        crate::output_schema::declared("offers").expect("offers declares an output schema");
     crate::output_schema::assert_matches("offers", &schema, structured);
     // And the check is real: a half-empty offering, as sent before, is refused.
     let mut half = structured.clone();
     half["offerings"][0].as_object_mut().unwrap().remove("url");
-    assert!(!crate::output_schema::errors(&schema, &half).is_empty(), "{half}");
+    assert!(
+        !crate::output_schema::errors(&schema, &half).is_empty(),
+        "{half}"
+    );
 }

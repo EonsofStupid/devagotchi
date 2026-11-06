@@ -74,11 +74,24 @@ fn every_kind_site(dir: &Path) -> PathBuf {
     let site = crate::offers_tests::builtin_with(dir, |_| {});
     let file = site.join("content/workflows.json");
     let mut value: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
-    let step = |kind: &str, title: &str, text: &str| json!({ "kind": kind, "title": title, "text": text });
+    let step =
+        |kind: &str, title: &str, text: &str| json!({ "kind": kind, "title": title, "text": text });
     value["workflows"][0]["steps"] = json!([
-        step("machine", "Connect a computer", "Pick what it runs and press the button."),
-        step("phone", "Turn on approvals on your phone", "Open this same link on your phone."),
-        step("secure_account", "Keep your account", "Optional: add a sign-in."),
+        step(
+            "machine",
+            "Connect a computer",
+            "Pick what it runs and press the button."
+        ),
+        step(
+            "phone",
+            "Turn on approvals on your phone",
+            "Open this same link on your phone."
+        ),
+        step(
+            "secure_account",
+            "Keep your account",
+            "Optional: add a sign-in."
+        ),
         step("done", "All set", "Go back to your AI."),
     ]);
     assert_eq!(value["workflows"][0]["id"], "get-started");
@@ -88,8 +101,7 @@ fn every_kind_site(dir: &Path) -> PathBuf {
 
 /// A site directory in `dir`: the built-in site.json with `edit` applied.
 fn site_dir(dir: &Path, edit: impl FnOnce(&mut Value)) -> PathBuf {
-    let mut value: Value =
-        serde_json::from_str(include_str!("../site/default/site.json")).unwrap();
+    let mut value: Value = serde_json::from_str(include_str!("../site/default/site.json")).unwrap();
     edit(&mut value);
     let site = dir.join("site");
     std::fs::create_dir_all(&site).unwrap();
@@ -169,10 +181,17 @@ fn escaped(text: &str) -> String {
 
 /// Get my command, pressed in a browser holding `cookies` (none: a fresh one): the answer,
 /// and the cookies it holds after (the line's and its own).
-async fn press(hub: &Hosted, path: &str, cookies: Option<&str>, form: &[(&str, &str)]) -> (u16, String) {
+async fn press(
+    hub: &Hosted,
+    path: &str,
+    cookies: Option<&str>,
+    form: &[(&str, &str)],
+) -> (u16, String) {
     let pressed = hub.form(&format!("{path}/command"), cookies, form).await;
     let status = pressed.status().as_u16();
-    let mut held: Vec<String> = cookies.map(|c| c.split("; ").map(str::to_string).collect()).unwrap_or_default();
+    let mut held: Vec<String> = cookies
+        .map(|c| c.split("; ").map(str::to_string).collect())
+        .unwrap_or_default();
     for name in ["dg_wfc", "dg_wfb"] {
         if let Some(cookie) = set_cookie(&pressed, name) {
             held.retain(|c| !c.starts_with(&format!("{name}=")));
@@ -202,7 +221,12 @@ fn subscription(n: u8) -> Value {
 }
 
 /// The phone posts its subscription to the link, from a browser holding `cookies`.
-async fn turn_on_phone(hub: &Hosted, path: &str, cookies: Option<&str>, n: u8) -> reqwest::Response {
+async fn turn_on_phone(
+    hub: &Hosted,
+    path: &str,
+    cookies: Option<&str>,
+    n: u8,
+) -> reqwest::Response {
     let mut request = hub
         .http
         .post(format!("{}{path}/phone", hub.url))
@@ -225,13 +249,28 @@ async fn the_list_offers_each_workflow_and_says_plainly_what_cannot_be_done_here
         assert_eq!(
             ids,
             [
-                "get-started", "connect-linux", "connect-windows", "connect-mac", "phone-approvals",
-                "connect-claude", "connect-chatgpt", "connect-grok", "connect-cursor"
+                "get-started",
+                "connect-linux",
+                "connect-windows",
+                "connect-mac",
+                "phone-approvals",
+                "connect-claude",
+                "connect-chatgpt",
+                "connect-grok",
+                "connect-cursor"
             ]
         );
         let offer = |id: &str| all.iter().find(|w| w["id"] == id).unwrap().clone();
-        for id in ["get-started", "connect-linux", "connect-windows", "phone-approvals", "connect-claude",
-                   "connect-chatgpt", "connect-grok", "connect-cursor"] {
+        for id in [
+            "get-started",
+            "connect-linux",
+            "connect-windows",
+            "phone-approvals",
+            "connect-claude",
+            "connect-chatgpt",
+            "connect-grok",
+            "connect-cursor",
+        ] {
             assert_eq!(offer(id)["available"], true, "{id}");
         }
         assert_eq!(offer("connect-grok")["steps"][0]["client"], "grok");
@@ -245,13 +284,22 @@ async fn the_list_offers_each_workflow_and_says_plainly_what_cannot_be_done_here
         let mac = offer("connect-mac");
         assert_eq!(mac["available"], false);
         assert!(
-            mac["why"].as_str().unwrap().contains("A Mac build of Devagotchi is not available yet"),
+            mac["why"]
+                .as_str()
+                .unwrap()
+                .contains("A Mac build of Devagotchi is not available yet"),
             "{mac}"
         );
         assert_eq!(mac["steps"], json!([]));
         assert_eq!(offer("connect-linux")["steps"][0]["os"], "linux");
         // A Mac is never started: there is nothing to install on one.
-        let answer = hub.call(&mut person, "workflow_start", json!({ "workflow": "connect-mac" })).await;
+        let answer = hub
+            .call(
+                &mut person,
+                "workflow_start",
+                json!({ "workflow": "connect-mac" }),
+            )
+            .await;
         assert_eq!(answer["isError"], true, "{answer}");
         assert!(answer.to_string().contains("not available yet"), "{answer}");
         for arguments in [
@@ -271,7 +319,13 @@ async fn the_list_offers_each_workflow_and_says_plainly_what_cannot_be_done_here
         match id {
             "connect-linux" | "connect-windows" | "get-started" => {
                 assert_eq!(workflow["available"], false, "{id}");
-                assert!(workflow["why"].as_str().unwrap().contains("hands out no builds"), "{workflow}");
+                assert!(
+                    workflow["why"]
+                        .as_str()
+                        .unwrap()
+                        .contains("hands out no builds"),
+                    "{workflow}"
+                );
             }
             "phone-approvals" => assert_eq!(workflow["available"], true),
             _ => {}
@@ -281,24 +335,58 @@ async fn the_list_offers_each_workflow_and_says_plainly_what_cannot_be_done_here
     let hub = hosted_with(None, |dir, _| {
         let dist = dist(dir);
         let sums = std::fs::read_to_string(dist.join("SHA256SUMS")).unwrap();
-        let linux: String = sums.lines().filter(|l| !l.contains("windows") && !l.contains(".ps1")).map(|l| format!("{l}\n")).collect();
+        let linux: String = sums
+            .lines()
+            .filter(|l| !l.contains("windows") && !l.contains(".ps1"))
+            .map(|l| format!("{l}\n"))
+            .collect();
         std::fs::write(dist.join("SHA256SUMS"), linux).unwrap();
         json!({ "downloads": dist.to_string_lossy() })
     })
     .await;
     let mut person = hub.first_connect("Claude").await;
     let listed = structured(&hub, &mut person, "workflow_list", json!({})).await;
-    let windows = listed["workflows"].as_array().unwrap().iter().find(|w| w["id"] == "connect-windows").unwrap().clone();
+    let windows = listed["workflows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|w| w["id"] == "connect-windows")
+        .unwrap()
+        .clone();
     assert_eq!(windows["available"], false);
-    assert!(windows["why"].as_str().unwrap().contains("no Windows build"), "{windows}");
-    let started = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "get-started" })).await;
+    assert!(
+        windows["why"]
+            .as_str()
+            .unwrap()
+            .contains("no Windows build"),
+        "{windows}"
+    );
+    let started = structured(
+        &hub,
+        &mut person,
+        "workflow_start",
+        json!({ "workflow": "get-started" }),
+    )
+    .await;
     let path = path_of(started["link"].as_str().unwrap(), &hub);
     let (_, body) = page(&hub, &path, NOBODY).await;
     assert!(body.contains("name=\"os\" value=\"linux\""), "{body}");
     assert!(!body.contains("name=\"os\" value=\"windows\""), "{body}");
-    let (status, _) = press(&hub, &path, NOBODY, &[("step", "0"), ("os", "windows"), ("name", "pc")]).await;
-    assert_eq!(status, 303, "an OS it cannot give a line for goes back to the page");
-    assert_eq!(hub.devices.held(&who(&hub, &mut person).await.0).unwrap(), 0);
+    let (status, _) = press(
+        &hub,
+        &path,
+        NOBODY,
+        &[("step", "0"), ("os", "windows"), ("name", "pc")],
+    )
+    .await;
+    assert_eq!(
+        status, 303,
+        "an OS it cannot give a line for goes back to the page"
+    );
+    assert_eq!(
+        hub.devices.held(&who(&hub, &mut person).await.0).unwrap(),
+        0
+    );
 }
 
 #[tokio::test]
@@ -319,8 +407,14 @@ async fn opening_the_link_needs_no_sign_in_spends_nothing_and_shows_no_code() {
         assert_eq!(step(&started, 0)["state"], "current");
         assert_eq!(step(&started, 0)["machine"], "nas");
         let left = started["expires_at"].as_u64().unwrap() - now_secs();
-        assert!((1790..=1800).contains(&left), "30 minutes by default: {left}");
-        assert!(started["next"].as_str().unwrap().contains("30 minutes"), "{started}");
+        assert!(
+            (1790..=1800).contains(&left),
+            "30 minutes by default: {left}"
+        );
+        assert!(
+            started["next"].as_str().unwrap().contains("30 minutes"),
+            "{started}"
+        );
         let before = events(&hub, &tenant).await;
         assert_eq!(before.last().unwrap(), "workflow.started");
         // What a person, a chat app's preview or a mail scanner gets, as often as it asks:
@@ -333,8 +427,20 @@ async fn opening_the_link_needs_no_sign_in_spends_nothing_and_shows_no_code() {
             assert!(body.contains("id=\"get-command-1\""), "{body}");
             assert!(body.contains("value=\"nas\""), "{body}");
             assert!(body.contains("Step 1 of 2"), "{body}");
-            assert!(body.contains("<script src=\"/assets/workflow.js\" defer></script>"), "{body}");
-            for absent in ["dvg-", "/join/", "Sign in", "sign-in", "passkey", "http-equiv", subject.as_str(), tenant.as_str()] {
+            assert!(
+                body.contains("<script src=\"/assets/workflow.js\" defer></script>"),
+                "{body}"
+            );
+            for absent in [
+                "dvg-",
+                "/join/",
+                "Sign in",
+                "sign-in",
+                "passkey",
+                "http-equiv",
+                subject.as_str(),
+                tenant.as_str(),
+            ] {
                 assert!(!body.contains(absent), "the page shows {absent}:\n{body}");
             }
             let answer = hub.get(&format!("{path}/status"), NOBODY).await;
@@ -344,12 +450,22 @@ async fn opening_the_link_needs_no_sign_in_spends_nothing_and_shows_no_code() {
             assert_eq!(answer["keep"], false);
             assert_eq!(answer["steps"][0]["state"], "current");
         }
-        assert_eq!(events(&hub, &tenant).await, before, "opening it writes nothing");
+        assert_eq!(
+            events(&hub, &tenant).await,
+            before,
+            "opening it writes nothing"
+        );
         assert_eq!(hub.devices.held(&subject).unwrap(), 0, "and issues no code");
         // A link that never was, and a malformed one: the same answer as a dead one.
-        for wrong in ["/go/dgw_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "/go/x"] {
+        for wrong in [
+            "/go/dgw_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "/go/x",
+        ] {
             assert_eq!(page(&hub, wrong, NOBODY).await.0, 404, "{wrong}");
-            assert_eq!(hub.get(&format!("{wrong}/status"), NOBODY).await.status(), 404);
+            assert_eq!(
+                hub.get(&format!("{wrong}/status"), NOBODY).await.status(),
+                404
+            );
         }
     }
 }
@@ -360,10 +476,20 @@ async fn get_my_command_issues_the_line_and_the_step_ticks_once_online() {
         let hub = hub_on(store.as_deref(), json!({})).await;
         let mut person = hub.first_connect("Claude").await;
         let (subject, tenant) = who(&hub, &mut person).await;
-        let started = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "connect-linux" })).await;
+        let started = structured(
+            &hub,
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": "connect-linux" }),
+        )
+        .await;
         let id = started["id"].as_str().unwrap().to_string();
         let path = path_of(started["link"].as_str().unwrap(), &hub);
-        assert_eq!(step(&started, 0)["machine"], "server", "the site's name for a Linux machine");
+        assert_eq!(
+            step(&started, 0)["machine"],
+            "server",
+            "the site's name for a Linux machine"
+        );
         // From another site: nothing.
         let refused = hub
             .http
@@ -376,10 +502,22 @@ async fn get_my_command_issues_the_line_and_the_step_ticks_once_online() {
         assert_eq!(refused.status(), 403);
         assert_eq!(hub.devices.held(&subject).unwrap(), 0);
         // Pressed, in a browser that never signed in: a code, in this browser's own cookie.
-        let pressed = hub.form(&format!("{path}/command"), NOBODY, &[("step", "0"), ("os", "linux"), ("name", "server")]).await;
+        let pressed = hub
+            .form(
+                &format!("{path}/command"),
+                NOBODY,
+                &[("step", "0"), ("os", "linux"), ("name", "server")],
+            )
+            .await;
         assert_eq!(pressed.status(), 303);
-        assert_eq!(pressed.headers()[header::LOCATION].to_str().unwrap(), format!("{path}#step-1"));
-        assert!(set_cookie(&pressed, "dg_session").is_none(), "nobody is signed in");
+        assert_eq!(
+            pressed.headers()[header::LOCATION].to_str().unwrap(),
+            format!("{path}#step-1")
+        );
+        assert!(
+            set_cookie(&pressed, "dg_session").is_none(),
+            "nobody is signed in"
+        );
         let line_cookie = set_cookie(&pressed, "dg_wfc").expect("the line's cookie");
         let browser = set_cookie(&pressed, "dg_wfb").expect("the browser's own cookie");
         assert!(browser.starts_with("dg_wfb=dgb_"), "{browser}");
@@ -388,20 +526,39 @@ async fn get_my_command_issues_the_line_and_the_step_ticks_once_online() {
         let code = code_in(&cookies);
         assert!(crate::join::valid_code(&code), "{code}");
         let (_, body) = page(&hub, &path, Some(&cookies)).await;
-        assert!(body.contains(&format!("curl -fsSL {}/join/{code} | sudo sh</code>", hub.url)), "{body}");
-        assert!(body.contains("class=\"copy\" data-copy=\"command-1\" hidden"), "{body}");
+        assert!(
+            body.contains(&format!(
+                "curl -fsSL {}/join/{code} | sudo sh</code>",
+                hub.url
+            )),
+            "{body}"
+        );
+        assert!(
+            body.contains("class=\"copy\" data-copy=\"command-1\" hidden"),
+            "{body}"
+        );
         // Anyone else opening the link sees the button, never that code.
         let (_, other) = page(&hub, &path, NOBODY).await;
-        assert!(!other.contains(&code) && other.contains("id=\"get-command-1\""), "{other}");
+        assert!(
+            !other.contains(&code) && other.contains("id=\"get-command-1\""),
+            "{other}"
+        );
         // The join script for that code is served, and fetching it spends nothing.
-        let script = hub.get(&format!("/join/{code}"), NOBODY).await.text().await.unwrap();
+        let script = hub
+            .get(&format!("/join/{code}"), NOBODY)
+            .await
+            .text()
+            .await
+            .unwrap();
         assert!(script.contains("device='t"), "{script}");
         let status = structured(&hub, &mut person, "workflow_status", json!({ "id": id })).await;
         assert_eq!(step(&status, 0)["state"], "current");
         assert_eq!(step(&status, 0)["fact"], "Waiting for server to join.");
         // The machine enrolls with that code: joined, offline.
         let stored = format!("{}-server", crate::accounts::tenants::tag(&tenant));
-        hub.devices.enroll(&stored, &code, &"ab".repeat(32), false).unwrap();
+        hub.devices
+            .enroll(&stored, &code, &"ab".repeat(32), false)
+            .unwrap();
         let status = structured(&hub, &mut person, "workflow_status", json!({ "id": id })).await;
         assert_eq!(step(&status, 0)["state"], "current");
         assert_eq!(step(&status, 0)["fact"], "server joined but is offline.");
@@ -420,7 +577,11 @@ async fn get_my_command_issues_the_line_and_the_step_ticks_once_online() {
             ("workflow.step_done", 2),
             ("workflow.completed", 1),
         ] {
-            assert_eq!(chain.iter().filter(|e| *e == event).count(), times, "{event} in {chain:?}");
+            assert_eq!(
+                chain.iter().filter(|e| *e == event).count(),
+                times,
+                "{event} in {chain:?}"
+            );
         }
         assert!(hub.accounts.chain_intact(&tenant).await.unwrap());
         // Looking again records nothing twice.
@@ -430,12 +591,26 @@ async fn get_my_command_issues_the_line_and_the_step_ticks_once_online() {
         let (status, body) = page(&hub, &path, NOBODY).await;
         assert_eq!(status, 200);
         assert!(body.contains("id=\"finished\" role=\"status\">"), "{body}");
-        assert!(!body.contains("get-command") && !body.contains("data-state=\"current\""), "{body}");
-        let answer: Value = hub.get(&format!("{path}/status"), NOBODY).await.json().await.unwrap();
+        assert!(
+            !body.contains("get-command") && !body.contains("data-state=\"current\""),
+            "{body}"
+        );
+        let answer: Value = hub
+            .get(&format!("{path}/status"), NOBODY)
+            .await
+            .json()
+            .await
+            .unwrap();
         assert_eq!(answer["state"], "completed");
         assert_eq!(answer["steps"][0]["state"], "done");
         // Pressing again after it completed issues nothing.
-        let (late, _) = press(&hub, &path, NOBODY, &[("step", "0"), ("os", "linux"), ("name", "other")]).await;
+        let (late, _) = press(
+            &hub,
+            &path,
+            NOBODY,
+            &[("step", "0"), ("os", "linux"), ("name", "other")],
+        )
+        .await;
         assert_eq!(late, 404);
         assert_eq!(hub.devices.held(&subject).unwrap(), 1);
         let late = turn_on_phone(&hub, &path, NOBODY, 9).await;
@@ -449,7 +624,13 @@ async fn another_account_reaches_nothing_of_a_workflow_through_its_ai() {
         let hub = hub_on(store.as_deref(), json!({})).await;
         let mut alice = hub.first_connect("Claude").await;
         let mut bob = hub.first_connect("Cursor").await;
-        let started = structured(&hub, &mut alice, "workflow_start", json!({ "workflow": "connect-linux" })).await;
+        let started = structured(
+            &hub,
+            &mut alice,
+            "workflow_start",
+            json!({ "workflow": "connect-linux" }),
+        )
+        .await;
         let id = started["id"].as_str().unwrap();
         // Bob's AI with Alice's workflow id: not found, in every tool.
         for (tool, arguments) in [
@@ -459,7 +640,10 @@ async fn another_account_reaches_nothing_of_a_workflow_through_its_ai() {
         ] {
             let answer = hub.call(&mut bob, tool, arguments).await;
             assert_eq!(answer["isError"], true, "{tool}: {answer}");
-            assert!(answer.to_string().contains("unknown_workflow"), "{tool}: {answer}");
+            assert!(
+                answer.to_string().contains("unknown_workflow"),
+                "{tool}: {answer}"
+            );
         }
         // Alice's workflow is as it was, and Bob lists none of hers.
         let status = structured(&hub, &mut alice, "workflow_status", json!({ "id": id })).await;
@@ -470,24 +654,46 @@ async fn another_account_reaches_nothing_of_a_workflow_through_its_ai() {
             .iter()
             .map(|t| t["name"].as_str().unwrap().to_string())
             .collect();
-        for tool in ["workflow_list", "workflow_start", "workflow_status", "workflow_wait", "workflow_cancel"] {
+        for tool in [
+            "workflow_list",
+            "workflow_start",
+            "workflow_status",
+            "workflow_wait",
+            "workflow_cancel",
+        ] {
             assert!(tools.iter().any(|t| t == tool), "{tool} in {tools:?}");
         }
-        assert!(!tools.iter().any(|t| t == "workflow_pair"), "no pairing: {tools:?}");
+        assert!(
+            !tools.iter().any(|t| t == "workflow_pair"),
+            "no pairing: {tools:?}"
+        );
     }
 }
 
 #[tokio::test]
 async fn expiry_cancelling_and_a_new_link_each_end_the_old_one() {
     for store in stores().await {
-        let hub = hub_on(store.as_deref(), json!({ "workflows": { "link_ttl_secs": 300 } })).await;
+        let hub = hub_on(
+            store.as_deref(),
+            json!({ "workflows": { "link_ttl_secs": 300 } }),
+        )
+        .await;
         let mut person = hub.first_connect("Claude").await;
         let (subject, tenant) = who(&hub, &mut person).await;
         // The configured life.
-        let started = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "connect-linux" })).await;
+        let started = structured(
+            &hub,
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": "connect-linux" }),
+        )
+        .await;
         let left = started["expires_at"].as_u64().unwrap() - now_secs();
         assert!((295..=300).contains(&left), "{left}");
-        assert!(started["next"].as_str().unwrap().contains("5 minutes"), "{started}");
+        assert!(
+            started["next"].as_str().unwrap().contains("5 minutes"),
+            "{started}"
+        );
         // Started ten minutes ago with five to live: expired, and it does nothing.
         let site = crate::site::builtin();
         let (old, token, _) = hub
@@ -506,11 +712,25 @@ async fn expiry_cancelling_and_a_new_link_each_end_the_old_one() {
             .unwrap();
         let path = format!("/go/{token}");
         assert_eq!(page(&hub, &path, NOBODY).await.0, 404);
-        assert_eq!(hub.get(&format!("{path}/status"), NOBODY).await.status(), 404);
+        assert_eq!(
+            hub.get(&format!("{path}/status"), NOBODY).await.status(),
+            404
+        );
         let status = structured(&hub, &mut person, "workflow_status", json!({ "id": old })).await;
         assert_eq!(status["state"], "expired");
-        assert!(status["next"].as_str().unwrap().contains("start the workflow again"));
-        let (pressed, _) = press(&hub, &path, NOBODY, &[("step", "0"), ("os", "windows"), ("name", "pc")]).await;
+        assert!(
+            status["next"]
+                .as_str()
+                .unwrap()
+                .contains("start the workflow again")
+        );
+        let (pressed, _) = press(
+            &hub,
+            &path,
+            NOBODY,
+            &[("step", "0"), ("os", "windows"), ("name", "pc")],
+        )
+        .await;
         assert_eq!(pressed, 404);
         assert_eq!(turn_on_phone(&hub, &path, NOBODY, 1).await.status(), 404);
         assert_eq!(hub.devices.held(&subject).unwrap(), 0);
@@ -521,21 +741,43 @@ async fn expiry_cancelling_and_a_new_link_each_end_the_old_one() {
         let cancelled = structured(&hub, &mut person, "workflow_cancel", json!({ "id": id })).await;
         assert_eq!(cancelled["cancelled"], true);
         assert_eq!(page(&hub, &path, NOBODY).await.0, 404);
-        let (pressed, _) = press(&hub, &path, NOBODY, &[("step", "0"), ("os", "linux"), ("name", "nas")]).await;
+        let (pressed, _) = press(
+            &hub,
+            &path,
+            NOBODY,
+            &[("step", "0"), ("os", "linux"), ("name", "nas")],
+        )
+        .await;
         assert_eq!(pressed, 404);
         let again = structured(&hub, &mut person, "workflow_cancel", json!({ "id": id })).await;
         assert_eq!(again["cancelled"], false);
         let status = structured(&hub, &mut person, "workflow_status", json!({ "id": id })).await;
         assert_eq!(status["state"], "cancelled");
         // Starting the same workflow again replaces its earlier link.
-        let first = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "connect-linux" })).await;
-        let second = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "connect-linux" })).await;
+        let first = structured(
+            &hub,
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": "connect-linux" }),
+        )
+        .await;
+        let second = structured(
+            &hub,
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": "connect-linux" }),
+        )
+        .await;
         let first = path_of(first["link"].as_str().unwrap(), &hub);
         let second = path_of(second["link"].as_str().unwrap(), &hub);
         assert_eq!(page(&hub, &first, NOBODY).await.0, 404);
         assert_eq!(page(&hub, &second, NOBODY).await.0, 200);
         let chain = events(&hub, &tenant).await;
-        assert_eq!(chain.iter().filter(|e| *e == "workflow.cancelled").count(), 2, "{chain:?}");
+        assert_eq!(
+            chain.iter().filter(|e| *e == "workflow.cancelled").count(),
+            2,
+            "{chain:?}"
+        );
         // The link is only ever kept as its hash.
         let token = second.trim_start_matches("/go/");
         let row = hub.accounts.workflow_by_link(token).await.unwrap().unwrap();
@@ -550,7 +792,13 @@ async fn keeping_the_account_is_offered_after_the_first_success_to_the_browser_t
         let hub = hub_on(store.as_deref(), json!({})).await;
         let mut person = hub.first_connect("Claude").await;
         let (subject, tenant) = who(&hub, &mut person).await;
-        let started = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "connect-linux" })).await;
+        let started = structured(
+            &hub,
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": "connect-linux" }),
+        )
+        .await;
         let path = path_of(started["link"].as_str().unwrap(), &hub);
         let keep = |cookies: Option<&str>| {
             let mut request = hub
@@ -563,30 +811,63 @@ async fn keeping_the_account_is_offered_after_the_first_success_to_the_browser_t
             }
             request.send()
         };
-        let (_, cookies) = press(&hub, &path, NOBODY, &[("step", "0"), ("os", "linux"), ("name", "server")]).await;
+        let (_, cookies) = press(
+            &hub,
+            &path,
+            NOBODY,
+            &[("step", "0"), ("os", "linux"), ("name", "server")],
+        )
+        .await;
         // Before anything worked: no offer, and asking opens nothing.
         let (_, body) = page(&hub, &path, Some(&cookies)).await;
-        assert!(body.contains("id=\"keep\" aria-labelledby=\"keep-title\" hidden"), "{body}");
+        assert!(
+            body.contains("id=\"keep\" aria-labelledby=\"keep-title\" hidden"),
+            "{body}"
+        );
         let answer = keep(Some(&cookies)).await.unwrap();
         assert_eq!(answer.status(), 303);
         assert!(set_cookie(&answer, "dg_session").is_none());
         // The machine joins and comes online: the first success.
         let stored = format!("{}-server", crate::accounts::tenants::tag(&tenant));
-        hub.devices.enroll(&stored, &code_in(&cookies), &"ab".repeat(32), false).unwrap();
+        hub.devices
+            .enroll(&stored, &code_in(&cookies), &"ab".repeat(32), false)
+            .unwrap();
         let _link = hub.hub.links.connect_for_test(&stored);
-        let answer: Value = hub.get(&format!("{path}/status"), Some(&cookies)).await.json().await.unwrap();
+        let answer: Value = hub
+            .get(&format!("{path}/status"), Some(&cookies))
+            .await
+            .json()
+            .await
+            .unwrap();
         assert_eq!(answer["state"], "completed");
-        assert_eq!(answer["keep"], true, "the browser that did it may keep the account");
+        assert_eq!(
+            answer["keep"], true,
+            "the browser that did it may keep the account"
+        );
         let (_, body) = page(&hub, &path, Some(&cookies)).await;
-        assert!(body.contains("<section class=\"keep\" id=\"keep\" aria-labelledby=\"keep-title\"><h2"), "{body}");
+        assert!(
+            body.contains("<section class=\"keep\" id=\"keep\" aria-labelledby=\"keep-title\"><h2"),
+            "{body}"
+        );
         assert!(body.contains(&format!("id=\"passkey-add\" type=\"button\" data-prepare=\"{path}/keep\" data-return-to=\"{path}\"")), "{body}");
-        assert!(body.contains("<script src=\"/assets/passkey.js\" defer></script>"), "{body}");
+        assert!(
+            body.contains("<script src=\"/assets/passkey.js\" defer></script>"),
+            "{body}"
+        );
         // Another browser holding the same link is offered nothing and gets nothing.
         let (_, other) = page(&hub, &path, NOBODY).await;
         assert!(!other.contains("id=\"keep\""), "{other}");
-        let answer: Value = hub.get(&format!("{path}/status"), NOBODY).await.json().await.unwrap();
+        let answer: Value = hub
+            .get(&format!("{path}/status"), NOBODY)
+            .await
+            .json()
+            .await
+            .unwrap();
         assert_eq!(answer["keep"], false);
-        let stranger = format!("dg_wfb={}", crate::accounts::workflows::new_browser_secret([1; 32]));
+        let stranger = format!(
+            "dg_wfb={}",
+            crate::accounts::workflows::new_browser_secret([1; 32])
+        );
         for cookies in [None, Some(stranger.as_str())] {
             let answer = keep(cookies).await.unwrap();
             assert_eq!(answer.status(), 303);
@@ -607,9 +888,19 @@ async fn keeping_the_account_is_offered_after_the_first_success_to_the_browser_t
         let answer = keep(Some(&cookies)).await.unwrap();
         assert_eq!(answer.status(), 204);
         let session = set_cookie(&answer, "dg_session").expect("a session for the passkey");
-        let me: Value = hub.get("/api/v1/me", Some(&session)).await.json().await.unwrap();
+        let me: Value = hub
+            .get("/api/v1/me", Some(&session))
+            .await
+            .json()
+            .await
+            .unwrap();
         assert_eq!(me["subject"], subject.as_str(), "{me}");
-        assert!(events(&hub, &tenant).await.iter().any(|e| e == "session.opened"));
+        assert!(
+            events(&hub, &tenant)
+                .await
+                .iter()
+                .any(|e| e == "session.opened")
+        );
         // Once the account is secured there is nothing more to keep.
         secure(&hub, &subject, 41).await;
         let answer = keep(Some(&cookies)).await.unwrap();
@@ -641,23 +932,55 @@ async fn keeping_the_account_is_offered_after_the_first_success_to_the_browser_t
     .await;
     let mut person = hub.first_connect("Claude").await;
     let (_, tenant) = who(&hub, &mut person).await;
-    let started = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "connect-linux" })).await;
+    let started = structured(
+        &hub,
+        &mut person,
+        "workflow_start",
+        json!({ "workflow": "connect-linux" }),
+    )
+    .await;
     let path = path_of(started["link"].as_str().unwrap(), &hub);
-    let (_, cookies) = press(&hub, &path, NOBODY, &[("step", "0"), ("os", "linux"), ("name", "server")]).await;
+    let (_, cookies) = press(
+        &hub,
+        &path,
+        NOBODY,
+        &[("step", "0"), ("os", "linux"), ("name", "server")],
+    )
+    .await;
     let stored = format!("{}-server", crate::accounts::tenants::tag(&tenant));
-    hub.devices.enroll(&stored, &code_in(&cookies), &"ab".repeat(32), false).unwrap();
+    hub.devices
+        .enroll(&stored, &code_in(&cookies), &"ab".repeat(32), false)
+        .unwrap();
     let _link = hub.hub.links.connect_for_test(&stored);
     let (_, body) = page(&hub, &path, Some(&cookies)).await;
     assert!(body.contains("name=\"how\" value=\"github\""), "{body}");
     assert!(body.contains("Continue with GitHub"), "{body}");
     assert!(!body.contains("passkey-add"), "{body}");
-    let answer = hub.form(&format!("{path}/keep"), Some(&cookies), &[("how", "github")]).await;
+    let answer = hub
+        .form(
+            &format!("{path}/keep"),
+            Some(&cookies),
+            &[("how", "github")],
+        )
+        .await;
     assert_eq!(answer.status(), 303);
-    let location = answer.headers()[header::LOCATION].to_str().unwrap().to_string();
-    assert!(location.starts_with("/auth/provider/github?return_to=%2Fgo%2Fdgw_"), "{location}");
+    let location = answer.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        location.starts_with("/auth/provider/github?return_to=%2Fgo%2Fdgw_"),
+        "{location}"
+    );
     assert!(location.ends_with("&link=1"), "{location}");
     assert!(set_cookie(&answer, "dg_session").is_some());
-    let answer = hub.form(&format!("{path}/keep"), Some(&cookies), &[("how", "passkey")]).await;
+    let answer = hub
+        .form(
+            &format!("{path}/keep"),
+            Some(&cookies),
+            &[("how", "passkey")],
+        )
+        .await;
     assert_eq!(answer.status(), 303, "a way this page does not offer");
 }
 
@@ -666,8 +989,19 @@ async fn each_step_kind_is_done_when_the_hub_sees_it_and_a_wait_returns_the_mome
     // The built-in "Get started" is this computer and done (spec first-connect, B).
     let builtin = hub_on(None, json!({})).await;
     let mut someone = builtin.first_connect("Claude").await;
-    let started = structured(&builtin, &mut someone, "workflow_start", json!({ "workflow": "get-started" })).await;
-    let kinds: Vec<&str> = started["steps"].as_array().unwrap().iter().map(|s| s["kind"].as_str().unwrap()).collect();
+    let started = structured(
+        &builtin,
+        &mut someone,
+        "workflow_start",
+        json!({ "workflow": "get-started" }),
+    )
+    .await;
+    let kinds: Vec<&str> = started["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["kind"].as_str().unwrap())
+        .collect();
     assert_eq!(kinds, ["machine", "done"]);
     for store in stores().await {
         // Every step kind, in a site whose "Get started" still has each one.
@@ -677,44 +1011,89 @@ async fn each_step_kind_is_done_when_the_hub_sees_it_and_a_wait_returns_the_mome
         .await;
         let mut person = hub.first_connect("Claude").await;
         let (subject, tenant) = who(&hub, &mut person).await;
-        let started = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "get-started" })).await;
+        let started = structured(
+            &hub,
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": "get-started" }),
+        )
+        .await;
         let id = started["id"].as_str().unwrap().to_string();
         let path = path_of(started["link"].as_str().unwrap(), &hub);
         let column = |status: &Value, key: &str| -> Vec<String> {
-            status["steps"].as_array().unwrap().iter().map(|s| s[key].as_str().unwrap().to_string()).collect()
+            status["steps"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s[key].as_str().unwrap().to_string())
+                .collect()
         };
-        assert_eq!(column(&started, "kind"), ["machine", "phone", "secure_account", "done"]);
-        assert_eq!(column(&started, "state"), ["current", "pending", "pending", "pending"]);
+        assert_eq!(
+            column(&started, "kind"),
+            ["machine", "phone", "secure_account", "done"]
+        );
+        assert_eq!(
+            column(&started, "state"),
+            ["current", "pending", "pending", "pending"]
+        );
         assert_eq!(step(&started, 2)["optional"], true);
-        assert_eq!(step(&started, 2)["fact"], "Your account is not secured yet.");
+        assert_eq!(
+            step(&started, 2)["fact"],
+            "Your account is not secured yet."
+        );
         // The page: the OS to pick, no Mac to pick and why, the phone's button.
         let (_, body) = page(&hub, &path, NOBODY).await;
         for os in ["linux", "windows", "docker", "host"] {
-            assert!(body.contains(&format!("name=\"os\" value=\"{os}\"")), "{os}: {body}");
+            assert!(
+                body.contains(&format!("name=\"os\" value=\"{os}\"")),
+                "{os}: {body}"
+            );
         }
         assert!(!body.contains("value=\"mac\""));
         assert!(body.contains("not available yet"), "{body}");
-        assert!(body.contains(&format!("data-subscribe=\"{path}/phone\" data-auto=\"off\"")), "{body}");
-        assert!(body.contains("<script src=\"/assets/push.js\" defer></script>"), "{body}");
+        assert!(
+            body.contains(&format!(
+                "data-subscribe=\"{path}/phone\" data-auto=\"off\""
+            )),
+            "{body}"
+        );
+        assert!(
+            body.contains("<script src=\"/assets/push.js\" defer></script>"),
+            "{body}"
+        );
         assert!(body.contains("data-optional=\"true\""), "{body}");
         // Without an OS picked, nothing is issued.
         let (status, _) = press(&hub, &path, NOBODY, &[("step", "0"), ("name", "box")]).await;
         assert_eq!(status, 303);
         assert_eq!(hub.devices.held(&subject).unwrap(), 0);
         // machine: the person picks Docker on the page.
-        let (status, cookies) = press(&hub, &path, NOBODY, &[("step", "0"), ("os", "docker"), ("name", "box")]).await;
+        let (status, cookies) = press(
+            &hub,
+            &path,
+            NOBODY,
+            &[("step", "0"), ("os", "docker"), ("name", "box")],
+        )
+        .await;
         assert_eq!(status, 303);
         let (_, body) = page(&hub, &path, Some(&cookies)).await;
         assert!(
-            body.contains(&format!("curl -fsSL {}/join/dvg-", hub.url)) && body.contains(".compose.yml -o compose.yml"),
+            body.contains(&format!("curl -fsSL {}/join/dvg-", hub.url))
+                && body.contains(".compose.yml -o compose.yml"),
             "{body}"
         );
         let stored = format!("{}-box", crate::accounts::tenants::tag(&tenant));
-        hub.devices.enroll(&stored, &code_in(&cookies), &"cd".repeat(32), false).unwrap();
+        hub.devices
+            .enroll(&stored, &code_in(&cookies), &"cd".repeat(32), false)
+            .unwrap();
         // A wait returns when the machine connects.
         let at = Instant::now();
         let (waited, _link) = tokio::join!(
-            structured(&hub, &mut person, "workflow_wait", json!({ "id": id, "timeout_secs": 60 })),
+            structured(
+                &hub,
+                &mut person,
+                "workflow_wait",
+                json!({ "id": id, "timeout_secs": 60 })
+            ),
             async {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 hub.hub.links.connect_for_test(&stored)
@@ -726,7 +1105,10 @@ async fn each_step_kind_is_done_when_the_hub_sees_it_and_a_wait_returns_the_mome
         assert_eq!(step(&waited, 0)["fact"], "box is online.");
         assert_eq!(step(&waited, 0)["os"], "docker");
         assert_eq!(step(&waited, 1)["state"], "current");
-        assert_eq!(step(&waited, 1)["fact"], "No phone has notifications on yet.");
+        assert_eq!(
+            step(&waited, 1)["fact"],
+            "No phone has notifications on yet."
+        );
         // phone: the same link opened on the phone, which never signed in; a wait wakes.
         let refused = hub
             .http
@@ -739,18 +1121,29 @@ async fn each_step_kind_is_done_when_the_hub_sees_it_and_a_wait_returns_the_mome
         assert_eq!(refused.status(), 403);
         let at = Instant::now();
         let (waited, subscribed) = tokio::join!(
-            structured(&hub, &mut person, "workflow_wait", json!({ "id": id, "timeout_secs": 60 })),
+            structured(
+                &hub,
+                &mut person,
+                "workflow_wait",
+                json!({ "id": id, "timeout_secs": 60 })
+            ),
             async {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 turn_on_phone(&hub, &path, NOBODY, 5).await
             }
         );
         assert_eq!(subscribed.status(), 204);
-        assert!(set_cookie(&subscribed, "dg_wfb").is_some(), "the phone did a step");
+        assert!(
+            set_cookie(&subscribed, "dg_wfb").is_some(),
+            "the phone did a step"
+        );
         assert!(at.elapsed() < Duration::from_secs(30), "{:?}", at.elapsed());
         assert_eq!(waited["changed"], true, "{waited}");
         assert_eq!(step(&waited, 1)["state"], "done");
-        assert_eq!(step(&waited, 1)["fact"], "Notifications are on for 1 phone or browser.");
+        assert_eq!(
+            step(&waited, 1)["fact"],
+            "Notifications are on for 1 phone or browser."
+        );
         // Keeping the account is optional: done or not, the workflow completes without it.
         assert_eq!(step(&waited, 2)["state"], "pending");
         assert_eq!(step(&waited, 3)["state"], "done");
@@ -762,25 +1155,59 @@ async fn each_step_kind_is_done_when_the_hub_sees_it_and_a_wait_returns_the_mome
         assert_eq!(step(&status, 2)["fact"], "Your account is secured.");
         // A wait on a finished workflow answers at once.
         let at = Instant::now();
-        let waited = structured(&hub, &mut person, "workflow_wait", json!({ "id": id, "timeout_secs": 60 })).await;
+        let waited = structured(
+            &hub,
+            &mut person,
+            "workflow_wait",
+            json!({ "id": id, "timeout_secs": 60 }),
+        )
+        .await;
         assert!(at.elapsed() < Duration::from_secs(10), "{:?}", at.elapsed());
         assert_eq!(waited["changed"], false);
         assert_eq!(waited["state"], "completed");
         // A wait with nothing moving times out, unchanged; a phone workflow takes no line.
-        let open = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "connect-windows" })).await;
+        let open = structured(
+            &hub,
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": "connect-windows" }),
+        )
+        .await;
         let at = Instant::now();
-        let waited = structured(&hub, &mut person, "workflow_wait", json!({ "id": open["id"], "timeout_secs": 1 })).await;
+        let waited = structured(
+            &hub,
+            &mut person,
+            "workflow_wait",
+            json!({ "id": open["id"], "timeout_secs": 1 }),
+        )
+        .await;
         assert!(at.elapsed() >= Duration::from_secs(1));
         assert_eq!(waited["changed"], false);
         assert_eq!(waited["state"], "open");
         let windows = path_of(open["link"].as_str().unwrap(), &hub);
-        assert_eq!(turn_on_phone(&hub, &windows, NOBODY, 6).await.status(), 404, "no phone step there");
+        assert_eq!(
+            turn_on_phone(&hub, &windows, NOBODY, 6).await.status(),
+            404,
+            "no phone step there"
+        );
         // A phone is on already: a phone workflow is done the moment it starts, and its
         // link grants nothing.
-        let phone = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "phone-approvals" })).await;
+        let phone = structured(
+            &hub,
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": "phone-approvals" }),
+        )
+        .await;
         assert_eq!(step(&phone, 0)["state"], "done", "{phone}");
         let phone = path_of(phone["link"].as_str().unwrap(), &hub);
-        let (pressed, _) = press(&hub, &phone, NOBODY, &[("step", "0"), ("os", "linux"), ("name", "x")]).await;
+        let (pressed, _) = press(
+            &hub,
+            &phone,
+            NOBODY,
+            &[("step", "0"), ("os", "linux"), ("name", "x")],
+        )
+        .await;
         assert_eq!(pressed, 404);
         assert_eq!(hub.devices.held(&subject).unwrap(), 1);
     }
@@ -803,31 +1230,71 @@ async fn a_plans_machine_limit_is_said_plainly_to_the_ai_and_on_the_page() {
         })
         .await;
         let mut person = hub.first_connect("Claude").await;
-        let started = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "connect-linux" })).await;
+        let started = structured(
+            &hub,
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": "connect-linux" }),
+        )
+        .await;
         assert_eq!(step(&started, 0)["state"], "current");
         let path = path_of(started["link"].as_str().unwrap(), &hub);
         // One machine already: the plan's one.
-        let added = hub.call(&mut person, "machine_add", json!({ "name": "first" })).await;
+        let added = hub
+            .call(&mut person, "machine_add", json!({ "name": "first" }))
+            .await;
         assert_ne!(added["isError"], true, "{added}");
-        let status = structured(&hub, &mut person, "workflow_status", json!({ "id": started["id"] })).await;
+        let status = structured(
+            &hub,
+            &mut person,
+            "workflow_status",
+            json!({ "id": started["id"] }),
+        )
+        .await;
         assert_eq!(step(&status, 0)["state"], "unavailable", "{status}");
         let why = step(&status, 0)["why"].as_str().unwrap().to_string();
         assert!(why.contains("Your Free plan holds 1 machine here"), "{why}");
-        assert!(status["next"].as_str().unwrap().contains("cannot be done"), "{status}");
+        assert!(
+            status["next"].as_str().unwrap().contains("cannot be done"),
+            "{status}"
+        );
         let (_, body) = page(&hub, &path, NOBODY).await;
         assert!(body.contains("data-state=\"unavailable\""), "{body}");
         assert!(body.contains(&escaped(&why)), "{body}");
         assert!(!body.contains("get-command-1"), "{body}");
-        let pressed = hub.form(&format!("{path}/command"), NOBODY, &[("step", "0"), ("os", "linux"), ("name", "second")]).await;
+        let pressed = hub
+            .form(
+                &format!("{path}/command"),
+                NOBODY,
+                &[("step", "0"), ("os", "linux"), ("name", "second")],
+            )
+            .await;
         assert_eq!(pressed.status(), 403);
         let (_, body) = Hosted::text(pressed).await;
         assert!(body.contains("Your Free plan holds 1 machine"), "{body}");
         // Starting another machine workflow now says so at once.
-        let answer = hub.call(&mut person, "workflow_start", json!({ "workflow": "connect-windows" })).await;
+        let answer = hub
+            .call(
+                &mut person,
+                "workflow_start",
+                json!({ "workflow": "connect-windows" }),
+            )
+            .await;
         assert_eq!(answer["isError"], true, "{answer}");
-        assert!(answer.to_string().contains("Your Free plan holds 1 machine"), "{answer}");
+        assert!(
+            answer
+                .to_string()
+                .contains("Your Free plan holds 1 machine"),
+            "{answer}"
+        );
         // A phone takes no machine: still fine.
-        let phone = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "phone-approvals" })).await;
+        let phone = structured(
+            &hub,
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": "phone-approvals" }),
+        )
+        .await;
         assert_eq!(step(&phone, 0)["state"], "current");
     }
 }
@@ -873,36 +1340,78 @@ async fn a_neutral_sites_workflow_pages_name_only_that_site() {
     let listed = structured(&hub, &mut person, "workflow_list", json!({})).await;
     seen.push(("workflow_list".to_string(), listed.to_string()));
     for (workflow, name) in [("get-started", "desk"), ("connect-linux", "nas")] {
-        let started = structured(&hub, &mut person, "workflow_start", json!({ "workflow": workflow })).await;
+        let started = structured(
+            &hub,
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": workflow }),
+        )
+        .await;
         seen.push((format!("{workflow} started"), started.to_string()));
         let path = path_of(started["link"].as_str().unwrap(), &hub);
-        seen.push((format!("{workflow} page"), page(&hub, &path, NOBODY).await.1));
-        let (_, cookies) = press(&hub, &path, NOBODY, &[("step", "0"), ("os", "linux"), ("name", name)]).await;
+        seen.push((
+            format!("{workflow} page"),
+            page(&hub, &path, NOBODY).await.1,
+        ));
+        let (_, cookies) = press(
+            &hub,
+            &path,
+            NOBODY,
+            &[("step", "0"), ("os", "linux"), ("name", name)],
+        )
+        .await;
         let (_, body) = page(&hub, &path, Some(&cookies)).await;
         assert!(body.contains("/join/dvg-"), "{body}");
         seen.push((format!("{workflow} with its line page"), body));
         let stored = format!("{}-{name}", crate::accounts::tenants::tag(&tenant));
-        hub.devices.enroll(&stored, &code_in(&cookies), &"ef".repeat(32), false).unwrap();
+        hub.devices
+            .enroll(&stored, &code_in(&cookies), &"ef".repeat(32), false)
+            .unwrap();
         let _link = hub.hub.links.connect_for_test(&stored);
         let (_, body) = page(&hub, &path, Some(&cookies)).await;
         assert!(body.contains("id=\"keep\""), "{body}");
         seen.push((format!("{workflow} keep page"), body));
-        let status: Value = hub.get(&format!("{path}/status"), Some(&cookies)).await.json().await.unwrap();
+        let status: Value = hub
+            .get(&format!("{path}/status"), Some(&cookies))
+            .await
+            .json()
+            .await
+            .unwrap();
         seen.push((format!("{workflow} status"), status.to_string()));
     }
-    for workflow in ["connect-claude", "connect-chatgpt", "connect-grok", "connect-cursor", "phone-approvals"] {
-        let started = structured(&hub, &mut person, "workflow_start", json!({ "workflow": workflow })).await;
+    for workflow in [
+        "connect-claude",
+        "connect-chatgpt",
+        "connect-grok",
+        "connect-cursor",
+        "phone-approvals",
+    ] {
+        let started = structured(
+            &hub,
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": workflow }),
+        )
+        .await;
         let path = path_of(started["link"].as_str().unwrap(), &hub);
         let (_, body) = page(&hub, &path, NOBODY).await;
         seen.push((format!("{workflow} page"), body));
     }
     seen.push(("dead link".into(), page(&hub, "/go/x", NOBODY).await.1));
-    let script = hub.get("/assets/workflow.js", NOBODY).await.text().await.unwrap();
+    let script = hub
+        .get("/assets/workflow.js", NOBODY)
+        .await
+        .text()
+        .await
+        .unwrap();
     seen.push(("workflow.js".into(), script));
     for (what, text) in seen {
         crate::site::tests::assert_no_brand(&what, &text);
         if what.ends_with(" page") {
-            assert!(text.contains("Lumen Relay"), "{what} names its own site: {text}");
+            assert!(
+                text.contains("Lumen Relay"),
+                "{what} names its own site: {text}"
+            );
         }
     }
 }
@@ -934,10 +1443,17 @@ async fn connect_in(hub: &Hosted, app: &str, cookie: &str) -> Person {
         web_encode(redirect),
         web_encode(&mcp)
     );
-    let (status, page) = Hosted::text(hub.get(&format!("/oauth/authorize?{query}"), Some(cookie)).await).await;
+    let (status, page) = Hosted::text(
+        hub.get(&format!("/oauth/authorize?{query}"), Some(cookie))
+            .await,
+    )
+    .await;
     assert_eq!(status, 200, "{page}");
     assert!(page.contains(&format!("<h1>Connect {app}?</h1>")), "{page}");
-    assert!(!page.contains("your new"), "it joins the account this browser is in: {page}");
+    assert!(
+        !page.contains("your new"),
+        "it joins the account this browser is in: {page}"
+    );
     let answer = hub
         .form(
             "/oauth/authorize",
@@ -954,7 +1470,10 @@ async fn connect_in(hub: &Hosted, app: &str, cookie: &str) -> Person {
         )
         .await;
     assert_eq!(answer.status(), 303);
-    let location = answer.headers()[header::LOCATION].to_str().unwrap().to_string();
+    let location = answer.headers()[header::LOCATION]
+        .to_str()
+        .unwrap()
+        .to_string();
     let code = query_param(&location, "code").expect("a code");
     let tokens: Value = hub
         .http
@@ -985,8 +1504,18 @@ async fn an_ai_client_step_is_done_when_a_client_of_its_family_calls_for_the_ten
         let hub = hub_on(store.as_deref(), json!({})).await;
         let mut claude = hub.first_connect("Claude").await;
         let (subject, tenant) = who(&hub, &mut claude).await;
-        assert_eq!(hub.accounts.client_families(&tenant).await.unwrap(), ["claude"], "Claude's own call counts");
-        let started = structured(&hub, &mut claude, "workflow_start", json!({ "workflow": "connect-chatgpt" })).await;
+        assert_eq!(
+            hub.accounts.client_families(&tenant).await.unwrap(),
+            ["claude"],
+            "Claude's own call counts"
+        );
+        let started = structured(
+            &hub,
+            &mut claude,
+            "workflow_start",
+            json!({ "workflow": "connect-chatgpt" }),
+        )
+        .await;
         let id = started["id"].as_str().unwrap().to_string();
         let path = path_of(started["link"].as_str().unwrap(), &hub);
         assert_eq!(step(&started, 0)["kind"], "ai_client");
@@ -998,8 +1527,16 @@ async fn an_ai_client_step_is_done_when_a_client_of_its_family_calls_for_the_ten
         let (_, body) = page(&hub, &path, NOBODY).await;
         let mcp = format!("{}/mcp", hub.url);
         assert!(body.contains("Developer mode"), "{body}");
-        assert!(body.contains(&format!("<code id=\"client-1-0\">{mcp}</code>")), "{body}");
-        assert!(body.contains(&format!("<code id=\"client-1-1\">codex mcp add devagotchi --url {mcp}</code>")), "{body}");
+        assert!(
+            body.contains(&format!("<code id=\"client-1-0\">{mcp}</code>")),
+            "{body}"
+        );
+        assert!(
+            body.contains(&format!(
+                "<code id=\"client-1-1\">codex mcp add devagotchi --url {mcp}</code>"
+            )),
+            "{body}"
+        );
         assert!(body.contains("data-copy=\"client-1-1\" hidden"), "{body}");
         assert!(body.contains("id=\"client-here-1\""), "{body}");
         // ChatGPT connected to someone else's account does not count here.
@@ -1019,7 +1556,9 @@ async fn an_ai_client_step_is_done_when_a_client_of_its_family_calls_for_the_ten
         assert_eq!(refused.status(), 403);
         // The person presses the button in the browser ChatGPT will open: a session of the
         // account, so ChatGPT's Connect lands there.
-        let pressed = hub.form(&format!("{path}/client"), NOBODY, &[("step", "0")]).await;
+        let pressed = hub
+            .form(&format!("{path}/client"), NOBODY, &[("step", "0")])
+            .await;
         assert_eq!(pressed.status(), 303);
         let session = set_cookie(&pressed, "dg_session").expect("a session of the account");
         let browser = set_cookie(&pressed, "dg_wfb").expect("the browser's own cookie");
@@ -1027,17 +1566,31 @@ async fn an_ai_client_step_is_done_when_a_client_of_its_family_calls_for_the_ten
         let (_, body) = page(&hub, &path, Some(&cookies)).await;
         assert!(body.contains("id=\"client-ready-1\""), "{body}");
         assert!(!body.contains("id=\"client-here-1\""), "{body}");
-        assert!(events(&hub, &tenant).await.iter().any(|e| e == "session.opened"));
+        assert!(
+            events(&hub, &tenant)
+                .await
+                .iter()
+                .any(|e| e == "session.opened")
+        );
         // ChatGPT connects in that browser and makes a call: the step is done, and a wait
         // returns the moment it is.
         let mut chatgpt = connect_in(&hub, "ChatGPT", &session).await;
         let at = Instant::now();
         let (waited, ()) = tokio::join!(
-            structured(&hub, &mut claude, "workflow_wait", json!({ "id": id, "timeout_secs": 60 })),
+            structured(
+                &hub,
+                &mut claude,
+                "workflow_wait",
+                json!({ "id": id, "timeout_secs": 60 })
+            ),
             async {
                 tokio::time::sleep(Duration::from_millis(300)).await;
                 let me = structured(&hub, &mut chatgpt, "whoami", json!({})).await;
-                assert_eq!(me["subject"], subject.as_str(), "ChatGPT is on the same account");
+                assert_eq!(
+                    me["subject"],
+                    subject.as_str(),
+                    "ChatGPT is on the same account"
+                );
             }
         );
         assert!(at.elapsed() < Duration::from_secs(30), "{:?}", at.elapsed());
@@ -1049,18 +1602,37 @@ async fn an_ai_client_step_is_done_when_a_client_of_its_family_calls_for_the_ten
         families.sort();
         assert_eq!(families, ["chatgpt", "claude"]);
         // A client that is already connected: done the moment it starts.
-        let again = structured(&hub, &mut claude, "workflow_start", json!({ "workflow": "connect-claude" })).await;
+        let again = structured(
+            &hub,
+            &mut claude,
+            "workflow_start",
+            json!({ "workflow": "connect-claude" }),
+        )
+        .await;
         assert_eq!(step(&again, 0)["state"], "done", "{again}");
         // A secured account signs in on the client's page; the link opens no session.
         secure(&hub, &subject, 51).await;
-        let cursor = structured(&hub, &mut claude, "workflow_start", json!({ "workflow": "connect-cursor" })).await;
+        let cursor = structured(
+            &hub,
+            &mut claude,
+            "workflow_start",
+            json!({ "workflow": "connect-cursor" }),
+        )
+        .await;
         let path = path_of(cursor["link"].as_str().unwrap(), &hub);
         let (_, body) = page(&hub, &path, NOBODY).await;
         assert!(body.contains("sign in there as you usually do"), "{body}");
         assert!(!body.contains("id=\"client-here-1\""), "{body}");
-        let entry = format!("{{ &quot;mcpServers&quot;: {{ &quot;devagotchi&quot;: {{ &quot;url&quot;: &quot;{mcp}&quot; }} }} }}");
-        assert!(body.contains(&entry), "Cursor's mcp.json entry, as is: {body}");
-        let pressed = hub.form(&format!("{path}/client"), NOBODY, &[("step", "0")]).await;
+        let entry = format!(
+            "{{ &quot;mcpServers&quot;: {{ &quot;devagotchi&quot;: {{ &quot;url&quot;: &quot;{mcp}&quot; }} }} }}"
+        );
+        assert!(
+            body.contains(&entry),
+            "Cursor's mcp.json entry, as is: {body}"
+        );
+        let pressed = hub
+            .form(&format!("{path}/client"), NOBODY, &[("step", "0")])
+            .await;
         assert_eq!(pressed.status(), 303);
         assert!(set_cookie(&pressed, "dg_session").is_none());
     }
@@ -1075,13 +1647,31 @@ async fn the_sites_workflows_name_only_clients_and_kinds_the_hub_runs() {
         .map_err(|error| error.to_string())?;
         file.check()
     };
-    assert_eq!(check(json!([{ "kind": "ai_client", "client": "claude", "title": "C", "text": "" }])), Ok(()));
+    assert_eq!(
+        check(json!([{ "kind": "ai_client", "client": "claude", "title": "C", "text": "" }])),
+        Ok(())
+    );
     for (steps, why) in [
-        (json!([{ "kind": "ai_client", "title": "C", "text": "" }]), "names its client"),
-        (json!([{ "kind": "ai_client", "client": "copilot", "title": "C", "text": "" }]), "not one the hub connects"),
-        (json!([{ "kind": "machine", "client": "claude", "title": "C", "text": "" }]), "takes no client"),
-        (json!([{ "kind": "teleport", "title": "C", "text": "" }]), "not one this hub runs"),
-        (json!([{ "kind": "machine", "os": "mac", "title": "C", "text": "" }]), "not one the hub installs on"),
+        (
+            json!([{ "kind": "ai_client", "title": "C", "text": "" }]),
+            "names its client",
+        ),
+        (
+            json!([{ "kind": "ai_client", "client": "copilot", "title": "C", "text": "" }]),
+            "not one the hub connects",
+        ),
+        (
+            json!([{ "kind": "machine", "client": "claude", "title": "C", "text": "" }]),
+            "takes no client",
+        ),
+        (
+            json!([{ "kind": "teleport", "title": "C", "text": "" }]),
+            "not one this hub runs",
+        ),
+        (
+            json!([{ "kind": "machine", "os": "mac", "title": "C", "text": "" }]),
+            "not one the hub installs on",
+        ),
     ] {
         let refused = check(steps).unwrap_err();
         assert!(refused.contains(why), "{refused}");
@@ -1089,18 +1679,37 @@ async fn the_sites_workflows_name_only_clients_and_kinds_the_hub_runs() {
     // Every client this hub connects has its steps in the built-in site, one per family the
     // analytics tell apart.
     let site = crate::site::builtin();
-    let clients: Vec<&str> = site.messages.workflow.clients.keys().map(String::as_str).collect();
+    let clients: Vec<&str> = site
+        .messages
+        .workflow
+        .clients
+        .keys()
+        .map(String::as_str)
+        .collect();
     let mut known = crate::site::workflows::AI_CLIENTS.to_vec();
     known.sort_unstable();
     assert_eq!(clients, known);
-    let mut families: Vec<&str> =
-        crate::analytics::funnel::FAMILIES.iter().copied().filter(|f| *f != "other").collect();
+    let mut families: Vec<&str> = crate::analytics::funnel::FAMILIES
+        .iter()
+        .copied()
+        .filter(|f| *f != "other")
+        .collect();
     families.sort_unstable();
     assert_eq!(families, known);
     // And the names those clients register with land in their families.
-    for (name, family) in [("Claude", "claude"), ("Claude Code", "claude"), ("ChatGPT", "chatgpt"),
-                           ("Codex", "chatgpt"), ("Grok", "grok"), ("Cursor", "cursor")] {
-        assert_eq!(crate::analytics::funnel::client_family(name), family, "{name}");
+    for (name, family) in [
+        ("Claude", "claude"),
+        ("Claude Code", "claude"),
+        ("ChatGPT", "chatgpt"),
+        ("Codex", "chatgpt"),
+        ("Grok", "grok"),
+        ("Cursor", "cursor"),
+    ] {
+        assert_eq!(
+            crate::analytics::funnel::client_family(name),
+            family,
+            "{name}"
+        );
     }
 }
 
@@ -1117,12 +1726,26 @@ async fn a_client_the_site_marks_unavailable_is_offered_as_unavailable_with_its_
     .await;
     let mut person = hub.first_connect("Claude").await;
     let listed = structured(&hub, &mut person, "workflow_list", json!({})).await;
-    let offer = |id: &str| listed["workflows"].as_array().unwrap().iter().find(|w| w["id"] == id).unwrap().clone();
+    let offer = |id: &str| {
+        listed["workflows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|w| w["id"] == id)
+            .unwrap()
+            .clone()
+    };
     let grok = offer("connect-grok");
     assert_eq!(grok["available"], false, "{grok}");
     assert_eq!(grok["why"], why, "{grok}");
     assert_eq!(offer("connect-cursor")["available"], true);
-    let answer = hub.call(&mut person, "workflow_start", json!({ "workflow": "connect-grok" })).await;
+    let answer = hub
+        .call(
+            &mut person,
+            "workflow_start",
+            json!({ "workflow": "connect-grok" }),
+        )
+        .await;
     assert_eq!(answer["isError"], true, "{answer}");
     assert!(answer.to_string().contains(why), "{answer}");
 }
@@ -1131,11 +1754,20 @@ async fn a_client_the_site_marks_unavailable_is_offered_as_unavailable_with_its_
 async fn the_phone_step_shows_its_link_as_a_qr_code() {
     let hub = hub_on(None, json!({})).await;
     let mut person = hub.first_connect("Claude").await;
-    let started = structured(&hub, &mut person, "workflow_start", json!({ "workflow": "phone-approvals" })).await;
+    let started = structured(
+        &hub,
+        &mut person,
+        "workflow_start",
+        json!({ "workflow": "phone-approvals" }),
+    )
+    .await;
     let path = path_of(started["link"].as_str().unwrap(), &hub);
     let (_, body) = page(&hub, &path, NOBODY).await;
     assert!(body.contains("<figure class=\"qr\" id=\"qr\"><svg role=\"img\" aria-label=\"This page&#39;s link as a QR code"), "{body}");
     assert!(!body.contains("<?xml"), "{body}");
     let svg = body.split("<figure class=\"qr\"").nth(1).unwrap();
-    assert!(svg.contains("<path") && svg.contains("</svg></figure>"), "{svg}");
+    assert!(
+        svg.contains("<path") && svg.contains("</svg></figure>"),
+        "{svg}"
+    );
 }

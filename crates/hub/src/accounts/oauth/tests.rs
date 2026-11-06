@@ -33,21 +33,37 @@ async fn client(accounts: &Accounts) -> Client {
 
 async fn code(accounts: &Accounts, client: &Client) -> String {
     accounts
-        .issue_code(&client.id, A, REDIRECT, &s256(VERIFIER), RESOURCE, "mcp offline_access")
+        .issue_code(
+            &client.id,
+            A,
+            REDIRECT,
+            &s256(VERIFIER),
+            RESOURCE,
+            "mcp offline_access",
+        )
         .await
         .unwrap()
 }
 
 async fn connect(accounts: &Accounts, client: &Client) -> Tokens {
     accounts
-        .exchange_code(&code(accounts, client).await, &client.id, REDIRECT, VERIFIER, Some(RESOURCE))
+        .exchange_code(
+            &code(accounts, client).await,
+            &client.id,
+            REDIRECT,
+            VERIFIER,
+            Some(RESOURCE),
+        )
         .await
         .unwrap()
 }
 
 #[test]
 fn pkce_is_rfc_7636s_example() {
-    assert_eq!(s256(VERIFIER), "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+    assert_eq!(
+        s256(VERIFIER),
+        "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+    );
 }
 
 #[test]
@@ -99,7 +115,10 @@ async fn clients_register_with_valid_redirects_and_the_oldest_unused_make_room()
         let used = client(&accounts).await;
         connect(&accounts, &used).await;
         let third = client(&accounts).await;
-        assert!(accounts.client(&first.id).await.unwrap().is_none(), "never used, oldest");
+        assert!(
+            accounts.client(&first.id).await.unwrap().is_none(),
+            "never used, oldest"
+        );
         assert!(accounts.client(&used.id).await.unwrap().is_some());
         assert!(accounts.client(&third.id).await.unwrap().is_some());
     }
@@ -113,22 +132,33 @@ async fn a_code_becomes_tokens_once_for_its_client_redirect_verifier_and_resourc
             .register_client("Other", &[REDIRECT.to_string()])
             .await
             .unwrap();
-        let refused = async |code: &str, client: &str, redirect: &str, verifier: &str, resource: &str| {
-            accounts
-                .exchange_code(code, client, redirect, verifier, Some(resource))
-                .await
-                .unwrap_err()
-                .code
-        };
+        let refused =
+            async |code: &str, client: &str, redirect: &str, verifier: &str, resource: &str| {
+                accounts
+                    .exchange_code(code, client, redirect, verifier, Some(resource))
+                    .await
+                    .unwrap_err()
+                    .code
+            };
         let short = "x".repeat(42);
         let wrong = "x".repeat(43);
         // Each wrong part refuses, and the code is gone with the first try.
         for (who, redirect, verifier, resource) in [
             (other.id.as_str(), REDIRECT, VERIFIER, RESOURCE),
-            (client.id.as_str(), "https://ai.example.net/other", VERIFIER, RESOURCE),
+            (
+                client.id.as_str(),
+                "https://ai.example.net/other",
+                VERIFIER,
+                RESOURCE,
+            ),
             (client.id.as_str(), REDIRECT, wrong.as_str(), RESOURCE),
             (client.id.as_str(), REDIRECT, short.as_str(), RESOURCE),
-            (client.id.as_str(), REDIRECT, VERIFIER, "https://evil.example/mcp"),
+            (
+                client.id.as_str(),
+                REDIRECT,
+                VERIFIER,
+                "https://evil.example/mcp",
+            ),
         ] {
             let c = code(&accounts, &client).await;
             assert_eq!(
@@ -149,7 +179,11 @@ async fn a_code_becomes_tokens_once_for_its_client_redirect_verifier_and_resourc
         assert!(tokens.access.starts_with("dgh_") && tokens.refresh.starts_with("dgr_"));
         assert_eq!(tokens.expires_in, TokenConfig::default().access_secs);
         assert_eq!(tokens.scope, "mcp offline_access");
-        let grant = accounts.verify_access(&tokens.access).await.unwrap().unwrap();
+        let grant = accounts
+            .verify_access(&tokens.access)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(
             (grant.account.id.as_str(), grant.client.as_str()),
             (A, client.id.as_str())
@@ -164,7 +198,14 @@ async fn a_code_becomes_tokens_once_for_its_client_redirect_verifier_and_resourc
         let late = code(&accounts, &client).await;
         assert_eq!(
             accounts
-                .exchange_code_at(&late, &client.id, REDIRECT, VERIFIER, Some(RESOURCE), now_secs() + limits.code_secs)
+                .exchange_code_at(
+                    &late,
+                    &client.id,
+                    REDIRECT,
+                    VERIFIER,
+                    Some(RESOURCE),
+                    now_secs() + limits.code_secs
+                )
                 .await
                 .unwrap_err()
                 .code,
@@ -187,7 +228,15 @@ async fn lifetimes_come_from_the_config() {
         let client = client(&accounts).await;
         let now = now_secs();
         let c = accounts
-            .issue_code_at(&client.id, A, REDIRECT, &s256(VERIFIER), RESOURCE, "mcp", now)
+            .issue_code_at(
+                &client.id,
+                A,
+                REDIRECT,
+                &s256(VERIFIER),
+                RESOURCE,
+                "mcp",
+                now,
+            )
             .await
             .unwrap();
         assert!(
@@ -204,8 +253,20 @@ async fn lifetimes_come_from_the_config() {
         let tokens = connect(&accounts, &client).await;
         let after = now_secs();
         assert_eq!(tokens.expires_in, 300);
-        assert!(accounts.verify_access_at(&tokens.access, before + 299).await.unwrap().is_some());
-        assert!(accounts.verify_access_at(&tokens.access, after + 301).await.unwrap().is_none());
+        assert!(
+            accounts
+                .verify_access_at(&tokens.access, before + 299)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            accounts
+                .verify_access_at(&tokens.access, after + 301)
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert!(
             accounts
                 .refresh_at(&tokens.refresh, &client.id, Some(RESOURCE), after + 3601)
@@ -221,10 +282,26 @@ async fn refresh_tokens_rotate_and_a_spent_one_ends_the_family() {
     for (_store, accounts) in stores().await {
         let client = client(&accounts).await;
         let first = connect(&accounts, &client).await;
-        let second = accounts.refresh(&first.refresh, &client.id, Some(RESOURCE)).await.unwrap();
+        let second = accounts
+            .refresh(&first.refresh, &client.id, Some(RESOURCE))
+            .await
+            .unwrap();
         assert_ne!(second.access, first.access);
-        assert!(accounts.verify_access(&first.access).await.unwrap().is_none(), "rotated out");
-        assert!(accounts.verify_access(&second.access).await.unwrap().is_some());
+        assert!(
+            accounts
+                .verify_access(&first.access)
+                .await
+                .unwrap()
+                .is_none(),
+            "rotated out"
+        );
+        assert!(
+            accounts
+                .verify_access(&second.access)
+                .await
+                .unwrap()
+                .is_some()
+        );
         // The spent refresh token again: the whole family ends, the new pair included.
         assert_eq!(
             accounts
@@ -234,11 +311,27 @@ async fn refresh_tokens_rotate_and_a_spent_one_ends_the_family() {
                 .code,
             "invalid_grant"
         );
-        assert!(accounts.verify_access(&second.access).await.unwrap().is_none());
-        assert!(accounts.refresh(&second.refresh, &client.id, Some(RESOURCE)).await.is_err());
+        assert!(
+            accounts
+                .verify_access(&second.access)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            accounts
+                .refresh(&second.refresh, &client.id, Some(RESOURCE))
+                .await
+                .is_err()
+        );
         // Another client, another resource, or past its lifetime unused: refused.
         let third = connect(&accounts, &client).await;
-        assert!(accounts.refresh(&third.refresh, "dgc_other", Some(RESOURCE)).await.is_err());
+        assert!(
+            accounts
+                .refresh(&third.refresh, "dgc_other", Some(RESOURCE))
+                .await
+                .is_err()
+        );
         assert!(
             accounts
                 .refresh(&third.refresh, &client.id, Some("https://evil.example/mcp"))
@@ -248,11 +341,21 @@ async fn refresh_tokens_rotate_and_a_spent_one_ends_the_family() {
         let lifetime = TokenConfig::default().refresh_secs;
         assert!(
             accounts
-                .refresh_at(&third.refresh, &client.id, Some(RESOURCE), now_secs() + lifetime)
+                .refresh_at(
+                    &third.refresh,
+                    &client.id,
+                    Some(RESOURCE),
+                    now_secs() + lifetime
+                )
                 .await
                 .is_err()
         );
-        assert!(accounts.refresh(&third.refresh, &client.id, Some(RESOURCE)).await.is_ok());
+        assert!(
+            accounts
+                .refresh(&third.refresh, &client.id, Some(RESOURCE))
+                .await
+                .is_ok()
+        );
     }
 }
 
@@ -270,13 +373,17 @@ async fn two_instances_refreshing_one_token_at_once_get_one_new_pair() {
             one.refresh(&tokens.refresh, &client.id, Some(RESOURCE)),
             two.refresh(&tokens.refresh, &client.id, Some(RESOURCE)),
         );
-        assert!(a.is_ok() || b.is_ok(), "{:?} / {:?}", a.as_ref().err(), b.as_ref().err());
-        let live: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM oauth_tokens WHERE kind = 'access'",
-        )
-        .fetch_one(one.store().admin())
-        .await
-        .unwrap();
+        assert!(
+            a.is_ok() || b.is_ok(),
+            "{:?} / {:?}",
+            a.as_ref().err(),
+            b.as_ref().err()
+        );
+        let live: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM oauth_tokens WHERE kind = 'access'")
+                .fetch_one(one.store().admin())
+                .await
+                .unwrap();
         // Both succeeding would leave two; a refused second may have ended the family (0).
         assert!(live <= 1, "{live} live access tokens");
     }
@@ -296,7 +403,10 @@ async fn access_tokens_expire_die_with_their_account_and_can_be_revoked() {
                 .is_none()
         );
         for wrong in ["", "dgh_", "dgh_nonsense", &tokens.refresh] {
-            assert!(accounts.verify_access(wrong).await.unwrap().is_none(), "{wrong:?}");
+            assert!(
+                accounts.verify_access(wrong).await.unwrap().is_none(),
+                "{wrong:?}"
+            );
         }
         let disable = async |at: Option<i64>| {
             sqlx::query("UPDATE auth_accounts SET disabled_at = $1 WHERE id = $2")
@@ -307,7 +417,13 @@ async fn access_tokens_expire_die_with_their_account_and_can_be_revoked() {
                 .unwrap();
         };
         disable(Some(1)).await;
-        assert!(accounts.verify_access(&tokens.access).await.unwrap().is_none());
+        assert!(
+            accounts
+                .verify_access(&tokens.access)
+                .await
+                .unwrap()
+                .is_none()
+        );
         assert_eq!(
             accounts
                 .refresh(&tokens.refresh, &client.id, Some(RESOURCE))
@@ -317,16 +433,32 @@ async fn access_tokens_expire_die_with_their_account_and_can_be_revoked() {
             "account_disabled"
         );
         disable(None).await;
-        assert!(accounts.verify_access(&tokens.access).await.unwrap().is_some());
+        assert!(
+            accounts
+                .verify_access(&tokens.access)
+                .await
+                .unwrap()
+                .is_some()
+        );
         accounts.revoke_token(&tokens.refresh).await.unwrap();
         assert!(
-            accounts.verify_access(&tokens.access).await.unwrap().is_none(),
+            accounts
+                .verify_access(&tokens.access)
+                .await
+                .unwrap()
+                .is_none(),
             "the family ends"
         );
         accounts.revoke_token("dgh_unknown").await.unwrap();
         let again = connect(&accounts, &client).await;
         assert_eq!(accounts.revoke_connections(A).await.unwrap(), 2);
-        assert!(accounts.verify_access(&again.access).await.unwrap().is_none());
+        assert!(
+            accounts
+                .verify_access(&again.access)
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 }
 
@@ -364,10 +496,23 @@ async fn tokens_and_codes_are_stored_only_as_hashes() {
 
 #[test]
 fn user_codes_are_eight_consonants_typed_any_way() {
-    assert_eq!(normalize_user_code("bcdf-ghjk").as_deref(), Some("BCDFGHJK"));
-    assert_eq!(normalize_user_code(" BCDF GHJK ").as_deref(), Some("BCDFGHJK"));
+    assert_eq!(
+        normalize_user_code("bcdf-ghjk").as_deref(),
+        Some("BCDFGHJK")
+    );
+    assert_eq!(
+        normalize_user_code(" BCDF GHJK ").as_deref(),
+        Some("BCDFGHJK")
+    );
     assert_eq!(normalize_user_code("BCDFGHJK").as_deref(), Some("BCDFGHJK"));
-    for bad in ["BCDF-GHJ", "BCDF-GHJKL", "ABCD-EFGH", "BCDF-GHJ1", "", "BCDF_GHJK"] {
+    for bad in [
+        "BCDF-GHJ",
+        "BCDF-GHJKL",
+        "ABCD-EFGH",
+        "BCDF-GHJ1",
+        "",
+        "BCDF_GHJK",
+    ] {
         assert_eq!(normalize_user_code(bad), None, "{bad}");
     }
     for _ in 0..200 {
@@ -387,10 +532,16 @@ async fn a_device_code_waits_for_the_person_and_becomes_tokens_once() {
             .await
             .unwrap();
         assert!(started.device_code.starts_with("dgd_"));
-        assert_eq!((started.expires_in, started.interval), (DEVICE_SECS, DEVICE_INTERVAL));
+        assert_eq!(
+            (started.expires_in, started.interval),
+            (DEVICE_SECS, DEVICE_INTERVAL)
+        );
         let code = normalize_user_code(&started.user_code).expect("a well-formed user code");
         assert_eq!(started.user_code, format!("{}-{}", &code[..4], &code[4..]));
-        let pending = accounts.pending_device(&started.user_code.to_lowercase()).await.unwrap();
+        let pending = accounts
+            .pending_device(&started.user_code.to_lowercase())
+            .await
+            .unwrap();
         assert_eq!(
             pending,
             Some(super::device::DevicePending {
@@ -400,18 +551,36 @@ async fn a_device_code_waits_for_the_person_and_becomes_tokens_once() {
         );
 
         let poll = async |client: &str, at: u64| {
-            accounts.poll_device_at(&started.device_code, client, at).await.unwrap()
+            accounts
+                .poll_device_at(&started.device_code, client, at)
+                .await
+                .unwrap()
         };
-        assert_eq!(poll("devagotchi-cli", now).await, DevicePoll::Waiting("authorization_pending"));
-        assert_eq!(poll("devagotchi-cli", now + 1).await, DevicePoll::Waiting("slow_down"));
+        assert_eq!(
+            poll("devagotchi-cli", now).await,
+            DevicePoll::Waiting("authorization_pending")
+        );
+        assert_eq!(
+            poll("devagotchi-cli", now + 1).await,
+            DevicePoll::Waiting("slow_down")
+        );
         let mut at = now + 1 + DEVICE_INTERVAL;
-        assert_eq!(poll("devagotchi-cli", at).await, DevicePoll::Waiting("authorization_pending"));
+        assert_eq!(
+            poll("devagotchi-cli", at).await,
+            DevicePoll::Waiting("authorization_pending")
+        );
         // Another client's poll learns nothing, and the grant stays.
         at += DEVICE_INTERVAL;
-        assert_eq!(poll("dgc_other", at).await, DevicePoll::Waiting("invalid_grant"));
+        assert_eq!(
+            poll("dgc_other", at).await,
+            DevicePoll::Waiting("invalid_grant")
+        );
 
         assert!(accounts.decide_device(&code, A, true).await.unwrap());
-        assert!(!accounts.decide_device(&code, A, true).await.unwrap(), "decided once");
+        assert!(
+            !accounts.decide_device(&code, A, true).await.unwrap(),
+            "decided once"
+        );
         assert_eq!(accounts.pending_device(&code).await.unwrap(), None);
         at += DEVICE_INTERVAL;
         let DevicePoll::Tokens(tokens) = poll("devagotchi-cli", at).await else {
@@ -419,8 +588,15 @@ async fn a_device_code_waits_for_the_person_and_becomes_tokens_once() {
         };
         assert!(tokens.access.starts_with("dgh_") && tokens.refresh.starts_with("dgr_"));
         assert_eq!(tokens.scope, "mcp offline_access");
-        let grant = accounts.verify_access_at(&tokens.access, at).await.unwrap().unwrap();
-        assert_eq!((grant.account.id.as_str(), grant.client.as_str()), (A, "devagotchi-cli"));
+        let grant = accounts
+            .verify_access_at(&tokens.access, at)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (grant.account.id.as_str(), grant.client.as_str()),
+            (A, "devagotchi-cli")
+        );
         // The refresh token rotates for the same client, as any AI connection's.
         let rotated = accounts
             .refresh_at(&tokens.refresh, "devagotchi-cli", Some(RESOURCE), at)
@@ -428,7 +604,10 @@ async fn a_device_code_waits_for_the_person_and_becomes_tokens_once() {
             .unwrap();
         assert_ne!(rotated.refresh, tokens.refresh);
         // The grant is gone with the tokens.
-        assert_eq!(poll("devagotchi-cli", at + 60).await, DevicePoll::Waiting("invalid_grant"));
+        assert_eq!(
+            poll("devagotchi-cli", at + 60).await,
+            DevicePoll::Waiting("invalid_grant")
+        );
     }
 }
 
@@ -441,13 +620,33 @@ async fn a_cancelled_or_expired_device_code_says_so_once() {
             .start_device_at("devagotchi-cli", "mcp", RESOURCE, now)
             .await
             .unwrap();
-        assert!(accounts.decide_device(&denied.user_code, A, false).await.unwrap());
-        assert!(!accounts.decide_device(&denied.user_code, A, true).await.unwrap(), "no approving after a cancel");
+        assert!(
+            accounts
+                .decide_device(&denied.user_code, A, false)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !accounts
+                .decide_device(&denied.user_code, A, true)
+                .await
+                .unwrap(),
+            "no approving after a cancel"
+        );
         let poll = async |code: &str, at: u64| {
-            accounts.poll_device_at(code, "devagotchi-cli", at).await.unwrap()
+            accounts
+                .poll_device_at(code, "devagotchi-cli", at)
+                .await
+                .unwrap()
         };
-        assert_eq!(poll(&denied.device_code, now).await, DevicePoll::Waiting("access_denied"));
-        assert_eq!(poll(&denied.device_code, now + 10).await, DevicePoll::Waiting("invalid_grant"));
+        assert_eq!(
+            poll(&denied.device_code, now).await,
+            DevicePoll::Waiting("access_denied")
+        );
+        assert_eq!(
+            poll(&denied.device_code, now + 10).await,
+            DevicePoll::Waiting("invalid_grant")
+        );
 
         let late = accounts
             .start_device_at("devagotchi-cli", "mcp", RESOURCE, now)
@@ -457,8 +656,14 @@ async fn a_cancelled_or_expired_device_code_says_so_once() {
             poll(&late.device_code, now + DEVICE_SECS).await,
             DevicePoll::Waiting("expired_token")
         );
-        assert_eq!(poll(&late.device_code, now + DEVICE_SECS + 10).await, DevicePoll::Waiting("invalid_grant"));
-        assert_eq!(poll("dgd_never-issued", now).await, DevicePoll::Waiting("invalid_grant"));
+        assert_eq!(
+            poll(&late.device_code, now + DEVICE_SECS + 10).await,
+            DevicePoll::Waiting("invalid_grant")
+        );
+        assert_eq!(
+            poll("dgd_never-issued", now).await,
+            DevicePoll::Waiting("invalid_grant")
+        );
         assert!(!accounts.decide_device("not a code", A, true).await.unwrap());
     }
 }
@@ -470,7 +675,12 @@ async fn a_device_approved_for_a_disabled_account_gets_nothing() {
             .start_device("devagotchi-cli", "mcp", RESOURCE)
             .await
             .unwrap();
-        assert!(accounts.decide_device(&started.user_code, A, true).await.unwrap());
+        assert!(
+            accounts
+                .decide_device(&started.user_code, A, true)
+                .await
+                .unwrap()
+        );
         sqlx::query("UPDATE auth_accounts SET disabled_at = $1 WHERE id = $2")
             .bind(Some(1i64))
             .bind(A)

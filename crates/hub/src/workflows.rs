@@ -76,7 +76,10 @@ impl Workflows {
         let key = (tenant.to_string(), family);
         {
             let noted = self.noted.lock().expect("noted");
-            if noted.get(&key).is_some_and(|at| now < at + crate::accounts::clients::NOTE_EVERY_SECS) {
+            if noted
+                .get(&key)
+                .is_some_and(|at| now < at + crate::accounts::clients::NOTE_EVERY_SECS)
+            {
                 return;
             }
         }
@@ -195,7 +198,10 @@ impl Hub {
                 let (installer, archives) = match os {
                     "windows" => (
                         "install-devagotchi.ps1",
-                        ["devagotchi-x86_64-pc-windows-msvc.zip", "devagotchi-aarch64-pc-windows-msvc.zip"],
+                        [
+                            "devagotchi-x86_64-pc-windows-msvc.zip",
+                            "devagotchi-aarch64-pc-windows-msvc.zip",
+                        ],
                     ),
                     _ => (
                         "install-devagotchi.sh",
@@ -206,7 +212,9 @@ impl Hub {
                     ),
                 };
                 downloads.sha256(installer).is_some()
-                    && archives.iter().any(|archive| downloads.sha256(archive).is_some())
+                    && archives
+                        .iter()
+                        .any(|archive| downloads.sha256(archive).is_some())
             })
         };
         let ok = match os {
@@ -216,7 +224,10 @@ impl Hub {
         let copy = &site.messages.workflow;
         (!ok).then(|| match (os, self.downloads.is_some()) {
             (Some(os), true) => Ctx::new(site)
-                .with("os", Ctx::new(site).plain(copy.os.get(os).map(String::as_str).unwrap_or(os)))
+                .with(
+                    "os",
+                    Ctx::new(site).plain(copy.os.get(os).map(String::as_str).unwrap_or(os)),
+                )
                 .plain(&copy.no_build_for),
             _ => Ctx::new(site).plain(&copy.no_downloads),
         })
@@ -234,26 +245,38 @@ impl Hub {
 
     /// Why a workflow cannot be started on this hub, if it cannot: the site says so, or a
     /// step needs what this hub does not have.
-    pub(crate) fn workflow_unavailable(&self, site: &Site, workflow: &crate::site::Workflow) -> Option<String> {
+    pub(crate) fn workflow_unavailable(
+        &self,
+        site: &Site,
+        workflow: &crate::site::Workflow,
+    ) -> Option<String> {
         if let Some(why) = &workflow.unavailable {
             return Some(Ctx::new(site).plain(why));
         }
-        workflow.steps.iter().find_map(|step| match step.kind.as_str() {
-            MACHINE => self.machine_unavailable(site, step.os.as_deref()),
-            PHONE if self.push.is_none() => Some(Ctx::new(site).plain(&site.messages.workflow.no_push)),
-            AI_CLIENT => step
-                .client
-                .as_ref()
-                .and_then(|client| site.messages.workflow.clients.get(client))
-                .and_then(|words| words.unavailable.as_ref())
-                .map(|why| Ctx::new(site).plain(why)),
-            _ => None,
-        })
+        workflow
+            .steps
+            .iter()
+            .find_map(|step| match step.kind.as_str() {
+                MACHINE => self.machine_unavailable(site, step.os.as_deref()),
+                PHONE if self.push.is_none() => {
+                    Some(Ctx::new(site).plain(&site.messages.workflow.no_push))
+                }
+                AI_CLIENT => step
+                    .client
+                    .as_ref()
+                    .and_then(|client| site.messages.workflow.clients.get(client))
+                    .and_then(|words| words.unavailable.as_ref())
+                    .map(|why| Ctx::new(site).plain(why)),
+                _ => None,
+            })
     }
 
     /// The workflow's account as the hub sees it now, for a page that follows the link: no
     /// sign-in, the link is the credential. `None` when the account is gone or disabled.
-    pub(crate) async fn workflow_subject(&self, row: &WorkflowRow) -> BridgeResult<Option<Subject>> {
+    pub(crate) async fn workflow_subject(
+        &self,
+        row: &WorkflowRow,
+    ) -> BridgeResult<Option<Subject>> {
         let workflows = self.workflows()?;
         let Some(mut account) = workflows
             .accounts()
@@ -270,7 +293,11 @@ impl Hub {
 
     /// The machine a step handed out a line for: enrolled for the account since then, and
     /// online.
-    pub(crate) fn machine_seen(&self, account: &str, progress: Option<&StepProgress>) -> MachineSeen {
+    pub(crate) fn machine_seen(
+        &self,
+        account: &str,
+        progress: Option<&StepProgress>,
+    ) -> MachineSeen {
         let (Some(stored), Some(issued)) = (
             progress.and_then(|p| p.machine.as_deref()),
             progress.and_then(|p| p.issued_at),
@@ -295,7 +322,13 @@ impl Hub {
 
     /// The name a machine step's machine gets: the one already handed out, the AI's, or the
     /// site's for the OS, made free among the account's machines (`server`, `server-2`, …).
-    pub(crate) fn machine_name_for(&self, subject: &Subject, row: &WorkflowRow, index: usize, os: &str) -> String {
+    pub(crate) fn machine_name_for(
+        &self,
+        subject: &Subject,
+        row: &WorkflowRow,
+        index: usize,
+        os: &str,
+    ) -> String {
         if let Some(stored) = row.progress.step(index).and_then(|p| p.machine.as_deref()) {
             return self.shown_name(subject, stored);
         }
@@ -316,7 +349,9 @@ impl Hub {
             .filter(|device| device.revoked_at.is_none())
             .map(|device| device.name)
             .collect();
-        let free = |name: &str| !held.iter().any(|held| held == name) && self.config.broker(name).is_none();
+        let free = |name: &str| {
+            !held.iter().any(|held| held == name) && self.config.broker(name).is_none()
+        };
         if free(&base) {
             return base;
         }
@@ -341,10 +376,12 @@ impl Hub {
         let copy = &site.messages.workflow;
         let facts = &copy.facts;
         let ctx = || Ctx::new(&site);
-        let phones = self
-            .push
-            .as_ref()
-            .map(|push| push.devices().push_for(&subject.id).map(|p| p.len()).unwrap_or(0));
+        let phones = self.push.as_ref().map(|push| {
+            push.devices()
+                .push_for(&subject.id)
+                .map(|p| p.len())
+                .unwrap_or(0)
+        });
         let room = self.machine_room(subject).map(|refused| refused.message);
         let steps = row.definition.steps.clone();
         // The AI clients the tenant has working, when a step waits on one.
@@ -362,13 +399,20 @@ impl Hub {
                 why: None,
                 fact: None,
                 machine: None,
-                os: step.os.clone().or_else(|| progress.and_then(|p| p.os.clone())),
+                os: step
+                    .os
+                    .clone()
+                    .or_else(|| progress.and_then(|p| p.os.clone())),
             };
             match step.kind.as_str() {
                 SECURE_ACCOUNT => {
                     let secured = subject.provisional_until.is_none();
                     one.done |= secured;
-                    one.fact = Some(ctx().plain(if one.done { &facts.secured } else { &facts.not_secured }));
+                    one.fact = Some(ctx().plain(if one.done {
+                        &facts.secured
+                    } else {
+                        &facts.not_secured
+                    }));
                 }
                 MACHINE => {
                     let os = one.os.clone().unwrap_or_else(|| "linux".into());
@@ -404,15 +448,19 @@ impl Hub {
                 AI_CLIENT => {
                     let client = step.client.clone().unwrap_or_default();
                     let words = copy.clients.get(&client);
-                    let name = words.map(|w| ctx().plain(&w.name)).unwrap_or_else(|| client.clone());
+                    let name = words
+                        .map(|w| ctx().plain(&w.name))
+                        .unwrap_or_else(|| client.clone());
                     one.done |= families.contains(&client);
-                    one.fact = Some(
-                        ctx()
-                            .with("client", name)
-                            .plain(if one.done { &facts.client_done } else { &facts.client_waiting }),
-                    );
+                    one.fact = Some(ctx().with("client", name).plain(if one.done {
+                        &facts.client_done
+                    } else {
+                        &facts.client_waiting
+                    }));
                     if !one.done {
-                        one.why = words.and_then(|w| w.unavailable.as_ref()).map(|why| ctx().plain(why));
+                        one.why = words
+                            .and_then(|w| w.unavailable.as_ref())
+                            .map(|why| ctx().plain(why));
                     }
                 }
                 _ => {}
@@ -440,7 +488,11 @@ impl Hub {
                 .zip(&seen)
                 .enumerate()
                 .filter(|(index, (_, seen))| {
-                    seen.done && row.progress.step(*index).is_none_or(|p| p.done_at.is_none())
+                    seen.done
+                        && row
+                            .progress
+                            .step(*index)
+                            .is_none_or(|p| p.done_at.is_none())
                 })
                 .map(|(index, (step, _))| (index, step.kind.as_str()))
                 .collect();
@@ -455,7 +507,8 @@ impl Hub {
                 if noted.completed {
                     row.state = "completed".into();
                     if let Some(analytics) = &self.analytics {
-                        analytics.tenant_event(&row.tenant, crate::analytics::funnel::WORKFLOW_DONE);
+                        analytics
+                            .tenant_event(&row.tenant, crate::analytics::funnel::WORKFLOW_DONE);
                     }
                 }
                 workflows.changed();

@@ -287,7 +287,9 @@ impl Store {
         {
             return Err(BridgeError::new(
                 "account_store",
-                format!("{schema:?} is not a schema name: 1 to 63 of [a-z0-9_], not starting with a digit or pg_"),
+                format!(
+                    "{schema:?} is not a schema name: 1 to 63 of [a-z0-9_], not starting with a digit or pg_"
+                ),
             ));
         }
         static DRIVERS: Once = Once::new();
@@ -324,7 +326,9 @@ impl Store {
         // migration record stays where it always was, and 0007 moves the tables into
         // `devagotchi`.
         {
-            let mut admin = sqlx::AnyConnection::connect(url).await.map_err(store_error)?;
+            let mut admin = sqlx::AnyConnection::connect(url)
+                .await
+                .map_err(store_error)?;
             if backend == Backend::Sqlite {
                 admin
                     .execute("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")
@@ -333,7 +337,9 @@ impl Store {
             } else {
                 if let Some(schema) = &schema {
                     admin
-                        .execute(sqlx::AssertSqlSafe(format!("CREATE SCHEMA IF NOT EXISTS {schema}")))
+                        .execute(sqlx::AssertSqlSafe(format!(
+                            "CREATE SCHEMA IF NOT EXISTS {schema}"
+                        )))
                         .await
                         .map_err(store_error)?;
                 }
@@ -451,7 +457,11 @@ impl Store {
     /// Scope the transaction on `connection` to `tenant`: from here to its end it sees and
     /// writes that tenant's rows only (Postgres, `set_config(…, true)`). SQLite: nothing to
     /// set.
-    pub async fn scope(&self, connection: &mut AnyConnection, tenant: &str) -> Result<(), sqlx::Error> {
+    pub async fn scope(
+        &self,
+        connection: &mut AnyConnection,
+        tenant: &str,
+    ) -> Result<(), sqlx::Error> {
         if self.backend == Backend::Postgres {
             sqlx::query("SELECT set_config('devagotchi.tenant', $1, true)")
                 .bind(tenant)
@@ -488,7 +498,9 @@ impl Store {
                 Lookup::Code(hash) => ("code", hash.to_string(), None),
                 Lookup::Link(hash) => ("link", hash.to_string(), None),
                 Lookup::Passkey(id) => ("passkey", hex::encode(id), None),
-                Lookup::Identity(provider, subject) => ("identity", provider.to_string(), Some(subject)),
+                Lookup::Identity(provider, subject) => {
+                    ("identity", provider.to_string(), Some(subject))
+                }
                 Lookup::Email(email) => ("email", email.to_string(), None),
                 Lookup::Owner => ("owner", String::new(), None),
                 Lookup::Workflow(_) | Lookup::Offer(_) => unreachable!("answered above"),
@@ -501,12 +513,24 @@ impl Store {
                 .await;
         }
         let query = match lookup {
-            Lookup::Account(id) => sqlx::query_scalar("SELECT tenant_id FROM auth_accounts WHERE id = $1").bind(id),
-            Lookup::Session(hash) => sqlx::query_scalar("SELECT tenant_id FROM auth_sessions WHERE hash = $1").bind(hash),
-            Lookup::Token(hash) => sqlx::query_scalar("SELECT tenant_id FROM oauth_tokens WHERE hash = $1").bind(hash),
-            Lookup::Code(hash) => sqlx::query_scalar("SELECT tenant_id FROM oauth_codes WHERE hash = $1").bind(hash),
-            Lookup::Link(hash) => sqlx::query_scalar("SELECT tenant_id FROM auth_links WHERE hash = $1").bind(hash),
-            Lookup::Passkey(id) => sqlx::query_scalar("SELECT tenant_id FROM auth_passkeys WHERE id = $1").bind(id),
+            Lookup::Account(id) => {
+                sqlx::query_scalar("SELECT tenant_id FROM auth_accounts WHERE id = $1").bind(id)
+            }
+            Lookup::Session(hash) => {
+                sqlx::query_scalar("SELECT tenant_id FROM auth_sessions WHERE hash = $1").bind(hash)
+            }
+            Lookup::Token(hash) => {
+                sqlx::query_scalar("SELECT tenant_id FROM oauth_tokens WHERE hash = $1").bind(hash)
+            }
+            Lookup::Code(hash) => {
+                sqlx::query_scalar("SELECT tenant_id FROM oauth_codes WHERE hash = $1").bind(hash)
+            }
+            Lookup::Link(hash) => {
+                sqlx::query_scalar("SELECT tenant_id FROM auth_links WHERE hash = $1").bind(hash)
+            }
+            Lookup::Passkey(id) => {
+                sqlx::query_scalar("SELECT tenant_id FROM auth_passkeys WHERE id = $1").bind(id)
+            }
             Lookup::Identity(provider, subject) => sqlx::query_scalar(
                 "SELECT tenant_id FROM auth_identities WHERE provider = $1 AND subject = $2",
             )
@@ -517,7 +541,9 @@ impl Store {
                  ORDER BY created_at, provider, subject LIMIT 1",
             )
             .bind(email),
-            Lookup::Owner => sqlx::query_scalar("SELECT tenant_id FROM auth_accounts WHERE owner = 1"),
+            Lookup::Owner => {
+                sqlx::query_scalar("SELECT tenant_id FROM auth_accounts WHERE owner = 1")
+            }
             Lookup::Workflow(hash) => {
                 sqlx::query_scalar("SELECT tenant_id FROM tenancy_workflows WHERE link_hash = $1")
                     .bind(hash)
@@ -531,7 +557,11 @@ impl Store {
     }
 
     /// Accounts nobody secured yet that were used after `since`, across the hub.
-    pub async fn live_unsecured(&self, connection: &mut AnyConnection, since: i64) -> Result<i64, sqlx::Error> {
+    pub async fn live_unsecured(
+        &self,
+        connection: &mut AnyConnection,
+        since: i64,
+    ) -> Result<i64, sqlx::Error> {
         let sql = match self.backend {
             Backend::Postgres => "SELECT devagotchi.live_unsecured($1)",
             Backend::Sqlite => {
@@ -539,7 +569,10 @@ impl Store {
                  WHERE provisional = 1 AND disabled_at IS NULL AND last_active > $1"
             }
         };
-        sqlx::query_scalar(sql).bind(since).fetch_one(&mut *connection).await
+        sqlx::query_scalar(sql)
+            .bind(since)
+            .fetch_one(&mut *connection)
+            .await
     }
 
     /// The tenants whose access is `state` (`admitted` or `waiting`), at most `most`: the
@@ -593,7 +626,11 @@ impl Store {
         tries: &mut u32,
     ) -> Option<BridgeResult<T>> {
         let outcome = match outcome {
-            Ok(value) => transaction.commit().await.map(|()| value).map_err(Failed::Store),
+            Ok(value) => transaction
+                .commit()
+                .await
+                .map(|()| value)
+                .map_err(Failed::Store),
             Err(failed) => {
                 let _ = transaction.rollback().await;
                 Err(failed)

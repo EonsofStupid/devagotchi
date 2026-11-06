@@ -99,7 +99,10 @@ impl Hub {
         }
         let stored = self.stored_name(subject, name);
         let (limit, unsecured, plan) = self.machine_limit(subject);
-        let code = match self.links.issue_owned_code_within(&subject.id, &stored, limit) {
+        let code = match self
+            .links
+            .issue_owned_code_within(&subject.id, &stored, limit)
+        {
             // The plan's limit, when it is the one reached, says so in the site's words.
             Err(error) if error.code == "machine_limit" => match plan {
                 Some((plan, Cap::AtMost(most)))
@@ -118,7 +121,14 @@ impl Hub {
     /// The most machines `subject` may hold, where something holds it: an account nobody
     /// secured, `tenancy.unsecured.machines`; a tenant on a plan, the plan's `machines`; the
     /// lower when both do. With the quota and the plan, to say which one was reached.
-    fn machine_limit(&self, subject: &Subject) -> (Option<usize>, Option<usize>, Option<(crate::site::Plan, Cap)>) {
+    fn machine_limit(
+        &self,
+        subject: &Subject,
+    ) -> (
+        Option<usize>,
+        Option<usize>,
+        Option<(crate::site::Plan, Cap)>,
+    ) {
         let unsecured = (self.config.multi_tenant() && subject.provisional_until.is_some())
             .then_some(self.config.tenancy.unsecured.machines as usize);
         let plan = self.plan_cap(subject, "machines");
@@ -151,12 +161,16 @@ impl Hub {
             return None;
         }
         match plan {
-            Some((plan, Cap::AtMost(most))) if unsecured.is_none_or(|quota| most as usize <= quota) => {
+            Some((plan, Cap::AtMost(most)))
+                if unsecured.is_none_or(|quota| most as usize <= quota) =>
+            {
                 Some(self.plan_limit(&plan, "machines", most, held))
             }
             _ => Some(BridgeError::new(
                 "machine_limit",
-                format!("this account already has {held} machines on this hub (the most is {limit}); revoke one first"),
+                format!(
+                    "this account already has {held} machines on this hub (the most is {limit}); revoke one first"
+                ),
             )),
         }
     }
