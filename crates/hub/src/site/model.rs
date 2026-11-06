@@ -1006,6 +1006,11 @@ pub struct AppCopy {
     pub board_unknown_text: String,
     pub ticket_unknown: String,
     pub ticket_unknown_text: String,
+    /// Pushes about a machine (`link.rs`): `{machine}` is its name.
+    pub push_offline_title: String,
+    pub push_offline_body: String,
+    pub push_update_failed_title: String,
+    pub push_update_failed_body: String,
 }
 
 /// The sign-in page's words (`web/sign_in.rs`): Google, or an email and a password.
