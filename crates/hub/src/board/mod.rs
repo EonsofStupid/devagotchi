@@ -697,6 +697,7 @@ impl Board {
                 format!("board schema {version} is not {SCHEMA_VERSION}; migrate before use"),
             ));
         }
+        upgrade_default_workflow(&mut connection, clock())?;
         Ok(Self {
             connection: Mutex::new(connection),
             project: project.to_string(),
@@ -2045,6 +2046,46 @@ CREATE INDEX IF NOT EXISTS tickets_fingerprint ON tickets (fingerprint);
 
 /// Schema 1 -> 2 in one transaction: the anchor columns, their indexes, the version,
 /// and a `board.migrated` event so the chain records it. Every row is kept.
+/// A board that still runs the previous default workflow, exactly, gets the current one
+/// (closed tickets reopen to the queue, the phone app's Undo), recorded on the chain as
+/// `board.workflow_upgraded`. A workflow anyone changed is theirs and is left alone.
+fn upgrade_default_workflow(connection: &mut Connection, now: i64) -> BridgeResult<()> {
+    let previous = Workflow::previous_default();
+    if load_workflow(connection)? != previous {
+        return Ok(());
+    }
+    let tx = connection
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .map_err(store_error)?;
+    // Checked again under the write lock: another process may have upgraded it first.
+    if load_workflow(&tx)? != previous {
+        return Ok(());
+    }
+    let current = Workflow::default_workflow();
+    tx.execute(
+        "UPDATE settings SET value = ?1 WHERE key = 'workflow'",
+        params![serde_json::to_string(&current).expect("workflow json")],
+    )
+    .map_err(store_error)?;
+    let appended = Cell::new(false);
+    Writer {
+        tx: &tx,
+        actor: "system",
+        now,
+        appended: &appended,
+    }
+    .event(
+        "board.workflow_upgraded",
+        None,
+        None,
+        serde_json::json!({
+            "id": current.id,
+            "added": [{ "from": "done", "to": "ready" }, { "from": "cancelled", "to": "ready" }],
+        }),
+    )?;
+    tx.commit().map_err(store_error)
+}
+
 fn migrate_v1(connection: &mut Connection, now: i64) -> BridgeResult<()> {
     let tx = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
