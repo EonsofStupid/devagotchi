@@ -1157,7 +1157,7 @@ mod cli {
         let (_, plain, _) = run(d, Some("codex"), false, &["new", "plain"]);
         let plain_id = json(&plain)["id"].as_str().unwrap().to_string();
         let (_, shown, _) = run(d, Some("claude"), true, &["show", &plain_id]);
-        assert!(!shown.contains(" · "), "nothing known, no line: {shown}");
+        assert_eq!(shown.lines().count(), 2, "nothing known, no line: {shown}");
     }
 
     #[test]
