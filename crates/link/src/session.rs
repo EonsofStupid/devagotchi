@@ -99,6 +99,8 @@ pub async fn connect(config: &LinkConfig, key: &SigningKey, mode: Mode<'_>) -> E
             Mode::Enroll { code } => Some(code.to_string()),
             Mode::Serve => None,
         },
+        // Said once the link can update its machine (U3 of the spec).
+        build: None,
     };
     if let Err(why) = send(&mut sink, &hello).await {
         return Ended::Retry(why);

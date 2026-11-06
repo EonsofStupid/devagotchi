@@ -526,6 +526,10 @@ pub enum HubFrame {
     Welcome { device: String },
     Refused { code: String, message: String },
     Call { id: u64, request: WireRequest },
+    /// Update this machine to the hub's build `version`: wait for its running jobs unless
+    /// `force`, then download, check and install it. The hub sends it only to a device
+    /// whose hello carried `build`; an older device would refuse an unknown frame.
+    Update { version: String, force: bool },
 }
 
 /// Device to hub.
@@ -543,14 +547,86 @@ pub enum LinkFrame {
         signature: String,
         #[serde(default)]
         enroll_code: Option<String>,
+        /// The build this device runs (`devagotchi --version`'s name: `main-<sha7>`, a
+        /// release version, or `dev`). An older device leaves it out.
+        #[serde(default)]
+        build: Option<String>,
     },
     Result { id: u64, response: WireResponse },
     Heartbeat,
+    /// Where an update the hub asked for stands: `waiting_for_jobs`, `downloading`,
+    /// `installing`, `done` or `failed`, with `detail` saying why when it failed.
+    UpdateStatus {
+        state: String,
+        #[serde(default)]
+        detail: Option<String>,
+    },
 }
+
+/// The states a [`LinkFrame::UpdateStatus`] reports, in the order an update passes them.
+pub const UPDATE_STATES: [&str; 5] = [
+    "waiting_for_jobs",
+    "downloading",
+    "installing",
+    "done",
+    "failed",
+];
 
 /// The exact bytes a device signs: protocol, the hub's public URL, the device name and
 /// the hub's nonce, so a signature cannot be replayed to another hub, as another
 /// device, or on another connection.
 pub fn link_signing_message(hub: &str, device: &str, nonce: &str) -> Vec<u8> {
     format!("devagotchi-link/{LINK_PROTOCOL_VERSION}\n{hub}\n{device}\n{nonce}").into_bytes()
+}
+
+#[cfg(test)]
+mod link_frame_tests {
+    use super::*;
+
+    #[test]
+    fn hello_carries_its_build_and_an_old_hello_without_one_still_parses() {
+        let hello = LinkFrame::Hello {
+            version: LINK_PROTOCOL_VERSION,
+            device: "dabo".into(),
+            public_key: "ab".into(),
+            signature: "cd".into(),
+            enroll_code: None,
+            build: Some("main-abc1234".into()),
+        };
+        let text = serde_json::to_string(&hello).unwrap();
+        assert!(text.contains(r#""build":"main-abc1234""#), "{text}");
+        let back: LinkFrame = serde_json::from_str(&text).unwrap();
+        assert!(matches!(back, LinkFrame::Hello { build: Some(ref b), .. } if b == "main-abc1234"));
+        // What a device from before builds had a name sends.
+        let old = r#"{"type":"hello","version":1,"device":"dabo","public_key":"ab","signature":"cd"}"#;
+        let parsed: LinkFrame = serde_json::from_str(old).unwrap();
+        assert!(matches!(parsed, LinkFrame::Hello { build: None, enroll_code: None, .. }));
+    }
+
+    #[test]
+    fn update_and_update_status_round_trip() {
+        let update = HubFrame::Update {
+            version: "main-abc1234".into(),
+            force: true,
+        };
+        let text = serde_json::to_string(&update).unwrap();
+        assert_eq!(text, r#"{"type":"update","version":"main-abc1234","force":true}"#);
+        let back: HubFrame = serde_json::from_str(&text).unwrap();
+        assert!(matches!(back, HubFrame::Update { ref version, force: true } if version == "main-abc1234"));
+        for state in UPDATE_STATES {
+            let detail = (state == "failed").then(|| "busy".to_string());
+            let status = LinkFrame::UpdateStatus {
+                state: state.into(),
+                detail: detail.clone(),
+            };
+            let text = serde_json::to_string(&status).unwrap();
+            let back: LinkFrame = serde_json::from_str(&text).unwrap();
+            assert!(
+                matches!(back, LinkFrame::UpdateStatus { state: ref s, detail: ref d } if s == state && *d == detail),
+                "{text}"
+            );
+        }
+        let bare: LinkFrame = serde_json::from_str(r#"{"type":"update_status","state":"downloading"}"#).unwrap();
+        assert!(matches!(bare, LinkFrame::UpdateStatus { detail: None, .. }));
+    }
 }
