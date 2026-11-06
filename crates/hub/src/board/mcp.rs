@@ -882,7 +882,9 @@ type BoardOut<T> = Result<Json<T>, Json<BoardError>>;
 impl Hub {
     /// Push "approval needed" to the phones of the people who decide on `project`. The
     /// payload names the approval and links to it; it never carries the command text.
-    /// Returns how many phones the push goes to.
+    /// Returns how many phones the push goes to. The board tools say whom per board kind
+    /// (`approvers`); this is the configured board's list.
+    #[cfg(test)]
     pub fn announce_approval(&self, project: &str, approval: &ApprovalStatus) -> usize {
         self.announce_approval_to(self.config.people_for_board(project), project, approval)
     }
@@ -923,10 +925,15 @@ impl Hub {
         }
     }
 
-    /// The board `project` for this request's subject, after the grant check.
     /// The board `project` names for this account: its own first, then a shared one by
     /// grant. An account board and a shared board never share a name (`bind` refuses).
-    fn board_for(&self, subject: &Subject, project: &str) -> BridgeResult<(Arc<Board>, Kind)> {
+    /// The one resolver: the board tools and the web pages (`/approvals`, the app) both
+    /// open boards through it.
+    pub(crate) fn board_for(
+        &self,
+        subject: &Subject,
+        project: &str,
+    ) -> BridgeResult<(Arc<Board>, Kind)> {
         if let Some(board) = self
             .boards
             .open_account(&Boards::owner_of(subject), project)?
@@ -963,6 +970,70 @@ impl Hub {
             });
         }
         Ok((self.boards.open(project)?, Kind::Shared))
+    }
+
+    /// The boards `subject` reaches, by project, as `whoami` lists them: the account's own
+    /// (or its org's) first, then the shared ones it holds a grant for.
+    pub(crate) fn board_names(&self, subject: &Subject) -> Vec<String> {
+        let mut names = self.boards.account_boards(&Boards::owner_of(subject));
+        for entry in self.config.boards_for(&subject.id) {
+            if !names.contains(&entry.project) {
+                names.push(entry.project.clone());
+            }
+        }
+        names
+    }
+
+    /// Whether `subject`, signed in to this hub's web pages as a person, decides approvals
+    /// on a board of `kind`: on its account's own board (or its org's) always; on a shared
+    /// one when the config makes it a person there (the owner, or a grant marked human).
+    /// Agents decide nothing: no board tool decides, and only a browser session reaches
+    /// here.
+    pub(crate) fn person_decides(&self, subject: &Subject, kind: Kind) -> bool {
+        match kind {
+            Kind::Account | Kind::Org => true,
+            Kind::Shared => self.config.is_human(&subject.id),
+        }
+    }
+
+    /// Whether the signed-in `subject` is a person who approves on this hub at all: on a
+    /// hub that hosts account boards everyone is, on their own; on a hub of configured
+    /// boards only, the people the config names are.
+    pub(crate) fn may_approve(&self, subject: &Subject) -> bool {
+        self.boards.hosts_accounts() || self.config.is_human(&subject.id)
+    }
+
+    /// The board named `project` on which the signed-in person `subject` decides
+    /// approvals, or why not.
+    pub(crate) fn approval_board(&self, subject: &Subject, project: &str) -> BridgeResult<Arc<Board>> {
+        let (board, kind) = self.board_for(subject, project)?;
+        if !self.person_decides(subject, kind) {
+            return Err(BridgeError::new(
+                "humans_only",
+                format!("{} is not a person on board {project:?}", subject.id),
+            ));
+        }
+        Ok(board)
+    }
+
+    /// Every board on which the signed-in person `subject` decides approvals, by project.
+    pub(crate) fn approval_boards(&self, subject: &Subject) -> Vec<(String, Arc<Board>)> {
+        self.board_names(subject)
+            .into_iter()
+            .filter_map(|project| {
+                let board = self.approval_board(subject, &project).ok()?;
+                Some((project, board))
+            })
+            .collect()
+    }
+
+    /// The people an approval on `project` goes to: the account that owns the board on
+    /// the account's own (or org's) board, the configured people on a shared one.
+    fn approvers(&self, subject: &Subject, project: &str, kind: Kind) -> Vec<String> {
+        match kind {
+            Kind::Account | Kind::Org => vec![subject.id.clone()],
+            Kind::Shared => self.config.people_for_board(project),
+        }
     }
 
     /// The seat the caller named (`X-Devagotchi-Seat`), checked like any board name.
@@ -1778,7 +1849,14 @@ impl Hub {
                 },
             )
             .await?;
-        let phones = self.announce_approval(&project, &approval);
+        // On the account's own board the push goes to that account's phones; never to
+        // the people of a configured board that shares no more than the name.
+        let subject = self.board_subject(&context)?;
+        let people = match self.board_for(&subject, &project) {
+            Ok((_, kind)) => self.approvers(&subject, &project, kind),
+            Err(_) => Vec::new(),
+        };
+        let phones = self.announce_approval_to(people, &project, &approval);
         let mut out = self.approval_out(&project, approval);
         out.phones = Some(phones);
         Ok(Json(out))

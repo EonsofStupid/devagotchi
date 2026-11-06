@@ -24,7 +24,7 @@ use super::{
     pages::{self, escape},
     routes::{Who, not_set_up, see_other, unavailable, who},
 };
-use crate::{AppState, auth::Subject, board::Board, board::mcp::Boards, site::Site};
+use crate::{AppState, auth::Subject, board::Board, site::Site};
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -67,33 +67,14 @@ pub(super) async fn person(
 /// The boards the person may work on, by project, as `whoami` lists them: the account's
 /// own (or its org's) first, then the shared ones it holds a grant for.
 pub(super) fn board_names(state: &AppState, subject: &Subject) -> Vec<String> {
-    let mut names = state.hub.boards.account_boards(&Boards::owner_of(subject));
-    for entry in state.hub.config.boards_for(&subject.id) {
-        if !names.contains(&entry.project) {
-            names.push(entry.project.clone());
-        }
-    }
-    names
+    state.hub.board_names(subject)
 }
 
-/// The board `project` names for this person, as the board tools open it: the account's
-/// own first, then a shared one by grant. None when it is not theirs.
+/// The board `project` names for this person, as the board tools open it
+/// (`Hub::board_for`): the account's own first, then a shared one by grant. None when it
+/// is not theirs.
 pub(super) fn open_board(state: &AppState, subject: &Subject, project: &str) -> Option<Arc<Board>> {
-    let boards = &state.hub.boards;
-    if let Ok(Some(board)) = boards.open_account(&Boards::owner_of(subject), project) {
-        return Some(board);
-    }
-    let granted = state
-        .hub
-        .config
-        .boards_for(&subject.id)
-        .iter()
-        .any(|entry| entry.project == project);
-    if granted {
-        boards.open(project).ok()
-    } else {
-        None
-    }
+    state.hub.board_for(subject, project).ok().map(|(board, _)| board)
 }
 
 /// The site's words for the app.
@@ -139,6 +120,8 @@ async fn script() -> Response {
     )
 }
 
+#[cfg(test)]
+mod approval_tests;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
