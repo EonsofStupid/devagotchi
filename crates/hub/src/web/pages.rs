@@ -134,9 +134,55 @@ pub fn public(status: StatusCode, title: &str, body: &str, head: &str) -> Respon
 }
 
 /// A page that is also the installable app: the manifest, the icon and the hub's one
-/// script (`/assets/push.js`) may load, from this origin only.
+/// script (`/assets/push.js`) may load, from this origin only. It is drawn in the app's
+/// frame (`app_page`) on its Approvals tab.
 pub fn app(status: StatusCode, title: &str, body: &str) -> Response {
-    render(status, title, body, Kind::App, "")
+    render(status, title, body, Kind::App { tab: Tab::Approvals, script: "/assets/push.js" }, "")
+}
+
+/// The phone app's tabs (`web/app/`), along the bottom of its frame.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Home,
+    Machines,
+    Boards,
+    Approvals,
+}
+
+/// A page of the phone app (`web/app/`): one fixed frame, the bar on top and the tabs at the
+/// bottom, with the page scrolling inside it. Its one script is `/assets/app.js`.
+pub fn app_page(status: StatusCode, title: &str, body: &str, tab: Tab) -> Response {
+    render(status, title, body, Kind::App { tab, script: "/assets/app.js" }, "")
+}
+
+/// The frame's tab bar, the current tab marked; and, for `app.js` to show, the install
+/// banner for iPhone or Android.
+fn tabs(tab: Tab, script: &str, site: &Site) -> (String, String) {
+    let words = &site.messages.app;
+    let links: String = [
+        (Tab::Home, "/app", &words.tab_home),
+        (Tab::Machines, "/app/machines", &words.tab_machines),
+        (Tab::Boards, "/app/boards", &words.tab_boards),
+        (Tab::Approvals, "/approvals", &words.tab_approvals),
+    ]
+    .iter()
+    .map(|(this, href, label)| {
+        let current = if *this == tab { " aria-current=\"page\"" } else { "" };
+        format!("<a href=\"{href}\"{current}>{}</a>", escape(label))
+    })
+    .collect();
+    let banner = if script == "/assets/app.js" {
+        format!(
+            "<p class=\"install\" id=\"install\" hidden><span data-os=\"iphone\" hidden>{}</span>\
+<span data-os=\"android\" hidden>{} <button id=\"install-go\" type=\"button\">{}</button></span></p>",
+            escape(&words.install_iphone),
+            escape(&words.install_android),
+            escape(&words.install_button)
+        )
+    } else {
+        String::new()
+    };
+    (format!("<nav class=\"tabs\">{links}</nav>"), banner)
 }
 
 /// A workflow's page (`workflow.rs`): its own script, which follows the steps, and the
@@ -170,7 +216,8 @@ enum Kind {
     /// The landing page: a plain page (no script) laid out wide as full-viewport pages
     /// under the fixed bar (`body.landing`, `landing.css`), with the hub's own setup video.
     Landing,
-    App,
+    /// A page in the phone app's frame (`app_page`), on `tab`, with its one script.
+    App { tab: Tab, script: &'static str },
     Script(&'static str),
     Workflow {
         passkey: bool,
@@ -184,14 +231,14 @@ fn render(status: StatusCode, title: &str, body: &str, kind: Kind, meta: &str) -
     let site = site();
     let head = match kind {
         Kind::Plain | Kind::Landing => String::new(),
-        Kind::App => {
+        Kind::App { script, .. } => {
             let icon = site
                 .named(site.info.assets.icon.as_ref())
                 .map(|icon| format!("<link rel=\"icon\" href=\"{}\">", escape(&icon.url())))
                 .unwrap_or_default();
             format!(
                 "<link rel=\"manifest\" href=\"/manifest.webmanifest\">{icon}\
-<meta name=\"theme-color\" content=\"{}\"><script src=\"/assets/push.js\" defer></script>",
+<meta name=\"theme-color\" content=\"{}\"><script src=\"{script}\" defer></script>",
                 escape(site.theme_color())
             )
         }
@@ -211,15 +258,20 @@ fn render(status: StatusCode, title: &str, body: &str, kind: Kind, meta: &str) -
             head
         }
     };
+    let (tabs, banner) = match kind {
+        Kind::App { tab, script } => tabs(tab, script, &site),
+        _ => (String::new(), String::new()),
+    };
     let page = format!(
         "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
 <title>{} · {}</title>{meta}<link rel=\"stylesheet\" href=\"/assets/hub.css\">{head}</head>\
-<body{class}>{bar}<main>{body}</main></body></html>\n",
+<body{class}>{bar}<main>{banner}{body}</main>{tabs}</body></html>\n",
         escape(title),
         escape(site.name()),
         class = match kind {
             Kind::Landing => " class=\"landing\"",
+            Kind::App { .. } => " class=\"app\"",
             _ => "",
         },
         bar = BAR
@@ -234,7 +286,7 @@ fn render(status: StatusCode, title: &str, body: &str, kind: Kind, meta: &str) -
     );
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     let policy = match kind {
-        Kind::App | Kind::Workflow { .. } => {
+        Kind::App { .. } | Kind::Workflow { .. } => {
             "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; worker-src 'self'; \
 manifest-src 'self'; img-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
         }

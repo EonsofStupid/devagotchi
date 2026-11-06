@@ -261,5 +261,33 @@
     "link": "Link",
     "keep_separate": "Keep separate",
     "link_password": "Enter this account's password to link Google to it."
+  },
+  "app": {
+    "tab_home": "Home",
+    "tab_machines": "Machines",
+    "tab_boards": "Boards",
+    "tab_approvals": "Approvals",
+    "install_iphone": "Add to your home screen: tap Share, then Add to Home Screen.",
+    "install_android": "Add to your home screen:",
+    "install_button": "Install",
+    "home_title": "Home",
+    "needs_you": "Needs you",
+    "needs_you_empty": "Nothing needs you.",
+    "approval_waiting": "Approval waiting",
+    "assigned_to_you": "Assigned to you",
+    "update_failed": "Update failed",
+    "machines_title": "Machines",
+    "machines_empty": "No machines yet.",
+    "online": "Online",
+    "offline": "Offline",
+    "revoked": "Revoked",
+    "not_enrolled": "Not enrolled",
+    "updating": "Updating",
+    "build": "Build {build}",
+    "boards_title": "Boards",
+    "boards_empty": "No boards yet.",
+    "open_count": "{n} open",
+    "offline_title": "You're offline",
+    "offline_text": "This page needs the hub. It opens again as soon as you're back online."
   }
 }
