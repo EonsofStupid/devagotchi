@@ -90,10 +90,7 @@ pub async fn list(
 
 /// The approvals waiting for `subject`, by project: on every board it decides on. Also the
 /// phone app's Needs you (`web/app/home.rs`).
-pub(super) async fn pending(
-    state: &AppState,
-    subject: &crate::auth::Subject,
-) -> Vec<(String, ApprovalStatus)> {
+pub(super) async fn pending(state: &AppState, subject: &crate::auth::Subject) -> Vec<(String, ApprovalStatus)> {
     let projects: Vec<String> = state
         .hub
         .config

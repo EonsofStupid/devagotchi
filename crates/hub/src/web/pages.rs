@@ -137,16 +137,7 @@ pub fn public(status: StatusCode, title: &str, body: &str, head: &str) -> Respon
 /// script (`/assets/push.js`) may load, from this origin only. It is drawn in the app's
 /// frame (`app_page`) on its Approvals tab.
 pub fn app(status: StatusCode, title: &str, body: &str) -> Response {
-    render(
-        status,
-        title,
-        body,
-        Kind::App {
-            tab: Tab::Approvals,
-            script: "/assets/push.js",
-        },
-        "",
-    )
+    render(status, title, body, Kind::App { tab: Tab::Approvals, script: "/assets/push.js" }, "")
 }
 
 /// The phone app's tabs (`web/app/`), along the bottom of its frame.
@@ -161,16 +152,7 @@ pub enum Tab {
 /// A page of the phone app (`web/app/`): one fixed frame, the bar on top and the tabs at the
 /// bottom, with the page scrolling inside it. Its one script is `/assets/app.js`.
 pub fn app_page(status: StatusCode, title: &str, body: &str, tab: Tab) -> Response {
-    render(
-        status,
-        title,
-        body,
-        Kind::App {
-            tab,
-            script: "/assets/app.js",
-        },
-        "",
-    )
+    render(status, title, body, Kind::App { tab, script: "/assets/app.js" }, "")
 }
 
 /// The frame's tab bar, the current tab marked; and, for `app.js` to show, the install
@@ -185,11 +167,7 @@ fn tabs(tab: Tab, script: &str, site: &Site) -> (String, String) {
     ]
     .iter()
     .map(|(this, href, label)| {
-        let current = if *this == tab {
-            " aria-current=\"page\""
-        } else {
-            ""
-        };
+        let current = if *this == tab { " aria-current=\"page\"" } else { "" };
         format!("<a href=\"{href}\"{current}>{}</a>", escape(label))
     })
     .collect();
@@ -239,10 +217,7 @@ enum Kind {
     /// under the fixed bar (`body.landing`, `landing.css`), with the hub's own setup video.
     Landing,
     /// A page in the phone app's frame (`app_page`), on `tab`, with its one script.
-    App {
-        tab: Tab,
-        script: &'static str,
-    },
+    App { tab: Tab, script: &'static str },
     Script(&'static str),
     Workflow {
         passkey: bool,

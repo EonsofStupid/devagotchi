@@ -226,9 +226,7 @@ impl Links {
     /// `device`'s recent routed operations, newest first.
     pub fn recent_jobs(&self, device: &str) -> Vec<Job> {
         let jobs = self.jobs.lock().expect("jobs");
-        jobs.get(device)
-            .map(|kept| kept.iter().cloned().collect())
-            .unwrap_or_default()
+        jobs.get(device).map(|kept| kept.iter().cloned().collect()).unwrap_or_default()
     }
 
     /// When `device`'s link last went away since this hub started (it is online when
@@ -252,10 +250,7 @@ impl Links {
             .unwrap_or_default();
         let mut jobs = self.jobs.lock().expect("jobs");
         let kept = jobs.entry(device.to_string()).or_default();
-        if let Some(job) = kept
-            .iter_mut()
-            .find(|j| j.operation_id == view.operation_id)
-        {
+        if let Some(job) = kept.iter_mut().find(|j| j.operation_id == view.operation_id) {
             job.state = state;
             job.exit_code = view.exit_code;
         } else if let Some(command) = start {
@@ -965,10 +960,7 @@ impl Links {
         let mut sessions = self.sessions.lock().expect("links");
         if sessions.get(device).is_some_and(|s| s.id == session_id) {
             sessions.remove(device);
-            self.seen
-                .lock()
-                .expect("seen")
-                .insert(device.to_string(), now_secs());
+            self.seen.lock().expect("seen").insert(device.to_string(), now_secs());
         }
         drop(sessions);
         self.changed();

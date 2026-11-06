@@ -1,6 +1,7 @@
 //! `/app/boards/<project>`: a board's open tickets, read with `Board::list`. Filters are
 //! chips (state, assignee, label and the anchors machine, environment, repo, agent: each
-//! value the open tickets have; tapping the chosen one clears it) and a search box over titles and descriptions. Approvals are not listed:
+//! value the open tickets have; tapping the chosen one clears it) and a search box over
+//! titles and descriptions. Approvals are not listed:
 //! they are decided on `/approvals`.
 
 use std::collections::BTreeSet;
