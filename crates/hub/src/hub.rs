@@ -293,6 +293,59 @@ impl Hub {
         machines
     }
 
+    /// Update one of `subject`'s machines to the hub's build now: what `machine_update`
+    /// does, and the phone app's Update now (`web/app/machine.rs`).
+    pub async fn update_machine(
+        &self,
+        subject: &Subject,
+        input: MachineUpdate,
+    ) -> Result<MachineUpdated, Json<BridgeError>> {
+        let device = match self.route(subject, &input.machine)? {
+            Route::Link(device) => device,
+            Route::Local(_) => {
+                return Err(Json(BridgeError::new(
+                    "update_unsupported",
+                    format!(
+                        "{} is a broker on the hub's own host; it updates with the hub",
+                        input.machine
+                    ),
+                )));
+            }
+        };
+        let asked = self
+            .links
+            .request_update(&device, input.force, &subject.id, subject.via)
+            .map_err(Json)?;
+        let (state, detail) = match asked {
+            crate::link::UpdateAsked::AlreadyOn(build) => {
+                ("done".to_string(), Some(format!("already on {build}")))
+            }
+            crate::link::UpdateAsked::Sent => {
+                let within =
+                    std::time::Duration::from_secs(input.wait_seconds.unwrap_or(50).min(300));
+                match self.links.wait_update(&device, within).await {
+                    Some(update) => (update.state, update.detail),
+                    None => ("requested".to_string(), None),
+                }
+            }
+        };
+        Ok(MachineUpdated {
+            machine: input.machine,
+            state,
+            detail,
+            build: self.links.build(&device),
+        })
+    }
+
+    /// The link device behind `machine`, a name as `subject` knows it; None for a broker
+    /// on the hub's own host or a machine that is not theirs.
+    pub fn link_device(&self, subject: &Subject, machine: &str) -> Option<String> {
+        match self.route(subject, machine) {
+            Ok(Route::Link(device)) => Some(device),
+            _ => None,
+        }
+    }
+
     /// What `machines` says about `device`'s latest update (`machine_update.rs`).
     fn update_shown(&self, device: &str) -> Option<String> {
         let build = self.links.build(device);
@@ -589,41 +642,7 @@ impl Hub {
         context: RequestContext<RoleServer>,
     ) -> Result<Json<MachineUpdated>, Json<BridgeError>> {
         let subject = self.subject(&context)?;
-        let device = match self.route(&subject, &input.machine)? {
-            Route::Link(device) => device,
-            Route::Local(_) => {
-                return Err(Json(BridgeError::new(
-                    "update_unsupported",
-                    format!(
-                        "{} is a broker on the hub's own host; it updates with the hub",
-                        input.machine
-                    ),
-                )));
-            }
-        };
-        let asked = self
-            .links
-            .request_update(&device, input.force, &subject.id, subject.via)
-            .map_err(Json)?;
-        let (state, detail) = match asked {
-            crate::link::UpdateAsked::AlreadyOn(build) => {
-                ("done".to_string(), Some(format!("already on {build}")))
-            }
-            crate::link::UpdateAsked::Sent => {
-                let within =
-                    std::time::Duration::from_secs(input.wait_seconds.unwrap_or(50).min(300));
-                match self.links.wait_update(&device, within).await {
-                    Some(update) => (update.state, update.detail),
-                    None => ("requested".to_string(), None),
-                }
-            }
-        };
-        Ok(Json(MachineUpdated {
-            machine: input.machine,
-            state,
-            detail,
-            build: self.links.build(&device),
-        }))
+        self.update_machine(&subject, input).await.map(Json)
     }
 
     #[tool(

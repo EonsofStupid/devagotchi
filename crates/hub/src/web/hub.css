@@ -215,3 +215,13 @@ body.app > main { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto;
 @media (prefers-reduced-motion: no-preference) and (scripting: enabled) {
   ::view-transition-group(shell-tabs) { animation: none; }
 }
+/* A machine's page: its facts in two columns, its recent jobs in a table that wraps. */
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 16px; margin: 0; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+table.jobs { table-layout: fixed; font-size: .9rem; }
+table.jobs td, table.jobs th { padding: 8px; overflow-wrap: anywhere; }
+table.jobs th:nth-child(1) { width: 27%; }
+table.jobs th:nth-child(3) { width: 27%; }
+table.jobs th:nth-child(4) { width: 14%; }
+table.jobs th:nth-child(4), table.jobs td:nth-child(4) { display: table-cell; }

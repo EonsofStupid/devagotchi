@@ -6,6 +6,7 @@
 //! the stylesheet so the app opens offline on `/app/offline`.
 
 mod home;
+mod machine;
 
 use std::sync::Arc;
 
@@ -26,6 +27,11 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/app", get(home::home))
         .route("/app/machines", get(home::machines))
+        .route("/app/machines/{name}", get(machine::page))
+        .route(
+            "/app/machines/{name}/update",
+            axum::routing::post(machine::update),
+        )
         .route("/app/boards", get(home::boards))
         .route("/app/offline", get(offline))
         .route("/assets/app.js", get(script))
