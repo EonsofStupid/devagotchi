@@ -34,11 +34,22 @@ fn help_names_every_command_and_each_answers_help() {
         );
         assert!(!out.stdout.is_empty(), "{command} --help printed nothing");
     }
-    let out = devagotchi().arg("version").output().unwrap();
-    assert_eq!(
-        String::from_utf8_lossy(&out.stdout).trim(),
-        format!("devagotchi {}", env!("CARGO_PKG_VERSION"))
-    );
+    // `devagotchi <semver> (<build>)`: the build is what CI set DEVAGOTCHI_BUILD to, else `dev`.
+    for flag in ["version", "--version", "-V"] {
+        let out = devagotchi().arg(flag).output().unwrap();
+        assert!(out.status.success());
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+        let build = text
+            .strip_prefix(&format!("devagotchi {} (", env!("CARGO_PKG_VERSION")))
+            .and_then(|rest| rest.strip_suffix(')'))
+            .unwrap_or_else(|| panic!("{flag} printed {text:?}"));
+        assert!(
+            !build.is_empty() && !build.contains(char::is_whitespace),
+            "{flag} printed {text:?}"
+        );
+        // build.rs sets the same name for this test as for the binary.
+        assert_eq!(build, env!("DEVAGOTCHI_BUILD"), "{flag} printed {text:?}");
+    }
     let out = devagotchi().arg("nonsense").output().unwrap();
     assert_eq!(out.status.code(), Some(64));
 }

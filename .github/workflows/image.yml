@@ -104,6 +104,7 @@ jobs:
           file: deploy/compose/Dockerfile
           platforms: ${{ matrix.platform }}
           build-contexts: downloads=${{ runner.temp }}/downloads
+          build-args: DEVAGOTCHI_BUILD=${{ needs.downloads.outputs.version }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
           tags: devagotchi-hub:ci
@@ -149,6 +150,7 @@ jobs:
           file: deploy/compose/Dockerfile
           platforms: ${{ matrix.platform }}
           build-contexts: downloads=${{ runner.temp }}/downloads
+          build-args: DEVAGOTCHI_BUILD=${{ needs.downloads.outputs.version }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true

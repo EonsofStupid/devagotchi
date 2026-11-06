@@ -8,6 +8,9 @@ ARG RUST_IMAGE=rust:1.99.1-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126
 ARG RUNTIME_IMAGE=gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 
 FROM ${RUST_IMAGE} AS build
+# The build's name `devagotchi --version` prints (crates/devagotchi/build.rs): GitHub's build
+# passes the downloads VERSION (image.yml); a local build is `dev`.
+ARG DEVAGOTCHI_BUILD=dev
 WORKDIR /src
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
