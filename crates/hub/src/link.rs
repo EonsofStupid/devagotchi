@@ -238,13 +238,19 @@ impl Links {
     /// `device`'s recent routed operations, newest first.
     pub fn recent_jobs(&self, device: &str) -> Vec<Job> {
         let jobs = self.jobs.lock().expect("jobs");
-        jobs.get(device).map(|kept| kept.iter().cloned().collect()).unwrap_or_default()
+        jobs.get(device)
+            .map(|kept| kept.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
     /// When `device`'s link last went away since this hub started (it is online when
     /// `connected`).
     pub fn last_seen(&self, device: &str) -> Option<u64> {
-        self.seen.lock().expect("seen").get(device).map(|(at, _)| *at)
+        self.seen
+            .lock()
+            .expect("seen")
+            .get(device)
+            .map(|(at, _)| *at)
     }
 
     /// The accounts a machine's pushes go to: the account that added it; for a machine the
@@ -287,7 +293,10 @@ impl Links {
         let shown = self.shown(device);
         let (title, body) = match what {
             "offline" => (&copy.push_offline_title, &copy.push_offline_body),
-            _ => (&copy.push_update_failed_title, &copy.push_update_failed_body),
+            _ => (
+                &copy.push_update_failed_title,
+                &copy.push_update_failed_body,
+            ),
         };
         let words = crate::site::Ctx::new(&site).with("machine", shown.clone());
         let payload = serde_json::json!({
@@ -318,7 +327,10 @@ impl Links {
                 .expect("seen")
                 .get(&device)
                 .is_some_and(|(_, seen)| *seen == episode);
-            if same && !self.connected(&device) && matches!(self.devices.is_revoked(&device), Ok(false)) {
+            if same
+                && !self.connected(&device)
+                && matches!(self.devices.is_revoked(&device), Ok(false))
+            {
                 self.push_machine(&device, "offline");
             }
         });
@@ -339,7 +351,10 @@ impl Links {
             .unwrap_or_default();
         let mut jobs = self.jobs.lock().expect("jobs");
         let kept = jobs.entry(device.to_string()).or_default();
-        if let Some(job) = kept.iter_mut().find(|j| j.operation_id == view.operation_id) {
+        if let Some(job) = kept
+            .iter_mut()
+            .find(|j| j.operation_id == view.operation_id)
+        {
             job.state = state;
             job.exit_code = view.exit_code;
         } else if let Some(command) = start {
@@ -1266,7 +1281,13 @@ mod tests {
         let (control, _) = mpsc::channel(1);
         links.sessions.lock().unwrap().insert(
             device.to_string(),
-            Session { id: 99, calls, pending: Arc::default(), build: None, control },
+            Session {
+                id: 99,
+                calls,
+                pending: Arc::default(),
+                build: None,
+                control,
+            },
         );
     }
 
@@ -1284,7 +1305,9 @@ mod tests {
         let code = links.devices.issue_code("gus", [6; 16]).unwrap();
         links.devices.enroll("gus", &code, "gus-key", true).unwrap();
         connect(&links, "gus");
-        let episode = links.forget("gus", 99, &Pending::default()).expect("its live session");
+        let episode = links
+            .forget("gus", 99, &Pending::default())
+            .expect("its live session");
         assert!(links.last_seen("gus").is_some());
         links.clone().watch_offline("gus".into(), episode);
         wait().await;
@@ -1327,7 +1350,10 @@ mod tests {
 
         // A machine an account added goes to that account only; a revoked one is not pushed.
         let code = links.issue_owned_code("alice", "lab").unwrap();
-        links.devices.enroll("lab", &code, "lab-key", false).unwrap();
+        links
+            .devices
+            .enroll("lab", &code, "lab-key", false)
+            .unwrap();
         links.update_reported("lab", "failed", None);
         assert_eq!(pushed(&links).last().unwrap().0, vec!["alice".to_string()]);
         connect(&links, "lab");
@@ -1335,7 +1361,11 @@ mod tests {
         links.devices.revoke("lab").unwrap();
         links.clone().watch_offline("lab".into(), episode);
         wait().await;
-        assert_eq!(pushed(&links).len(), 5, "a revoked machine going offline is not news");
+        assert_eq!(
+            pushed(&links).len(),
+            5,
+            "a revoked machine going offline is not news"
+        );
     }
 
     #[test]
