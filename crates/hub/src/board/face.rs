@@ -8,7 +8,7 @@ use devagotchi_contracts::BridgeResult;
 
 use super::{
     Actor, Board, ChainStatus, Dep, DepKind, Filter, Lease, NewTicket, NextFilter, Note, Patch,
-    Prime, Ticket, TicketView,
+    Prime, ProjectSettings, Settings, Ticket, TicketView,
 };
 
 /// Where the holder filter means "whoever I am on this board": the local face knows the
@@ -93,6 +93,9 @@ pub trait Face {
     /// Expire lapsed leases; the hub does its own, so the remote face returns 0.
     fn reap(&self) -> BridgeResult<usize>;
     fn verify_chain(&self) -> BridgeResult<ChainStatus>;
+    /// The board's settings after naming its repo and environments; nothing given reads
+    /// them (`board settings`).
+    fn project_settings(&self, actor: &Actor<'_>, patch: &ProjectSettings) -> BridgeResult<Settings>;
 }
 
 impl Face for Board {
@@ -236,5 +239,9 @@ impl Face for Board {
 
     fn verify_chain(&self) -> BridgeResult<ChainStatus> {
         Board::verify_chain(self)
+    }
+
+    fn project_settings(&self, actor: &Actor<'_>, patch: &ProjectSettings) -> BridgeResult<Settings> {
+        Board::set_project(self, actor, patch)
     }
 }

@@ -151,7 +151,12 @@ Seventeen tools, each taking `project`: `board_prime` (start here), `board_ready
 `board_get`, `board_create`, `board_claim` (by id, or the best ready ticket when `id` is omitted;
 `claimed: false` when nothing is ready), `board_heartbeat`, `board_update`, `board_note`,
 `board_handoff`, `board_release`, `board_complete`, `board_dep`, `board_force_release` (people
-only), `board_events`, `board_wait` (held until the board commits an event, at most 25 s), `board_verify`.
+only), `board_events`, `board_wait` (held until the board commits an event, at most 25 s), `board_verify`,
+and `board_settings {project, repo?, environments?}`: the project's repo (an https URL; new tickets
+carry it) and its environments (1 to 20 lowercase names), set by the owning account, its AI, or a
+person granted on a shared board, each change on the chain as `board.settings_changed`; with
+neither field it returns the settings. `devagotchi board settings [--repo URL] [--env a,b,c]` is the
+same on the command line, locally or on the hub for a bound project.
 `board_wait` and `approval_wait` sleep on the board's commit signal: every write that records an
 event wakes them, nothing re-reads the store on a timer. A write by another process (the board
 command line on a project not bound to this hub) is seen at the next change or when the wait ends.

@@ -494,6 +494,7 @@ fn next_for(code: &str, id: Option<&str>) -> String {
         "use_lease_ops" => "use board_claim / board_complete / board_handoff / board_release; held tickets do not move by board_update".into(),
         "transition_not_allowed" => "board_prime names the states; the workflow allows only its transitions".into(),
         "humans_only" => "ask the person who owns this board".into(),
+        "not_owner" => "only the account that owns this board, a person granted on it, or that account's AI changes its settings; ask them".into(),
         "not_found" => "board_list with open_only to see the ids on this board".into(),
         "not_granted" | "unknown_board" => "whoami lists the boards your identity may work on".into(),
         "no_board" | "board_mismatch" | "board_version" => "the hub's operator must initialise or fix this board; nothing an agent can do".into(),
@@ -525,6 +526,8 @@ fn mcp_session(context: &RequestContext<RoleServer>) -> Option<String> {
 fn refuse(error: BridgeError, ticket: Option<&str>) -> Json<BoardError> {
     let next = match error.code.as_str() {
         // The store's message ends with the board's list: name it in `next` too.
+        // What is wrong and how to give it, as the store said: that is the hint.
+        "invalid_settings" => format!("{}, then call board_settings again", error.message),
         "unknown_environment" => match error.message.rsplit_once(": ") {
             Some((_, list)) => {
                 format!("pass one of this board's environments ({list}), or leave environment out")
@@ -852,6 +855,18 @@ pub struct ApprovalRequestIn {
     /// How to undo it if it goes wrong.
     #[serde(default)]
     pub undo: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SettingsIn {
+    pub project: String,
+    /// The project's repository, an https URL (https://github.com/you/project). New tickets
+    /// carry it when they name none.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// The environments a ticket may name: 1 to 20 lowercase names (dev, staging, prod).
+    #[serde(default)]
+    pub environments: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1944,6 +1959,54 @@ impl Hub {
             None,
             &context,
             move |board, _| board.verify_chain(),
+        )
+        .await
+    }
+
+    #[tool(
+        name = "board_settings",
+        description = "Name a project's repo (an https URL) and its environments (1 to 20 lowercase names) once, on its board: new tickets then carry the repo, and a ticket's environment must be one of them. With neither given, returns the board's settings. For the account that owns the board (and its AI), or a person granted on a shared board; refused as not_owner otherwise, invalid_settings with what to fix in next.",
+        title = "A board's repo and environments",
+        annotations(
+            title = "A board's repo and environments",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn board_settings(
+        &self,
+        Parameters(input): Parameters<SettingsIn>,
+        context: RequestContext<RoleServer>,
+    ) -> BoardOut<super::Settings> {
+        let subject = self.board_subject(&context)?;
+        // Whose settings these are: the owning account's, and its AI's, on its own board
+        // (or its org's); the people the config names on a shared one. Unknown boards are
+        // refused by the call itself, as every board tool refuses them.
+        let owner = match self.board_for(&subject, &input.project) {
+            Ok((_, Kind::Account | Kind::Org)) => true,
+            Ok((_, Kind::Shared)) => self.config.is_human(&subject.id),
+            Err(_) => true,
+        };
+        let patch = super::ProjectSettings {
+            repo: input.repo,
+            environments: input.environments,
+        };
+        self.board_call(
+            "board_settings",
+            &input.project,
+            None,
+            &context,
+            move |board, actor| {
+                if !owner {
+                    return Err(BridgeError::new(
+                        "not_owner",
+                        "this board's settings are its owner's: the owning account, its AI, or a person granted on it",
+                    ));
+                }
+                board.set_project(actor, &patch)
+            },
         )
         .await
     }

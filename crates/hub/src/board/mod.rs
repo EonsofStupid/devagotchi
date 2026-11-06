@@ -17,6 +17,8 @@ pub mod welcome;
 pub mod workflow;
 
 #[cfg(test)]
+mod settings_tests;
+#[cfg(test)]
 mod tests;
 
 use std::{
@@ -393,6 +395,68 @@ pub struct Settings {
     pub environments: Vec<String>,
 }
 
+/// What `board_settings` changes: the project's repo, its environments, or both.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProjectSettings {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environments: Option<Vec<String>>,
+}
+
+/// A project's repo: an https URL with a host, no spaces, at most 500 characters.
+fn check_repo(repo: &str) -> BridgeResult<String> {
+    let repo = repo.trim();
+    let host = repo
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split(['/', '?', '#']).next())
+        .unwrap_or_default();
+    if host.is_empty()
+        || (!host.contains('.') && host != "localhost")
+        || repo.chars().count() > 500
+        || repo.chars().any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(fail(
+            "invalid_settings",
+            format!("repo {repo:?} is not an https URL: give one like https://github.com/you/project"),
+        ));
+    }
+    Ok(repo.to_string())
+}
+
+/// A board's environments: 1 to 20 distinct lowercase names, `[a-z0-9][a-z0-9-]{0,62}`.
+fn check_environments(environments: &[String]) -> BridgeResult<Vec<String>> {
+    let names: Vec<String> = environments.iter().map(|e| e.trim().to_string()).collect();
+    if names.is_empty() || names.len() > 20 {
+        return Err(fail(
+            "invalid_settings",
+            format!(
+                "environments must be 1 to 20 names, and {} were given: give them like dev, staging, prod",
+                names.len()
+            ),
+        ));
+    }
+    if let Some(bad) = names.iter().find(|n| !crate::config::valid_name(n)) {
+        return Err(fail(
+            "invalid_settings",
+            format!(
+                "environment {bad:?} is not a lowercase name: use a-z, 0-9 and -, starting with a letter or digit"
+            ),
+        ));
+    }
+    if let Some(twice) = names
+        .iter()
+        .enumerate()
+        .find_map(|(i, n)| names[..i].contains(n).then_some(n))
+    {
+        return Err(fail(
+            "invalid_settings",
+            format!("environment {twice:?} is named twice: name each once"),
+        ));
+    }
+    Ok(names)
+}
+
 fn default_environments() -> Vec<String> {
     ["dev", "staging", "prod"].map(String::from).to_vec()
 }
@@ -713,6 +777,46 @@ impl Board {
             .map_err(store_error)?;
             w.event("admin.settings.put", None, None, serde_json::json!({}))?;
             Ok(())
+        })
+    }
+
+    /// Name the project's repo and environments (`board_settings`, `board settings`): the
+    /// fields given replace the board's, after the same checks on every face; the other
+    /// settings stay. Nothing given changes nothing and returns the settings as they are.
+    /// A change is on the chain as `board.settings_changed`, naming what changed.
+    pub fn set_project(&self, actor: &Actor<'_>, patch: &ProjectSettings) -> BridgeResult<Settings> {
+        let repo = patch.repo.as_deref().map(check_repo).transpose()?;
+        let environments = patch
+            .environments
+            .as_deref()
+            .map(check_environments)
+            .transpose()?;
+        if repo.is_none() && environments.is_none() {
+            return self.settings();
+        }
+        self.write(actor, |w| {
+            let mut settings = load_settings(w.tx)?;
+            let mut changed = serde_json::Map::new();
+            if let Some(repo) = &repo {
+                settings.repo = Some(repo.clone());
+                changed.insert("repo".into(), serde_json::json!(repo));
+            }
+            if let Some(environments) = &environments {
+                settings.environments = environments.clone();
+                changed.insert("environments".into(), serde_json::json!(environments));
+            }
+            w.tx.execute(
+                "UPDATE settings SET value = ?1 WHERE key = 'settings'",
+                params![serde_json::to_string(&settings).expect("settings json")],
+            )
+            .map_err(store_error)?;
+            w.event(
+                "board.settings_changed",
+                None,
+                None,
+                serde_json::Value::Object(changed),
+            )?;
+            Ok(settings)
         })
     }
 
