@@ -51,6 +51,9 @@ work.mkdir(parents=True, exist_ok=True)
 binary_a = args.a.resolve() / f"devagotchi{EXE}"
 binary_b = args.b.resolve() / f"devagotchi{EXE}"
 processes = []
+# Under PowerShell 7 the step's PSModulePath names its modules, which Windows PowerShell 5.1
+# (the installer, the updater) cannot load: its children get the environment logon gives.
+os.environ.pop("PSModulePath", None)
 
 
 def check(label, ok, detail=""):
