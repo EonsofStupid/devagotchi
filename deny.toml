@@ -58,10 +58,11 @@ wildcards = "deny"
 allow-wildcard-paths = true
 highlight = "all"
 # The no-network rule (plan S10, CLAUDE.md): nothing in core or mcp may link an HTTP
-# client. The hub is the one crate allowed to, because it talks to the identity
-# provider; `wrappers` lists every crate permitted to depend on each banned crate.
+# client. The hub may, because it talks to the identity provider, and so may the link,
+# for an update's downloads from its own hub (docs/spec-machine-update.md, U3);
+# `wrappers` lists every crate permitted to depend on each banned crate.
 deny = [
-  { crate = "reqwest", wrappers = ["devagotchi-hub"] },
+  { crate = "reqwest", wrappers = ["devagotchi-hub", "devagotchi-link"] },
   { crate = "ureq", wrappers = [] },
   { crate = "curl", wrappers = [] },
   { crate = "isahc", wrappers = [] },

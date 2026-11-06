@@ -4,8 +4,11 @@
 
 //! This library is the link's whole behaviour; `devagotchi link` is its name.
 
+mod handoff;
+mod idle;
 mod session;
 mod state;
+mod update;
 
 use std::{env, ffi::OsString, path::PathBuf, process::ExitCode, time::Duration};
 
@@ -77,8 +80,9 @@ fn parse_args(args: impl IntoIterator<Item = OsString>) -> BridgeResult<Command>
 }
 
 /// The link's command line: `enroll …`, `run …`, or `--help`. Exit 2 means the hub
-/// refused this device; a supervisor should not hammer it.
-pub fn cli(args: Vec<OsString>) -> ExitCode {
+/// refused this device; a supervisor should not hammer it. `build` is the name of the
+/// build this binary is (`devagotchi --version`), which the link tells the hub.
+pub fn cli(args: Vec<OsString>, build: &str) -> ExitCode {
     let command = match parse_args(args) {
         Ok(Command::Help) => {
             println!("{USAGE}");
@@ -100,16 +104,16 @@ pub fn cli(args: Vec<OsString>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    runtime.block_on(dispatch(command))
+    runtime.block_on(dispatch(command, build))
 }
 
-async fn dispatch(command: Command) -> ExitCode {
+async fn dispatch(command: Command, build: &str) -> ExitCode {
     let result = match command {
         Command::Enroll { state, config } => match enrollment_code() {
             Ok(code) => enroll(state, config, code).await,
             Err(error) => Err(error),
         },
-        Command::Run { state } => run(state).await,
+        Command::Run { state } => run(state, build).await,
         Command::Help => unreachable!(),
     };
     match result {
@@ -166,15 +170,16 @@ async fn enroll(state_dir: PathBuf, config: LinkConfig, code: String) -> BridgeR
     }
 }
 
-async fn run(state_dir: PathBuf) -> BridgeResult<()> {
+async fn run(state_dir: PathBuf, build: &str) -> BridgeResult<()> {
     state::prepare(&state_dir)?;
     let config = state::load_config(&state_dir)?;
     let key = state::device_key(&state_dir)?;
+    let updater = update::Updater::new(&config, &state_dir, build);
     let mut delay = Duration::from_secs(1);
     loop {
         let started = tokio::time::Instant::now();
         let ended = tokio::select! {
-            ended = session::connect(&config, &key, Mode::Serve) => ended,
+            ended = session::connect(&config, &key, Mode::Serve { updater: &updater, state_dir: &state_dir }) => ended,
             _ = tokio::signal::ctrl_c() => {
                 eprintln!("devagotchi link stopped");
                 return Ok(());
@@ -212,6 +217,10 @@ fn jitter(delay: Duration) -> Duration {
     let _ = getrandom::fill(&mut byte);
     delay + delay.mul_f32(f32::from(byte[0]) / 255.0 * 0.25)
 }
+
+#[cfg(test)]
+#[path = "update_tests.rs"]
+mod update_tests;
 
 #[cfg(test)]
 mod tests {

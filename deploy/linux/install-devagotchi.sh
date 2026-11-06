@@ -44,6 +44,7 @@ PREFIX=/opt/devagotchi
 ACCOUNT=devagotchi
 ACCOUNT_HOME=/var/lib/devagotchi
 VERSION='' BIN_DIR='' ARTIFACT_DIR='' WORKSPACE='' HUB='' DEVICE='' ENROLL=0 DEVELOPER=0 UNINSTALL=0 EXEC_POLICY=''
+APPLY_UPDATE=0 SELF=$(readlink -f "$0")
 ROLE=machine PUBLIC_URL='' LISTEN=127.0.0.1:8787 CADDY=0 AUTH_CONFIG=''
 GRANTS=() BOARDS=() PEOPLE=() AGENTS=()
 
@@ -70,6 +71,7 @@ while [ $# -gt 0 ]; do
         --developer) DEVELOPER=1; shift ;;
         --exec-policy) EXEC_POLICY=${2:?--exec-policy needs granted or account}; shift 2 ;;
         --uninstall) UNINSTALL=1; shift ;;
+        --apply-update) APPLY_UPDATE=1; shift ;;  # devagotchi-update.service only
         --repo) REPO=${2:?--repo needs a value}; shift 2 ;;
         --role) ROLE=${2:?--role needs machine or hub}; shift 2 ;;
         --public-url) PUBLIC_URL=${2:?--public-url needs a value}; shift 2 ;;
@@ -171,6 +173,12 @@ if [ $UNINSTALL = 1 ]; then
         fi
         as_user rm -f "$home/.config/systemd/user/devagotchi-broker.service" "$home/.config/systemd/user/devagotchi-link.service" \
             "$home/.config/systemd/user/devagotchi-hub.service"
+        # The update units are this account's when their service names it.
+        if grep -qs -- "--user $ACCOUNT --prefix" /etc/systemd/system/devagotchi-update.service; then
+            systemctl disable --now devagotchi-update.path >/dev/null 2>&1 || true
+            rm -f /etc/systemd/system/devagotchi-update.path /etc/systemd/system/devagotchi-update.service
+            systemctl daemon-reload || true
+        fi
         [ -S "/run/user/$(uid_of)/bus" ] && { user_systemctl daemon-reload || true; }
         loginctl disable-linger "$ACCOUNT" || true
         echo "    stopped and removed the services of $ACCOUNT; lingering is off"
@@ -183,6 +191,49 @@ if [ $UNINSTALL = 1 ]; then
         echo "    no account $ACCOUNT; nothing to stop"
     fi
     exit 0
+fi
+
+# ------------------------------------------------------------------ apply an update
+# devagotchi-update.service runs the root-owned copy of this installer here when the link
+# asked for an update (docs/spec-machine-update.md, U3): it writes update-request.json in its
+# state, beside the installer and archive it downloaded and checked against the hub's list.
+# The request and the archive are read as the account, so root never follows a link the
+# account planted; the installer that runs is this root-owned one, never a downloaded one.
+# If the new build does not come up, the version that was current is installed again. The
+# log says how it ended ("… done", or "… failed: <reason>" before the rollback); the new
+# link tells the hub.
+if [ $APPLY_UPDATE = 1 ]; then
+    getent passwd "$ACCOUNT" >/dev/null || die "no account $ACCOUNT"
+    from_state=$(home_of)/.local/state/devagotchi-link
+    request=$(as_user cat "$from_state/update-request.json" 2>/dev/null) || exit 0
+    as_user rm -f "$from_state/update-request.json"
+    [[ $request =~ \"version\":\"([A-Za-z0-9][A-Za-z0-9._-]{0,63})\" ]] || die "update-request.json names no plain version"
+    version=${BASH_REMATCH[1]}
+    from=$from_state/updates/$version
+    [[ $request == *"\"dir\":\"$from\""* ]] || die "update-request.json names a directory other than $from"
+    need_target
+    archive=devagotchi-$TARGET.tar.xz
+    work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
+    for name in "$archive" "$archive.sha256"; do
+        as_user cat "$from/$name" > "$work/$name" || die "cannot read $from/$name"
+    done
+    install -d -o root -g root -m 0755 "$PREFIX/update"
+    log=$PREFIX/update/update-$version.log
+    previous=$(readlink -f "$PREFIX/current")
+    echo "devagotchi update to $version at $(date -u +%FT%TZ); current is $previous" > "$log"
+    chmod 0644 "$log"
+    if "$SELF" --version "$version" --artifact-dir "$work" --user "$ACCOUNT" --prefix "$PREFIX" >> "$log" 2>&1 </dev/null; then
+        echo "devagotchi update to $version done" >> "$log"
+        exit 0
+    fi
+    reason=$(sed -n 's/^install-devagotchi: //p' "$log" | tail -n 1)
+    [ -n "$reason" ] || reason="the installer failed"
+    # Said before the rollback, which starts the link that reports it.
+    echo "devagotchi update to $version failed: $reason" >> "$log"
+    echo "rolling back to $previous" >> "$log"
+    "$SELF" --bin-dir "$previous" --user "$ACCOUNT" --prefix "$PREFIX" >> "$log" 2>&1 </dev/null \
+        || echo "the rollback failed too" >> "$log"
+    exit 1
 fi
 
 [ -n "$VERSION" ] || [ -n "$BIN_DIR" ] || [ -L "$PREFIX/current" ] \
@@ -638,6 +689,45 @@ else
     echo
     echo "    No link yet. To join a hub: sudo $0 --hub <url> --device <name> --enroll < code"
 fi
+
+# ------------------------------------------------------------------ self-update
+# The link asks for an update with a file in its state and never gets root; this root .path
+# unit sees the file and devagotchi-update.service applies it with the root-owned copy of
+# this installer (--apply-update above). docs/spec-machine-update.md, U3.
+step "Self-update"
+install -d -o root -g root -m 0755 "$PREFIX/libexec" "$PREFIX/update"
+[ "$SELF" -ef "$PREFIX/libexec/install-devagotchi.sh" ] \
+    || install -o root -g root -m 0755 "$SELF" "$PREFIX/libexec/install-devagotchi.sh"
+cat > /etc/systemd/system/devagotchi-update.path.tmp <<EOF
+# Written by install-devagotchi.sh; re-running the installer rewrites it.
+[Unit]
+Description=Devagotchi: an update the link asked for
+Documentation=https://github.com/$REPO/tree/main/deploy/linux
+
+[Path]
+PathExists=$LINK_STATE/update-request.json
+
+[Install]
+WantedBy=multi-user.target
+EOF
+cat > /etc/systemd/system/devagotchi-update.service.tmp <<EOF
+# Written by install-devagotchi.sh; re-running the installer rewrites it.
+[Unit]
+Description=Devagotchi: apply the update the link asked for, or roll back
+Documentation=https://github.com/$REPO/tree/main/deploy/linux
+
+[Service]
+Type=oneshot
+ExecStart=$PREFIX/libexec/install-devagotchi.sh --apply-update --user $ACCOUNT --prefix $PREFIX
+EOF
+for unit in devagotchi-update.path devagotchi-update.service; do
+    chmod 0644 "/etc/systemd/system/$unit.tmp" && mv -f "/etc/systemd/system/$unit.tmp" "/etc/systemd/system/$unit"
+done
+systemctl daemon-reload
+# Not restarted: when this run is the update itself, the service that runs it is active.
+systemctl enable devagotchi-update.path >/dev/null 2>&1
+systemctl start devagotchi-update.path
+echo "    devagotchi-update.path watches $LINK_STATE/update-request.json; $PREFIX/libexec/install-devagotchi.sh applies it"
 
 step "Done"
 echo "    Version:   $VERSION ($PREFIX/current)"
