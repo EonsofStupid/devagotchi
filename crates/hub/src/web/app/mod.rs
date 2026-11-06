@@ -74,7 +74,11 @@ pub(super) fn open_board(state: &AppState, subject: &Subject, project: &str) -> 
         .boards_for(&subject.id)
         .iter()
         .any(|entry| entry.project == project);
-    if granted { boards.open(project).ok() } else { None }
+    if granted {
+        boards.open(project).ok()
+    } else {
+        None
+    }
 }
 
 /// The site's words for the app.
@@ -89,7 +93,10 @@ pub(super) fn card(id: &str, title: &str, rows: &[String], empty: &str) -> Strin
     } else {
         format!("<ul class=\"rows\">{}</ul>", rows.concat())
     };
-    format!("<section class=\"card\" id=\"{id}\"><h2>{}</h2>{inner}</section>", escape(title))
+    format!(
+        "<section class=\"card\" id=\"{id}\"><h2>{}</h2>{inner}</section>",
+        escape(title)
+    )
 }
 
 /// `/app/offline`: what the service worker shows when the hub cannot be reached.

@@ -17,11 +17,18 @@ async fn page(hub: &Hosted, path: &str, person: &Person) -> (u16, String) {
 /// A's things: a machine that joined, a board with its getting-started ticket and one more
 /// assigned to A (2 open).
 async fn things_of(hub: &Hosted, person: &mut Person) {
-    let added = hub.call(person, "machine_add", json!({ "name": "desk" })).await;
+    let added = hub
+        .call(person, "machine_add", json!({ "name": "desk" }))
+        .await;
     assert!(!refused(&added), "{added}");
     // It joins with its code, as `tenant_tests.rs` enrolls one.
     let added = &added["structuredContent"];
-    let stored = added["manual"].as_str().unwrap().split("--device ").nth(1).unwrap();
+    let stored = added["manual"]
+        .as_str()
+        .unwrap()
+        .split("--device ")
+        .nth(1)
+        .unwrap();
     let stored = stored.split(' ').next().unwrap();
     let enrolled = hub
         .http
@@ -31,7 +38,9 @@ async fn things_of(hub: &Hosted, person: &mut Person) {
         .await
         .unwrap();
     assert_eq!(enrolled.status(), 201);
-    let bound = hub.call(person, "board_bind", json!({ "project": "alpha" })).await;
+    let bound = hub
+        .call(person, "board_bind", json!({ "project": "alpha" }))
+        .await;
     assert!(!refused(&bound), "{bound}");
     let me: Value = hub.call(person, "whoami", json!({})).await["structuredContent"].clone();
     let made = hub
@@ -53,23 +62,46 @@ async fn the_app_shows_only_the_accounts_own_machines_and_boards_in_one_frame() 
 
     let (status, home) = page(&hub, "/app", &alice).await;
     assert_eq!(status, 200, "{home}");
-    for seen in ["id=\"needs-you\"", "id=\"machines\"", "id=\"boards\"", "desk", "alpha", "2 open"] {
+    for seen in [
+        "id=\"needs-you\"",
+        "id=\"machines\"",
+        "id=\"boards\"",
+        "desk",
+        "alpha",
+        "2 open",
+    ] {
         assert!(home.contains(seen), "home shows {seen}: {home}");
     }
-    assert!(home.contains("A-PRIVATE-TICKET"), "Needs you lists the ticket assigned to A");
+    assert!(
+        home.contains("A-PRIVATE-TICKET"),
+        "Needs you lists the ticket assigned to A"
+    );
     assert!(home.contains("<body class=\"app\">"), "the app's frame");
     assert!(home.contains("<nav class=\"tabs\"><a href=\"/app\" aria-current=\"page\">Home</a>"));
     for tab in ["/app/machines", "/app/boards", "/approvals"] {
-        assert!(home.contains(&format!("<a href=\"{tab}\">")), "the tab bar leads to {tab}");
+        assert!(
+            home.contains(&format!("<a href=\"{tab}\">")),
+            "the tab bar leads to {tab}"
+        );
     }
-    assert_eq!(home.matches("<script").count(), 1, "one script: the app's own file");
+    assert_eq!(
+        home.matches("<script").count(),
+        1,
+        "one script: the app's own file"
+    );
     assert!(home.contains("<script src=\"/assets/app.js\" defer></script>"));
-    assert!(home.contains("id=\"install\" hidden"), "the install banner waits for app.js");
+    assert!(
+        home.contains("id=\"install\" hidden"),
+        "the install banner waits for app.js"
+    );
 
     for (path, tab) in [("/app/machines", "Machines"), ("/app/boards", "Boards")] {
         let (status, html) = page(&hub, path, &alice).await;
         assert_eq!(status, 200, "{path}: {html}");
-        assert!(html.contains(&format!("aria-current=\"page\">{tab}</a>")), "{path}");
+        assert!(
+            html.contains(&format!("aria-current=\"page\">{tab}</a>")),
+            "{path}"
+        );
     }
     let (_, machines) = page(&hub, "/app/machines", &alice).await;
     assert!(machines.contains("desk"));
@@ -110,7 +142,12 @@ async fn signed_out_the_app_sends_you_to_sign_in_and_back() {
 #[tokio::test]
 async fn the_app_installs_at_app_and_opens_offline() {
     let hub = hosted().await;
-    let manifest: Value = hub.get("/manifest.webmanifest", None).await.json().await.unwrap();
+    let manifest: Value = hub
+        .get("/manifest.webmanifest", None)
+        .await
+        .json()
+        .await
+        .unwrap();
     assert_eq!(manifest["start_url"], "/app");
     assert_eq!(manifest["id"], "/app");
     assert_eq!(manifest["display"], "standalone");
@@ -121,18 +158,33 @@ async fn the_app_installs_at_app_and_opens_offline() {
         .iter()
         .filter_map(|icon| icon["purpose"].as_str())
         .collect();
-    assert!(purposes.contains(&"any") && purposes.contains(&"maskable"), "{manifest}");
+    assert!(
+        purposes.contains(&"any") && purposes.contains(&"maskable"),
+        "{manifest}"
+    );
 
     // The page the service worker keeps for offline needs no sign-in, and it keeps it.
     let (status, offline) = Hosted::text(hub.get("/app/offline", None).await).await;
     assert_eq!(status, 200);
     assert!(offline.contains("<h1>You&#39;re offline</h1>"), "{offline}");
-    assert!(offline.contains("<nav class=\"tabs\">"), "the offline page is the app's frame");
+    assert!(
+        offline.contains("<nav class=\"tabs\">"),
+        "the offline page is the app's frame"
+    );
     let (_, worker) = Hosted::text(hub.get("/sw.js", None).await).await;
-    for kept in ["\"/app/offline\"", "\"/assets/hub.css\"", "\"/assets/app.js\""] {
+    for kept in [
+        "\"/app/offline\"",
+        "\"/assets/hub.css\"",
+        "\"/assets/app.js\"",
+    ] {
         assert!(worker.contains(kept), "the service worker keeps {kept}");
     }
     let script = hub.get("/assets/app.js", None).await;
     assert_eq!(script.status(), 200);
-    assert!(script.headers()["content-type"].to_str().unwrap().starts_with("text/javascript"));
+    assert!(
+        script.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("text/javascript")
+    );
 }

@@ -43,7 +43,11 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> Response
     // Needs you, newest first: a failed update has no time of its own, so it leads.
     let mut needs: Vec<(i64, String)> = Vec::new();
     for machine in &machines {
-        if machine.update.as_deref().is_some_and(|u| u.starts_with("failed")) {
+        if machine
+            .update
+            .as_deref()
+            .is_some_and(|u| u.starts_with("failed"))
+        {
             needs.push((
                 i64::MAX,
                 format!(
@@ -101,7 +105,12 @@ pub async fn machines(State(state): State<AppState>, headers: HeaderMap) -> Resp
     let machines = state.hub.machine_status(&subject).await;
     let site = words();
     let title = &site.messages.app.machines_title;
-    pages::app_page(StatusCode::OK, title, &machines_card(&machines), Tab::Machines)
+    pages::app_page(
+        StatusCode::OK,
+        title,
+        &machines_card(&machines),
+        Tab::Machines,
+    )
 }
 
 pub async fn boards(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -171,7 +180,11 @@ pub(super) fn build_line(machine: &Machine) -> String {
     let copy = &site.messages.app;
     let mut parts = Vec::new();
     if let Some(build) = &machine.build {
-        parts.push(crate::site::Ctx::new(&site).with("build", build.as_str()).inline(&copy.build));
+        parts.push(
+            crate::site::Ctx::new(&site)
+                .with("build", build.as_str())
+                .inline(&copy.build),
+        );
     }
     if machine.update.as_deref() == Some("updating") {
         parts.push(escape(&copy.updating));
@@ -195,7 +208,12 @@ fn machines_card(machines: &[Machine]) -> String {
             )
         })
         .collect();
-    card("machines", &copy.machines_title, &rows, &copy.machines_empty)
+    card(
+        "machines",
+        &copy.machines_title,
+        &rows,
+        &copy.machines_empty,
+    )
 }
 
 fn boards_card(boards: &[BoardSummary]) -> String {
