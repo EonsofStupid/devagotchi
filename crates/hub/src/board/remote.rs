@@ -99,6 +99,12 @@ impl Face for Remote {
                 "kind": filter.kind,
                 "open_only": filter.open_only,
                 "text": filter.text,
+                "machine": filter.anchors.machine,
+                "repo": filter.anchors.repo,
+                "environment": filter.anchors.environment,
+                "agent": filter.anchors.agent,
+                "session": filter.anchors.session,
+                "fingerprint": filter.anchors.fingerprint,
                 "limit": filter.limit,
             }),
         )
@@ -120,6 +126,12 @@ impl Face for Remote {
                 "parent": new.parent,
                 "assignee": new.assignee,
                 "discovered_from": new.discovered_from,
+                "machine": new.anchors.machine,
+                "repo": new.anchors.repo,
+                "environment": new.anchors.environment,
+                "agent": new.anchors.agent,
+                "session": new.anchors.session,
+                "fingerprint": new.anchors.fingerprint,
             }),
         )
     }
@@ -240,6 +252,13 @@ impl Face for Remote {
                 "assignee": assignee,
                 "clear_assignee": clear_assignee,
                 "state": patch.state,
+                // A cleared anchor travels as "", which the hub clears.
+                "machine": patch.anchors.machine.map(Option::unwrap_or_default),
+                "repo": patch.anchors.repo.map(Option::unwrap_or_default),
+                "environment": patch.anchors.environment.map(Option::unwrap_or_default),
+                "agent": patch.anchors.agent.map(Option::unwrap_or_default),
+                "session": patch.anchors.session.map(Option::unwrap_or_default),
+                "fingerprint": patch.anchors.fingerprint.map(Option::unwrap_or_default),
             }),
         )
     }

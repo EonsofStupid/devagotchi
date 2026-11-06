@@ -34,8 +34,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Actor, Board, ChainStatus, Dep, DepKind, Event, Filter, Lease, NewTicket, NextFilter, Note,
-    Patch, Prime, Ticket, TicketView, approval::ApprovalStatus, face::ME, open_project,
+    Actor, AnchorPatch, Anchors, Board, ChainStatus, Dep, DepKind, Event, Filter, Lease, NewTicket,
+    NextFilter, Note, Patch, Prime, Ticket, TicketView, approval::ApprovalStatus, face::ME,
+    open_project,
 };
 use crate::{
     audit::AuditEntry,
@@ -497,13 +498,24 @@ fn next_for(code: &str, id: Option<&str>) -> String {
         "not_granted" | "unknown_board" => "whoami lists the boards your identity may work on".into(),
         "no_board" | "board_mismatch" | "board_version" => "the hub's operator must initialise or fix this board; nothing an agent can do".into(),
         "nothing_ready" => "board_create what you found, or wait with board_wait".into(),
+        "unknown_environment" => "pass one of the board's environments the message lists, or leave environment out".into(),
         _ => "board_prime to re-orient".into(),
     }
 }
 
 fn refuse(error: BridgeError, ticket: Option<&str>) -> Json<BoardError> {
+    let next = match error.code.as_str() {
+        // The store's message ends with the board's list: name it in `next` too.
+        "unknown_environment" => match error.message.rsplit_once(": ") {
+            Some((_, list)) => {
+                format!("pass one of this board's environments ({list}), or leave environment out")
+            }
+            None => next_for(&error.code, ticket),
+        },
+        _ => next_for(&error.code, ticket),
+    };
     Json(BoardError {
-        next: next_for(&error.code, ticket),
+        next,
         code: error.code,
         message: error.message,
         ticket: ticket.map(str::to_string),
@@ -559,6 +571,24 @@ pub struct ListIn {
     /// Substring of the title or description.
     #[serde(default)]
     pub text: Option<String>,
+    /// Only tickets on this machine.
+    #[serde(default)]
+    pub machine: Option<String>,
+    /// Only tickets for this repository URL.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// Only tickets in this environment.
+    #[serde(default)]
+    pub environment: Option<String>,
+    /// Only tickets of this agent.
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// Only tickets of this agent session.
+    #[serde(default)]
+    pub session: Option<String>,
+    /// Only tickets with this fingerprint.
+    #[serde(default)]
+    pub fingerprint: Option<String>,
     /// At most this many (default 50).
     #[serde(default)]
     pub limit: Option<u32>,
@@ -593,6 +623,25 @@ pub struct CreateIn {
     /// The ticket you were working when you found this one; recorded as `discovered-from`.
     #[serde(default)]
     pub discovered_from: Option<String>,
+    /// The machine this ticket is about, as `machines` names it. Optional; the hub fills it
+    /// when it knows it.
+    #[serde(default)]
+    pub machine: Option<String>,
+    /// The repository URL. Optional; the hub fills it from the board's settings when set.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// One of the board's environments (default dev, staging, prod). Optional.
+    #[serde(default)]
+    pub environment: Option<String>,
+    /// The agent that made or works it. Optional; the hub fills it with your seat.
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// The agent's session id. Optional; the hub fills it when the connection has one.
+    #[serde(default)]
+    pub session: Option<String>,
+    /// Folds repeats of one failure into one ticket. Optional.
+    #[serde(default)]
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -659,6 +708,24 @@ pub struct UpdateIn {
     /// handoff / release.
     #[serde(default)]
     pub state: Option<String>,
+    /// The machine this ticket is about. Optional; an empty string clears it.
+    #[serde(default)]
+    pub machine: Option<String>,
+    /// The repository URL. Optional; an empty string clears it.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// One of the board's environments. Optional; an empty string clears it.
+    #[serde(default)]
+    pub environment: Option<String>,
+    /// The agent. Optional; an empty string clears it.
+    #[serde(default)]
+    pub agent: Option<String>,
+    /// The agent's session id. Optional; an empty string clears it.
+    #[serde(default)]
+    pub session: Option<String>,
+    /// Optional; an empty string clears it.
+    #[serde(default)]
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -1052,7 +1119,7 @@ impl Hub {
 
     #[tool(
         name = "board_list",
-        description = "Tickets on the board, filtered by state, holder, assignee, label, parent, kind or text. open_only leaves out done and cancelled.",
+        description = "Tickets on the board, filtered by state, holder, assignee, label, parent, kind, text, machine, repo, environment, agent, session or fingerprint. open_only leaves out done and cancelled.",
         title = "List tickets",
         annotations(title = "List tickets", read_only_hint = true, open_world_hint = false)
     )]
@@ -1071,8 +1138,15 @@ impl Hub {
             ready: false,
             open_only: input.open_only,
             text: input.text,
+            anchors: Anchors {
+                machine: input.machine,
+                repo: input.repo,
+                environment: input.environment,
+                agent: input.agent,
+                session: input.session,
+                fingerprint: input.fingerprint,
+            },
             limit: Some(input.limit.unwrap_or(50).clamp(1, 500) as usize),
-            ..Filter::default()
         };
         self.board_call(
             "board_list",
@@ -1144,6 +1218,14 @@ impl Hub {
             parent: input.parent,
             assignee: input.assignee,
             discovered_from: input.discovered_from,
+            anchors: Anchors {
+                machine: input.machine,
+                repo: input.repo,
+                environment: input.environment,
+                agent: input.agent,
+                session: input.session,
+                fingerprint: input.fingerprint,
+            },
             ..NewTicket::default()
         };
         self.board_call(
@@ -1273,6 +1355,14 @@ impl Hub {
                 input.assignee.map(Some)
             },
             state: input.state,
+            anchors: AnchorPatch {
+                machine: input.machine.map(Some),
+                repo: input.repo.map(Some),
+                environment: input.environment.map(Some),
+                agent: input.agent.map(Some),
+                session: input.session.map(Some),
+                fingerprint: input.fingerprint.map(Some),
+            },
             ..Patch::default()
         };
         let id = input.id.clone();
