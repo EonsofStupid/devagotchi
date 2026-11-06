@@ -161,6 +161,16 @@ fn apply(
             } else {
                 workflow.initial_state.clone()
             };
+            // A workflow someone changed keeps its own rules: say which one Undo needs.
+            if !workflow.allows(&current.state, &to) {
+                return Err(crate::board::fail(
+                    "transition_not_allowed",
+                    format!(
+                        "this board's workflow ({}) has no transition {} -> {}; add {{\"from\": \"{}\", \"to\": \"{}\"}} to its transitions to undo here",
+                        workflow.id, current.state, to, current.state, to
+                    ),
+                ));
+            }
             update(Patch {
                 state: Some(to),
                 ..Patch::default()

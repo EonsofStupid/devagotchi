@@ -120,6 +120,17 @@ impl Workflow {
         }
     }
 
+    /// The default before closed tickets reopened (PR #148): the same workflow without
+    /// `done -> ready` and `cancelled -> ready`. A board that still stores exactly this is
+    /// upgraded to the current default when it opens (`Board::open`).
+    pub fn previous_default() -> Self {
+        let mut workflow = Self::default_workflow();
+        workflow
+            .transitions
+            .retain(|t| !(matches!(t.from.as_str(), "done" | "cancelled") && t.to == "ready"));
+        workflow
+    }
+
     pub fn state(&self, key: &str) -> Option<&State> {
         self.states.iter().find(|s| s.key == key)
     }
