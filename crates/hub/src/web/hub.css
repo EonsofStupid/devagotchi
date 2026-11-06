@@ -243,3 +243,4 @@ table.jobs th:nth-child(4), table.jobs td:nth-child(4) { display: table-cell; }
 form textarea { display: block; width: 100%; font: inherit; padding: 10px; margin-top: 4px;
   border: 1px solid var(--line); border-radius: var(--radius-s); background: var(--bg); color: var(--text); }
 .rows .body { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.what:empty { display: none; }
