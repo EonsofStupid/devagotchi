@@ -91,7 +91,10 @@ pub async fn list(
 /// The approvals waiting for `subject`, by project: on every board it decides on, its
 /// account's own first (`Hub::approval_boards`). Also the phone app's Needs you
 /// (`web/app/home.rs`).
-pub(super) async fn pending(state: &AppState, subject: &crate::auth::Subject) -> Vec<(String, ApprovalStatus)> {
+pub(super) async fn pending(
+    state: &AppState,
+    subject: &crate::auth::Subject,
+) -> Vec<(String, ApprovalStatus)> {
     let boards = state.hub.approval_boards(subject);
     tokio::task::spawn_blocking(move || {
         let mut all = Vec::new();

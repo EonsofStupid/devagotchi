@@ -74,7 +74,8 @@ async fn a_person_decides_approvals_on_their_own_board_and_nobody_else_does() {
     assert!(list.contains(&format!("value=\"{id}\"")), "{list}");
     let (_, home) = page(&hub, "/app", &alice).await;
     assert!(
-        home.contains(&format!("href=\"/approvals#alpha-{id}\"")) && home.contains("A-PRIVATE-APPROVAL"),
+        home.contains(&format!("href=\"/approvals#alpha-{id}\""))
+            && home.contains("A-PRIVATE-APPROVAL"),
         "Needs you lists A's approval: {home}"
     );
 
@@ -121,7 +122,9 @@ async fn a_person_decides_approvals_on_their_own_board_and_nobody_else_does() {
         .filter_map(|t| t["name"].as_str())
         .collect();
     assert!(
-        names.iter().all(|n| !n.contains("decide") && *n != "approval_approve"),
+        names
+            .iter()
+            .all(|n| !n.contains("decide") && *n != "approval_approve"),
         "{names:?}"
     );
 
@@ -133,5 +136,8 @@ async fn a_person_decides_approvals_on_their_own_board_and_nobody_else_does() {
     let (_, list) = page(&hub, "/approvals", &alice).await;
     assert!(list.contains("Nothing is waiting for you."), "{list}");
     let (_, home) = page(&hub, "/app", &alice).await;
-    assert!(!home.contains("A-PRIVATE-APPROVAL"), "decided, it leaves Needs you");
+    assert!(
+        !home.contains("A-PRIVATE-APPROVAL"),
+        "decided, it leaves Needs you"
+    );
 }
