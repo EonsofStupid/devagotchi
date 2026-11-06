@@ -1,6 +1,6 @@
 # Spec: machines update themselves, and on request
 
-Status: DRAFT for Jesse's approval. No agent starts until he approves this file.
+Status: APPROVED by Jesse 2026-11-05. One agent executes U1–U4 in order.
 Ruled 2026-11-05 (Jesse): **both** — machines update themselves quietly by default, and an
 AI can update one now with a tool. Scope is only what is written here. Paths are relative to
 the repo root; function names are the anchors, line numbers are hints from `main` 2026-11-05.
