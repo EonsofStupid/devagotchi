@@ -176,6 +176,8 @@ $joinConfig = [ordered]@{
     brokers = @([ordered]@{ name = 'ci-joined'; link = $true })
     grants = @([ordered]@{ subject = 'ci'; brokers = @('ci-joined') })
     downloads = $dist
+    # This runner's build is not the one the hub hands out: no machine updates itself here.
+    machines = [ordered]@{ auto_update = $false }
 }
 [System.IO.File]::WriteAllText($joinCfg, ($joinConfig | ConvertTo-Json -Depth 5), $utf8)
 $joinLog = Join-Path $env:RUNNER_TEMP 'join-hub.log'
@@ -221,3 +223,22 @@ try {
 } finally {
     Stop-Process -Id $joinHub.Id -Force -ErrorAction SilentlyContinue
 }
+
+# A machine updates itself through its hub (docs/spec-machine-update.md, U5): build A from
+# local artifacts, its broker and link started as the Run entries start them, a broken build
+# that rolls back to A with `failed`, then build B. Two builds of this commit by name.
+$updates = Join-Path $env:RUNNER_TEMP 'update'
+foreach ($build in 'a', 'b') {
+    $env:DEVAGOTCHI_BUILD = "ci-$build"
+    $ErrorActionPreference = 'Continue'
+    cargo build --locked --bin devagotchi
+    $built = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+    if ($built -ne 0) { throw "building ci-$build failed" }
+    New-Item -ItemType Directory -Force -Path (Join-Path $updates $build) | Out-Null
+    Copy-Item 'target\debug\devagotchi.exe' (Join-Path $updates $build)
+}
+Remove-Item Env:DEVAGOTCHI_BUILD
+python tests/machine_update_probe.py --installer windows --a (Join-Path $updates 'a') --b (Join-Path $updates 'b') --work (Join-Path $updates 'probe')
+if ($LASTEXITCODE -ne 0) { throw 'the machine did not update itself through its hub' }
+Write-Host 'ok   a broken build rolled back to ci-a and said so; ci-b came up by itself'

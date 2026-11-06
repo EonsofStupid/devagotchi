@@ -65,6 +65,8 @@ def main() -> int:
         "auth": {"mode": "hub"},
         "tenancy": {"mode": "multi", "starts_per_hour": 100},
         "downloads": str(downloads(work, args.devagotchi)),
+        # This binary is not the build it hands out: no machine updates itself here.
+        "machines": {"auto_update": False},
         "brokers": [],
         "grants": [],
     }))

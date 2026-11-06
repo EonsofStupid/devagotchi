@@ -80,6 +80,10 @@ pub const TOOLS: [(&str, &[(&[&str], &str)]); 5] = [
                 "Adds a machine to your account: a one-time code and the line that installs it, for Linux, Windows, Docker Compose, Proxmox or Incus.",
             ),
             (
+                &["machine_update"],
+                "Updates a machine to the hub's current build now, after its running jobs finish. Machines also update themselves within the hour.",
+            ),
+            (
                 &["whoami"],
                 "Who it is signed in as, and the boards it may use.",
             ),

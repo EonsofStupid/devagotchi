@@ -19,6 +19,7 @@ mod hub;
 mod identity;
 mod join;
 mod link;
+mod machine_update;
 mod mail;
 mod nomen;
 mod oauth;
@@ -670,17 +671,6 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         )),
         _ => None,
     };
-    // What a workflow's wait wakes on: a machine connecting or dropping, a phone turned on.
-    let changes = Arc::new(tokio::sync::Notify::new());
-    let links = Links::new(config.clone(), devices.clone(), audit.clone())
-        .notifying(push.clone())
-        .counting(analytics.clone())
-        .signalling(changes.clone());
-    // A machine joins for an account only once its tenant is let in (early access).
-    let links = Arc::new(match &accounts {
-        Some(accounts) => links.gated(accounts.enroll_gate()),
-        None => links,
-    });
     // A downloads directory that does not check out is logged and left out: the hub still
     // serves everything else, and /healthz says why /join is off.
     let downloads = match &config.downloads {
@@ -700,6 +690,20 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
         },
         None => None,
     };
+    // What a workflow's wait wakes on: a machine connecting or dropping, a phone turned on.
+    let changes = Arc::new(tokio::sync::Notify::new());
+    let links = Links::new(config.clone(), devices.clone(), audit.clone())
+        .notifying(push.clone())
+        .counting(analytics.clone())
+        .signalling(changes.clone())
+        .offering(downloads.as_ref().map(|d| d.version.clone()));
+    // A machine joins for an account only once its tenant is let in (early access).
+    let links = Arc::new(match &accounts {
+        Some(accounts) => links.gated(accounts.enroll_gate()),
+        None => links,
+    });
+    // Machines on another build update themselves, checked hourly (`machine_update.rs`).
+    tokio::spawn(links.clone().auto_update_hourly());
     let workflows = accounts.clone().map(|accounts| {
         Arc::new(workflows::Workflows::new(
             accounts,

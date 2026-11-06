@@ -148,10 +148,23 @@ jobs:
         with:
           python-version: "3.13"
       - run: cargo build --locked --bins
+      # Two builds of this commit by name (crates/devagotchi/build.rs), for machine_update
+      # from one to the other (tests/machine_update_probe.py); then target/debug as it was.
+      - name: Builds ci-a and ci-b
+        if: runner.os == 'Linux'
+        run: |
+          for build in a b; do
+            DEVAGOTCHI_BUILD=ci-$build cargo build --locked --bin devagotchi
+            mkdir -p "$RUNNER_TEMP/build-$build" && cp target/debug/devagotchi "$RUNNER_TEMP/build-$build/"
+          done
+          cargo build --locked --bin devagotchi
       # e2e.py also runs tests/oauth_probe.py: DCR, PKCE through a fake upstream,
       # MCP initialize and whoami for a new account, a returning subject, and a
-      # second provider with the same verified email.
+      # second provider with the same verified email; on Linux, machine_update from ci-a to ci-b.
       - run: python tests/e2e.py --bin-dir target/debug
+        if: runner.os == 'Windows'
+      - run: python tests/e2e.py --bin-dir target/debug --update-builds "$RUNNER_TEMP/build-a" "$RUNNER_TEMP/build-b"
+        if: runner.os == 'Linux'
       # The hub's own sign-in pages in a real browser, the runner image's Chrome with a
       # virtual passkey: claiming a new hub from its log's link, the owner link, signing in,
       # `devagotchi login` approved on the hub's /device page, the operator letting a

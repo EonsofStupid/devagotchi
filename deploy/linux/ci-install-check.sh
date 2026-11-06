@@ -15,7 +15,8 @@
 # as a second account with the key installed 0600 and sign-in metadata naming the issuer;
 # one line from a hub's /join installs the hub's build on a bare account, enrolls it with the
 # account exec policy and a real operation runs through it (29b); an update the link asks for
-# with update-request.json is applied by root's devagotchi-update.path; uninstall stops everything. Exit 0 only when every step holds.
+# with update-request.json is applied by root's devagotchi-update.path; uninstall stops everything;
+# a machine updates itself through its hub, and a broken build rolls back. Exit 0 only when every step holds.
 set -euo pipefail
 
 BIN=$(readlink -f target/debug)
@@ -202,7 +203,7 @@ cat > "$WORK/join-hub.json" <<EOF
  "auth": {"mode": "dev", "tokens_file": "$WORK/tokens.json"},
  "brokers": [{"name": "ci-joined", "link": true}],
  "grants": [{"subject": "ci", "brokers": ["ci-joined"]}],
- "downloads": "$DIST"}
+ "downloads": "$DIST", "machines": {"auto_update": false}}
 EOF
 "$BIN/devagotchi" hub serve --state-dir "$WORK/join-state" --config "$WORK/join-hub.json" 2> "$WORK/join-hub.log" &
 JOIN_HUB_PID=$!
@@ -349,4 +350,17 @@ sudo "$INSTALL" "${COMMON[@]}" --uninstall
 [ "$(loginctl show-user "$ACCOUNT" -p Linger --value 2>/dev/null || echo no)" != yes ] || fail "lingering still on"
 wait_for 20 "no process left for $ACCOUNT" no_processes_left
 ok "services stopped and removed; lingering off"
+
+echo "--- a machine updates itself through its hub (docs/spec-machine-update.md, U5)"
+# Two builds of this commit by name; the probe installs ci-a from local artifacts as its own
+# account, then a broken build rolls back to ci-a with "failed", then ci-b comes up.
+for build in a b; do
+    DEVAGOTCHI_BUILD=ci-$build cargo build --locked --bin devagotchi
+    mkdir -p "$WORK/build-$build" && cp target/debug/devagotchi "$WORK/build-$build/"
+done
+cargo build --locked --bin devagotchi
+chmod 0755 "$WORK"
+sudo python3 tests/machine_update_probe.py --installer linux --a "$WORK/build-a" --b "$WORK/build-b" --work "$WORK/update" \
+    || fail "the machine did not update itself through its hub"
+ok "a broken build rolled back to ci-a and said so; ci-b came up by itself"
 echo "HOST INSTALL CHECK PASSED"
