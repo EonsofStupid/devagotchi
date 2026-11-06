@@ -565,25 +565,31 @@ impl Site {
 
     /// The installed app's manifest.
     pub fn manifest(&self) -> String {
+        // The site's icon, also as the maskable icon a phone crops to its own shape.
         let icons: Vec<serde_json::Value> = self
             .named(self.info.assets.icon.as_ref())
             .map(|icon| {
-                serde_json::json!({
-                    "src": icon.url(),
-                    "sizes": if icon.extension() == "svg" { "any" } else { "512x512" },
-                    "type": icon.mime,
-                    "purpose": "any",
+                ["any", "maskable"].map(|purpose| {
+                    serde_json::json!({
+                        "src": icon.url(),
+                        "sizes": if icon.extension() == "svg" { "any" } else { "512x512" },
+                        "type": icon.mime,
+                        "purpose": purpose,
+                    })
                 })
             })
             .into_iter()
+            .flatten()
             .collect();
         let manifest = serde_json::json!({
             "name": self.info.product.name,
             "short_name": self.info.product.short_name.as_deref().unwrap_or(&self.info.product.name),
             "description": self.info.product.description,
-            "start_url": "/approvals",
+            "id": "/app",
+            "start_url": "/app",
             "scope": "/",
             "display": "standalone",
+            "orientation": "portrait",
             "background_color": self.style.background_color,
             "theme_color": self.style.theme_color,
             "icons": icons,
