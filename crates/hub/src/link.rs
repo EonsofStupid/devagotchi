@@ -31,6 +31,7 @@ use crate::{
     audit::{Audit, AuditEntry},
     config::HubConfig,
     devices::{Devices, now_secs},
+    machine_update::{self, Update},
 };
 
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -54,6 +55,10 @@ struct Session {
     id: u64,
     calls: mpsc::Sender<(u64, WireRequest)>,
     pending: Pending,
+    /// The build the device's hello said it runs; None from a link too old to say.
+    build: Option<String>,
+    /// Frames the hub sends on its own: `update` (`machine_update.rs`).
+    control: mpsc::Sender<HubFrame>,
 }
 
 /// Removes a call's waiter if the caller stops waiting for any reason (cancelled, timed
@@ -92,6 +97,22 @@ pub struct Links {
     analytics: Option<Arc<crate::analytics::Analytics>>,
     /// Woken when a machine connects or drops: what a workflow waits on (`workflows.rs`).
     changes: Option<Arc<tokio::sync::Notify>>,
+    /// The build this hub hands out (`downloads.rs`), which machines update to.
+    offered: Option<String>,
+    /// `machines.auto_update` in the config: machines on another build update themselves.
+    auto_update: bool,
+    /// Each machine's latest update, and who waits on one (`machine_update`).
+    updates: Mutex<HashMap<String, Update>>,
+    update_changed: tokio::sync::Notify,
+}
+
+/// What asking a machine to update came to.
+#[derive(Debug, PartialEq, Eq)]
+pub enum UpdateAsked {
+    /// The machine already runs the build this hub hands out.
+    AlreadyOn(String),
+    /// `update` went to the machine.
+    Sent,
 }
 
 /// Whether an account may enroll a machine now: false while its tenant waits to be let in
@@ -106,6 +127,7 @@ struct Admitted {
     device: String,
     key: String,
     joined_for: Option<String>,
+    build: Option<String>,
 }
 
 fn offline(device: &str) -> BridgeError {
@@ -145,6 +167,7 @@ fn wire_refusal(error: &BridgeError) -> HubFrame {
 impl Links {
     pub fn new(config: Arc<HubConfig>, devices: Arc<Devices>, audit: Arc<Audit>) -> Self {
         Self {
+            auto_update: config.machines.auto_update,
             config,
             devices,
             audit,
@@ -156,7 +179,16 @@ impl Links {
             gate: None,
             analytics: None,
             changes: None,
+            offered: None,
+            updates: Mutex::new(HashMap::new()),
+            update_changed: tokio::sync::Notify::new(),
         }
+    }
+
+    /// Machines update to `version`, the build this hub hands out, when there is one.
+    pub fn offering(mut self, version: Option<String>) -> Self {
+        self.offered = version;
+        self
     }
 
     /// Wake `changes`' waiters whenever a machine connects or drops.
@@ -355,6 +387,8 @@ impl Links {
                 id,
                 calls,
                 pending: Arc::default(),
+                build: None,
+                control: mpsc::channel(1).0,
             },
         );
         self.changed();
@@ -435,6 +469,176 @@ impl Links {
         match response {
             WireResponse::Ok(body) => Ok(body),
             WireResponse::Error(error) => Err(error),
+        }
+    }
+
+    /// The build a connected machine's hello said it runs.
+    pub fn build(&self, device: &str) -> Option<String> {
+        let sessions = self.sessions.lock().expect("links");
+        sessions
+            .get(device)
+            .and_then(|session| session.build.clone())
+    }
+
+    /// A machine's latest update, if it had one since this hub started.
+    pub fn update_of(&self, device: &str) -> Option<Update> {
+        self.updates.lock().expect("updates").get(device).cloned()
+    }
+
+    /// Ask a connected machine to update to the build this hub hands out, now; with
+    /// `force`, without waiting for its running jobs. `subject` and `via` are who asked
+    /// (`hub`, `auto` for the hourly round), for the audit.
+    pub fn request_update(
+        &self,
+        device: &str,
+        force: bool,
+        subject: &str,
+        via: &str,
+    ) -> BridgeResult<UpdateAsked> {
+        let asked = self.ask_update(device, force);
+        let (version, outcome) = match &asked {
+            Ok(UpdateAsked::Sent) => (self.offered.clone(), format!("sent force={force}")),
+            Ok(UpdateAsked::AlreadyOn(build)) => (Some(build.clone()), "already_on".into()),
+            Err(error) => (self.offered.clone(), error.code.clone()),
+        };
+        let version = version.unwrap_or_default();
+        self.event(subject, via, "machine.update", device, &version, &outcome);
+        asked
+    }
+
+    fn ask_update(&self, device: &str, force: bool) -> BridgeResult<UpdateAsked> {
+        let version = self.offered.clone().ok_or_else(|| {
+            BridgeError::new(
+                "no_build",
+                "this hub hands out no builds (no downloads), so it has none to update to",
+            )
+        })?;
+        let session = self
+            .sessions
+            .lock()
+            .expect("links")
+            .get(device)
+            .cloned()
+            .ok_or_else(|| offline(device))?;
+        let Some(build) = session.build else {
+            return Err(BridgeError::new(
+                "update_unsupported",
+                format!(
+                    "{device} runs a link from before machines could update themselves; install it once more by hand"
+                ),
+            ));
+        };
+        if build == version {
+            return Ok(UpdateAsked::AlreadyOn(build));
+        }
+        session
+            .control
+            .try_send(HubFrame::Update {
+                version: version.clone(),
+                force,
+            })
+            .map_err(|_| offline(device))?;
+        let mut updates = self.updates.lock().expect("updates");
+        let now = now_secs();
+        if !updates
+            .get(device)
+            .is_some_and(|u| u.running(now) && u.target == version)
+        {
+            updates.insert(device.to_string(), Update::new(&version, now));
+        }
+        drop(updates);
+        self.update_changed.notify_waiters();
+        Ok(UpdateAsked::Sent)
+    }
+
+    /// Wait up to `within` for `device`'s update to finish; its latest state either way.
+    pub async fn wait_update(&self, device: &str, within: Duration) -> Option<Update> {
+        let deadline = tokio::time::Instant::now() + within;
+        loop {
+            let changed = self.update_changed.notified();
+            let update = self.update_of(device);
+            if update.as_ref().is_none_or(|u| !u.running(now_secs())) {
+                return update;
+            }
+            if tokio::time::timeout_at(deadline, changed).await.is_err() {
+                return self.update_of(device);
+            }
+        }
+    }
+
+    /// The link reported a step of its update.
+    fn update_reported(&self, device: &str, state: &str, detail: Option<String>) {
+        if !devagotchi_contracts::UPDATE_STATES.contains(&state) {
+            return;
+        }
+        let target = {
+            let mut updates = self.updates.lock().expect("updates");
+            let entry = updates
+                .entry(device.to_string())
+                .or_insert_with(|| Update::new("", now_secs()));
+            entry.state = state.to_string();
+            entry.detail = detail.clone().map(|d| d.chars().take(300).collect());
+            entry.target.clone()
+        };
+        if matches!(state, "done" | "failed") {
+            let outcome = match &detail {
+                Some(detail) => format!("{state}: {detail}"),
+                None => state.to_string(),
+            };
+            let subject = format!("device:{device}");
+            self.event(
+                &subject,
+                "link",
+                "machine.update_status",
+                device,
+                &target,
+                &outcome,
+            );
+        }
+        self.update_changed.notify_waiters();
+    }
+
+    /// A machine connected on `build`: an update that brought it there is done.
+    fn connected_on(&self, device: &str, build: Option<&str>) {
+        let done = {
+            let updates = self.updates.lock().expect("updates");
+            updates
+                .get(device)
+                .is_some_and(|u| u.running(now_secs()) && Some(u.target.as_str()) == build)
+        };
+        if done {
+            self.update_reported(device, "done", None);
+        }
+    }
+
+    /// Ask each connected machine that is due an update for one (`machine_update::select`),
+    /// when `machines.auto_update` is on and this hub hands out a build.
+    pub fn auto_update_now(&self) {
+        let (true, Some(version)) = (self.auto_update, self.offered.as_deref()) else {
+            return;
+        };
+        let live: Vec<(String, Option<String>)> = {
+            let sessions = self.sessions.lock().expect("links");
+            sessions
+                .iter()
+                .map(|(name, s)| (name.clone(), s.build.clone()))
+                .collect()
+        };
+        let chosen = {
+            let updates = self.updates.lock().expect("updates");
+            machine_update::select(&live, version, &updates, now_secs())
+        };
+        for device in chosen {
+            let _ = self.request_update(&device, false, "hub", "auto");
+        }
+    }
+
+    /// Once an hour, for as long as the hub runs: [`Self::auto_update_now`].
+    pub async fn auto_update_hourly(self: Arc<Self>) {
+        let mut every = tokio::time::interval(machine_update::EVERY);
+        loop {
+            every.tick().await;
+            self.auto_update_now();
         }
     }
 
@@ -521,6 +725,7 @@ impl Links {
             device,
             key,
             joined_for,
+            build,
         } = match self.admit(hello, &nonce) {
             Ok(admitted) => admitted,
             Err(error) => {
@@ -533,6 +738,7 @@ impl Links {
         drop(permit);
 
         let (calls_tx, mut calls_rx) = mpsc::channel::<(u64, WireRequest)>(CALL_QUEUE);
+        let (control_tx, mut control_rx) = mpsc::channel::<HubFrame>(4);
         let pending: Pending = Arc::default();
         let session_id = self.next.fetch_add(1, Ordering::Relaxed);
         let previous = self.sessions.lock().expect("links").insert(
@@ -541,6 +747,8 @@ impl Links {
                 id: session_id,
                 calls: calls_tx,
                 pending: pending.clone(),
+                build: build.clone(),
+                control: control_tx,
             },
         );
         drop(previous); // A reconnect replaces the old session; its sender drops and it ends.
@@ -584,6 +792,9 @@ impl Links {
             self.forget(&device, session_id, &pending);
             return;
         }
+        // An update that brought this build is done; then any machine due one is asked.
+        self.connected_on(&device, build.as_deref());
+        self.auto_update_now();
 
         let mut revocation = tokio::time::interval(REVOCATION_CHECK);
         let mut idle = Box::pin(tokio::time::sleep(IDLE_TIMEOUT));
@@ -612,6 +823,11 @@ impl Links {
                     }
                     None => break "replaced",
                 },
+                Some(frame) = control_rx.recv() => {
+                    if send(&mut sink, &frame).await.is_err() {
+                        break "send_failed";
+                    }
+                },
                 incoming = stream.next() => match incoming {
                     Some(Ok(Message::Text(text))) => {
                         idle.as_mut().reset(tokio::time::Instant::now() + IDLE_TIMEOUT);
@@ -621,8 +837,10 @@ impl Links {
                                     let _ = waiter.send(response);
                                 }
                             }
-                            // Updates: the hub does not ask for one yet (U4 of the spec).
-                            Ok(LinkFrame::Heartbeat | LinkFrame::UpdateStatus { .. }) => {}
+                            Ok(LinkFrame::Heartbeat) => {}
+                            Ok(LinkFrame::UpdateStatus { state, detail }) => {
+                                self.update_reported(&device, &state, detail);
+                            }
                             Ok(LinkFrame::Hello { .. }) | Err(_) => break "protocol_error",
                         }
                     }
@@ -677,7 +895,7 @@ impl Links {
             public_key,
             signature,
             enroll_code,
-            ..
+            build,
         }) = hello
         else {
             return refuse("protocol_error", "expected a hello frame".into());
@@ -740,6 +958,7 @@ impl Links {
                 device,
                 key: public_key,
                 joined_for: bound.owner,
+                build,
             });
         }
         match self.devices.get(&device)? {
@@ -761,6 +980,7 @@ impl Links {
                 device,
                 key: public_key,
                 joined_for: None,
+                build,
             }),
         }
     }
@@ -1065,6 +1285,8 @@ mod tests {
                 id: 1,
                 calls,
                 pending: pending.clone(),
+                build: None,
+                control: mpsc::channel(1).0,
             },
         );
         let body = RequestBody::OperationList(devagotchi_contracts::ListInput {

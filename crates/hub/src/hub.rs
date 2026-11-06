@@ -63,6 +63,14 @@ pub struct Machine {
     /// output schema's `required` (a client that checks refuses `machines` otherwise).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub owned: bool,
+    /// The build the machine runs, as its link said when it connected (online linked
+    /// machines whose link says it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
+    /// `updating` while an update to the hub's build runs on it, or `failed: <reason>, back
+    /// on <build>` after one failed. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -106,6 +114,32 @@ pub struct ReadRouted {
 pub struct MachineAdd {
     /// Short name for the machine, `[a-z0-9][a-z0-9-]{0,62}`.
     pub name: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MachineUpdate {
+    /// The machine's name, as `machines` lists it.
+    pub machine: String,
+    /// Update now even while the machine runs jobs; they end when its broker restarts.
+    #[serde(default)]
+    pub force: bool,
+    /// How long to wait for the machine to come back, in seconds (default 50, at most 300).
+    #[serde(default)]
+    pub wait_seconds: Option<u64>,
+}
+
+#[derive(Debug, Serialize, JsonSchema)]
+pub struct MachineUpdated {
+    pub machine: String,
+    /// `done`, `failed`, or where it still is when the wait ended: `requested`,
+    /// `waiting_for_jobs`, `downloading` or `installing`.
+    pub state: String,
+    /// Why it failed, or `already on <build>` when there was nothing to do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// The build the machine runs now, while it is online.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
@@ -211,6 +245,8 @@ impl Hub {
                 kind: "linked",
                 enrolled_at: Some(device.enrolled_at),
                 owned: true,
+                build: self.links.build(&device.name),
+                update: self.update_shown(&device.name),
             })
             .collect();
         let checks = configured.into_iter().map(|broker| async move {
@@ -225,6 +261,8 @@ impl Hub {
                     },
                     enrolled_at: None,
                     owned: false,
+                    build: None,
+                    update: None,
                 },
                 None => {
                     let (status, enrolled_at) = match self.links.device(&broker.name) {
@@ -244,6 +282,8 @@ impl Hub {
                         status,
                         enrolled_at,
                         owned: false,
+                        build: self.links.build(&broker.name),
+                        update: self.update_shown(&broker.name),
                     }
                 }
             }
@@ -251,6 +291,14 @@ impl Hub {
         let mut machines = futures_util::future::join_all(checks).await;
         machines.extend(owned);
         machines
+    }
+
+    /// What `machines` says about `device`'s latest update (`machine_update.rs`).
+    fn update_shown(&self, device: &str) -> Option<String> {
+        let build = self.links.build(device);
+        self.links
+            .update_of(device)
+            .and_then(|update| update.shown(build.as_deref(), crate::devices::now_secs()))
     }
 
     /// The machines `subject` added with codes of its own (increment 29a). A store that
@@ -519,6 +567,61 @@ impl Hub {
             manual: format!(
                 "Download the archive and SHA256SUMS from {hub}/dist/ for this machine, check the sum, unpack, then: printf '%s\\n' '{code}' | devagotchi link enroll --state-dir ~/.local/state/devagotchi-link --hub {hub} --device {device} --broker <broker-endpoint>"
             ),
+        }))
+    }
+
+    #[tool(
+        name = "machine_update",
+        description = "Update one of the user's machines to the hub's current build now. Waits for its running jobs to finish unless force is true; the machine is offline for about a minute.",
+        title = "Update a machine",
+        annotations(
+            title = "Update a machine",
+            read_only_hint = false,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn machine_update(
+        &self,
+        Parameters(input): Parameters<MachineUpdate>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<Json<MachineUpdated>, Json<BridgeError>> {
+        let subject = self.subject(&context)?;
+        let device = match self.route(&subject, &input.machine)? {
+            Route::Link(device) => device,
+            Route::Local(_) => {
+                return Err(Json(BridgeError::new(
+                    "update_unsupported",
+                    format!(
+                        "{} is a broker on the hub's own host; it updates with the hub",
+                        input.machine
+                    ),
+                )));
+            }
+        };
+        let asked = self
+            .links
+            .request_update(&device, input.force, &subject.id, subject.via)
+            .map_err(Json)?;
+        let (state, detail) = match asked {
+            crate::link::UpdateAsked::AlreadyOn(build) => {
+                ("done".to_string(), Some(format!("already on {build}")))
+            }
+            crate::link::UpdateAsked::Sent => {
+                let within =
+                    std::time::Duration::from_secs(input.wait_seconds.unwrap_or(50).min(300));
+                match self.links.wait_update(&device, within).await {
+                    Some(update) => (update.state, update.detail),
+                    None => ("requested".to_string(), None),
+                }
+            }
+        };
+        Ok(Json(MachineUpdated {
+            machine: input.machine,
+            state,
+            detail,
+            build: self.links.build(&device),
         }))
     }
 

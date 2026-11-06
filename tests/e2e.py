@@ -33,6 +33,9 @@ EXE = ".exe" if os.name == "nt" else ""
 parser = argparse.ArgumentParser()
 parser.add_argument("--bin-dir", required=True, type=Path)
 parser.add_argument("--keep", action="store_true", help="keep the work directory")
+# Two builds of this commit, DEVAGOTCHI_BUILD=ci-a and ci-b: machine_update takes a machine
+# from one to the other (tests/machine_update_probe.py --installer none; Linux).
+parser.add_argument("--update-builds", nargs=2, type=Path, metavar=("DIR_A", "DIR_B"))
 args = parser.parse_args()
 bins = args.bin_dir.resolve()
 devagotchi = bins / f"devagotchi{EXE}"
@@ -104,9 +107,9 @@ def free_port():
         return s.getsockname()[1]
 
 
-def run_probe(argv, label):
+def run_probe(argv, label, timeout=120):
     print(f"--- {label}", flush=True)
-    result = subprocess.run([sys.executable, *argv], timeout=120)
+    result = subprocess.run([sys.executable, *argv], timeout=timeout)
     print(f"--- {label}: exit {result.returncode}", flush=True)
     return result.returncode == 0
 
@@ -220,6 +223,15 @@ try:
     link_ok = all(steps)
     print(f"--- link steps: {['ok' if s else 'FAIL' for s in steps]}", flush=True)
 
+    # A machine updates to its hub's build when asked (docs/spec-machine-update.md, U5).
+    if args.update_builds and os.name != "nt":
+        build_a, build_b = (str(d.resolve()) for d in args.update_builds)
+        update_ok = run_probe([str(HERE / "machine_update_probe.py"), "--installer", "none", "--a", build_a,
+                               "--b", build_b, "--work", str(work / "update")], "machine_update from ci-a to ci-b", 600)
+    else:
+        print("--- machine_update: skipped (needs --update-builds, on Linux)", flush=True)
+        update_ok = True
+
     # Shippin sign-in: a second hub that checks Nomen tokens, against a fake Nomen.
     nomen_ok = run_probe(
         [str(HERE / "nomen_probe.py"), "--devagotchi", str(devagotchi), "--endpoint", endpoint,
@@ -242,7 +254,7 @@ try:
     else:
         print("--- promote-hub dry-run: skipped on Windows (a Linux deploy script)", flush=True)
         promote_ok = True
-    ok = adapter_ok and hub_ok and board_ok and link_ok and nomen_ok and web_ok and oauth_ok and promote_ok
+    ok = adapter_ok and hub_ok and board_ok and link_ok and update_ok and nomen_ok and web_ok and oauth_ok and promote_ok
 finally:
     for process in reversed(processes):
         if process.poll() is None:
