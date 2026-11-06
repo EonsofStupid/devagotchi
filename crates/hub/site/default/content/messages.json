@@ -338,6 +338,10 @@
     "board_unknown": "No such board",
     "board_unknown_text": "It is not one of your boards.",
     "ticket_unknown": "No such ticket",
-    "ticket_unknown_text": "It is not on one of your boards."
+    "ticket_unknown_text": "It is not on one of your boards.",
+    "push_offline_title": "{machine} is offline",
+    "push_offline_body": "It has been offline for 10 minutes. Tap to see it.",
+    "push_update_failed_title": "{machine} update failed",
+    "push_update_failed_body": "Tap to see what happened."
   }
 }

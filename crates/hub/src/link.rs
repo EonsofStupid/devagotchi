@@ -107,9 +107,18 @@ pub struct Links {
     /// Each machine's last [`RECENT_JOBS`] operations routed through its link, newest first,
     /// in memory only (the phone app's machine page, `web/app/machine.rs`).
     jobs: Mutex<HashMap<String, VecDeque<Job>>>,
-    /// When each machine's link last went away, since this hub started.
-    seen: Mutex<HashMap<String, u64>>,
+    /// When each machine's link last went away, since this hub started, and which time
+    /// that was (a number no other drop has).
+    seen: Mutex<HashMap<String, (u64, u64)>>,
+    /// How long a machine stays offline before its account's phones hear it (P1d).
+    offline_after: Duration,
+    /// The pushes about machines this hub made, for the tests to read.
+    #[cfg(test)]
+    pushed: Mutex<Vec<(Vec<String>, serde_json::Value)>>,
 }
+
+/// A machine offline this long is pushed to its account's phones, once per time it went.
+const OFFLINE_PUSH_AFTER: Duration = Duration::from_secs(600);
 
 /// How many routed operations the hub keeps per machine.
 pub const RECENT_JOBS: usize = 20;
@@ -220,6 +229,9 @@ impl Links {
             update_changed: tokio::sync::Notify::new(),
             jobs: Mutex::new(HashMap::new()),
             seen: Mutex::new(HashMap::new()),
+            offline_after: OFFLINE_PUSH_AFTER,
+            #[cfg(test)]
+            pushed: Mutex::new(Vec::new()),
         }
     }
 
@@ -232,7 +244,84 @@ impl Links {
     /// When `device`'s link last went away since this hub started (it is online when
     /// `connected`).
     pub fn last_seen(&self, device: &str) -> Option<u64> {
-        self.seen.lock().expect("seen").get(device).copied()
+        self.seen.lock().expect("seen").get(device).map(|(at, _)| *at)
+    }
+
+    /// The accounts a machine's pushes go to: the account that added it; for a machine the
+    /// config names, the hub's owner and every account granted it.
+    fn machine_people(&self, device: &str) -> Vec<String> {
+        if let Ok(Some(record)) = self.devices.get(device)
+            && let Some(owner) = record.owner
+        {
+            return vec![owner];
+        }
+        let mut people: Vec<String> = self.config.owner.iter().cloned().collect();
+        for grant in &self.config.grants {
+            if grant.brokers.iter().any(|b| b == device) && !people.contains(&grant.subject) {
+                people.push(grant.subject.clone());
+            }
+        }
+        people
+    }
+
+    /// The name a machine's person knows it by: on a hosted hub, without its tenant's tag
+    /// (`tenant_machines.rs`).
+    fn shown(&self, device: &str) -> String {
+        if self.config.multi_tenant()
+            && let Some((tag, name)) = device.split_once('-')
+            && tag.len() == 13
+            && tag.starts_with('t')
+            && tag[1..].chars().all(|c| c.is_ascii_hexdigit())
+            && !name.is_empty()
+        {
+            return name.to_string();
+        }
+        device.to_string()
+    }
+
+    /// Tell the phones of `device`'s account that it is `offline` or its `update_failed`;
+    /// tapping it opens the machine's page in the phone app.
+    fn push_machine(&self, device: &str, what: &str) {
+        let site = self.config.site();
+        let copy = &site.messages.app;
+        let shown = self.shown(device);
+        let (title, body) = match what {
+            "offline" => (&copy.push_offline_title, &copy.push_offline_body),
+            _ => (&copy.push_update_failed_title, &copy.push_update_failed_body),
+        };
+        let words = crate::site::Ctx::new(&site).with("machine", shown.clone());
+        let payload = serde_json::json!({
+            "title": words.plain(title),
+            "body": words.plain(body),
+            "url": format!("/app/machines/{shown}"),
+            "tag": format!("devagotchi-machine-{what}-{device}"),
+        });
+        let people = self.machine_people(device);
+        #[cfg(test)]
+        self.pushed
+            .lock()
+            .expect("pushed")
+            .push((people.clone(), payload.clone()));
+        if let (Some(push), false) = (self.push.clone(), people.is_empty()) {
+            tokio::spawn(async move { push.notify(&people, &payload).await });
+        }
+    }
+
+    /// `device`'s link went away (the `episode`th drop): if it is still away, and not
+    /// revoked, after [`OFFLINE_PUSH_AFTER`], its account's phones hear it once.
+    fn watch_offline(self: Arc<Self>, device: String, episode: u64) {
+        tokio::spawn(async move {
+            tokio::time::sleep(self.offline_after).await;
+            let same = self
+                .seen
+                .lock()
+                .expect("seen")
+                .get(&device)
+                .is_some_and(|(_, seen)| *seen == episode);
+            if same && !self.connected(&device) && matches!(self.devices.is_revoked(&device), Ok(false)) {
+                self.push_machine(&device, "offline");
+            }
+        });
     }
 
     /// A broker answer through `device`'s link: a start (`started` is what it ran) adds a
@@ -655,15 +744,20 @@ impl Links {
         if !devagotchi_contracts::UPDATE_STATES.contains(&state) {
             return;
         }
-        let target = {
+        let (target, newly_failed) = {
             let mut updates = self.updates.lock().expect("updates");
             let entry = updates
                 .entry(device.to_string())
                 .or_insert_with(|| Update::new("", now_secs()));
+            let newly_failed = state == "failed" && entry.state != "failed";
             entry.state = state.to_string();
             entry.detail = detail.clone().map(|d| d.chars().take(300).collect());
-            entry.target.clone()
+            (entry.target.clone(), newly_failed)
         };
+        // Once per failed update: its account's phones hear it.
+        if newly_failed {
+            self.push_machine(device, "update_failed");
+        }
         if matches!(state, "done" | "failed") {
             let outcome = match &detail {
                 Some(detail) => format!("{state}: {detail}"),
@@ -873,7 +967,7 @@ impl Links {
         .await
         .is_err()
         {
-            self.forget(&device, session_id, &pending);
+            let _ = self.forget(&device, session_id, &pending);
             return;
         }
         // An update that brought this build is done; then any machine due one is asked.
@@ -944,7 +1038,9 @@ impl Links {
                 }
             }
         };
-        self.forget(&device, session_id, &pending);
+        if let Some(episode) = self.forget(&device, session_id, &pending) {
+            self.clone().watch_offline(device.clone(), episode);
+        }
         let _ = tokio::time::timeout(SEND_TIMEOUT, sink.close()).await;
         self.event(
             &subject,
@@ -956,16 +1052,24 @@ impl Links {
         );
     }
 
-    fn forget(&self, device: &str, session_id: u64, pending: &Pending) {
+    /// The session is gone; which drop this was, when it was the device's live session.
+    fn forget(&self, device: &str, session_id: u64, pending: &Pending) -> Option<u64> {
         let mut sessions = self.sessions.lock().expect("links");
+        let mut episode = None;
         if sessions.get(device).is_some_and(|s| s.id == session_id) {
             sessions.remove(device);
-            self.seen.lock().expect("seen").insert(device.to_string(), now_secs());
+            let this = self.next.fetch_add(1, Ordering::Relaxed);
+            self.seen
+                .lock()
+                .expect("seen")
+                .insert(device.to_string(), (now_secs(), this));
+            episode = Some(this);
         }
         drop(sessions);
         self.changed();
         // Dropping the waiters answers every in-flight call with broker_offline.
         pending.lock().expect("pending").clear();
+        episode
     }
 
     /// Check the device's hello: a configured link broker or a machine an account added,
@@ -1154,6 +1258,84 @@ mod tests {
             enroll_code: code.map(str::to_string),
             build: None,
         })
+    }
+
+    /// A live session for `device`, as a link that connected leaves it.
+    fn connect(links: &Links, device: &str) {
+        let (calls, _) = mpsc::channel(1);
+        let (control, _) = mpsc::channel(1);
+        links.sessions.lock().unwrap().insert(
+            device.to_string(),
+            Session { id: 99, calls, pending: Arc::default(), build: None, control },
+        );
+    }
+
+    #[tokio::test]
+    async fn a_machine_offline_ten_minutes_or_failing_an_update_reaches_its_peoples_phones_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut links = links(dir.path());
+        links.offline_after = Duration::from_millis(40);
+        let links = Arc::new(links);
+        let wait = || tokio::time::sleep(Duration::from_millis(200));
+        let pushed = |links: &Links| links.pushed.lock().unwrap().clone();
+
+        // A configured machine goes to the accounts granted it; it stays away: one push,
+        // whose tap opens its page in the app.
+        let code = links.devices.issue_code("gus", [6; 16]).unwrap();
+        links.devices.enroll("gus", &code, "gus-key", true).unwrap();
+        connect(&links, "gus");
+        let episode = links.forget("gus", 99, &Pending::default()).expect("its live session");
+        assert!(links.last_seen("gus").is_some());
+        links.clone().watch_offline("gus".into(), episode);
+        wait().await;
+        let sent = pushed(&links);
+        assert_eq!(sent.len(), 1, "{sent:?}");
+        assert_eq!(sent[0].0, vec!["jesse".to_string()]);
+        assert_eq!(sent[0].1["title"], "gus is offline");
+        assert_eq!(sent[0].1["url"], "/app/machines/gus");
+
+        // Back within the wait: nothing. Dropped again: that drop's own wait, one push.
+        connect(&links, "gus");
+        let episode = links.forget("gus", 99, &Pending::default()).unwrap();
+        links.clone().watch_offline("gus".into(), episode);
+        connect(&links, "gus");
+        wait().await;
+        assert_eq!(pushed(&links).len(), 1, "it came back: no push");
+        let first = links.forget("gus", 99, &Pending::default()).unwrap();
+        links.clone().watch_offline("gus".into(), first);
+        connect(&links, "gus");
+        let second = links.forget("gus", 99, &Pending::default()).unwrap();
+        links.clone().watch_offline("gus".into(), second);
+        wait().await;
+        assert_eq!(pushed(&links).len(), 2, "one push for the drop that lasted");
+
+        // A failed update: one push however often the link says so; the next update's
+        // failure is another.
+        links.update_reported("gus", "failed", Some("no space".into()));
+        links.update_reported("gus", "failed", Some("no space".into()));
+        let sent = pushed(&links);
+        assert_eq!(sent.len(), 3, "{sent:?}");
+        assert_eq!(sent[2].1["title"], "gus update failed");
+        assert_eq!(sent[2].1["url"], "/app/machines/gus");
+        links
+            .updates
+            .lock()
+            .unwrap()
+            .insert("gus".into(), Update::new("v2", now_secs()));
+        links.update_reported("gus", "failed", None);
+        assert_eq!(pushed(&links).len(), 4);
+
+        // A machine an account added goes to that account only; a revoked one is not pushed.
+        let code = links.issue_owned_code("alice", "lab").unwrap();
+        links.devices.enroll("lab", &code, "lab-key", false).unwrap();
+        links.update_reported("lab", "failed", None);
+        assert_eq!(pushed(&links).last().unwrap().0, vec!["alice".to_string()]);
+        connect(&links, "lab");
+        let episode = links.forget("lab", 99, &Pending::default()).unwrap();
+        links.devices.revoke("lab").unwrap();
+        links.clone().watch_offline("lab".into(), episode);
+        wait().await;
+        assert_eq!(pushed(&links).len(), 5, "a revoked machine going offline is not news");
     }
 
     #[test]
