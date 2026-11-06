@@ -1117,6 +1117,50 @@ mod cli {
     }
 
     #[test]
+    fn prime_and_show_print_the_anchors_as_one_line() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        assert_eq!(
+            run(d, None, false, &["init", "--project", "demo"]).0,
+            EXIT_OK
+        );
+        let (_, out, _) = run(
+            d,
+            Some("claude"),
+            false,
+            &[
+                "new",
+                "dabo is down",
+                "--machine",
+                "dabo",
+                "--env",
+                "prod",
+                "--repo",
+                "https://github.com/x/y",
+                "--agent",
+                "claude",
+                "--session",
+                "4f1c9a2b-77e0",
+            ],
+        );
+        let id = json(&out)["id"].as_str().unwrap().to_string();
+        let line = "dabo · prod · github.com/x/y · claude (session 4f1c9a2b…)";
+        let (code, shown, _) = run(d, Some("claude"), true, &["show", &id]);
+        assert_eq!(code, EXIT_OK, "{shown}");
+        assert!(shown.lines().any(|l| l.trim() == line), "{shown}");
+        let (code, primed, _) = run(d, Some("claude"), true, &["prime"]);
+        assert_eq!(code, EXIT_OK, "{primed}");
+        let row = primed.lines().find(|l| l.contains(&id)).expect("ready row");
+        assert!(row.ends_with(&format!("· {line}")), "{row}");
+        let (_, primed, _) = run(d, Some("claude"), false, &["prime"]);
+        assert_eq!(json(&primed)["ready"][0]["anchors"], line);
+        let (_, plain, _) = run(d, Some("codex"), false, &["new", "plain"]);
+        let plain_id = json(&plain)["id"].as_str().unwrap().to_string();
+        let (_, shown, _) = run(d, Some("claude"), true, &["show", &plain_id]);
+        assert!(!shown.contains(" · "), "nothing known, no line: {shown}");
+    }
+
+    #[test]
     fn a_new_ticket_carries_the_session_the_hook_pack_exported() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(
@@ -2177,4 +2221,44 @@ fn an_environment_outside_the_boards_list_is_refused_with_the_list() {
         .unwrap_err();
     assert_eq!(refused.code, "unknown_environment");
     assert!(refused.message.contains("qa"), "{}", refused.message);
+}
+
+#[test]
+fn the_anchor_line_names_what_is_known_in_order() {
+    let f = fixture();
+    let jesse = Actor::human("jesse");
+    let line = |anchors: Anchors| {
+        f.board
+            .create(
+                &jesse,
+                NewTicket {
+                    title: "t".into(),
+                    anchors,
+                    ..NewTicket::default()
+                },
+            )
+            .unwrap()
+            .anchor_line()
+    };
+    assert_eq!(line(Anchors::default()), None);
+    assert_eq!(
+        line(Anchors {
+            machine: Some("dabo".into()),
+            environment: Some("prod".into()),
+            repo: Some("https://github.com/x/y.git".into()),
+            agent: Some("claude".into()),
+            session: Some("abc".into()),
+            fingerprint: Some("never shown".into()),
+        })
+        .as_deref(),
+        Some("dabo · prod · github.com/x/y · claude (session abc)")
+    );
+    assert_eq!(
+        line(Anchors {
+            session: Some("0123456789".into()),
+            ..Anchors::default()
+        })
+        .as_deref(),
+        Some("session 01234567…")
+    );
 }
