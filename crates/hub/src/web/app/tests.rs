@@ -211,11 +211,21 @@ async fn a_machines_page_shows_its_state_and_jobs_and_updates_from_here_only() {
 
     let (status, html) = page(&hub, "/app/machines", &alice).await;
     assert_eq!(status, 200);
-    assert!(html.contains("<a href=\"/app/machines/desk\">"), "the list leads to the page");
+    assert!(
+        html.contains("<a href=\"/app/machines/desk\">"),
+        "the list leads to the page"
+    );
     let (status, html) = page(&hub, "/app/machines/desk", &alice).await;
     assert_eq!(status, 200, "{html}");
     assert!(html.contains("<h1>desk</h1>"));
-    for seen in ["Status", "Offline", "Build", "Last seen", "Not since the hub started", "Update now"] {
+    for seen in [
+        "Status",
+        "Offline",
+        "Build",
+        "Last seen",
+        "Not since the hub started",
+        "Update now",
+    ] {
         assert!(html.contains(seen), "the page shows {seen}: {html}");
     }
     assert!(html.contains("action=\"/app/machines/desk/update\""));
@@ -229,18 +239,44 @@ async fn a_machines_page_shows_its_state_and_jobs_and_updates_from_here_only() {
             operation: view(&format!("op-{n}"), "running", None),
             replayed: false,
         });
-        links.jobs_saw(&device, Some(format!("echo job-{n} {}", "x".repeat(100)).chars().take(80).collect()), &start);
+        links.jobs_saw(
+            &device,
+            Some(
+                format!("echo job-{n} {}", "x".repeat(100))
+                    .chars()
+                    .take(80)
+                    .collect(),
+            ),
+            &start,
+        );
     }
-    links.jobs_saw(&device, None, &ResponseBody::Operation(view("op-24", "succeeded", Some(0))));
-    links.jobs_saw(&device, None, &ResponseBody::Operation(view("op-0", "failed", Some(1))));
+    links.jobs_saw(
+        &device,
+        None,
+        &ResponseBody::Operation(view("op-24", "succeeded", Some(0))),
+    );
+    links.jobs_saw(
+        &device,
+        None,
+        &ResponseBody::Operation(view("op-0", "failed", Some(1))),
+    );
     let jobs = links.recent_jobs(&device);
     assert_eq!(jobs.len(), crate::link::RECENT_JOBS);
     assert_eq!(jobs[0].operation_id, "op-24");
-    assert_eq!((jobs[0].state.as_str(), jobs[0].exit_code), ("succeeded", Some(0)));
-    assert!(jobs.iter().all(|job| job.operation_id != "op-0"), "the oldest fell out");
+    assert_eq!(
+        (jobs[0].state.as_str(), jobs[0].exit_code),
+        ("succeeded", Some(0))
+    );
+    assert!(
+        jobs.iter().all(|job| job.operation_id != "op-0"),
+        "the oldest fell out"
+    );
     assert!(jobs.iter().all(|job| job.command.chars().count() <= 80));
     let (_, html) = page(&hub, "/app/machines/desk", &alice).await;
-    assert!(html.contains("echo job-24") && html.contains("succeeded"), "{html}");
+    assert!(
+        html.contains("echo job-24") && html.contains("succeeded"),
+        "{html}"
+    );
     assert!(!html.contains("echo job-4 "), "only the last 20");
 
     // Update now: another site's form changes nothing; from here, it is the machine_update
@@ -254,12 +290,20 @@ async fn a_machines_page_shows_its_state_and_jobs_and_updates_from_here_only() {
         .await
         .unwrap();
     assert_eq!(cross.status(), 403);
-    let pressed = hub.form("/app/machines/desk/update", Some(&alice.cookie), &[]).await;
+    let pressed = hub
+        .form("/app/machines/desk/update", Some(&alice.cookie), &[])
+        .await;
     assert_eq!(pressed.status(), 303);
     let to = pressed.headers()["location"].to_str().unwrap().to_string();
-    assert!(to.starts_with("/app/machines/desk?state=failed&detail="), "{to}");
+    assert!(
+        to.starts_with("/app/machines/desk?state=failed&detail="),
+        "{to}"
+    );
     let (_, html) = page(&hub, &to, &alice).await;
-    assert!(html.contains("id=\"update-result\"") && html.contains("Update: failed"), "{html}");
+    assert!(
+        html.contains("id=\"update-result\"") && html.contains("Update: failed"),
+        "{html}"
+    );
     let audit = rusqlite::Connection::open(hub.dir.path().join("audit.sqlite3")).unwrap();
     let asked: i64 = audit
         .query_row(
@@ -274,9 +318,14 @@ async fn a_machines_page_shows_its_state_and_jobs_and_updates_from_here_only() {
     let (status, html) = page(&hub, "/app/machines/desk", &bob).await;
     assert_eq!(status, 404);
     assert!(!html.contains("echo job"));
-    let theirs = hub.form("/app/machines/desk/update", Some(&bob.cookie), &[]).await;
+    let theirs = hub
+        .form("/app/machines/desk/update", Some(&bob.cookie), &[])
+        .await;
     let to = theirs.headers()["location"].to_str().unwrap().to_string();
-    assert!(to.contains("state=failed") && to.contains("no%20broker%20named"), "{to}");
+    assert!(
+        to.contains("state=failed") && to.contains("no%20broker%20named"),
+        "{to}"
+    );
     let signed_out = hub.get("/app/machines/desk", None).await;
     assert_eq!(
         signed_out.headers()["location"],

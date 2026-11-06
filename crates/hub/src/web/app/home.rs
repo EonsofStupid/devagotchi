@@ -176,7 +176,7 @@ pub(super) fn status_word(status: &str) -> String {
 }
 
 /// A machine's build, and "updating" while an update runs on it.
-pub(super) fn build_line(machine: &Machine) -> String {
+fn build_line(machine: &Machine) -> String {
     let site = words();
     let copy = &site.messages.app;
     let mut parts = Vec::new();

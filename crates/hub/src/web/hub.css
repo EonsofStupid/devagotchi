@@ -221,7 +221,7 @@ body.app > main { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto;
 .facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 table.jobs { table-layout: fixed; font-size: .9rem; }
 table.jobs td, table.jobs th { padding: 8px; overflow-wrap: anywhere; }
-table.jobs th:nth-child(1) { width: 28%; }
-table.jobs th:nth-child(3) { width: 22%; }
+table.jobs th:nth-child(1) { width: 27%; }
+table.jobs th:nth-child(3) { width: 27%; }
 table.jobs th:nth-child(4) { width: 14%; }
 table.jobs th:nth-child(4), table.jobs td:nth-child(4) { display: table-cell; }

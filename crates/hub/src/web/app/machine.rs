@@ -69,11 +69,17 @@ pub async fn page(
         Some(build) => escape(build),
         None => escape(&copy.machine_build_unknown),
     };
-    let updating = home::build_line(&machine);
+    let updating = if machine.update.as_deref() == Some("updating") {
+        escape(&copy.updating)
+    } else {
+        String::new()
+    };
     let result = shown
         .state
         .map(|done| {
-            let line = Ctx::new(&site).with("state", done).inline(&copy.update_state);
+            let line = Ctx::new(&site)
+                .with("state", done)
+                .inline(&copy.update_state);
             let detail = shown
                 .detail
                 .map(|detail| format!(" · {}", escape(&detail)))
@@ -96,7 +102,9 @@ pub async fn page(
                     pages::utc(job.at),
                     escape(&job.command),
                     escape(&job.state),
-                    job.exit_code.map(|code| code.to_string()).unwrap_or_default(),
+                    job.exit_code
+                        .map(|code| code.to_string())
+                        .unwrap_or_default(),
                 )
             })
             .collect();
@@ -147,7 +155,12 @@ pub async fn update(
     let site = words();
     let copy = &site.messages.app;
     if !same_origin(&headers, &state.hub.config.public_url) {
-        return pages::message(StatusCode::FORBIDDEN, &copy.update_now, &copy.not_from_here, None);
+        return pages::message(
+            StatusCode::FORBIDDEN,
+            &copy.update_now,
+            &copy.not_from_here,
+            None,
+        );
     }
     let subject = match person(&state, &headers, &here).await {
         Ok(subject) => subject,
@@ -155,7 +168,12 @@ pub async fn update(
     };
     // A tenant waiting to be let in changes nothing (`tenant_access.rs`).
     if let Some(refused) = state.hub.waiting_refusal(&subject) {
-        return pages::message(StatusCode::FORBIDDEN, &copy.update_now, &refused.message, None);
+        return pages::message(
+            StatusCode::FORBIDDEN,
+            &copy.update_now,
+            &refused.message,
+            None,
+        );
     }
     let asked = MachineUpdate {
         machine: name.clone(),

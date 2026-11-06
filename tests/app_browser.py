@@ -8,6 +8,9 @@ http://localhost (a secure context, so the service worker runs without TLS). The
    adds a machine (a broker and `devagotchi link`, online) and a board with a ticket.
 2. `/app` on the iPhone shows the machine online and the board, in one frame that does not
    scroll sideways at 390 px; the install banner says Share, then Add to Home Screen.
+   Its machine page: online, its build, last seen now, the AI's command among the recent
+   jobs, and Update now saying it is already on the hub's build (the hub hands out this
+   binary's own build).
 3. The manifest starts the installed app at `/app`, standalone.
 4. The same on a Pixel 7 (emulated), signed in there with the email and password.
 5. With the hub gone, reloading the app shows its offline page, not a browser error.
@@ -93,13 +96,18 @@ def main() -> int:
     state, config = work / "state", work / "hub.json"
     port = free_port()
     url = f"http://localhost:{port}"
+    # The hub hands out this binary's own build, so Update now finds the machine on it.
+    build = re.search(r"\(([^)]+)\)", subprocess.run([args.devagotchi, "--version"], capture_output=True,
+                                                     text=True, check=True).stdout).group(1)
+    dist = downloads(work, args.devagotchi)
+    (dist / "VERSION").write_text(build + "\n")
     config.write_text(json.dumps({
         "listen": f"127.0.0.1:{port}",
         "public_url": url,
         "auth": {"mode": "hub"},
         "tenancy": {"mode": "multi", "starts_per_hour": 100},
         "account_boards": {"dir": str(work / "boards"), "free_limit": 5},
-        "downloads": str(downloads(work, args.devagotchi)),
+        "downloads": str(dist),
         "machines": {"auto_update": False},
         "brokers": [],
         "grants": [],
@@ -141,6 +149,8 @@ def main() -> int:
             assert not bound.get("isError"), bound
             made = ai.tool("board_create", {"project": "alpha", "title": "Check the backups"})
             assert not made.get("isError"), made
+            ran = ai.tool("run", {"machine": "desk", "command": "echo from-the-phone"})
+            assert not ran.get("isError"), ran
             print("PASS signed up on an iPhone; the AI added desk (online) and the board alpha")
 
             # 2. Home on the iPhone: the machine and the board, one frame, no sideways scroll.
@@ -155,6 +165,22 @@ def main() -> int:
             banner.wait_for(state="visible", timeout=5_000)
             assert "Add to Home Screen" in banner.inner_text()
             print("PASS /app on an iPhone 13 shows desk online and alpha; no sideways scroll at 390 px")
+
+            # Its machine page: status, build, last seen, recent jobs, Update now.
+            page.locator("#machine-desk a").click()
+            page.wait_for_url(re.compile(r".*/app/machines/desk$"))
+            assert page.locator("h1").inner_text() == "desk"
+            assert "Online" in page.locator("#machine").inner_text()
+            assert page.locator("#build").inner_text() == build
+            assert page.locator("#last-seen").inner_text() == "Now"
+            jobs = page.locator("table.jobs").inner_text()
+            assert "echo from-the-phone" in jobs and "succeeded" in jobs, jobs
+            no_sideways_scroll(page, 390)
+            page.locator("#update-now").click()
+            page.wait_for_url(re.compile(r".*/app/machines/desk\?state=done.*"))
+            result = page.locator("#update-result").inner_text()
+            assert "Update: done" in result and f"already on {build}" in result, result
+            print("PASS desk's page: online, its build, last seen now, the AI's job, Update now answered")
 
             # 3. The installed app starts at /app, standalone.
             status, _, body = call(f"{url}/manifest.webmanifest")
