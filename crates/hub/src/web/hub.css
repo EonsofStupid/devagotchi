@@ -189,3 +189,29 @@ form.inline { margin-top: 8px; }
 }
 @keyframes page-leave { to { opacity: 0; transform: translateX(-28px); } }
 @keyframes page-arrive { from { opacity: 0; transform: translateX(36px); } }
+
+/* The phone app (`web/app/`): one fixed frame, the bar on top and the tabs at the bottom,
+   the page scrolling in between, so nothing but the page moves. */
+body.app { height: 100vh; height: 100dvh; min-height: 0; display: flex; flex-direction: column;
+  overflow: hidden; }
+body.app > .bar, body.app > .nudge { position: static; flex: none; }
+body.app > main { flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto;
+  -webkit-overflow-scrolling: touch; overscroll-behavior-y: contain;
+  padding: 20px max(var(--gutter), calc(50% - var(--narrow) / 2)) 24px; }
+.tabs { flex: none; display: flex; border-top: 1px solid var(--line); background: var(--surface);
+  padding-bottom: env(safe-area-inset-bottom); view-transition-name: shell-tabs; }
+.tabs a { flex: 1; min-width: 0; padding: 12px 4px; text-align: center; color: var(--muted);
+  text-decoration: none; font-size: .85rem; font-weight: 600; overflow-wrap: anywhere; }
+.tabs a[aria-current="page"] { color: var(--accent); box-shadow: inset 0 2px 0 var(--accent); }
+.install { margin: 0 0 12px; padding: 10px 12px; background: var(--sunk); border-radius: var(--radius-s);
+  color: var(--text); font-size: .92rem; }
+.install button { padding: 4px 12px; margin-left: 4px; }
+.rows { list-style: none; margin: 0; padding: 0; }
+.rows li { padding: 10px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.rows li:first-child { border-top: 0; padding-top: 4px; }
+.rows .meta { display: inline; font-size: .9rem; }
+.what-kind { display: block; color: var(--muted); font-size: .8rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .04em; }
+@media (prefers-reduced-motion: no-preference) and (scripting: enabled) {
+  ::view-transition-group(shell-tabs) { animation: none; }
+}
