@@ -8,7 +8,7 @@
 //! A peer learns only that it was refused; the reason goes to the operator's audit.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     net::SocketAddr,
     sync::{
         Arc, Mutex,
@@ -104,6 +104,42 @@ pub struct Links {
     /// Each machine's latest update, and who waits on one (`machine_update`).
     updates: Mutex<HashMap<String, Update>>,
     update_changed: tokio::sync::Notify,
+    /// Each machine's last [`RECENT_JOBS`] operations routed through its link, newest first,
+    /// in memory only (the phone app's machine page, `web/app/machine.rs`).
+    jobs: Mutex<HashMap<String, VecDeque<Job>>>,
+    /// When each machine's link last went away, since this hub started.
+    seen: Mutex<HashMap<String, u64>>,
+}
+
+/// How many routed operations the hub keeps per machine.
+pub const RECENT_JOBS: usize = 20;
+
+/// One operation the hub routed to a machine, as its page lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Job {
+    pub operation_id: String,
+    /// When it started, in Unix seconds.
+    pub at: u64,
+    /// The command line's first 80 characters (or the executable and its arguments).
+    pub command: String,
+    /// The operation's state as the broker last answered it (`running`, `succeeded`, …).
+    pub state: String,
+    pub exit_code: Option<i32>,
+}
+
+/// What a routed start ran, as the machine page shows it: at most 80 characters.
+fn command_of(body: &RequestBody) -> Option<String> {
+    let RequestBody::OperationStart(input) = body else {
+        return None;
+    };
+    let line = match &input.command {
+        Some(command) => command.clone(),
+        None => std::iter::once(input.executable.as_str())
+            .chain(input.args.iter().map(String::as_str))
+            .collect::<Vec<_>>()
+            .join(" "),
+    };
+    Some(line.chars().take(80).collect())
 }
 
 /// What asking a machine to update came to.
@@ -182,6 +218,50 @@ impl Links {
             offered: None,
             updates: Mutex::new(HashMap::new()),
             update_changed: tokio::sync::Notify::new(),
+            jobs: Mutex::new(HashMap::new()),
+            seen: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// `device`'s recent routed operations, newest first.
+    pub fn recent_jobs(&self, device: &str) -> Vec<Job> {
+        let jobs = self.jobs.lock().expect("jobs");
+        jobs.get(device).map(|kept| kept.iter().cloned().collect()).unwrap_or_default()
+    }
+
+    /// When `device`'s link last went away since this hub started (it is online when
+    /// `connected`).
+    pub fn last_seen(&self, device: &str) -> Option<u64> {
+        self.seen.lock().expect("seen").get(device).copied()
+    }
+
+    /// A broker answer through `device`'s link: a start (`started` is what it ran) adds a
+    /// job; any later answer about a kept operation moves its state and exit code.
+    pub(crate) fn jobs_saw(&self, device: &str, started: Option<String>, answer: &ResponseBody) {
+        let (view, start) = match answer {
+            ResponseBody::Start(output) => (&output.operation, started),
+            ResponseBody::Operation(view) => (view, None),
+            ResponseBody::Output(page) => (&page.operation, None),
+            _ => return,
+        };
+        let state = serde_json::to_value(&view.state)
+            .ok()
+            .and_then(|v| v.as_str().map(str::to_string))
+            .unwrap_or_default();
+        let mut jobs = self.jobs.lock().expect("jobs");
+        let kept = jobs.entry(device.to_string()).or_default();
+        if let Some(job) = kept.iter_mut().find(|j| j.operation_id == view.operation_id) {
+            job.state = state;
+            job.exit_code = view.exit_code;
+        } else if let Some(command) = start {
+            kept.push_front(Job {
+                operation_id: view.operation_id.clone(),
+                at: view.created_at_ms / 1000,
+                command,
+                state,
+                exit_code: view.exit_code,
+            });
+            kept.truncate(RECENT_JOBS);
         }
     }
 
@@ -439,6 +519,7 @@ impl Links {
         };
         // A wait is answered when the operation changes or its own timeout passes.
         let within = CALL_TIMEOUT + body.held_for();
+        let started = command_of(&body);
         let request = WireRequest {
             api_version: API_VERSION,
             request: body,
@@ -467,7 +548,10 @@ impl Links {
             }
         };
         match response {
-            WireResponse::Ok(body) => Ok(body),
+            WireResponse::Ok(body) => {
+                self.jobs_saw(device, started, &body);
+                Ok(body)
+            }
             WireResponse::Error(error) => Err(error),
         }
     }
@@ -876,6 +960,7 @@ impl Links {
         let mut sessions = self.sessions.lock().expect("links");
         if sessions.get(device).is_some_and(|s| s.id == session_id) {
             sessions.remove(device);
+            self.seen.lock().expect("seen").insert(device.to_string(), now_secs());
         }
         drop(sessions);
         self.changed();

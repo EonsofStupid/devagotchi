@@ -51,8 +51,9 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> Response
             needs.push((
                 i64::MAX,
                 format!(
-                    "<li><span class=\"what-kind\">{}</span> {}</li>",
+                    "<li><span class=\"what-kind\">{}</span> <a href=\"/app/machines/{}\">{}</a></li>",
                     escape(&copy.update_failed),
+                    crate::web::encode(&machine.name),
                     escape(&machine.name)
                 ),
             ));
@@ -76,8 +77,11 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> Response
             needs.push((
                 *at,
                 format!(
-                    "<li><span class=\"what-kind\">{}</span> {} <span class=\"meta\">{} · {}</span></li>",
+                    "<li><span class=\"what-kind\">{}</span> <a href=\"/app/tickets/{}/{}\">{}</a> \
+<span class=\"meta\">{} · {}</span></li>",
                     escape(&copy.assigned_to_you),
+                    crate::web::encode(&board.project),
+                    crate::web::encode(id),
                     escape(title),
                     escape(id),
                     escape(&board.project),
@@ -175,7 +179,7 @@ pub(super) fn status_word(status: &str) -> String {
 }
 
 /// A machine's build, and "updating" while an update runs on it.
-pub(super) fn build_line(machine: &Machine) -> String {
+fn build_line(machine: &Machine) -> String {
     let site = words();
     let copy = &site.messages.app;
     let mut parts = Vec::new();
@@ -199,10 +203,11 @@ fn machines_card(machines: &[Machine]) -> String {
         .iter()
         .map(|machine| {
             format!(
-                "<li id=\"machine-{n}\"><span class=\"status {}\">{}</span> <strong>{n}</strong> \
-<span class=\"meta\">{}</span></li>",
+                "<li id=\"machine-{n}\"><span class=\"status {}\">{}</span> \
+<a href=\"/app/machines/{}\"><strong>{n}</strong></a> <span class=\"meta\">{}</span></li>",
                 machine.status,
                 escape(&status_word(machine.status)),
+                crate::web::encode(&machine.name),
                 build_line(machine),
                 n = escape(&machine.name),
             )
@@ -226,7 +231,9 @@ fn boards_card(boards: &[BoardSummary]) -> String {
                 .with("n", board.open.to_string())
                 .inline(&copy.open_count);
             format!(
-                "<li id=\"board-{p}\"><strong>{p}</strong> <span class=\"meta\">{count}</span></li>",
+                "<li id=\"board-{p}\"><a href=\"/app/boards/{}\"><strong>{p}</strong></a> \
+<span class=\"meta\">{count}</span></li>",
+                crate::web::encode(&board.project),
                 p = escape(&board.project),
             )
         })

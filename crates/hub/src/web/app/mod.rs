@@ -5,7 +5,11 @@
 //! banner, refreshes on a pull and registers the service worker, which keeps the frame and
 //! the stylesheet so the app opens offline on `/app/offline`.
 
+mod board;
 mod home;
+mod machine;
+mod ticket;
+mod ticket_actions;
 
 use std::sync::Arc;
 
@@ -26,7 +30,18 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/app", get(home::home))
         .route("/app/machines", get(home::machines))
+        .route("/app/machines/{name}", get(machine::page))
+        .route(
+            "/app/machines/{name}/update",
+            axum::routing::post(machine::update),
+        )
         .route("/app/boards", get(home::boards))
+        .route("/app/boards/{project}", get(board::page))
+        .route("/app/tickets/{project}/{id}", get(ticket::page))
+        .route(
+            "/app/tickets/{project}/{id}/{action}",
+            axum::routing::post(ticket_actions::act),
+        )
         .route("/app/offline", get(offline))
         .route("/assets/app.js", get(script))
 }
@@ -126,3 +141,5 @@ async fn script() -> Response {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod ticket_tests;
