@@ -1,6 +1,6 @@
 # Plan: the phone app, and tickets from what machines and AIs already emit
 
-Status: PLAN for Jesse's approval (2026-11-06). Each phase becomes its own code-anchored spec
+Status: APPROVED by Jesse 2026-11-06. Each phase becomes its own code-anchored spec
 (like `docs/spec-first-connect.md`) before any agent works on it. Nothing here is built yet
 unless it says **exists**.
 

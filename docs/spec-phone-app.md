@@ -1,6 +1,6 @@
 # Spec P1: the phone control app
 
-Status: DRAFT for Jesse's approval. Plan: `docs/plan-phone-and-signals.md` (P1). Ruled
+Status: APPROVED by Jesse 2026-11-06. Plan: `docs/plan-phone-and-signals.md` (P1). Ruled
 2026-11-06: control app installed from app.devagotchi.com, no app store. Paths relative to
 `crates/hub/`; function names are anchors, line numbers are hints (`main` 2026-11-06).
 

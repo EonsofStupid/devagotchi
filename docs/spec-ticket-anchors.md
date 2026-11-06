@@ -1,6 +1,6 @@
 # Spec P2: tickets tied to machine, project + repo, environment, agent + session
 
-Status: DRAFT for Jesse's approval. Plan: `docs/plan-phone-and-signals.md` (P2). Ruled
+Status: APPROVED by Jesse 2026-11-06. Plan: `docs/plan-phone-and-signals.md` (P2). Ruled
 2026-11-06: every ticket is tied to its machine/system, project + repo, environment, and
 agent + session. Paths relative to `crates/hub/`; names are anchors, lines are hints.
 
