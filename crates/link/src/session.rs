@@ -15,7 +15,10 @@ use tokio_tungstenite::{
     tungstenite::{Message, protocol::WebSocketConfig},
 };
 
-use crate::state::{LinkConfig, endpoint};
+use crate::{
+    state::{LinkConfig, endpoint},
+    update::Updater,
+};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -41,8 +44,14 @@ pub enum Ended {
 }
 
 pub enum Mode<'a> {
-    Enroll { code: &'a str },
-    Serve,
+    Enroll {
+        code: &'a str,
+    },
+    /// Serve calls, and update this machine when the hub asks (`update.rs`).
+    Serve {
+        updater: &'a Arc<Updater>,
+        state_dir: &'a std::path::Path,
+    },
 }
 
 fn tls() -> Result<Connector, String> {
@@ -97,10 +106,12 @@ pub async fn connect(config: &LinkConfig, key: &SigningKey, mode: Mode<'_>) -> E
         signature: hex::encode(signature.to_bytes()),
         enroll_code: match mode {
             Mode::Enroll { code } => Some(code.to_string()),
-            Mode::Serve => None,
+            Mode::Serve { .. } => None,
         },
-        // Said once the link can update its machine (U3 of the spec).
-        build: None,
+        build: match &mode {
+            Mode::Serve { updater, .. } => Some(updater.build().to_string()),
+            Mode::Enroll { .. } => None,
+        },
     };
     if let Err(why) = send(&mut sink, &hello).await {
         return Ended::Retry(why);
@@ -111,10 +122,13 @@ pub async fn connect(config: &LinkConfig, key: &SigningKey, mode: Mode<'_>) -> E
         Ok(_) => return Ended::Retry("hub answered the hello with an unexpected frame".into()),
         Err(why) => return Ended::Retry(why),
     }
-    if let Mode::Enroll { .. } = mode {
-        let _ = sink.close().await;
-        return Ended::Enrolled;
-    }
+    let (updater, state_dir) = match mode {
+        Mode::Enroll { .. } => {
+            let _ = sink.close().await;
+            return Ended::Enrolled;
+        }
+        Mode::Serve { updater, state_dir } => (updater, state_dir),
+    };
     eprintln!(
         "devagotchi link ready: {} linked to {} (broker {})",
         config.device, config.hub, config.broker
@@ -127,6 +141,14 @@ pub async fn connect(config: &LinkConfig, key: &SigningKey, mode: Mode<'_>) -> E
     let broker = std::path::PathBuf::from(&config.broker);
     let slots = Arc::new(tokio::sync::Semaphore::new(MAX_IN_FLIGHT));
     let waits = Arc::new(tokio::sync::Semaphore::new(MAX_WAITS));
+    // How the update the previous link handed off went, then each change of one under way.
+    if let Some(status) = crate::handoff::outcome(state_dir, updater.build())
+        && let Err(why) = send(&mut sink, &status.frame()).await
+    {
+        return Ended::Retry(why);
+    }
+    let mut updates = updater.subscribe();
+    updates.mark_unchanged();
     loop {
         tokio::select! {
             incoming = stream.next() => match incoming {
@@ -150,6 +172,11 @@ pub async fn connect(config: &LinkConfig, key: &SigningKey, mode: Mode<'_>) -> E
                             drop(slot);
                         });
                     }
+                    Ok(HubFrame::Update { version, force }) => {
+                        if let Some(status) = updater.request(version, force) {
+                            let _ = answers_tx.try_send(status.frame());
+                        }
+                    }
                     Ok(HubFrame::Refused { code, message }) => return refusal(code, message),
                     Ok(_) | Err(_) => return Ended::Retry("hub sent a frame this link does not understand".into()),
                 },
@@ -160,6 +187,14 @@ pub async fn connect(config: &LinkConfig, key: &SigningKey, mode: Mode<'_>) -> E
             },
             Some(answer) = answers_rx.recv() => {
                 if let Err(why) = send(&mut sink, &answer).await {
+                    return Ended::Retry(why);
+                }
+            }
+            Ok(()) = updates.changed() => {
+                let status = updates.borrow_and_update().clone();
+                if let Some(status) = status
+                    && let Err(why) = send(&mut sink, &status.frame()).await
+                {
                     return Ended::Retry(why);
                 }
             }

@@ -65,7 +65,7 @@ fn run(args: Vec<OsString>) -> ExitCode {
         ),
         Some("broker") => devagotchi_broker::cli(args),
         Some("hub") => devagotchi_hub::cli(args),
-        Some("link") => devagotchi_link::cli(args),
+        Some("link") => devagotchi_link::cli(args, env!("DEVAGOTCHI_BUILD")),
         Some(verb @ ("login" | "logout" | "whoami")) => account(verb, args),
         Some("version" | "--version" | "-V") => {
             println!(

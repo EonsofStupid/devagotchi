@@ -14,7 +14,8 @@
 # anything is written (D21), and one with an identity provider (--auth-config, nomen) comes up
 # as a second account with the key installed 0600 and sign-in metadata naming the issuer;
 # one line from a hub's /join installs the hub's build on a bare account, enrolls it with the
-# account exec policy and a real operation runs through it (29b); uninstall stops everything. Exit 0 only when every step holds.
+# account exec policy and a real operation runs through it (29b); an update the link asks for
+# with update-request.json is applied by root's devagotchi-update.path; uninstall stops everything. Exit 0 only when every step holds.
 set -euo pipefail
 
 BIN=$(readlink -f target/debug)
@@ -147,6 +148,31 @@ sudo kill -9 "$link_pid"
 wait_for 30 "link restarted under a new pid" new_main_pid devagotchi-link.service "$link_pid"
 wait_for 30 "link reconnected" link_connected
 ok "restarted by systemd and reconnected"
+
+echo "--- an update the link asks for: devagotchi-update.path applies it as root"
+# What the link writes (crates/link/src/handoff.rs): the checked download in its state,
+# then update-request.json. Root's .path unit runs the root-owned installer on it.
+LINK_STATE=$HOME_DIR/.local/state/devagotchi-link
+target=$("$INSTALL" --print-target)
+mkdir -p "$WORK/ci-path/devagotchi-$target"
+cp "$BIN/devagotchi" "$WORK/ci-path/devagotchi-$target/"
+XZ_OPT=-0 tar -C "$WORK/ci-path" -cJf "$WORK/ci-path/devagotchi-$target.tar.xz" "devagotchi-$target"
+as_account mkdir -p "$LINK_STATE/updates/ci-path"
+# shellcheck disable=SC2016  # the sh -c script takes its file as $1
+as_account_write() { as_account sh -c 'cat > "$1.tmp" && mv "$1.tmp" "$1"' sh "$1"; }
+as_account_write "$LINK_STATE/updates/ci-path/devagotchi-$target.tar.xz" < "$WORK/ci-path/devagotchi-$target.tar.xz"
+(cd "$WORK/ci-path" && sha256sum "devagotchi-$target.tar.xz") | as_account_write "$LINK_STATE/updates/ci-path/devagotchi-$target.tar.xz.sha256"
+link_pid=$(prop devagotchi-link.service MainPID)
+printf '{"dir":"%s","version":"ci-path"}' "$LINK_STATE/updates/ci-path" | as_account_write "$LINK_STATE/update-request.json"
+on_version() { [ "$(readlink "$PREFIX/current")" = "versions/$1" ]; }
+update_done() { grep -q "devagotchi update to $1 done" "$PREFIX/update/update-$1.log"; }
+wait_for 120 "the update service put ci-path in place" update_done ci-path
+on_version ci-path || fail "current is $(readlink "$PREFIX/current"), want versions/ci-path"
+as_account test ! -e "$LINK_STATE/update-request.json" || fail "the request was not used up"
+[ "$(stat -c '%U' "$PREFIX/versions/ci-path/devagotchi")" = root ] || fail "the updated binary is not root's"
+wait_for 30 "link restarted on ci-path" new_main_pid devagotchi-link.service "$link_pid"
+wait_for 30 "link back after the update" link_connected
+ok "the link's request made root install ci-path from its checked download; the link is back"
 
 echo "--- a revoked machine stays down"
 "$BIN/devagotchi" hub revoke --state-dir "$WORK/hub-state" --device ci-server

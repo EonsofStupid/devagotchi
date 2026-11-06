@@ -32,6 +32,10 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", 
 rustls-platform-verifier = "0.7"
 # Hub URLs are parsed, not pattern-matched.
 http = "1"
+# An update's downloads from the hub URL in this link's config, and their checksums
+# (`update.rs`): the same reqwest and rustls the hub already builds with.
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+sha2 = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 # O_NOFOLLOW when reading the device key.
