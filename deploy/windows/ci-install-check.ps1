@@ -21,6 +21,50 @@ $run = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\R
 if (-not $run) { throw 'autostart entry missing' }
 Write-Host "ok   autostart entry: $($run.'Devagotchi Broker')"
 
+# An upgrade over a broker that logon started (dabo, 2026-11-05): the Run entry's powershell
+# wrapper holds broker.log open for `2>>`, and the upgrade must still go through.
+$pipeName = (Get-Content -Raw (Join-Path $root 'endpoint.txt')).Trim() -replace '^\\\\\.\\pipe\\', ''
+function Test-BrokerPipe {
+    $client = New-Object System.IO.Pipes.NamedPipeClientStream('.', $pipeName, [System.IO.Pipes.PipeDirection]::InOut)
+    try { $client.Connect(200); return $true } catch { return $false } finally { $client.Dispose() }
+}
+function Get-RootProcess([string]$Name) {
+    @(Get-CimInstance Win32_Process -Filter "Name = '$Name'" -ErrorAction SilentlyContinue | Where-Object {
+        $_.CommandLine -and $_.CommandLine.IndexOf($root, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and $_.CommandLine -match '\sbroker\s+run\b'
+    })
+}
+foreach ($p in Get-RootProcess 'devagotchi.exe') {
+    $h = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue
+    Stop-Process -Id $p.ProcessId -Force
+    if ($h) { $h.WaitForExit(10000) | Out-Null }
+}
+for ($i = 0; $i -lt 100 -and (Test-BrokerPipe); $i++) { Start-Sleep -Milliseconds 100 }
+if (Test-BrokerPipe) { throw 'the installed broker did not stop' }
+# Exactly what logon runs: the Run value, split into its program and its arguments.
+$logonLine = $run.'Devagotchi Broker'
+if ($logonLine -notmatch '^(\S+)\s+(.+)$') { throw "cannot split the Run value: $logonLine" }
+Start-Process -FilePath $Matches[1] -ArgumentList $Matches[2] -WindowStyle Hidden | Out-Null
+for ($i = 0; $i -lt 300 -and -not (Test-BrokerPipe); $i++) { Start-Sleep -Milliseconds 100 }
+if (-not (Test-BrokerPipe)) { Get-Content (Join-Path $root 'logs\broker.log') -ErrorAction SilentlyContinue; throw 'the broker started by the Run entry did not become ready' }
+$wrappers = @(Get-RootProcess 'powershell.exe')
+if ($wrappers.Count -ne 1) { Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'powershell|pwsh|devagotchi' } | Format-List ProcessId, ParentProcessId, Name, CommandLine; throw "expected one powershell wrapper around the logon broker, found $($wrappers.Count)" }
+# On dabo the wrapper outlived the broker the installer killed and still held broker.log
+# when the installer cleared it. A runner tears the wrapper down faster than dabo did, so
+# hold it there: suspended, it keeps broker.log open exactly as it did on dabo.
+Add-Type -Namespace DvgCi -Name Nt -MemberDefinition '[System.Runtime.InteropServices.DllImport("ntdll.dll")] public static extern int NtSuspendProcess(System.IntPtr process);'
+$wrapperProcess = Get-Process -Id $wrappers[0].ProcessId
+$status = [DvgCi.Nt]::NtSuspendProcess($wrapperProcess.Handle)
+if ($status -ne 0) { throw "could not suspend the logon wrapper (NTSTATUS $status)" }
+Write-Host "ok   the broker runs as logon starts it, under powershell wrapper pid $($wrapperProcess.Id) holding broker.log (suspended)"
+$hostExe = (Get-Process -Id $PID).Path
+& $hostExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PSScriptRoot\install-devagotchi.ps1" `
+    -BinDir (Resolve-Path 'target\debug').ProviderPath -Root $root -Workspace $ws -Autostart
+if ($LASTEXITCODE -ne 0) { throw "the upgrade over the logon broker failed ($LASTEXITCODE)" }
+if (@(Get-RootProcess 'powershell.exe').Count -ne 0) { throw 'the logon wrapper survived the upgrade' }
+python tests/windows_install_check.py --root $root --claude-config $cfg --workspace $ws
+if ($LASTEXITCODE -ne 0) { throw 'the broker does not answer after the upgrade over the logon broker' }
+Write-Host 'ok   the upgrade over the logon broker exited 0 and its broker answers'
+
 # Re-running is an upgrade: the config is kept, the broker restarts, the endpoint is stable.
 $before = Get-Content -Raw (Join-Path $root 'endpoint.txt')
 # What it prints, kept by a transcript (the installer runs in this session): the log, and the
