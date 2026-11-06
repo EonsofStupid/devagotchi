@@ -97,8 +97,21 @@ function Stop-Ours([string]$Role, [string]$Note) {
         $_.ExecutablePath -and $_.ExecutablePath.StartsWith($Root, [System.StringComparison]::OrdinalIgnoreCase) -and
         $_.CommandLine -and $_.CommandLine -cmatch $pattern
     })
+    # The HKCU Run entries start a role through a powershell wrapper that holds its log open
+    # for `2>>`; it must be gone too, or the restart below cannot reuse the log.
+    $exePath = [regex]::Escape((Join-Path $Root 'current\devagotchi.exe'))
+    $wrappers = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+        ($_.Name -eq 'powershell.exe' -or $_.Name -eq 'pwsh.exe') -and $_.ProcessId -ne $PID -and
+        $_.CommandLine -and $_.CommandLine -match "(?i)$exePath" -and $_.CommandLine -cmatch $pattern
+    })
     foreach ($process in $ours) {
         Write-Host "    stopping devagotchi $Role pid $($process.ProcessId) ($($process.ExecutablePath))$Note"
+        $handle = Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue
+        Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+        if ($handle) { $handle.WaitForExit(10000) | Out-Null }
+    }
+    foreach ($process in $wrappers) {
+        Write-Host "    stopping the $($process.Name) wrapper of the $Role, pid $($process.ProcessId)"
         $handle = Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue
         Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
         if ($handle) { $handle.WaitForExit(10000) | Out-Null }
@@ -123,9 +136,22 @@ function Invoke-Native([string]$Exe, [string[]]$Arguments) {
     return $exit
 }
 
-# Starts a hidden process with stderr to $LogPath and waits for its ready line.
+# Empties $LogPath for a fresh start. Another process may still hold it (a wrapper that
+# outlived its child): retry for up to 10 s, then hand back a new log beside it instead.
+function Reset-Log([string]$LogPath) {
+    if (-not (Test-Path $LogPath)) { return $LogPath }
+    for ($i = 0; $i -lt 50; $i++) {
+        try { Clear-Content $LogPath -ErrorAction Stop; return $LogPath } catch { Start-Sleep -Milliseconds 200 }
+    }
+    $fresh = Join-Path (Split-Path -Parent $LogPath) ("{0}-{1}.log" -f [System.IO.Path]::GetFileNameWithoutExtension($LogPath), (Get-Date -Format 'yyyyMMddHHmmss'))
+    Write-Host "    $LogPath is still held by another process; logging to $fresh"
+    return $fresh
+}
+
+# Starts a hidden process with stderr to a fresh log and waits for its ready line. Returns
+# the process, the ready line and the log it wrote (normally $LogPath; see Reset-Log).
 function Start-Ready([string]$Exe, [string[]]$Arguments, [string]$WorkDir, [string]$LogPath, [string]$Pattern, [string]$What) {
-    if (Test-Path $LogPath) { Clear-Content $LogPath }
+    $LogPath = Reset-Log $LogPath
     $started = Start-Process -FilePath $Exe -ArgumentList $Arguments -WorkingDirectory $WorkDir -WindowStyle Hidden `
         -RedirectStandardError $LogPath -PassThru
     for ($i = 0; $i -lt 150; $i++) {
@@ -133,7 +159,7 @@ function Start-Ready([string]$Exe, [string[]]$Arguments, [string]$WorkDir, [stri
         if ($started.HasExited) { break }
         if (Test-Path $LogPath) {
             $line = Get-Content $LogPath -ErrorAction SilentlyContinue | Where-Object { $_ -match $Pattern } | Select-Object -First 1
-            if ($line) { return @{ Process = $started; Line = $line } }
+            if ($line) { return @{ Process = $started; Line = $line; Log = $LogPath } }
         }
     }
     Get-Content $LogPath -ErrorAction SilentlyContinue | Write-Host
@@ -277,7 +303,9 @@ $brokerExe = Join-Path $Bin 'devagotchi.exe'
 $ready = Start-Ready $brokerExe @('broker', 'run', '--state-dir', "`"$State`"", '--config', "`"$Config`"") $Workspace $Log 'devagotchi broker ready: (.+)$' 'the broker'
 $endpoint = ($ready.Line -replace '^.*devagotchi broker ready: ', '').Trim()
 Write-Utf8 $EndpointFile $endpoint
-Write-Host "    ready: $endpoint (pid $($ready.Process.Id)); log $Log"
+# The log this run wrote; the Run entry still appends to $Log.
+$brokerLog = $ready.Log
+Write-Host "    ready: $endpoint (pid $($ready.Process.Id)); log $brokerLog"
 # `devagotchi mcp` and `devagotchi setup` find this broker through these, in every new shell
 # and AI client, instead of starting a second one under %LOCALAPPDATA% on C:. Only the
 # broker's config file is named: the sign-in (`devagotchi login`) stays in %APPDATA%.
@@ -313,7 +341,8 @@ if ($EnrollCode) {
 if (Test-Path (Join-Path $LinkState 'link.json')) {
     Step 'Starting the link'
     $ready = Start-Ready $linkExe @('link', 'run', '--state-dir', "`"$LinkState`"") $Root $LinkLog 'devagotchi link ready:' 'the link'
-    Write-Host "    $($ready.Line.Trim()) (pid $($ready.Process.Id)); log $LinkLog"
+    $linkLogUsed = $ready.Log
+    Write-Host "    $($ready.Line.Trim()) (pid $($ready.Process.Id)); log $linkLogUsed"
     $linked = $true
 } elseif ($Hub -or $Device) {
     throw 'this machine has not enrolled yet: pass -Hub, -Device and -EnrollCode once'
@@ -373,8 +402,8 @@ if ($RegisterClaudeCode) {
 }
 
 Step 'Done'
-if ($linked) { Write-Host "    Link:        this machine answers the hub as its broker; log $LinkLog" }
-Write-Host "    Log: $Log"
+if ($linked) { Write-Host "    Link:        this machine answers the hub as its broker; log $linkLogUsed" }
+Write-Host "    Log: $brokerLog"
 if ($Developer) {
     Write-Host "    MCP command: `"$mcpExe`" mcp --socket $endpoint"
     Write-Host "    Claude Code: claude mcp add --scope user devagotchi -- `"$mcpExe`" mcp --socket $endpoint"

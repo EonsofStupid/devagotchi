@@ -7,6 +7,20 @@ heading. Agents draft the fragments below; they never tag.
 
 ## Unreleased
 
+### Windows upgrade over a logon-started broker (increment 95)
+- `deploy/windows/install-devagotchi.ps1` re-run as an upgrade no longer aborts with
+  "Clear-Content : The process cannot access the file …\logs\broker.log" (dabo,
+  2026-11-05). Stopping the broker or the link now also stops the `powershell.exe` /
+  `pwsh.exe` wrapper the HKCU Run entry starts it with (its command line names this
+  root's `current\devagotchi.exe` and the same role), waiting up to 10 s for each.
+- Starting the broker or the link never fails on a held log: clearing it is retried for up
+  to 10 s, then the start goes to a fresh `<name>-<yyyyMMddHHmmss>.log` beside it, and the
+  installer reports that path. The Run entries, install paths and config are unchanged.
+- Test: the Windows installer check (PowerShell 7 and 5.1) stops the installed broker,
+  starts it with the Run entry's own command line, holds that wrapper as dabo's was held,
+  re-runs the installer as an upgrade and asserts it exits 0, the wrapper is gone and the
+  broker answers the registered MCP command.
+
 ### Shell scripts on Windows run in Git Bash (increment 94)
 - On Windows, a `run` or `operation_start` command line whose first token (unquoted) ends in
   `.sh`, or is `bash`, `sh`, `bash.exe` or `sh.exe`, runs in Git for Windows' bash.exe as
