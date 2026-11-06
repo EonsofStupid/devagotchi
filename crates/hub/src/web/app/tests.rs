@@ -6,17 +6,17 @@ use serde_json::{Value, json};
 
 use crate::tenant_tests::{Hosted, Person, hosted_with, refused};
 
-async fn hosted() -> Hosted {
+pub(super) async fn hosted() -> Hosted {
     hosted_with(None, |_, _| json!({})).await
 }
 
-async fn page(hub: &Hosted, path: &str, person: &Person) -> (u16, String) {
+pub(super) async fn page(hub: &Hosted, path: &str, person: &Person) -> (u16, String) {
     Hosted::text(hub.get(path, Some(&person.cookie)).await).await
 }
 
 /// A's things: a machine that joined, a board with its getting-started ticket and one more
 /// assigned to A (2 open). The machine's name as the hub stores it.
-async fn things_of(hub: &Hosted, person: &mut Person) -> String {
+pub(super) async fn things_of(hub: &Hosted, person: &mut Person) -> String {
     let added = hub
         .call(person, "machine_add", json!({ "name": "desk" }))
         .await;

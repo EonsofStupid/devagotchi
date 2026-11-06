@@ -77,8 +77,11 @@ pub async fn home(State(state): State<AppState>, headers: HeaderMap) -> Response
             needs.push((
                 *at,
                 format!(
-                    "<li><span class=\"what-kind\">{}</span> {} <span class=\"meta\">{} · {}</span></li>",
+                    "<li><span class=\"what-kind\">{}</span> <a href=\"/app/tickets/{}/{}\">{}</a> \
+<span class=\"meta\">{} · {}</span></li>",
                     escape(&copy.assigned_to_you),
+                    crate::web::encode(&board.project),
+                    crate::web::encode(id),
                     escape(title),
                     escape(id),
                     escape(&board.project),
@@ -228,7 +231,9 @@ fn boards_card(boards: &[BoardSummary]) -> String {
                 .with("n", board.open.to_string())
                 .inline(&copy.open_count);
             format!(
-                "<li id=\"board-{p}\"><strong>{p}</strong> <span class=\"meta\">{count}</span></li>",
+                "<li id=\"board-{p}\"><a href=\"/app/boards/{}\"><strong>{p}</strong></a> \
+<span class=\"meta\">{count}</span></li>",
+                crate::web::encode(&board.project),
                 p = escape(&board.project),
             )
         })
