@@ -843,6 +843,39 @@ mod cli {
     }
 
     #[test]
+    fn board_settings_names_the_repo_and_environments_of_a_local_board() {
+        let dir = tempfile::tempdir().unwrap();
+        let (code, out, _) = run(dir.path(), None, false, &["init", "--project", "demo"]);
+        assert_eq!(code, EXIT_OK, "{out}");
+        let (code, out, err) = run(
+            dir.path(),
+            None,
+            false,
+            &["settings", "--repo", "https://github.com/x/demo", "--env", "dev,prod"],
+        );
+        assert_eq!(code, EXIT_OK, "{err}");
+        let set = json(&out);
+        assert_eq!(set["repo"], "https://github.com/x/demo");
+        assert_eq!(set["environments"], serde_json::json!(["dev", "prod"]));
+        let (code, out, _) = run(dir.path(), None, true, &["settings"]);
+        assert_eq!(code, EXIT_OK);
+        assert_eq!(out.trim(), "repo https://github.com/x/demo · environments dev, prod");
+        let (code, out, _) = run(dir.path(), None, false, &["settings", "--env", "a b"]);
+        assert_eq!(code, cli::EXIT_REFUSED, "{out}");
+        let refused = json(&out);
+        assert_eq!(refused["error"]["code"], "invalid_settings");
+        assert!(
+            refused["error"]["next"]
+                .as_str()
+                .unwrap()
+                .contains("\"a b\" is not a lowercase name"),
+            "{refused}"
+        );
+        let (code, out, _) = run(dir.path(), None, false, &["new", "staged", "--env", "staging"]);
+        assert_eq!(code, cli::EXIT_REFUSED, "the board's environments are the new ones: {out}");
+    }
+
+    #[test]
     fn init_creates_the_board_and_appends_the_agents_block_once() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("AGENTS.md"), "# Repo\n").unwrap();
@@ -1478,30 +1511,34 @@ mod bound {
     const MEMBER: &str = "300000000000000002";
 
     async fn hub(dir: &Path) -> String {
+        hub_with(dir, json!({}), &[]).await
+    }
+
+    /// The hub, with `extra` merged into its config and more dev tokens.
+    async fn hub_with(dir: &Path, extra: Value, tokens: &[(&str, &str)]) -> String {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}", listener.local_addr().unwrap());
-        let config = Arc::new(
-            HubConfig::parse(
-                &json!({
-                    "listen": "127.0.0.1:1",
-                    "public_url": url,
-                    "auth": {"mode": "dev", "tokens_file": dir.join("tokens.json")},
-                    "brokers": [],
-                    "grants": [],
-                    "account_boards": { "dir": dir.join("accounts") }
-                })
-                .to_string(),
-            )
-            .unwrap(),
-        );
+        let mut value = json!({
+            "listen": "127.0.0.1:1",
+            "public_url": url,
+            "auth": {"mode": "dev", "tokens_file": dir.join("tokens.json")},
+            "brokers": [],
+            "grants": [],
+            "account_boards": { "dir": dir.join("accounts") }
+        });
+        for (key, more) in extra.as_object().unwrap() {
+            value[key] = more.clone();
+        }
+        let config = Arc::new(HubConfig::parse(&value.to_string()).unwrap());
         let devices = Arc::new(Devices::open(&dir.join("devices.sqlite3")).unwrap());
         let audit = Arc::new(Audit::open(&dir.join("audit.sqlite3")).unwrap());
         let links = Arc::new(Links::new(config.clone(), devices.clone(), audit.clone()));
         let state = AppState {
-            verifier: Arc::new(Verifier::Dev(HashMap::from([(
-                "tok-member".to_string(),
-                MEMBER.to_string(),
-            )]))),
+            verifier: Arc::new(Verifier::Dev(
+                std::iter::once(("tok-member".to_string(), MEMBER.to_string()))
+                    .chain(tokens.iter().map(|(t, s)| (t.to_string(), s.to_string())))
+                    .collect::<HashMap<_, _>>(),
+            )),
             hub: Hub {
                 downloads: None,
                 analytics: None,
@@ -1794,6 +1831,121 @@ mod bound {
         })
         .await
         .unwrap();
+    }
+
+    /// One tool call over MCP as `token`: initialize, then the call; its `result`.
+    async fn tool(url: &str, token: &str, name: &str, arguments: Value) -> Value {
+        let http = reqwest::Client::new();
+        let post = |body: Value, session: Option<&str>| {
+            let mut request = http
+                .post(format!("{url}/mcp"))
+                .bearer_auth(token)
+                .header("accept", "application/json, text/event-stream")
+                .json(&body);
+            if let Some(session) = session {
+                request = request.header("mcp-session-id", session);
+            }
+            request.send()
+        };
+        let init = post(
+            json!({ "jsonrpc": "2.0", "id": 0, "method": "initialize", "params": {
+                "protocolVersion": "2025-06-18", "capabilities": {},
+                "clientInfo": { "name": "board_tests", "version": "1" } } }),
+            None,
+        )
+        .await
+        .unwrap();
+        let session = init.headers()["mcp-session-id"].to_str().unwrap().to_string();
+        post(
+            json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+            Some(&session),
+        )
+        .await
+        .unwrap();
+        let text = post(
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                    "params": { "name": name, "arguments": arguments } }),
+            Some(&session),
+        )
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+        let data = text
+            .lines()
+            .filter_map(|line| line.strip_prefix("data:"))
+            .map(str::trim)
+            .find(|data| data.starts_with('{'))
+            .unwrap_or(text.trim());
+        serde_json::from_str::<Value>(data).unwrap()["result"].clone()
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn board_settings_from_the_command_line_on_the_hub_and_who_may_change_them() {
+        const AGENT: &str = "300000000000000007";
+        let dir = tempfile::tempdir().unwrap();
+        // A configured board the agent holds a grant for (not a person's).
+        let shared = dir.path().join("shared");
+        std::fs::create_dir_all(&shared).unwrap();
+        let (code, _, err) = run(&shared, &dir.path().join("none.json"), None, &["init", "--project", "shared"]);
+        assert_eq!(code, EXIT_OK, "{err}");
+        let url = hub_with(
+            dir.path(),
+            json!({
+                "boards": [{ "project": "shared", "dir": shared }],
+                "grants": [{ "subject": AGENT, "boards": ["shared"] }]
+            }),
+            &[("tok-agent", AGENT)],
+        )
+        .await;
+        let project = dir.path().join("m").join("demo");
+        std::fs::create_dir_all(&project).unwrap();
+        let account = dir.path().join("m").join("account.json");
+        signed_in(&account, "tok-member");
+        {
+            let (project, account, url) = (project.clone(), account.clone(), url.clone());
+            tokio::task::spawn_blocking(move || {
+                let (code, _, err) = run(&project, &account, None, &["bind", "--hub", &url]);
+                assert_eq!(code, EXIT_OK, "{err}");
+                let (code, set, err) = run(
+                    &project,
+                    &account,
+                    Some("claude"),
+                    &["settings", "--repo", "https://github.com/x/demo", "--env", "dev, prod"],
+                );
+                assert_eq!(code, EXIT_OK, "{err}");
+                assert_eq!(set["repo"], "https://github.com/x/demo", "{set}");
+                assert_eq!(set["environments"], json!(["dev", "prod"]));
+                let (code, read, err) = run(&project, &account, None, &["settings"]);
+                assert_eq!(code, EXIT_OK, "{err}");
+                assert_eq!(read, set, "read back as set");
+                let (code, ticket, err) = run(&project, &account, Some("claude"), &["new", "after the settings"]);
+                assert_eq!(code, EXIT_OK, "{err}");
+                assert_eq!(ticket["repo"], "https://github.com/x/demo", "P2c: {ticket}");
+                let (code, refused, all) = run(&project, &account, None, &["settings", "--repo", "ftp://x/demo"]);
+                assert_eq!(code, EXIT_REFUSED, "{all}");
+                assert_eq!(refused["error"]["code"], "invalid_settings", "{refused}");
+                let next = refused["error"]["next"].as_str().unwrap();
+                assert!(next.contains("is not an https URL") && next.contains("board settings again"), "{next}");
+                let (code, refused, all) = run(&project, &account, None, &["settings", "--env", "Prod"]);
+                assert_eq!(code, EXIT_REFUSED, "{all}");
+                assert!(refused["error"]["next"].as_str().unwrap().contains("not a lowercase name"), "{refused}");
+            })
+            .await
+            .unwrap();
+        }
+        // The agent's grant is not a person's: it reads nothing and changes nothing there.
+        let refused = tool(&url, "tok-agent", "board_settings",
+            json!({ "project": "shared", "repo": "https://github.com/x/shared" })).await;
+        assert_eq!(refused["isError"], true, "{refused}");
+        assert!(refused.to_string().contains("not_owner"), "{refused}");
+        let (_, board) = crate::board::open_project(&shared).unwrap();
+        assert_eq!(board.settings().unwrap().repo, None);
+        // And the member's own board is not the agent's to reach at all.
+        let refused = tool(&url, "tok-agent", "board_settings", json!({ "project": "demo" })).await;
+        assert_eq!(refused["isError"], true, "{refused}");
+        assert!(refused.to_string().contains("unknown_board"), "{refused}");
     }
 }
 
@@ -2261,4 +2413,84 @@ fn the_anchor_line_names_what_is_known_in_order() {
         .as_deref(),
         Some("session 01234567…")
     );
+}
+
+#[test]
+fn a_boards_repo_and_environments_are_set_checked_and_on_the_chain() {
+    let f = fixture();
+    let jesse = Actor::human("jesse");
+    let before = f.board.events(0, 1000).unwrap().len();
+    let read = f
+        .board
+        .set_project(&jesse, &super::ProjectSettings::default())
+        .expect("nothing given reads");
+    assert_eq!(read, Settings::default());
+    assert_eq!(f.board.events(0, 1000).unwrap().len(), before, "a read writes nothing");
+
+    let set = f
+        .board
+        .set_project(
+            &jesse,
+            &super::ProjectSettings {
+                repo: Some(" https://github.com/x/y ".into()),
+                environments: Some(vec!["dev".into(), "prod".into()]),
+            },
+        )
+        .expect("set");
+    assert_eq!(set.repo.as_deref(), Some("https://github.com/x/y"));
+    assert_eq!(set.environments, ["dev", "prod"]);
+    assert_eq!(f.board.settings().unwrap(), set, "read back");
+    assert_eq!(set.lease_ttl_ms, Settings::default().lease_ttl_ms, "the rest stays");
+    let changed = f.board.events(0, 1000).unwrap().pop().unwrap();
+    assert_eq!(changed.action, "board.settings_changed");
+    assert_eq!(changed.actor, "jesse");
+    assert_eq!(
+        changed.data,
+        serde_json::json!({ "repo": "https://github.com/x/y", "environments": ["dev", "prod"] })
+    );
+    // Only what is given changes.
+    let set = f
+        .board
+        .set_project(
+            &jesse,
+            &super::ProjectSettings {
+                environments: Some(vec!["staging".into()]),
+                ..Default::default()
+            },
+        )
+        .expect("environments only");
+    assert_eq!(set.repo.as_deref(), Some("https://github.com/x/y"));
+    assert_eq!(set.environments, ["staging"]);
+    assert!(f.board.verify_chain().unwrap().ok);
+
+    let refused = |patch: super::ProjectSettings| {
+        f.board
+            .set_project(&jesse, &patch)
+            .expect_err("refused")
+    };
+    for repo in ["http://github.com/x/y", "github.com/x/y", "https://", "https://exa mple.com/x", "ftp://x.y/z"] {
+        let error = refused(super::ProjectSettings {
+            repo: Some(repo.into()),
+            ..Default::default()
+        });
+        assert_eq!(error.code, "invalid_settings", "{repo}");
+        assert!(error.message.contains("is not an https URL"), "{repo}: {}", error.message);
+    }
+    let many: Vec<String> = (0..21).map(|n| format!("e{n}")).collect();
+    for (environments, says) in [
+        (vec![], "1 to 20 names"),
+        (many, "1 to 20 names"),
+        (vec!["Prod".to_string()], "not a lowercase name"),
+        (vec!["dev".to_string(), "dev".to_string()], "named twice"),
+        (vec!["has space".to_string()], "not a lowercase name"),
+    ] {
+        let error = refused(super::ProjectSettings {
+            environments: Some(environments.clone()),
+            ..Default::default()
+        });
+        assert_eq!(error.code, "invalid_settings", "{environments:?}");
+        assert!(error.message.contains(says), "{environments:?}: {}", error.message);
+    }
+    let after = f.board.settings().unwrap();
+    assert_eq!(after.environments, ["staging"], "a refusal changes nothing");
 }

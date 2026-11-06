@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 
 use super::{
     Actor, ChainStatus, Dep, DepKind, Filter, Lease, NewTicket, NextFilter, Note, Patch, Prime,
-    Ticket, TicketView,
+    ProjectSettings, Settings, Ticket, TicketView,
     face::{Face, ME},
 };
 use crate::account::client::HubClient;
@@ -295,5 +295,16 @@ impl Face for Remote {
 
     fn verify_chain(&self) -> BridgeResult<ChainStatus> {
         self.call("board_verify", json!({}))
+    }
+
+    fn project_settings(
+        &self,
+        _actor: &Actor<'_>,
+        patch: &ProjectSettings,
+    ) -> BridgeResult<Settings> {
+        self.call(
+            "board_settings",
+            json!({ "repo": patch.repo, "environments": patch.environments }),
+        )
     }
 }

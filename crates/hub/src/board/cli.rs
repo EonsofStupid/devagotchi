@@ -56,6 +56,7 @@ pub const USAGE: &str = "Usage: devagotchi board <command> [options]
   dep       ID --on ID [--kind blocks|parent|related|discovered-from|duplicates|supersedes] [--remove]
   reap                             expire lapsed leases
   verify                           recompute the event chain
+  settings  [--repo URL] [--env a,b,c]   the project's repo (https) and environments (1-20 lowercase names); none given: show them
   export    [--out PATH]           board.jsonl (export, never the truth)
   hooks     [--for claude-code|codex|all]   write .devagotchi/hooks/ (prime at start, beat after tools, no stop while holding) and print the config to add
 
@@ -294,6 +295,9 @@ fn next_for(code: &str, id: Option<&str>) -> String {
         "humans_only" => {
             "ask the person who owns this board; run without --as to act as yourself".into()
         }
+        "not_owner" => {
+            "only the account that owns this board, or a person granted on it, changes its settings; ask them".into()
+        }
         "not_found" => "board ls --open to see the ids on this board".into(),
         "no_board" => "run board init in the project directory, or pass --dir".into(),
         "usage" => "board --help".into(),
@@ -346,6 +350,10 @@ impl Output<'_> {
                 format!(
                     "pass --env with one of this board's environments ({list}), or leave it out"
                 )
+            }
+            // The store's message is what is wrong and how to give it: it is the hint.
+            ("invalid_settings", _) => {
+                format!("{}, then run board settings again", error.message)
             }
             _ => next_for(&error.code, id),
         };
@@ -1252,6 +1260,27 @@ fn dispatch(
                 )
             });
             Ok(if status.ok { EXIT_OK } else { EXIT_REFUSED })
+        }
+        "settings" => {
+            let patch = super::ProjectSettings {
+                repo: parsed.flag("--repo").map(str::to_string),
+                environments: parsed.flag("--env").map(|list| {
+                    list.split(',')
+                        .map(str::trim)
+                        .filter(|e| !e.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                }),
+            };
+            let settings = no_id(board.project_settings(actor, &patch))?;
+            output.value(&settings, || {
+                format!(
+                    "repo {} · environments {}",
+                    settings.repo.as_deref().unwrap_or("(none)"),
+                    settings.environments.join(", ")
+                )
+            });
+            Ok(EXIT_OK)
         }
         "export" => {
             let path = parsed

@@ -126,7 +126,7 @@ broker_tools = ["approval_request", "approval_wait", "create_directory", "edit_f
                 "workflow_cancel", "workflow_list", "workflow_start", "workflow_status", "workflow_wait",
                 "write_file"]
 board_tools = [t for t in tools if t.startswith("board_")]
-check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 18,
+check("tools", [t for t in tools if not t.startswith("board_")] == broker_tools and len(board_tools) == 19,
       ", ".join(tools))
 
 is_error, me = call("whoami", {})
