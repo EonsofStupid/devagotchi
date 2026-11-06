@@ -1114,6 +1114,107 @@ mod cli {
         assert_eq!(json(&out)["entries"], 2);
         assert_eq!(json(&out)["ok"], true);
     }
+
+    #[test]
+    fn anchors_are_flags_on_new_set_and_ls_and_in_the_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let d = dir.path();
+        assert_eq!(
+            run(d, None, false, &["init", "--project", "demo"]).0,
+            EXIT_OK
+        );
+        let (code, out, _) = run(
+            d,
+            None,
+            false,
+            &[
+                "new",
+                "dabo is down",
+                "--machine",
+                "dabo",
+                "--repo",
+                "https://github.com/x/y",
+                "--env",
+                "prod",
+                "--agent",
+                "claude",
+                "--session",
+                "s-1",
+                "--fingerprint",
+                "fp-1",
+            ],
+        );
+        assert_eq!(code, EXIT_OK, "{out}");
+        let ticket = json(&out);
+        for (key, value) in [
+            ("machine", "dabo"),
+            ("repo", "https://github.com/x/y"),
+            ("environment", "prod"),
+            ("agent", "claude"),
+            ("session", "s-1"),
+            ("fingerprint", "fp-1"),
+        ] {
+            assert_eq!(ticket[key], value, "{key}: {ticket}");
+        }
+        assert_eq!(ticket["occurrences"], 1);
+        let id = ticket["id"].as_str().unwrap().to_string();
+        let (_, plain, _) = run(d, None, false, &["new", "plain"]);
+        let plain = json(&plain);
+        assert!(
+            plain["machine"].is_null() && plain.get("machine").is_some(),
+            "{plain}"
+        );
+
+        let ids = |args: &[&str]| -> Vec<String> {
+            let (code, out, _) = run(d, None, false, args);
+            assert_eq!(code, EXIT_OK, "{out}");
+            json(&out)
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["id"].as_str().unwrap().to_string())
+                .collect()
+        };
+        assert_eq!(
+            ids(&["ls", "--machine", "dabo", "--env", "prod"]),
+            [id.clone()]
+        );
+        assert_eq!(ids(&["ls", "--fingerprint", "fp-1"]), [id.clone()]);
+        assert!(ids(&["ls", "--machine", "other"]).is_empty());
+        assert_eq!(ids(&["ls"]).len(), 2);
+
+        let (code, out, _) = run(
+            d,
+            None,
+            false,
+            &[
+                "set",
+                &id,
+                "--version",
+                "1",
+                "--env",
+                "staging",
+                "--session",
+                "",
+            ],
+        );
+        assert_eq!(code, EXIT_OK, "{out}");
+        assert_eq!(json(&out)["environment"], "staging");
+        assert!(json(&out)["session"].is_null(), "an empty anchor clears it");
+        assert_eq!(ids(&["ls", "--env", "staging"]), [id.clone()]);
+
+        let (code, out, _) = run(d, None, false, &["new", "qa only", "--env", "qa"]);
+        assert_ne!(code, EXIT_OK);
+        let error = &json(&out)["error"];
+        assert_eq!(error["code"], "unknown_environment");
+        assert!(
+            error["next"]
+                .as_str()
+                .unwrap()
+                .contains("dev, staging, prod"),
+            "{error}"
+        );
+    }
 }
 
 #[test]
@@ -1486,6 +1587,84 @@ mod bound {
             err.contains("not_signed_in") && err.contains("devagotchi login"),
             "{err}"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_bound_project_carries_anchors_to_the_hub_and_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = hub(dir.path()).await;
+        let project = dir.path().join("a").join("demo");
+        std::fs::create_dir_all(&project).unwrap();
+        let account = dir.path().join("a").join("account.json");
+        signed_in(&account, "tok-member");
+        tokio::task::spawn_blocking(move || {
+            let (code, _, err) = run(&project, &account, None, &["bind", "--hub", &url]);
+            assert_eq!(code, EXIT_OK, "{err}");
+            let (code, ticket, err) = run(
+                &project,
+                &account,
+                Some("claude"),
+                &[
+                    "new",
+                    "anchored",
+                    "--machine",
+                    "dabo",
+                    "--env",
+                    "prod",
+                    "--session",
+                    "s-1",
+                ],
+            );
+            assert_eq!(code, EXIT_OK, "{err}");
+            assert_eq!(ticket["machine"], "dabo", "{ticket}");
+            assert_eq!(ticket["environment"], "prod");
+            assert_eq!(ticket["session"], "s-1");
+            let id = ticket["id"].as_str().unwrap().to_string();
+            let (code, _, err) = run(&project, &account, Some("claude"), &["new", "plain"]);
+            assert_eq!(code, EXIT_OK, "{err}");
+            let (code, listed, err) = run(
+                &project,
+                &account,
+                Some("claude"),
+                &["ls", "--machine", "dabo"],
+            );
+            assert_eq!(code, EXIT_OK, "{err}");
+            let listed: Vec<&str> = listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["id"].as_str().unwrap())
+                .collect();
+            assert_eq!(listed, [id.as_str()]);
+            let (code, set, err) = run(
+                &project,
+                &account,
+                Some("claude"),
+                &[
+                    "set",
+                    &id,
+                    "--version",
+                    "1",
+                    "--machine",
+                    "",
+                    "--env",
+                    "dev",
+                ],
+            );
+            assert_eq!(code, EXIT_OK, "{err}");
+            assert!(set["machine"].is_null(), "cleared through the hub: {set}");
+            assert_eq!(set["environment"], "dev");
+            let (code, refused, _) = run(
+                &project,
+                &account,
+                Some("claude"),
+                &["new", "nowhere", "--env", "moon"],
+            );
+            assert_eq!(code, EXIT_REFUSED);
+            assert_eq!(refused["error"]["code"], "unknown_environment", "{refused}");
+        })
+        .await
+        .unwrap();
     }
 }
 

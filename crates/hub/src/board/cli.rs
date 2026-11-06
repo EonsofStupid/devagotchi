@@ -24,8 +24,8 @@ use devagotchi_contracts::{BridgeError, BridgeResult};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Actor, BOARD_DIR, BOARD_FILE, Board, DepKind, Filter, NewTicket, NextFilter, Patch,
-    ProjectConfig, Ticket, default_prefix,
+    Actor, AnchorPatch, Anchors, BOARD_DIR, BOARD_FILE, Board, DepKind, Filter, NewTicket,
+    NextFilter, Patch, ProjectConfig, Ticket, default_prefix,
     face::{Face, ME},
     open_project, read_project_config,
     remote::Remote,
@@ -41,9 +41,9 @@ pub const USAGE: &str = "Usage: devagotchi board <command> [options]
   onboard                          print the AGENTS.md block
   agent                            print the full workflow for an agent
   ready     [--limit N]            tickets you could claim now, best first
-  ls        [--state S] [--label L] [--text T] [--open] [--limit N]
+  ls        [--state S] [--label L] [--text T] [--open] [--limit N] [ANCHORS]
   show      ID
-  new       TITLE [--desc D] [--priority N] [--label L]... [--parent ID] [--assign ID] [--found-in ID] [--epic]
+  new       TITLE [--desc D] [--priority N] [--label L]... [--parent ID] [--assign ID] [--found-in ID] [--epic] [ANCHORS]
   claim     [ID] [--ttl SECONDS] [--label L] [--state S]   no ID: the best ready ticket
   beat      [ID] [--progress JSON] [--fence N]   no ID: every ticket you hold (what the hook pack calls)
   held                             the tickets you hold (empty output when none)
@@ -52,13 +52,14 @@ pub const USAGE: &str = "Usage: devagotchi board <command> [options]
   handoff   ID NOTE [--to ID] [--fence N]
   release   ID [REASON] [--fence N]
   force     ID REASON              a person takes a lease away
-  set       ID --version V [--title T] [--desc D] [--priority N] [--state S] [--assign ID|-]
+  set       ID --version V [--title T] [--desc D] [--priority N] [--state S] [--assign ID|-] [ANCHORS]   an anchor of \"\" clears it
   dep       ID --on ID [--kind blocks|parent|related|discovered-from|duplicates|supersedes] [--remove]
   reap                             expire lapsed leases
   verify                           recompute the event chain
   export    [--out PATH]           board.jsonl (export, never the truth)
   hooks     [--for claude-code|codex|all]   write .devagotchi/hooks/ (prime at start, beat after tools, no stop while holding) and print the config to add
 
+ANCHORS: --machine M --repo URL --env E --agent A --session S --fingerprint F   where a ticket belongs; on ls, filters
 Global: --dir PATH (project directory; default: walk up from here)  --as ID (act as this agent)
         --json (also on when stdout is not a terminal)  --text (force the human form)  --quiet
 Bound project: every command above runs on the hub as the signed-in account; --as / DEVAGOTCHI_ACTOR is your seat there.
@@ -132,6 +133,12 @@ const VALUE_FLAGS: &[&str] = &[
     "--on",
     "--out",
     "--for",
+    "--machine",
+    "--repo",
+    "--env",
+    "--agent",
+    "--session",
+    "--fingerprint",
 ];
 const SWITCHES: &[&str] = &[
     "--json",
@@ -198,6 +205,18 @@ impl Parsed {
     }
     fn switch(&self, name: &str) -> bool {
         self.switches.iter().any(|s| s == name)
+    }
+    /// The anchor flags, as given.
+    fn anchors(&self) -> Anchors {
+        let get = |name: &str| self.flag(name).map(str::to_string);
+        Anchors {
+            machine: get("--machine"),
+            repo: get("--repo"),
+            environment: get("--env"),
+            agent: get("--agent"),
+            session: get("--session"),
+            fingerprint: get("--fingerprint"),
+        }
     }
     fn int(&self, name: &str) -> Result<Option<i64>, String> {
         match self.flag(name) {
@@ -318,7 +337,15 @@ impl Output<'_> {
     }
 
     fn error(&mut self, error: &BridgeError, id: Option<&str>) -> u8 {
-        let next = next_for(&error.code, id);
+        let next = match (error.code.as_str(), error.message.rsplit_once(": ")) {
+            // The store's message ends with the board's environments: name them in `next`.
+            ("unknown_environment", Some((_, list))) => {
+                format!(
+                    "pass --env with one of this board's environments ({list}), or leave it out"
+                )
+            }
+            _ => next_for(&error.code, id),
+        };
         if self.json {
             let body = ErrorOut {
                 error: ErrorBody {
@@ -882,6 +909,7 @@ fn dispatch(
                     label: parsed.flag("--label").map(str::to_string),
                     text: parsed.flag("--text").map(str::to_string),
                     open_only: parsed.switch("--open"),
+                    anchors: parsed.anchors(),
                     limit: Some(limit),
                     ..Filter::default()
                 },
@@ -952,6 +980,7 @@ fn dispatch(
                     parent: parsed.flag("--parent").map(str::to_string),
                     assignee: parsed.flag("--assign").map(str::to_string),
                     discovered_from: parsed.flag("--found-in").map(str::to_string),
+                    anchors: parsed.anchors(),
                     ..NewTicket::default()
                 },
             ))?;
@@ -1146,6 +1175,17 @@ fn dispatch(
                     .flag("--assign")
                     .map(|a| if a == "-" { None } else { Some(a.to_string()) }),
                 state: parsed.flag("--state").map(str::to_string),
+                anchors: {
+                    let a = parsed.anchors();
+                    AnchorPatch {
+                        machine: a.machine.map(Some),
+                        repo: a.repo.map(Some),
+                        environment: a.environment.map(Some),
+                        agent: a.agent.map(Some),
+                        session: a.session.map(Some),
+                        fingerprint: a.fingerprint.map(Some),
+                    }
+                },
                 ..Patch::default()
             };
             let ticket = with_id(id, board.update(actor, id, version, patch))?;
