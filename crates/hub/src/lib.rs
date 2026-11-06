@@ -575,6 +575,9 @@ pub fn board_cli(args: Vec<OsString>, account_file: Option<PathBuf>) -> ExitCode
         actor_env: env::var("DEVAGOTCHI_ACTOR")
             .ok()
             .filter(|a| !a.trim().is_empty()),
+        session_env: env::var("DEVAGOTCHI_SESSION")
+            .ok()
+            .filter(|s| !s.trim().is_empty()),
         os_user: env::var("USER").or_else(|_| env::var("USERNAME")).ok(),
         stdout_is_terminal: std::io::stdout().is_terminal(),
         account_file,
@@ -764,6 +767,7 @@ async fn run(state_dir: PathBuf, config_path: PathBuf) -> BridgeResult<()> {
             analytics,
             workflows,
             offers,
+            routed: Default::default(),
         },
         web,
         passkeys,
@@ -876,7 +880,7 @@ fn app(state: AppState) -> Router {
     let mcp = {
         let hub = state.hub.clone();
         StreamableHttpService::new(
-            move || Ok(hub.clone()),
+            move || Ok(hub.for_session()),
             Arc::new(LocalSessionManager::default()),
             mcp_config,
         )
@@ -1731,6 +1735,7 @@ mod tests {
                 analytics: None,
                 workflows: None,
                 offers: None,
+                routed: Default::default(),
             },
             web: None,
             passkeys: None,
@@ -1956,6 +1961,7 @@ mod tests {
                 analytics: None,
                 workflows: None,
                 offers: None,
+                routed: Default::default(),
             },
             web: None,
             passkeys,

@@ -2,7 +2,10 @@
 //! named broker the authenticated subject holds a grant for, plus `whoami` and `machines`
 //! (what this subject can reach and whether each machine can be used right now).
 
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use devagotchi_contracts::{
     BridgeError, GetInput, OperationView, OutputPage, ReadInput, RequestBody, ResponseBody,
@@ -42,6 +45,30 @@ pub struct Hub {
     /// The site's offers and how an account is linked (`crate::offers`), on a hub with its
     /// own accounts.
     pub offers: Option<Arc<crate::offers::Offers>>,
+    /// The machines this MCP session's calls were routed to (the service makes one `Hub`
+    /// per session, `for_session`): what fills a new ticket's `machine` (P2c).
+    pub routed: Arc<Mutex<Routed>>,
+}
+
+/// The distinct machines one MCP session routed calls to, as the caller named them. Two
+/// are enough to know there was more than one.
+#[derive(Debug, Default)]
+pub struct Routed(Vec<String>);
+
+impl Routed {
+    fn add(&mut self, machine: &str) {
+        if self.0.len() < 2 && !self.0.iter().any(|m| m == machine) {
+            self.0.push(machine.to_string());
+        }
+    }
+
+    /// The one machine this session routed to, when there was exactly one.
+    pub fn only(&self) -> Option<String> {
+        match self.0.as_slice() {
+            [one] => Some(one.clone()),
+            _ => None,
+        }
+    }
 }
 
 /// One machine as a person sees it on their page and in `/api/v1/me`, and as an AI sees it
@@ -377,11 +404,25 @@ impl Hub {
             })
     }
 
+    /// This hub for one new MCP session: shared stores, its own routed machines.
+    pub(crate) fn for_session(&self) -> Self {
+        Self {
+            routed: Arc::default(),
+            ..self.clone()
+        }
+    }
+
     pub(crate) fn route(
         &self,
         subject: &Subject,
         broker: &str,
     ) -> Result<Route, Json<BridgeError>> {
+        let route = self.resolve(subject, broker)?;
+        self.routed.lock().expect("routed lock").add(broker);
+        Ok(route)
+    }
+
+    fn resolve(&self, subject: &Subject, broker: &str) -> Result<Route, Json<BridgeError>> {
         let allowed = self.config.brokers_for(&subject.id);
         let unknown = || {
             Err(Json(BridgeError::new(

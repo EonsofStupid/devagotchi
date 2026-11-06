@@ -124,6 +124,7 @@ pub(crate) async fn hosted_with(
             offers: Some(Arc::new(
                 crate::offers::Offers::from_config(&config, accounts.clone()).unwrap(),
             )),
+            routed: Default::default(),
         },
         web: None,
         passkeys: web::HubSignIn::new(config.clone(), accounts.clone())
