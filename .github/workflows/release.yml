@@ -151,6 +151,22 @@ jobs:
       - name: Install dependencies
         run: |
           ${{ matrix.packages_install }}
+      # The build's name, compiled in (crates/devagotchi/build.rs): the same string the hub's
+      # downloads VERSION holds (image.yml `Version`, scripts/lay-down-dist.sh).
+      - name: Build name
+        shell: bash
+        env:
+          APP_VERSION: ${{ fromJson(needs.plan.outputs.val).releases[0].app_version }}
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          case $REF in
+            refs/tags/*) build=$APP_VERSION ;;
+            refs/heads/main) build="main-${SHA::7}" ;;
+            *) build="ci-${SHA::7}" ;;
+          esac
+          [ -n "$build" ] || { echo "no version in dist's plan" >&2; exit 1; }
+          echo "DEVAGOTCHI_BUILD=$build" >> "$GITHUB_ENV"
       - name: Build artifacts
         run: |
           # Actually do builds and make zips and whatnot

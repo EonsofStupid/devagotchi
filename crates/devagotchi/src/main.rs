@@ -68,7 +68,11 @@ fn run(args: Vec<OsString>) -> ExitCode {
         Some("link") => devagotchi_link::cli(args),
         Some(verb @ ("login" | "logout" | "whoami")) => account(verb, args),
         Some("version" | "--version" | "-V") => {
-            println!("devagotchi {}", env!("CARGO_PKG_VERSION"));
+            println!(
+                "devagotchi {} ({})",
+                env!("CARGO_PKG_VERSION"),
+                env!("DEVAGOTCHI_BUILD")
+            );
             ExitCode::SUCCESS
         }
         Some("help" | "--help" | "-h") => match args.first().and_then(|a| a.to_str()) {
