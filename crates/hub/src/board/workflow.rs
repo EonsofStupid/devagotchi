@@ -113,6 +113,9 @@ impl Workflow {
                 transition("review", "done"),
                 transition("review", "ready"),
                 transition("*", "cancelled"),
+                // A closed ticket reopens to the queue (the phone app's Undo).
+                transition("done", "ready"),
+                transition("cancelled", "ready"),
             ],
         }
     }
